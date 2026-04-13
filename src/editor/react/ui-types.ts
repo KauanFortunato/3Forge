@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { EditableFieldEntry, EditorNode, FontAsset, NodePropertyDefinition } from "../types";
+import type { EditableFieldEntry, EditorNode, FontAsset, NodePropertyDefinition, ViewMode } from "../types";
 
 export type ExportMode = "json" | "typescript";
 export type RightPanelTab = "inspector" | "fields" | "export";
@@ -14,6 +14,7 @@ export interface EditorStoreView {
   editableFields: EditableFieldEntry[];
   canUndo: boolean;
   canRedo: boolean;
+  viewMode: ViewMode;
 }
 
 export interface TreeBranch {

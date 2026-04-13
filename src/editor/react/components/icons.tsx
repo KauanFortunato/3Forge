@@ -276,6 +276,22 @@ export function ObjectDataIcon(props: IconProps) {
   );
 }
 
+export function ViewSolidIcon(props: IconProps) {
+  return (
+    <BootstrapIcon {...props}>
+      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16" />
+    </BootstrapIcon>
+  );
+}
+
+export function ViewRenderedIcon(props: IconProps) {
+  return (
+    <BootstrapIcon {...props}>
+      <path d="M8 15A7 7 0 1 0 8 1zm0 1A8 8 0 1 1 8 0a8 8 0 0 1 0 16" />
+    </BootstrapIcon>
+  );
+}
+
 export function BoxIcon(props: IconProps) {
   return (
     <BootstrapIcon {...props}>

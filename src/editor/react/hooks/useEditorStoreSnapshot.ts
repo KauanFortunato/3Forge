@@ -18,6 +18,7 @@ export function useEditorStoreSnapshot(store: EditorStore): EditorStoreView {
       editableFields: store.listEditableFields(),
       canUndo: store.canUndo,
       canRedo: store.canRedo,
+      viewMode: store.viewMode,
     }),
     [store, revision],
   );

@@ -117,6 +117,8 @@ export function App() {
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false);
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
   const [statusTick, setStatusTick] = useState(0);
+  const [hierarchyHeight, setHierarchyHeight] = useState(320);
+  const [isResizing, setIsResizing] = useState(false);
 
   const sceneRef = useRef<SceneEditor | null>(null);
   const clipboardRef = useRef<NodeClipboard | null>(null);
@@ -414,6 +416,36 @@ export function App() {
     setTransientStatus(nextValue ? "Autosave enabled." : "Autosave disabled.");
   }, [autosaveEnabled, setTransientStatus]);
 
+  const startResizing = useCallback((event: React.PointerEvent) => {
+    event.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const panel = document.querySelector(".panel--split");
+      if (!panel) return;
+
+      const rect = panel.getBoundingClientRect();
+      const newHeight = event.clientY - rect.top;
+      setHierarchyHeight(Math.max(120, Math.min(newHeight, rect.height - 120)));
+    };
+
+    const handlePointerUp = () => {
+      setIsResizing(false);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [isResizing]);
+
   const handleSceneMove = useCallback((nodeId: string, target: TreeDropTarget) => {
     if (store.moveNode(nodeId, target.parentId, target.index)) {
       const node = store.getNode(nodeId);
@@ -537,10 +569,12 @@ export function App() {
         canUndo={storeView.canUndo}
         canRedo={storeView.canRedo}
         currentTool={currentTool}
+        viewMode={storeView.viewMode}
         onComponentNameChange={(value) => store.updateComponentName(value)}
         onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}
         onRedo={() => { if (store.redo()) setTransientStatus("Redo."); }}
         onToolChange={handleToolChange}
+        onViewModeChange={(mode) => store.setViewMode(mode)}
         onFrame={handleFrameSelection}
       />
 
@@ -566,7 +600,7 @@ export function App() {
           </div>
         </main>
 
-        <aside className="panel panel--right panel--split">
+        <aside className="panel panel--right panel--split" style={{ gridTemplateRows: `${hierarchyHeight}px auto 1fr` }}>
           <section className="panel-split__top">
             <div className="panel__header">
               <p className="panel__eyebrow">Hierarchy</p>
@@ -583,6 +617,11 @@ export function App() {
               />
             </div>
           </section>
+
+          <div 
+            className={`panel-resizer${isResizing ? " is-active" : ""}`} 
+            onPointerDown={startResizing}
+          />
 
           <section className="panel-split__bottom">
             <div className="panel-tabs">

@@ -144,8 +144,10 @@ export interface EditableFieldEntry {
   binding: EditableBinding;
 }
 
-export interface EditorStoreChange {
-  reason: "structure" | "node" | "selection" | "editable" | "meta" | "import" | "history" | "font";
+export type EditorStoreChange = {
+  reason: "structure" | "node" | "selection" | "editable" | "meta" | "import" | "history" | "font" | "view";
   source: "ui" | "scene" | "system" | "import" | "history";
   nodeId?: string;
-}
+};
+
+export type ViewMode = "rendered" | "solid";

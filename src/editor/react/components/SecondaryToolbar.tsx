@@ -1,6 +1,17 @@
 import type { ReactNode } from "react";
 import type { ToolMode } from "../ui-types";
-import { CursorIcon, FrameIcon, MoveIcon, RedoIcon, RotateIcon, ScaleIcon, UndoIcon } from "./icons";
+import type { ViewMode } from "../../types";
+import {
+  CursorIcon,
+  FrameIcon,
+  MoveIcon,
+  RedoIcon,
+  RotateIcon,
+  ScaleIcon,
+  UndoIcon,
+  ViewRenderedIcon,
+  ViewSolidIcon,
+} from "./icons";
 
 interface SecondaryToolbarProps {
   componentName: string;
@@ -9,10 +20,12 @@ interface SecondaryToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   currentTool: ToolMode;
+  viewMode: ViewMode;
   onComponentNameChange: (value: string) => void;
   onUndo: () => void;
   onRedo: () => void;
   onToolChange: (mode: ToolMode) => void;
+  onViewModeChange: (mode: ViewMode) => void;
   onFrame: () => void;
 }
 
@@ -24,10 +37,12 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     canUndo,
     canRedo,
     currentTool,
+    viewMode,
     onComponentNameChange,
     onUndo,
     onRedo,
     onToolChange,
+    onViewModeChange,
     onFrame,
   } = props;
 
@@ -51,6 +66,23 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       </div>
 
       <div className="secondary-toolbar__right">
+        <div className="toolbar-icon-group">
+          <ToolbarIconButton
+            label="Solid View"
+            isActive={viewMode === "solid"}
+            onClick={() => onViewModeChange("solid")}
+          >
+            <ViewSolidIcon />
+          </ToolbarIconButton>
+          <ToolbarIconButton
+            label="Rendered View"
+            isActive={viewMode === "rendered"}
+            onClick={() => onViewModeChange("rendered")}
+          >
+            <ViewRenderedIcon />
+          </ToolbarIconButton>
+        </div>
+
         <div className="toolbar-icon-group">
           <ToolbarIconButton label="Undo" disabled={!canUndo} onClick={onUndo}>
             <UndoIcon />

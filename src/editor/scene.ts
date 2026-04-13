@@ -68,6 +68,7 @@ export class SceneEditor {
   private animationFrame = 0;
   private pointerDownX = 0;
   private pointerDownY = 0;
+  private mainLight: DirectionalLight | null = null;
   private selectionHelper: BoxHelper | null = null;
   private currentMode: ToolMode = "select";
   private currentGizmoMode: GizmoMode = "translate";
@@ -247,6 +248,11 @@ export class SceneEditor {
       return;
     }
 
+    if (change.reason === "view") {
+      this.updateViewMode();
+      return;
+    }
+
     if (change.reason === "editable" || change.reason === "meta") {
       return;
     }
@@ -257,6 +263,21 @@ export class SceneEditor {
     }
 
     this.rebuildScene();
+  }
+
+  private updateViewMode(): void {
+    const isRendered = this.store.viewMode === "rendered";
+
+    if (this.mainLight) {
+      this.mainLight.castShadow = isRendered;
+    }
+
+    this.viewportRoot.traverse((object) => {
+      if (object instanceof Mesh) {
+        object.castShadow = isRendered && object.userData.nodeType !== "image";
+        object.receiveShadow = isRendered && object.userData.nodeType !== "image";
+      }
+    });
   }
 
   private addHelpers(): void {
@@ -270,11 +291,11 @@ export class SceneEditor {
     const ambient = new AmbientLight(0xffffff, 0.3);
     this.scene.add(ambient);
 
-    const light = new DirectionalLight(0xffffff, 1.4);
-    light.position.set(5, 9, 6);
-    light.castShadow = true;
-    light.shadow.mapSize.set(2048, 2048);
-    this.scene.add(light);
+    this.mainLight = new DirectionalLight(0xffffff, 1.4);
+    this.mainLight.position.set(5, 9, 6);
+    this.mainLight.castShadow = true;
+    this.mainLight.shadow.mapSize.set(2048, 2048);
+    this.scene.add(this.mainLight);
   }
 
   private buildOrientationGizmo(): void {
@@ -437,6 +458,7 @@ export class SceneEditor {
       }
     }
 
+    this.updateViewMode();
     this.refreshSelection();
   }
 
@@ -444,6 +466,7 @@ export class SceneEditor {
     const object = this.buildNodeObject(node);
     object.name = node.name;
     object.userData.nodeId = node.id;
+    object.userData.nodeType = node.type;
     object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
     object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
     object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);

@@ -333,6 +333,13 @@ interface PropertyRowProps {
 function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable }: PropertyRowProps) {
   const currentValue = getDisplayValue(node, definition);
   const isEditable = Boolean(node.editable[definition.path]);
+  
+  // Local state for immediate UI feedback without heavy store updates (mostly for colors)
+  const [localValue, setLocalValue] = useState(String(currentValue));
+
+  useEffect(() => {
+    setLocalValue(String(currentValue));
+  }, [currentValue]);
 
   return (
     <div className={`inspector-property${isEditable ? " is-editable" : ""}`}>
@@ -350,11 +357,24 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
           <input
             className="editor-input editor-input--compact"
             type={definition.input === "color" ? "color" : definition.input === "text" ? "text" : "number"}
-            value={String(currentValue)}
+            value={localValue}
             step={definition.step}
             min={definition.min}
             max={definition.max}
-            onChange={(event) => onNodePropertyChange(node.id, definition, event.target.value)}
+            onChange={(event) => {
+              setLocalValue(event.target.value);
+              // For non-color inputs, we update immediately. For color, we update immediately too 
+              // but the local state makes the input itself smoother. 
+              // If it still lags, we would move this to onBlur.
+              if (definition.input !== "color") {
+                onNodePropertyChange(node.id, definition, event.target.value);
+              }
+            }}
+            onBlur={(event) => {
+              if (definition.input === "color") {
+                onNodePropertyChange(node.id, definition, event.target.value);
+              }
+            }}
           />
         )}
       </div>

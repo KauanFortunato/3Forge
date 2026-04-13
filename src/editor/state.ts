@@ -22,10 +22,11 @@ import type {
   TextNode,
   TransformSpec,
   Vec3Like,
+  ViewMode,
 } from "./types";
 
 export const ROOT_NODE_ID = "root";
-export const EDITOR_AUTOSAVE_KEY = "hologfx-component-editor-blueprint";
+export const EDITOR_AUTOSAVE_KEY = "3editor-component-editor-blueprint";
 const HISTORY_LIMIT = 100;
 
 const DEGREE_TO_RADIAN = Math.PI / 180;
@@ -101,7 +102,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
   panel.geometry.width = 2.6;
   panel.geometry.height = 1.2;
   panel.geometry.depth = 0.24;
-  panel.material.color = "#19d4ff";
+  panel.material.color = "#7c44de";
   panel.material.opacity = 0.9;
   panel.transform.position.y = 0.8;
 
@@ -109,22 +110,22 @@ export function createDefaultBlueprint(): ComponentBlueprint {
   accent.name = "Accent Plate";
   accent.geometry.width = 2.1;
   accent.geometry.height = 0.35;
-  accent.material.color = "#f8c84a";
+  accent.material.color = "#ffffff";
   accent.transform.position.y = 0.55;
   accent.transform.position.z = 0.14;
 
   const title = createNode("text", panel.id);
   title.name = "Headline";
-  title.geometry.text = "HoloGfx";
+  title.geometry.text = "3Editor";
   title.geometry.size = 0.28;
   title.geometry.depth = 0.06;
-  title.material.color = "#e7fbff";
-  title.transform.position.y = 0.04;
-  title.transform.position.z = 0.18;
+  title.material.color = "#333333";
+  title.transform.position.y = 0.5535;
+  title.transform.position.z = 0.1584;
 
   return {
     version: 1,
-    componentName: "HologfxComponent",
+    componentName: "3Editor-Component",
     fonts: [],
     nodes: [root, panel, accent, title],
   };
@@ -592,6 +593,7 @@ interface EditorStoreSnapshot {
 export class EditorStore extends EventTarget {
   private _blueprint: ComponentBlueprint;
   private _selectedNodeId: string;
+  private _viewMode: ViewMode = "rendered";
   private _undoStack: EditorStoreSnapshot[] = [];
   private _redoStack: EditorStoreSnapshot[] = [];
   private _activeHistorySnapshot: EditorStoreSnapshot | null = null;
@@ -630,6 +632,19 @@ export class EditorStore extends EventTarget {
 
   get revision(): number {
     return this._revision;
+  }
+
+  get viewMode(): ViewMode {
+    return this._viewMode;
+  }
+
+  setViewMode(mode: ViewMode, source: EditorStoreChange["source"] = "ui"): void {
+    if (this._viewMode === mode) {
+      return;
+    }
+
+    this._viewMode = mode;
+    this.notify({ reason: "view", source });
   }
 
   subscribe(listener: (change: EditorStoreChange) => void): () => void {

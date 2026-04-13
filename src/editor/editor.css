@@ -287,7 +287,40 @@ button {
 }
 
 .panel--split {
-  grid-template-rows: minmax(320px, 40%) minmax(0, 1fr);
+  display: grid;
+  grid-template-rows: 320px auto 1fr;
+}
+
+.panel-resizer {
+  height: 6px;
+  margin: -3px 0;
+  z-index: 10;
+  cursor: row-resize;
+  transition: background 0.2s;
+  position: relative;
+}
+
+.panel-resizer::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-soft);
+  transition: all 0.2s;
+}
+
+.panel-resizer:hover::after,
+.panel-resizer.is-active::after {
+  background: var(--accent);
+  width: 48px;
+}
+
+.panel-resizer.is-active {
+  background: var(--accent-soft);
 }
 
 .panel-split__top,
