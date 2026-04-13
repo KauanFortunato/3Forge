@@ -1,0 +1,52 @@
+import type { ReactNode } from "react";
+import type { EditableFieldEntry, EditorNode, FontAsset, NodePropertyDefinition } from "../types";
+
+export type ExportMode = "json" | "typescript";
+export type RightPanelTab = "inspector" | "fields" | "export";
+export type ToolMode = "select" | "translate" | "rotate" | "scale";
+
+export interface EditorStoreView {
+  blueprintComponentName: string;
+  blueprintNodes: EditorNode[];
+  selectedNodeId: string;
+  selectedNode: EditorNode | undefined;
+  fonts: FontAsset[];
+  editableFields: EditableFieldEntry[];
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export interface TreeBranch {
+  node: EditorNode;
+  children: TreeBranch[];
+}
+
+export interface TreeDropTarget {
+  parentId: string;
+  index: number;
+  position: "before" | "inside" | "after" | "end";
+  rowNodeId?: string;
+}
+
+export interface MenuAction {
+  id: string;
+  label?: string;
+  shortcut?: string;
+  icon?: ReactNode;
+  disabled?: boolean;
+  danger?: boolean;
+  separator?: boolean;
+  onSelect?: () => void;
+  children?: MenuAction[];
+}
+
+export interface ContextMenuState {
+  x: number;
+  y: number;
+  items: MenuAction[];
+}
+
+export interface PropertyFieldProps {
+  node: EditorNode;
+  definition: NodePropertyDefinition;
+}

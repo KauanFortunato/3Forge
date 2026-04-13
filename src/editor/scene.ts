@@ -1,5 +1,6 @@
 import {
   AmbientLight,
+  AxesHelper,
   Box3,
   BoxGeometry,
   BoxHelper,
@@ -43,6 +44,13 @@ export class SceneEditor {
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
+  private readonly orientationRenderer: WebGLRenderer;
+  private readonly orientationScene: Scene;
+  private readonly orientationCamera: PerspectiveCamera;
+  private readonly orientationRoot = new Group();
+  private readonly orientationInteractive: Object3D[] = [];
+  private readonly orientationRaycaster = new Raycaster();
+  private readonly orientationPointer = new Vector2();
   private readonly orbitControls: OrbitControls;
   private readonly transformControls: TransformControls;
   private readonly transformHelper: Object3D;
@@ -65,6 +73,7 @@ export class SceneEditor {
   private currentGizmoMode: GizmoMode = "translate";
   private isTransformDragging = false;
   private skipNextSelectionPick = false;
+  private readonly ORIENTATION_SIZE = 86;
 
   constructor(container: HTMLElement, store: EditorStore) {
     this.container = container;
@@ -75,6 +84,7 @@ export class SceneEditor {
     this.renderer.shadowMap.enabled = true;
     this.renderer.setClearColor("#23252a", 1);
     this.renderer.domElement.style.touchAction = "none";
+    this.renderer.domElement.style.display = "block";
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new Scene();
@@ -82,6 +92,26 @@ export class SceneEditor {
 
     this.camera = new PerspectiveCamera(45, 1, 0.01, 2000);
     this.camera.position.set(6, 5, 8);
+
+    this.orientationRenderer = new WebGLRenderer({ antialias: true, alpha: true });
+    this.orientationRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.orientationRenderer.setClearColor(0x000000, 0);
+    this.orientationRenderer.domElement.className = "viewport-orientation-gizmo";
+    this.orientationRenderer.domElement.style.position = "absolute";
+    this.orientationRenderer.domElement.style.top = "10px";
+    this.orientationRenderer.domElement.style.right = "10px";
+    this.orientationRenderer.domElement.style.pointerEvents = "auto";
+    this.orientationRenderer.domElement.style.cursor = "pointer";
+    this.orientationRenderer.domElement.style.width = `${this.ORIENTATION_SIZE}px`;
+    this.orientationRenderer.domElement.style.height = `${this.ORIENTATION_SIZE}px`;
+    this.container.appendChild(this.orientationRenderer.domElement);
+
+    this.orientationScene = new Scene();
+    this.orientationCamera = new PerspectiveCamera(50, 1, 0.1, 10);
+    this.orientationCamera.position.set(0, 0, 2.2);
+    this.buildOrientationGizmo();
+    this.orientationScene.add(this.orientationRoot);
+    this.orientationRenderer.domElement.addEventListener("pointerdown", this.handleOrientationPointerDown);
 
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
@@ -146,6 +176,18 @@ export class SceneEditor {
     return this.currentMode;
   }
 
+  getNodeIdAtClientPoint(clientX: number, clientY: number): string | null {
+    const hits = this.getHitsAtClientPoint(clientX, clientY);
+    for (const hit of hits) {
+      const nodeId = this.findNodeId(hit.object);
+      if (nodeId) {
+        return nodeId;
+      }
+    }
+
+    return null;
+  }
+
   frameSelection(): void {
     const target = this.objectMap.get(this.store.selectedNodeId) ?? this.viewportRoot;
     this.selectionBounds.setFromObject(target);
@@ -176,8 +218,28 @@ export class SceneEditor {
     this.clearViewportRoot();
     this.selectionHelper?.removeFromParent();
     this.renderer.dispose();
+    this.orientationRenderer.dispose();
+    this.orientationRenderer.domElement.removeEventListener("pointerdown", this.handleOrientationPointerDown);
     this.renderer.domElement.remove();
+    this.orientationRenderer.domElement.remove();
   }
+
+  private readonly handleOrientationPointerDown = (event: PointerEvent): void => {
+    const rect = this.orientationRenderer.domElement.getBoundingClientRect();
+    this.orientationPointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.orientationPointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.orientationRaycaster.setFromCamera(this.orientationPointer, this.orientationCamera);
+    const hits = this.orientationRaycaster.intersectObjects(this.orientationInteractive, false);
+    const axis = hits[0]?.object?.userData?.axis as string | undefined;
+    if (!axis) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    this.snapCameraToAxis(axis);
+  };
 
   private handleStoreChange(change: EditorStoreChange): void {
     if (change.reason === "selection") {
@@ -215,6 +277,87 @@ export class SceneEditor {
     this.scene.add(light);
   }
 
+  private buildOrientationGizmo(): void {
+    this.orientationRoot.clear();
+    this.orientationInteractive.length = 0;
+
+    const createAxisLine = (color: string, rotation: { x?: number; y?: number; z?: number }, position: Vector3) => {
+      const mesh = new Mesh(
+        new CylinderGeometry(0.03, 0.03, 0.84, 6),
+        new MeshBasicMaterial({ color }),
+      );
+      mesh.rotation.set(rotation.x ?? 0, rotation.y ?? 0, rotation.z ?? 0);
+      mesh.position.copy(position);
+      this.orientationRoot.add(mesh);
+    };
+
+    createAxisLine("#ff5570", { z: -Math.PI / 2 }, new Vector3(0.42, 0, 0));
+    createAxisLine("#79df53", {}, new Vector3(0, 0.42, 0));
+    createAxisLine("#4d84ff", { x: Math.PI / 2 }, new Vector3(0, 0, 0.42));
+
+    const createEndpoint = (axis: string, position: Vector3, color: string, opacity: number, scale = 0.14) => {
+      const mesh = new Mesh(
+        new SphereGeometry(scale, 18, 18),
+        new MeshBasicMaterial({ color, transparent: opacity < 1, opacity }),
+      );
+      mesh.position.copy(position);
+      mesh.userData.axis = axis;
+      this.orientationRoot.add(mesh);
+      this.orientationInteractive.push(mesh);
+    };
+
+    createEndpoint("posX", new Vector3(1, 0, 0), "#ff5570", 1, 0.15);
+    createEndpoint("negX", new Vector3(-1, 0, 0), "#111318", 0.9, 0.13);
+    createEndpoint("posY", new Vector3(0, 1, 0), "#79df53", 1, 0.15);
+    createEndpoint("negY", new Vector3(0, -1, 0), "#111318", 0.9, 0.13);
+    createEndpoint("posZ", new Vector3(0, 0, 1), "#4d84ff", 1, 0.15);
+    createEndpoint("negZ", new Vector3(0, 0, -1), "#111318", 0.9, 0.13);
+
+    const core = new Mesh(
+      new SphereGeometry(0.08, 14, 14),
+      new MeshBasicMaterial({ color: "#1d2026" }),
+    );
+    this.orientationRoot.add(core);
+  }
+
+  private snapCameraToAxis(axis: string): void {
+    const focus = this.orbitControls.target.clone();
+    const distance = Math.max(this.camera.position.distanceTo(focus), 2);
+    const direction = new Vector3();
+    const verticalSnapOffset = 0.0001;
+
+    switch (axis) {
+      case "posX":
+        direction.set(1, 0, 0);
+        break;
+      case "negX":
+        direction.set(-1, 0, 0);
+        break;
+      case "posY":
+        // OrbitControls expects a stable up-vector, so avoid a perfect pole snap.
+        direction.set(0, 1, verticalSnapOffset).normalize();
+        break;
+      case "negY":
+        direction.set(0, -1, verticalSnapOffset).normalize();
+        break;
+      case "posZ":
+        direction.set(0, 0, 1);
+        break;
+      case "negZ":
+        direction.set(0, 0, -1);
+        break;
+      default:
+        return;
+    }
+
+    this.camera.position.copy(focus).addScaledVector(direction, distance);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(focus);
+    this.camera.updateMatrixWorld();
+    this.orbitControls.target.copy(focus);
+    this.orbitControls.update();
+  }
+
   private bindPointerSelection(): void {
     const canvas = this.renderer.domElement;
 
@@ -243,13 +386,7 @@ export class SceneEditor {
   }
 
   private pick(clientX: number, clientY: number): void {
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hits = this.raycaster.intersectObjects(this.viewportRoot.children, true);
-
+    const hits = this.getHitsAtClientPoint(clientX, clientY);
     for (const hit of hits) {
       const nodeId = this.findNodeId(hit.object);
       if (nodeId) {
@@ -257,6 +394,15 @@ export class SceneEditor {
         return;
       }
     }
+  }
+
+  private getHitsAtClientPoint(clientX: number, clientY: number) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(this.pointer, this.camera);
+    return this.raycaster.intersectObjects(this.viewportRoot.children, true);
   }
 
   private findNodeId(object: Object3D | null): string | null {
@@ -360,9 +506,9 @@ export class SceneEditor {
       opacity: node.material.opacity,
       transparent: node.material.opacity < 1,
       wireframe: node.material.wireframe,
-      side: node.type === "plane" ? DoubleSide : undefined,
       roughness: 0.4,
       metalness: 0.1,
+      ...(node.type === "plane" ? { side: DoubleSide } : {}),
     });
   }
 
@@ -457,6 +603,9 @@ export class SceneEditor {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.orientationCamera.aspect = 1;
+    this.orientationCamera.updateProjectionMatrix();
+    this.orientationRenderer.setSize(this.ORIENTATION_SIZE, this.ORIENTATION_SIZE, false);
   }
 
   private startLoop(): void {
@@ -465,6 +614,8 @@ export class SceneEditor {
       this.orbitControls.update();
       this.selectionHelper?.update();
       this.renderer.render(this.scene, this.camera);
+      this.orientationRoot.quaternion.copy(this.camera.quaternion).invert();
+      this.orientationRenderer.render(this.orientationScene, this.orientationCamera);
     };
 
     tick();

@@ -596,8 +596,9 @@ export class EditorStore extends EventTarget {
   private _redoStack: EditorStoreSnapshot[] = [];
   private _activeHistorySnapshot: EditorStoreSnapshot | null = null;
   private _activeHistoryDirty = false;
+  private _revision = 0;
 
-  constructor(initialBlueprint?: ComponentBlueprint) {
+  constructor(initialBlueprint?: unknown) {
     super();
     this._blueprint = normalizeBlueprint(initialBlueprint ?? createDefaultBlueprint());
     this._selectedNodeId = this._blueprint.nodes[0]?.id ?? ROOT_NODE_ID;
@@ -625,6 +626,10 @@ export class EditorStore extends EventTarget {
 
   get canRedo(): boolean {
     return this._redoStack.length > 0;
+  }
+
+  get revision(): number {
+    return this._revision;
   }
 
   subscribe(listener: (change: EditorStoreChange) => void): () => void {
@@ -768,12 +773,7 @@ export class EditorStore extends EventTarget {
       ? selected.id
       : selected?.parentId ?? ROOT_NODE_ID;
 
-    const node = createNode(type, parentId);
-    this.recordHistorySnapshot();
-    this._blueprint.nodes.push(node);
-    this._selectedNodeId = node.id;
-    this.notify({ reason: "structure", source, nodeId: node.id });
-    return node.id;
+    return this.insertNode(type, parentId, undefined, source);
   }
 
   addImageNode(image: ImageAsset, source: EditorStoreChange["source"] = "ui"): string {
@@ -782,12 +782,48 @@ export class EditorStore extends EventTarget {
       ? selected.id
       : selected?.parentId ?? ROOT_NODE_ID;
 
-    const node = createNode("image", parentId);
+    return this.insertImageNode(image, parentId, undefined, source);
+  }
+
+  insertNode(
+    type: EditorNodeType,
+    parentId: string | null,
+    siblingIndex?: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    const targetParentId = this.resolveInsertParentId(parentId);
+    const node = createNode(type, targetParentId);
+
+    this.recordHistorySnapshot();
+    this._blueprint.nodes = insertSubtreeIntoBlueprint(
+      this._blueprint.nodes,
+      [node],
+      targetParentId,
+      siblingIndex,
+    );
+    this._selectedNodeId = node.id;
+    this.notify({ reason: "structure", source, nodeId: node.id });
+    return node.id;
+  }
+
+  insertImageNode(
+    image: ImageAsset,
+    parentId: string | null,
+    siblingIndex?: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    const targetParentId = this.resolveInsertParentId(parentId);
+    const node = createNode("image", targetParentId);
     applyImageAssetToNode(node, image);
     node.name = stripExtension(image.name) || node.name;
 
     this.recordHistorySnapshot();
-    this._blueprint.nodes.push(node);
+    this._blueprint.nodes = insertSubtreeIntoBlueprint(
+      this._blueprint.nodes,
+      [node],
+      targetParentId,
+      siblingIndex,
+    );
     this._selectedNodeId = node.id;
     this.notify({ reason: "structure", source, nodeId: node.id });
     return node.id;
@@ -884,6 +920,59 @@ export class EditorStore extends EventTarget {
 
     this.recordHistorySnapshot();
     node.parentId = targetParentId;
+    this.notify({ reason: "structure", source, nodeId });
+    return true;
+  }
+
+  moveNode(
+    nodeId: string,
+    parentId: string | null,
+    siblingIndex: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const node = this.getNode(nodeId);
+    if (!node || node.id === ROOT_NODE_ID) {
+      return false;
+    }
+
+    const targetParentId = parentId ?? ROOT_NODE_ID;
+    const parent = this.getNode(targetParentId);
+    if (!parent || parent.type !== "group") {
+      return false;
+    }
+
+    const blocked = new Set(this.getDescendantIds(nodeId));
+    if (blocked.has(targetParentId) || targetParentId === nodeId) {
+      return false;
+    }
+
+    const movingIds = new Set([nodeId, ...this.getDescendantIds(nodeId)]);
+    const movingSubtree = this._blueprint.nodes.filter((entry) => movingIds.has(entry.id));
+    if (movingSubtree.length === 0) {
+      return false;
+    }
+
+    const remainingNodes = this._blueprint.nodes.filter((entry) => !movingIds.has(entry.id));
+    const targetSiblings = remainingNodes.filter((entry) => entry.parentId === targetParentId);
+    const normalizedIndex = clampInteger(siblingIndex, 0, targetSiblings.length);
+    const currentSiblingIndex = this._blueprint.nodes
+      .filter((entry) => entry.parentId === node.parentId)
+      .findIndex((entry) => entry.id === nodeId);
+
+    if (node.parentId === targetParentId && currentSiblingIndex === normalizedIndex) {
+      return false;
+    }
+
+    movingSubtree[0].parentId = targetParentId;
+
+    this.recordHistorySnapshot();
+    this._blueprint.nodes = insertSubtreeIntoBlueprint(
+      remainingNodes,
+      movingSubtree,
+      targetParentId,
+      normalizedIndex,
+    );
+    this._selectedNodeId = nodeId;
     this.notify({ reason: "structure", source, nodeId });
     return true;
   }
@@ -1079,6 +1168,16 @@ export class EditorStore extends EventTarget {
     return targetParentId;
   }
 
+  private resolveInsertParentId(parentId: string | null): string {
+    const targetParentId = parentId ?? ROOT_NODE_ID;
+    const parent = this.getNode(targetParentId);
+    if (!parent || parent.type !== "group") {
+      return ROOT_NODE_ID;
+    }
+
+    return targetParentId;
+  }
+
   private snapshotState(): EditorStoreSnapshot {
     return {
       blueprint: structuredClone(this._blueprint),
@@ -1138,6 +1237,7 @@ export class EditorStore extends EventTarget {
   }
 
   private notify(change: EditorStoreChange): void {
+    this._revision += 1;
     this.dispatchEvent(new CustomEvent<EditorStoreChange>("change", { detail: change }));
   }
 }
@@ -1186,4 +1286,87 @@ function applyImageAssetToNode(
 
 function stripExtension(fileName: string): string {
   return fileName.replace(/\.[a-z0-9]+$/i, "").trim();
+}
+
+function insertSubtreeIntoBlueprint(
+  nodes: EditorNode[],
+  subtree: EditorNode[],
+  parentId: string,
+  siblingIndex?: number,
+): EditorNode[] {
+  const insertionIndex = findInsertionIndex(nodes, parentId, siblingIndex);
+  return [
+    ...nodes.slice(0, insertionIndex),
+    ...subtree,
+    ...nodes.slice(insertionIndex),
+  ];
+}
+
+function findInsertionIndex(
+  nodes: EditorNode[],
+  parentId: string,
+  siblingIndex?: number,
+): number {
+  const siblings = nodes.filter((node) => node.parentId === parentId);
+  const normalizedIndex = clampInteger(siblingIndex ?? siblings.length, 0, siblings.length);
+
+  if (normalizedIndex === 0) {
+    const parentIndex = nodes.findIndex((node) => node.id === parentId);
+    if (parentIndex >= 0) {
+      return parentIndex + 1;
+    }
+
+    return nodes.findIndex((node) => node.parentId === parentId);
+  }
+
+  const previousSibling = siblings[normalizedIndex - 1];
+  if (!previousSibling) {
+    return nodes.length;
+  }
+
+  return findSubtreeEndIndex(nodes, previousSibling.id) + 1;
+}
+
+function findSubtreeEndIndex(nodes: EditorNode[], nodeId: string): number {
+  const subtreeIds = new Set([nodeId, ...getDescendantIdsFromNodes(nodes, nodeId)]);
+  let lastMatch = -1;
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    if (subtreeIds.has(nodes[index].id)) {
+      lastMatch = index;
+    }
+  }
+
+  return lastMatch >= 0 ? lastMatch : nodes.length - 1;
+}
+
+function getDescendantIdsFromNodes(nodes: EditorNode[], nodeId: string): string[] {
+  const descendants: string[] = [];
+  const queue = [nodeId];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      continue;
+    }
+
+    for (const node of nodes) {
+      if (node.parentId !== current) {
+        continue;
+      }
+
+      descendants.push(node.id);
+      queue.push(node.id);
+    }
+  }
+
+  return descendants;
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
