@@ -53,28 +53,28 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       <div className="secondary-toolbar__right">
         <div className="toolbar-icon-group">
           <ToolbarIconButton label="Undo" disabled={!canUndo} onClick={onUndo}>
-            <UndoIcon width={16} height={16} viewBox="0 0 16 16"/>
+            <UndoIcon />
           </ToolbarIconButton>
           <ToolbarIconButton label="Redo" disabled={!canRedo} onClick={onRedo}>
-            <RedoIcon width={16} height={16} viewBox="0 0 16 16" />
+            <RedoIcon />
           </ToolbarIconButton>
         </div>
 
         <div className="toolbar-icon-group">
           <ToolbarIconButton label="Select (1)" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
-            <CursorIcon width={16} height={16} />
+            <CursorIcon />
           </ToolbarIconButton>
           <ToolbarIconButton label="Move (2)" isActive={currentTool === "translate"} onClick={() => onToolChange("translate")}>
-            <MoveIcon width={16} height={16} viewBox="0 0 16 16" />
+            <MoveIcon />
           </ToolbarIconButton>
           <ToolbarIconButton label="Rotate (3)" isActive={currentTool === "rotate"} onClick={() => onToolChange("rotate")}>
-            <RotateIcon width={16} height={16} />
+            <RotateIcon />
           </ToolbarIconButton>
           <ToolbarIconButton label="Scale (4)" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
-            <ScaleIcon width={16} height={16} />
+            <ScaleIcon />
           </ToolbarIconButton>
           <ToolbarIconButton label="Frame (F)" onClick={onFrame}>
-            <FrameIcon width={16} height={16} />
+            <FrameIcon />
           </ToolbarIconButton>
         </div>
       </div>
