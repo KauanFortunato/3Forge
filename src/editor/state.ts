@@ -26,7 +26,7 @@ import type {
 } from "./types";
 
 export const ROOT_NODE_ID = "root";
-export const EDITOR_AUTOSAVE_KEY = "3editor-component-editor-blueprint";
+export const EDITOR_AUTOSAVE_KEY = "3Forge-component-editor-blueprint";
 const HISTORY_LIMIT = 100;
 
 const DEGREE_TO_RADIAN = Math.PI / 180;
@@ -55,6 +55,12 @@ const GEOMETRY_DEFINITIONS: Record<Exclude<EditorNodeType, "group">, NodePropert
     { group: "Geometry", path: "geometry.width", label: "Width", type: "number", input: "number", step: 0.1, min: 0.01 },
     { group: "Geometry", path: "geometry.height", label: "Height", type: "number", input: "number", step: 0.1, min: 0.01 },
     { group: "Geometry", path: "geometry.depth", label: "Depth", type: "number", input: "number", step: 0.1, min: 0.01 },
+  ],
+  circle: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.segments", label: "Segments", type: "number", input: "number", step: 1, min: 1 },
+    { group: "Geometry", path: "geometry.thetaStarts", label: "Theta Starts", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.thetaLenght", label: "Theta Lenght", type: "number", input: "number", step: 0.1, min: 0.01 },
   ],
   sphere: [
     { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
@@ -86,6 +92,7 @@ const GEOMETRY_DEFINITIONS: Record<Exclude<EditorNodeType, "group">, NodePropert
 const DEFAULT_NODE_NAMES: Record<EditorNodeType, string> = {
   group: "Group",
   box: "Box",
+  circle: "Circle",
   sphere: "Sphere",
   cylinder: "Cylinder",
   plane: "Plane",
@@ -116,7 +123,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
 
   const title = createNode("text", panel.id);
   title.name = "Headline";
-  title.geometry.text = "3Editor";
+  title.geometry.text = "3Forge";
   title.geometry.size = 0.28;
   title.geometry.depth = 0.06;
   title.material.color = "#333333";
@@ -125,7 +132,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
 
   return {
     version: 1,
-    componentName: "3Editor-Component",
+    componentName: "3Forge-Component",
     fonts: [],
     nodes: [root, panel, accent, title],
   };
@@ -175,6 +182,13 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
         type: "box",
         geometry: { width: 1.6, height: 1, depth: 1 },
         material: createMaterial("#4bd6ff"),
+      } as EditorNodeOfType<T>;
+    case "circle":
+      return {
+        ...base,
+        type: "circle",
+        geometry: { radius: 1, segments: 32, thetaStarts: 6.4, thetaLenght: 1 },
+        material: createMaterial("#ff8dcc"),
       } as EditorNodeOfType<T>;
     case "sphere":
       return {
@@ -468,7 +482,7 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
 
   const source = rawNode as Record<string, unknown>;
   const type = source.type;
-  if (type !== "group" && type !== "box" && type !== "sphere" && type !== "cylinder" && type !== "plane" && type !== "text" && type !== "image") {
+  if (type !== "group" && type !== "box" && type !== "circle" && type !== "sphere" && type !== "cylinder" && type !== "plane" && type !== "text" && type !== "image") {
     return null;
   }
 
@@ -493,6 +507,11 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
         node.geometry.height = clampNumber(normalizeNumber(geometry.height, node.geometry.height), 0.01);
         node.geometry.depth = clampNumber(normalizeNumber(geometry.depth, node.geometry.depth), 0.01);
         break;
+      case "circle":
+        node.geometry.radius = clampNumber(normalizeNumber(geometry.radius, node.geometry.radius), 0.01);
+        node.geometry.segments = clampNumber(normalizeNumber(geometry.segments, node.geometry.segments), 1);
+        node.geometry.thetaStarts = clampNumber(normalizeNumber(geometry.thetaStarts, node.geometry.thetaStarts), 0.01);
+        node.geometry.thetaLenght = clampNumber(normalizeNumber(geometry.thetaLenght, node.geometry.thetaLenght), 0.01);
       case "sphere":
         node.geometry.radius = clampNumber(normalizeNumber(geometry.radius, node.geometry.radius), 0.01);
         break;

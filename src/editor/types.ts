@@ -1,4 +1,4 @@
-export type EditorNodeType = "group" | "box" | "sphere" | "cylinder" | "plane" | "text" | "image";
+export type EditorNodeType = "group" | "box" | "circle" | "sphere" | "cylinder" | "plane" | "text" | "image";
 export type EditableFieldType = "number" | "color" | "boolean" | "string";
 export type PropertyGroup = "Transform" | "Geometry" | "Material" | "Text";
 export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text";
@@ -67,6 +67,17 @@ export interface BoxNode extends BaseEditorNode {
   material: MaterialSpec;
 }
 
+export interface CircleNode extends BaseEditorNode {
+  type: "circle";
+  geometry: {
+    radius: number;
+    segments: number;
+    thetaStarts: number;
+    thetaLenght: number;
+  };
+  material: MaterialSpec;
+}
+
 export interface SphereNode extends BaseEditorNode {
   type: "sphere";
   geometry: {
@@ -119,7 +130,7 @@ export interface ImageNode extends BaseEditorNode {
   material: MaterialSpec;
 }
 
-export type EditorNode = GroupNode | BoxNode | SphereNode | CylinderNode | PlaneNode | TextNode | ImageNode;
+export type EditorNode = GroupNode | BoxNode | CircleNode | SphereNode | CylinderNode | PlaneNode | TextNode | ImageNode;
 
 export interface ComponentBlueprint {
   version: 1;

@@ -26,6 +26,7 @@ import {
   Vector2,
   Vector3,
   WebGLRenderer,
+  CircleGeometry,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
@@ -109,7 +110,7 @@ export class SceneEditor {
 
     this.orientationScene = new Scene();
     this.orientationCamera = new PerspectiveCamera(50, 1, 0.1, 10);
-    this.orientationCamera.position.set(0, 0, 2.2);
+    this.orientationCamera.position.set(0, 0, 3);
     this.buildOrientationGizmo();
     this.orientationScene.add(this.orientationRoot);
     this.orientationRenderer.domElement.addEventListener("pointerdown", this.handleOrientationPointerDown);
@@ -483,6 +484,9 @@ export class SceneEditor {
       case "box":
         mesh = new Mesh(new BoxGeometry(node.geometry.width, node.geometry.height, node.geometry.depth), this.createStandardMaterial(node));
         break;
+      case "circle":
+        mesh = new Mesh(new CircleGeometry(node.geometry.radius, node.geometry.segments, node.geometry.thetaLenght, node.geometry.thetaStarts), this.createStandardMaterial(node));
+        break;
       case "sphere":
         mesh = new Mesh(new SphereGeometry(node.geometry.radius, 32, 24), this.createStandardMaterial(node));
         break;
@@ -531,7 +535,7 @@ export class SceneEditor {
       wireframe: node.material.wireframe,
       roughness: 0.4,
       metalness: 0.1,
-      ...(node.type === "plane" ? { side: DoubleSide } : {}),
+      ...((node.type === "plane" || node.type === "circle") ? { side: DoubleSide } : {}),
     });
   }
 

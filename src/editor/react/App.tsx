@@ -323,6 +323,7 @@ export function App() {
     return [
       { id: "add-group", label: "Group", icon: <GroupIcon {...iconSize} />, onSelect: createNodeAction("group") },
       { id: "add-box", label: "Box", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("box") },
+      { id: "add-circle", label: "Circle", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("circle") },
       { id: "add-sphere", label: "Sphere", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("sphere") },
       { id: "add-cylinder", label: "Cylinder", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("cylinder") },
       { id: "add-plane", label: "Plane", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("plane") },
@@ -618,8 +619,8 @@ export function App() {
             </div>
           </section>
 
-          <div 
-            className={`panel-resizer${isResizing ? " is-active" : ""}`} 
+          <div
+            className={`panel-resizer${isResizing ? " is-active" : ""}`}
             onPointerDown={startResizing}
           />
 

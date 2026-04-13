@@ -24,7 +24,7 @@ export function exportBlueprintToJson(blueprint: ComponentBlueprint): string {
 }
 
 export function generateTypeScriptComponent(blueprint: ComponentBlueprint): string {
-  const componentName = blueprint.componentName.trim() || "HologfxComponent";
+  const componentName = blueprint.componentName.trim() || "3ForgeComponent";
   const componentTypeName = toPascalCase(componentName);
   const optionTypeName = `${componentTypeName}Options`;
   const resolvedTypeName = `${componentTypeName}ResolvedOptions`;
@@ -172,6 +172,7 @@ function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<
   const types = new Set<EditorNodeType>(nodes.map((node) => node.type));
 
   if (types.has("box")) imports.add("BoxGeometry");
+  if (types.has("circle")) imports.add("CircleGeometry");
   if (types.has("sphere")) imports.add("SphereGeometry");
   if (types.has("cylinder")) imports.add("CylinderGeometry");
   if (types.has("plane") || types.has("image")) imports.add("PlaneGeometry");
@@ -342,6 +343,11 @@ function emitCreationLines(
       case "box":
         lines.push(
           `const ${geometryVariable} = new BoxGeometry(${propertyExpression(node, "geometry.width", bindingAccessor)}, ${propertyExpression(node, "geometry.height", bindingAccessor)}, ${propertyExpression(node, "geometry.depth", bindingAccessor)});`,
+        );
+        break;
+      case "circle":
+        lines.push(
+          `const ${geometryVariable} = new SphereGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, ${propertyExpression(node, "geometry.segments", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaStarts", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaLenght", bindingAccessor)});`,
         );
         break;
       case "sphere":
