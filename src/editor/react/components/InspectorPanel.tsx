@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
 import type { EditorNode, FontAsset, NodePropertyDefinition } from "../../types";
 import {
+  CircleFilledIcon,
+  CircleIcon,
   GeometryIcon,
   ImagePropertyIcon,
   MaterialIcon,
@@ -305,12 +307,13 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                 max={definition.max}
                 onChange={(event) => onNodePropertyChange(node.id, definition, event.target.value)}
               />
-              <label className="transform-cell__editable" title="Editable at runtime">
+              <label className={`transform-cell__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
                 <input
                   type="checkbox"
                   checked={isEditable}
                   onChange={(event) => onToggleEditable(node.id, definition, event.target.checked)}
                 />
+                {isEditable ? <CircleFilledIcon width={10} height={10} /> : <CircleIcon width={10} height={10} />}
               </label>
             </div>
           );
@@ -356,12 +359,13 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
         )}
       </div>
 
-      <label className="inspector-property__editable" title="Editable at runtime">
+      <label className={`inspector-property__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
         <input
           type="checkbox"
           checked={isEditable}
           onChange={(event) => onToggleEditable(node.id, definition, event.target.checked)}
         />
+        {isEditable ? <CircleFilledIcon width={10} height={10} /> : <CircleIcon width={10} height={10} />}
       </label>
     </div>
   );

@@ -18,7 +18,20 @@ import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
 import { ContextMenu } from "./components/ContextMenu";
 import { ExportPanel } from "./components/ExportPanel";
 import { FieldsPanel } from "./components/FieldsPanel";
-import { CopyIcon, FileIcon, FrameIcon, InfoIcon, TrashIcon } from "./components/icons";
+import {
+  CopyIcon,
+  FileIcon,
+  FrameIcon,
+  InfoIcon,
+  TrashIcon,
+  ShortcutIcon,
+  GroupIcon,
+  MeshIcon,
+  ImagePropertyIcon,
+  TextPropertyIcon,
+  UndoIcon,
+  RedoIcon,
+} from "./components/icons";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MenuBar } from "./components/MenuBar";
 import { Modal } from "./components/Modal";
@@ -303,21 +316,24 @@ export function App() {
       setTransientStatus(`Added ${type}.`);
     };
 
+    const iconSize = { width: 14, height: 14 };
+
     return [
-      { id: "add-group", label: "Group", onSelect: createNodeAction("group") },
-      { id: "add-box", label: "Box", onSelect: createNodeAction("box") },
-      { id: "add-sphere", label: "Sphere", onSelect: createNodeAction("sphere") },
-      { id: "add-cylinder", label: "Cylinder", onSelect: createNodeAction("cylinder") },
-      { id: "add-plane", label: "Plane", onSelect: createNodeAction("plane") },
+      { id: "add-group", label: "Group", icon: <GroupIcon {...iconSize} />, onSelect: createNodeAction("group") },
+      { id: "add-box", label: "Box", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("box") },
+      { id: "add-sphere", label: "Sphere", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("sphere") },
+      { id: "add-cylinder", label: "Cylinder", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("cylinder") },
+      { id: "add-plane", label: "Plane", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("plane") },
       {
         id: "add-image",
         label: "Image",
+        icon: <ImagePropertyIcon {...iconSize} />,
         onSelect: () => {
           const target = resolveTarget();
           requestImageImport({ mode: "create", parentId: target.parentId, index: target.index });
         },
       },
-      { id: "add-text", label: "Text", onSelect: createNodeAction("text") },
+      { id: "add-text", label: "Text", icon: <TextPropertyIcon {...iconSize} />, onSelect: createNodeAction("text") },
     ];
   }, [requestImageImport, setTransientStatus, store]);
 
@@ -413,8 +429,8 @@ export function App() {
     const targetNode = nodeId ? store.getNode(nodeId) : null;
     const addActions = createAddMenuActions(() => resolveContextInsertTarget(nodeId));
     const items: MenuAction[] = [
-      { id: "ctx-new", label: "New", children: addActions },
-      { id: "ctx-paste", label: "Paste", shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste(nodeId) },
+      { id: "ctx-new", label: "New", icon: <MeshIcon width={14} height={14} />, children: addActions },
+      { id: "ctx-paste", label: "Paste", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste(nodeId) },
       { id: "ctx-divider-1", separator: true },
       { id: "ctx-duplicate", label: "Duplicate", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C / Ctrl+V", disabled: !targetNode || targetNode.id === ROOT_NODE_ID, onSelect: () => handleDuplicate(nodeId) },
       { id: "ctx-frame", label: "Frame", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: !targetNode, onSelect: () => { if (nodeId) store.selectNode(nodeId); handleFrameSelection(); } },
@@ -453,12 +469,12 @@ export function App() {
       id: "file",
       label: "File",
       items: [
-        { id: "file-new", label: "New Blueprint", shortcut: "Ctrl+N", onSelect: handleNewBlueprint },
-        { id: "file-restore", label: "Restore Autosave", disabled: !hasAutosave, onSelect: handleRestoreAutosave },
+        { id: "file-new", label: "New Blueprint", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+N", onSelect: handleNewBlueprint },
+        { id: "file-restore", label: "Restore Autosave", icon: <UndoIcon width={14} height={14} />, disabled: !hasAutosave, onSelect: handleRestoreAutosave },
         { id: "file-divider-1", separator: true },
-        { id: "file-import-json", label: "Import JSON", onSelect: () => jsonInputRef.current?.click() },
-        { id: "file-import-image", label: "Import Image", onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
-        { id: "file-import-font", label: "Import Font", onSelect: () => fontInputRef.current?.click() },
+        { id: "file-import-json", label: "Import JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
+        { id: "file-import-image", label: "Import Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
+        { id: "file-import-font", label: "Import Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
         { id: "file-divider-2", separator: true },
         { id: "file-export-json", label: "Download Blueprint JSON", onSelect: () => downloadExportFile("json") },
         { id: "file-export-ts", label: "Download TypeScript", onSelect: () => downloadExportFile("typescript") },
@@ -468,14 +484,14 @@ export function App() {
       id: "edit",
       label: "Edit",
       items: [
-        { id: "edit-undo", label: "Undo", shortcut: "Ctrl+Z", disabled: !storeView.canUndo, onSelect: () => store.undo() },
-        { id: "edit-redo", label: "Redo", shortcut: "Ctrl+Y", disabled: !storeView.canRedo, onSelect: () => store.redo() },
+        { id: "edit-undo", label: "Undo", icon: <UndoIcon width={14} height={14} />, shortcut: "Ctrl+Z", disabled: !storeView.canUndo, onSelect: () => store.undo() },
+        { id: "edit-redo", label: "Redo", icon: <RedoIcon width={14} height={14} />, shortcut: "Ctrl+Y", disabled: !storeView.canRedo, onSelect: () => store.redo() },
         { id: "edit-divider-1", separator: true },
-        { id: "edit-copy", label: "Copy", shortcut: "Ctrl+C", disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID, onSelect: handleCopy },
-        { id: "edit-paste", label: "Paste", shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste() },
-        { id: "edit-delete", label: "Delete", shortcut: "Delete", danger: true, disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID, onSelect: () => handleDelete() },
+        { id: "edit-copy", label: "Copy", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C", disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID, onSelect: handleCopy },
+        { id: "edit-paste", label: "Paste", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste() },
+        { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID, onSelect: () => handleDelete() },
         { id: "edit-divider-2", separator: true },
-        { id: "edit-frame", label: "Frame Selection", shortcut: "F", disabled: !selectedNode, onSelect: handleFrameSelection },
+        { id: "edit-frame", label: "Frame Selection", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: !selectedNode, onSelect: handleFrameSelection },
       ],
     },
     {
@@ -487,11 +503,12 @@ export function App() {
       id: "help",
       label: "Help",
       items: [
-        { id: "help-shortcuts", label: "Shortcuts", icon: <FileIcon width={14} height={14} />, onSelect: () => setIsShortcutDialogOpen(true) },
+        { id: "help-shortcuts", label: "Shortcuts", icon: <ShortcutIcon width={14} height={14} />, onSelect: () => setIsShortcutDialogOpen(true) },
         { id: "help-about", label: "About 3Forge", icon: <InfoIcon width={14} height={14} />, onSelect: () => setIsAboutDialogOpen(true) },
       ],
     },
   ], [
+    autosaveEnabled,
     createAddMenuActions,
     downloadExportFile,
     handleCopy,
@@ -552,10 +569,7 @@ export function App() {
         <aside className="panel panel--right panel--split">
           <section className="panel-split__top">
             <div className="panel__header">
-              <div>
-                <p className="panel__eyebrow">Hierarchy</p>
-                <h2>Scene Graph</h2>
-              </div>
+              <p className="panel__eyebrow">Hierarchy</p>
               <span className="panel__meta">{storeView.blueprintNodes.length} items</span>
             </div>
 

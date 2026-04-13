@@ -1,4 +1,5 @@
 import type { ExportMode } from "../ui-types";
+import { CopyIcon, DownloadIcon } from "./icons";
 
 interface ExportPanelProps {
   exportMode: ExportMode;
@@ -30,16 +31,20 @@ export function ExportPanel({ exportMode, preview, onExportModeChange, onCopy, o
         </div>
 
         <div className="button-row">
-          <button type="button" className="tool-button" onClick={onCopy}>
-            Copiar
+          <button type="button" className="tool-button tool-button--icon" onClick={onCopy} title="Copy to clipboard">
+            <CopyIcon width={14} height={14} />
+            <span>Copy</span>
           </button>
-          <button type="button" className="tool-button" onClick={onDownload}>
-            Download
+          <button type="button" className="tool-button tool-button--icon" onClick={onDownload} title="Download file">
+            <DownloadIcon width={14} height={14} />
+            <span>Download</span>
           </button>
         </div>
       </div>
 
-      <textarea className="export-preview" readOnly spellCheck={false} value={preview} />
+      <div className="export-preview-container">
+        <textarea className="export-preview" readOnly spellCheck={false} value={preview} />
+      </div>
     </div>
   );
 }

@@ -12,6 +12,7 @@ interface ViewportHostProps {
 export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHostProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onSceneReadyRef = useRef(onSceneReady);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     onSceneReadyRef.current = onSceneReady;
@@ -48,8 +49,29 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
         }
 
         event.currentTarget.focus({ preventScroll: true });
+
+        // Rastrear início do clique com botão direito (button 2)
+        if (event.button === 2) {
+          dragStartRef.current = { x: event.clientX, y: event.clientY };
+        }
       }}
-      onContextMenu={onContextMenu}
+      onContextMenu={(event) => {
+        if (dragStartRef.current) {
+          const deltaX = Math.abs(event.clientX - dragStartRef.current.x);
+          const deltaY = Math.abs(event.clientY - dragStartRef.current.y);
+          const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+          
+          dragStartRef.current = null;
+
+          // Se moveu mais de 5 pixels, é um arraste da câmera, cancela o menu
+          if (distance > 5) {
+            event.preventDefault();
+            return;
+          }
+        }
+        
+        onContextMenu(event);
+      }}
     />
   );
 }
