@@ -35,8 +35,6 @@ import {
   UndoIcon,
   RedoIcon,
 } from "./components/icons";
-
-const APP_LOGO_SRC = "/assets/icons/logo.svg";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MenuBar } from "./components/MenuBar";
 import { Modal } from "./components/Modal";
@@ -44,6 +42,8 @@ import { SceneGraphPanel } from "./components/SceneGraphPanel";
 import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { ViewportHost } from "./components/ViewportHost";
+
+const APP_LOGO_SRC = "/assets/icons/logo.svg";
 
 interface NodeClipboard {
   sourceNodeId: string;
