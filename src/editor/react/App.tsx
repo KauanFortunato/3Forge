@@ -20,9 +20,12 @@ import { ExportPanel } from "./components/ExportPanel";
 import { FieldsPanel } from "./components/FieldsPanel";
 import {
   CopyIcon,
+  DownloadIcon,
   FileIcon,
   FrameIcon,
   InfoIcon,
+  LogoGlyph,
+  PlusIcon,
   TrashIcon,
   ShortcutIcon,
   GroupIcon,
@@ -103,11 +106,50 @@ function getAutosaveBootState(): AutosaveBootState {
   };
 }
 
+function LandingPage({ onStartNew, onLoadProject }: { onStartNew: () => void; onLoadProject: () => void }) {
+  return (
+    <div className="landing-page">
+      <div className="landing-page__content">
+        <div className="landing-page__logo">
+          <LogoGlyph width={80} height={80} />
+        </div>
+        <h1 className="landing-page__title">3Forge Editor</h1>
+        <p className="landing-page__subtitle">
+          Design, prototype, and export high-performance 3D components for your applications.
+        </p>
+        
+        <div className="landing-page__actions">
+          <button type="button" className="landing-btn landing-btn--primary" onClick={onStartNew}>
+            <PlusIcon width={20} height={20} />
+            <div className="landing-btn__text">
+              <span className="landing-btn__label">New Project</span>
+              <span className="landing-btn__desc">Start from a clean slate</span>
+            </div>
+          </button>
+          
+          <button type="button" className="landing-btn landing-btn--secondary" onClick={onLoadProject}>
+            <DownloadIcon width={20} height={20} />
+            <div className="landing-btn__text">
+              <span className="landing-btn__label">Load Project</span>
+              <span className="landing-btn__desc">Import a .json blueprint</span>
+            </div>
+          </button>
+        </div>
+        
+        <div className="landing-page__footer">
+          Developed for modern 3D workflows. All assets are stored locally.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const [bootState] = useState(getAutosaveBootState);
   const [store] = useState(() => new EditorStore(bootState.initialBlueprint));
   const [autosaveEnabled, setAutosaveEnabled] = useState(bootState.autosaveEnabled);
   const [hasAutosave, setHasAutosave] = useState(bootState.hasAutosave);
+  const [isStarted, setIsStarted] = useState(bootState.hasAutosave);
   const storeView = useEditorStoreSnapshot(store);
   const [exportMode, setExportMode] = useState<ExportMode>("typescript");
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("inspector");
@@ -558,6 +600,39 @@ export function App() {
     storeView.canRedo,
     storeView.canUndo,
   ]);
+
+  if (!isStarted) {
+    return (
+      <div className="app-shell app-shell--landing">
+        <LandingPage 
+          onStartNew={() => {
+            handleNewBlueprint();
+            setIsStarted(true);
+          }} 
+          onLoadProject={() => {
+            jsonInputRef.current?.click();
+          }} 
+        />
+        <input
+          ref={jsonInputRef}
+          className="hidden-input"
+          type="file"
+          accept=".json"
+          onChange={async (event) => {
+            const file = event.target.files?.[0];
+            event.currentTarget.value = "";
+            if (!file) return;
+            try {
+              await importJsonFromFile(file);
+              setIsStarted(true);
+            } catch {
+              setTransientStatus("Unable to import JSON.");
+            }
+          }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell" data-status-tick={statusTick}>

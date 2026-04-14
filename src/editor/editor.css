@@ -1249,6 +1249,113 @@ input[type=number] {
   display: none;
 }
 
+/* Landing Page */
+.app-shell--landing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at center, #1c1e26 0%, #121316 100%);
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.landing-page {
+  max-width: 640px;
+  width: 100%;
+  padding: 40px;
+  text-align: center;
+  animation: landing-fade-in 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes landing-fade-in {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.landing-page__logo {
+  color: var(--accent);
+  margin-bottom: 24px;
+  filter: drop-shadow(0 0 20px rgba(124, 68, 222, 0.3));
+}
+
+.landing-page__title {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 3.5rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+  background: linear-gradient(180deg, #fff 0%, #a1a5af 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.landing-page__subtitle {
+  font-size: 1.1rem;
+  color: var(--text-soft);
+  line-height: 1.6;
+  margin-bottom: 48px;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.landing-page__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 64px;
+}
+
+.landing-btn {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.landing-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--accent);
+  transform: scale(1.02);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+}
+
+.landing-btn--primary {
+  border-color: var(--accent-soft);
+}
+
+.landing-btn__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.landing-btn__label {
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.landing-btn__desc {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.landing-page__footer {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
 .statusbar {
   display: flex;
   align-items: center;
