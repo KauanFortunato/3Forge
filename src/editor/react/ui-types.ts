@@ -1,5 +1,13 @@
 import type { ReactNode } from "react";
-import type { EditableFieldEntry, EditorNode, FontAsset, NodePropertyDefinition, ViewMode } from "../types";
+import type {
+  AnimationTrack,
+  ComponentAnimation,
+  EditableFieldEntry,
+  EditorNode,
+  FontAsset,
+  NodePropertyDefinition,
+  ViewMode,
+} from "../types";
 
 export type ExportMode = "json" | "typescript";
 export type RightPanelTab = "inspector" | "fields" | "export";
@@ -12,6 +20,8 @@ export interface EditorStoreView {
   selectedNode: EditorNode | undefined;
   fonts: FontAsset[];
   editableFields: EditableFieldEntry[];
+  animation: ComponentAnimation;
+  selectedNodeAnimationTracks: AnimationTrack[];
   canUndo: boolean;
   canRedo: boolean;
   viewMode: ViewMode;

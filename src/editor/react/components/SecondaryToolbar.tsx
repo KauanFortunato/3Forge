@@ -21,12 +21,14 @@ interface SecondaryToolbarProps {
   canRedo: boolean;
   currentTool: ToolMode;
   viewMode: ViewMode;
+  isTimelineVisible: boolean;
   onComponentNameChange: (value: string) => void;
   onUndo: () => void;
   onRedo: () => void;
   onToolChange: (mode: ToolMode) => void;
   onViewModeChange: (mode: ViewMode) => void;
   onFrame: () => void;
+  onToggleTimeline: () => void;
 }
 
 export function SecondaryToolbar(props: SecondaryToolbarProps) {
@@ -38,12 +40,14 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     canRedo,
     currentTool,
     viewMode,
+    isTimelineVisible,
     onComponentNameChange,
     onUndo,
     onRedo,
     onToolChange,
     onViewModeChange,
     onFrame,
+    onToggleTimeline,
   } = props;
 
   return (
@@ -90,6 +94,16 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
           <ToolbarIconButton label="Redo" disabled={!canRedo} onClick={onRedo}>
             <RedoIcon />
           </ToolbarIconButton>
+        </div>
+
+        <div className="toolbar-icon-group">
+          <button
+            type="button"
+            className={`tool-button tool-button--label${isTimelineVisible ? " is-active" : ""}`}
+            onClick={onToggleTimeline}
+          >
+            Timeline
+          </button>
         </div>
 
         <div className="toolbar-icon-group">

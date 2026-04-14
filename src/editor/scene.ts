@@ -28,12 +28,14 @@ import {
   WebGLRenderer,
   CircleGeometry,
 } from "three";
+import gsap from "gsap";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
+import { frameToSeconds, getTrackSegments, mapAnimationEaseToGsap, secondsToFrame } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { EditorStore } from "./state";
-import type { EditorNode, EditorStoreChange, ImageNode, TextNode } from "./types";
+import type { AnimationPropertyPath, EditorNode, EditorStoreChange, ImageNode, TextNode } from "./types";
 
 type GizmoMode = "translate" | "rotate" | "scale";
 type ToolMode = "select" | GizmoMode;
@@ -65,8 +67,10 @@ export class SceneEditor {
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribe: () => void;
   private readonly textureCache = new Map<string, Texture>();
+  private readonly animationFrameListeners = new Set<(frame: number) => void>();
 
   private animationFrame = 0;
+  private animationTimeline: gsap.core.Timeline | null = null;
   private pointerDownX = 0;
   private pointerDownY = 0;
   private mainLight: DirectionalLight | null = null;
@@ -210,10 +214,81 @@ export class SceneEditor {
     this.orbitControls.update();
   }
 
+  onAnimationFrameChange(listener: (frame: number) => void): () => void {
+    this.animationFrameListeners.add(listener);
+    listener(this.getCurrentAnimationFrame());
+    return () => {
+      this.animationFrameListeners.delete(listener);
+    };
+  }
+
+  getCurrentAnimationFrame(): number {
+    if (!this.animationTimeline) {
+      return 0;
+    }
+
+    return secondsToFrame(this.animationTimeline.time(), this.store.animation.fps);
+  }
+
+  getNodeAnimationValue(nodeId: string, property: AnimationPropertyPath): number | null {
+    const object = this.objectMap.get(nodeId);
+    if (!object) {
+      return null;
+    }
+
+    const [owner, key] = resolveAnimationTarget(object, toObjectAnimationPath(property));
+    if (!owner || !key) {
+      return null;
+    }
+
+    const value = owner[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+
+  playAnimation(): void {
+    if (!this.animationTimeline) {
+      this.rebuildAnimationTimeline(false);
+    }
+
+    this.animationTimeline?.play();
+    this.emitAnimationFrame();
+  }
+
+  pauseAnimation(): void {
+    this.animationTimeline?.pause();
+    this.emitAnimationFrame();
+  }
+
+  stopAnimation(): void {
+    if (!this.animationTimeline) {
+      return;
+    }
+
+    this.animationTimeline.pause(0);
+    this.emitAnimationFrame();
+  }
+
+  seekAnimation(frame: number): void {
+    if (!this.animationTimeline) {
+      this.rebuildAnimationTimeline(false);
+    }
+
+    if (!this.animationTimeline) {
+      this.emitAnimationFrame(Math.max(0, Math.round(frame)));
+      return;
+    }
+
+    const time = frameToSeconds(frame, this.store.animation.fps);
+    this.animationTimeline.pause();
+    this.animationTimeline.seek(time, false);
+    this.emitAnimationFrame();
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.animationFrame);
     this.unsubscribe();
     this.resizeObserver.disconnect();
+    this.animationTimeline?.kill();
     this.transformControls.detach();
     this.transformControls.dispose();
     this.orbitControls.dispose();
@@ -255,6 +330,11 @@ export class SceneEditor {
     }
 
     if (change.reason === "editable" || change.reason === "meta") {
+      return;
+    }
+
+    if (change.reason === "animation") {
+      this.rebuildAnimationTimeline();
       return;
     }
 
@@ -461,6 +541,7 @@ export class SceneEditor {
 
     this.updateViewMode();
     this.refreshSelection();
+    this.rebuildAnimationTimeline();
   }
 
   private createObject(node: EditorNode): Object3D {
@@ -667,4 +748,98 @@ export class SceneEditor {
 
     tick();
   }
+
+  private rebuildAnimationTimeline(preserveState = true): void {
+    const previousTimeline = this.animationTimeline;
+    const previousFrame = preserveState ? this.getCurrentAnimationFrame() : 0;
+    const wasPaused = previousTimeline?.paused() ?? true;
+    previousTimeline?.kill();
+
+    const timeline = gsap.timeline({
+      paused: true,
+      repeat: -1,
+      onUpdate: () => this.emitAnimationFrame(),
+    });
+    const totalDuration = frameToSeconds(this.store.animation.durationFrames, this.store.animation.fps);
+    const hold = { progress: 0 };
+    timeline.to(hold, { progress: 1, duration: Math.max(totalDuration, 0.0001), ease: "none" }, 0);
+
+    for (const track of this.store.animation.tracks) {
+      const target = this.objectMap.get(track.nodeId);
+      if (!target) {
+        continue;
+      }
+
+      const objectPath = toObjectAnimationPath(track.property);
+      const [owner, property] = resolveAnimationTarget(target, objectPath);
+      if (!owner || !property) {
+        continue;
+      }
+
+      const ordered = [...track.keyframes].sort((a, b) => a.frame - b.frame);
+      if (ordered.length === 0) {
+        continue;
+      }
+
+      timeline.set(owner, { [property]: ordered[0].value }, frameToSeconds(ordered[0].frame, this.store.animation.fps));
+
+      for (const segment of getTrackSegments(track)) {
+        timeline.to(
+          owner,
+          {
+            [property]: segment.to.value,
+            duration: frameToSeconds(segment.to.frame - segment.from.frame, this.store.animation.fps),
+            ease: mapAnimationEaseToGsap(segment.to.ease),
+          },
+          frameToSeconds(segment.from.frame, this.store.animation.fps),
+        );
+      }
+    }
+
+    this.animationTimeline = timeline;
+
+    if (timeline.duration() <= 0) {
+      this.emitAnimationFrame(0);
+      return;
+    }
+
+    const clampedFrame = Math.max(0, Math.min(previousFrame, this.store.animation.durationFrames));
+    timeline.pause();
+    timeline.seek(frameToSeconds(clampedFrame, this.store.animation.fps), false);
+    if (!wasPaused) {
+      timeline.play();
+    }
+    this.emitAnimationFrame();
+  }
+
+  private emitAnimationFrame(frame = this.getCurrentAnimationFrame()): void {
+    for (const listener of this.animationFrameListeners) {
+      listener(frame);
+    }
+  }
+}
+
+function toObjectAnimationPath(path: string): string {
+  return path.replace(/^transform\./, "");
+}
+
+function resolveAnimationTarget(target: Object3D, path: string): [Record<string, unknown> | null, string | null] {
+  const segments = path.split(".");
+  const property = segments.pop() ?? null;
+  if (!property) {
+    return [null, null];
+  }
+
+  const owner = segments.reduce<unknown>((current, segment) => {
+    if (current && typeof current === "object" && segment in current) {
+      return (current as Record<string, unknown>)[segment];
+    }
+    return undefined;
+  }, target);
+
+  if (!owner || typeof owner !== "object") {
+    return [null, null];
+  }
+
+  return [owner as Record<string, unknown>, property];
 }

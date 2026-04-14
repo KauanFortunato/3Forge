@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuAction } from "../ui-types";
-import { LogoGlyph } from "./icons";
 import { MenuList } from "./ContextMenu";
+
+const APP_LOGO_SRC = "/assets/icons/logo.svg";
 
 interface TopMenu {
   id: string;
@@ -41,7 +42,7 @@ export function MenuBar({ menus }: MenuBarProps) {
   return (
     <div ref={rootRef} className="menu-bar">
       <div className="menu-bar__brand" aria-label="3Forge">
-        <LogoGlyph width={16} height={16} />
+        <img src={APP_LOGO_SRC} alt="" className="menu-bar__brand-image" />
       </div>
 
       <div className="menu-bar__menus">
