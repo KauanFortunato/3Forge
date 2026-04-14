@@ -3,6 +3,8 @@ import type { MouseEvent } from "react";
 import { SceneEditor } from "../../scene";
 import { EditorStore } from "../../state";
 
+const CONTEXT_MENU_DRAG_THRESHOLD = 5;
+
 interface ViewportHostProps {
   store: EditorStore;
   onSceneReady: (scene: SceneEditor | null) => void;
@@ -12,7 +14,7 @@ interface ViewportHostProps {
 export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHostProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onSceneReadyRef = useRef(onSceneReady);
-  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const rightPointerStateRef = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
 
   useEffect(() => {
     onSceneReadyRef.current = onSceneReady;
@@ -33,6 +35,40 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
     };
   }, [store]);
 
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const state = rightPointerStateRef.current;
+      if (!state || event.pointerId !== state.pointerId) {
+        return;
+      }
+
+      const deltaX = Math.abs(event.clientX - state.x);
+      const deltaY = Math.abs(event.clientY - state.y);
+      if (deltaX > CONTEXT_MENU_DRAG_THRESHOLD || deltaY > CONTEXT_MENU_DRAG_THRESHOLD) {
+        rightPointerStateRef.current = { ...state, moved: true };
+      }
+    };
+
+    const clearPointerState = (event: PointerEvent) => {
+      const state = rightPointerStateRef.current;
+      if (!state || event.pointerId !== state.pointerId) {
+        return;
+      }
+
+      rightPointerStateRef.current = null;
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", clearPointerState);
+    window.addEventListener("pointercancel", clearPointerState);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", clearPointerState);
+      window.removeEventListener("pointercancel", clearPointerState);
+    };
+  }, []);
+
   return (
     <div
       ref={containerRef}
@@ -50,26 +86,24 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
 
         event.currentTarget.focus({ preventScroll: true });
 
-        // Rastrear início do clique com botão direito (button 2)
         if (event.button === 2) {
-          dragStartRef.current = { x: event.clientX, y: event.clientY };
+          rightPointerStateRef.current = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+            moved: false,
+          };
         }
       }}
       onContextMenu={(event) => {
-        if (dragStartRef.current) {
-          const deltaX = Math.abs(event.clientX - dragStartRef.current.x);
-          const deltaY = Math.abs(event.clientY - dragStartRef.current.y);
-          const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-          
-          dragStartRef.current = null;
+        const state = rightPointerStateRef.current;
+        rightPointerStateRef.current = null;
 
-          // Se moveu mais de 5 pixels, é um arraste da câmera, cancela o menu
-          if (distance > 5) {
-            event.preventDefault();
-            return;
-          }
+        if (state?.moved) {
+          event.preventDefault();
+          return;
         }
-        
+
         onContextMenu(event);
       }}
     />
