@@ -165,8 +165,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           ) : null}
 
           {activeSection === "material" ? (
-            <DefinitionSection
-              title="Material"
+            <MaterialDefinitionSection
               node={node}
               definitions={groupedDefinitions.get("Material") ?? []}
               onNodePropertyChange={onNodePropertyChange}
@@ -275,6 +274,61 @@ function DefinitionSection(props: DefinitionSectionProps) {
   );
 }
 
+interface MaterialDefinitionSectionProps {
+  node: EditorNode;
+  definitions: NodePropertyDefinition[];
+  onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
+  onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
+}
+
+function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
+  const { node, definitions, onNodePropertyChange, onToggleEditable } = props;
+
+  const basePaths = ["material.type", "material.color", "material.opacity", "material.transparent"];
+  const pbrPaths = ["material.emissive", "material.roughness", "material.metalness"];
+  
+  const baseProps = definitions.filter((d) => basePaths.includes(definitionPath(d.path)));
+  const pbrProps = definitions.filter((d) => pbrPaths.includes(definitionPath(d.path)));
+  const advancedProps = definitions.filter((d) => !basePaths.includes(definitionPath(d.path)) && !pbrPaths.includes(definitionPath(d.path)));
+
+  function definitionPath(path: string): string {
+    return path;
+  }
+
+  return (
+    <section className="inspector-card">
+      <div className="inspector-card__header">
+        <h4>Material</h4>
+      </div>
+
+      <div className="inspector-properties">
+        <div className="inspector-sub-header"><span>Base</span></div>
+        {baseProps.map((def) => (
+          <PropertyRow key={def.path} node={node} definition={def} onNodePropertyChange={onNodePropertyChange} onToggleEditable={onToggleEditable} />
+        ))}
+
+        {pbrProps.length > 0 && (
+          <>
+            <div className="inspector-sub-header"><span>Standard PBR</span></div>
+            {pbrProps.map((def) => (
+              <PropertyRow key={def.path} node={node} definition={def} onNodePropertyChange={onNodePropertyChange} onToggleEditable={onToggleEditable} />
+            ))}
+          </>
+        )}
+
+        {advancedProps.length > 0 && (
+          <>
+            <div className="inspector-sub-header"><span>Advanced</span></div>
+            {advancedProps.map((def) => (
+              <PropertyRow key={def.path} node={node} definition={def} onNodePropertyChange={onNodePropertyChange} onToggleEditable={onToggleEditable} />
+            ))}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 interface TransformAxisGroupProps {
   title: string;
   node: EditorNode;
@@ -288,7 +342,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
 
   return (
     <div className="transform-group">
-      <div className="transform-group__title">{title}</div>
+      <div className="inspector-sub-header"><span>{title}</span></div>
       <div className="transform-grid">
         {definitions.map((definition) => {
           const axis = definition.path.split(".").at(-1)?.toUpperCase() ?? "?";
@@ -353,6 +407,21 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
             checked={Boolean(currentValue)}
             onChange={(event) => onNodePropertyChange(node.id, definition, event.target.checked)}
           />
+        ) : definition.input === "select" ? (
+          <select
+            className="editor-select"
+            value={localValue}
+            onChange={(event) => {
+              setLocalValue(event.target.value);
+              onNodePropertyChange(node.id, definition, event.target.value);
+            }}
+          >
+            {(definition.options ?? []).map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         ) : (
           <input
             className="editor-input editor-input--compact"
@@ -363,9 +432,6 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
             max={definition.max}
             onChange={(event) => {
               setLocalValue(event.target.value);
-              // For non-color inputs, we update immediately. For color, we update immediately too 
-              // but the local state makes the input itself smoother. 
-              // If it still lags, we would move this to onBlur.
               if (definition.input !== "color") {
                 onNodePropertyChange(node.id, definition, event.target.value);
               }

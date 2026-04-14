@@ -2,18 +2,19 @@ import { useEffect, useMemo, useState } from "react";
 import type { DragEvent, MouseEvent } from "react";
 import type { EditorNode } from "../../types";
 import type { TreeBranch, TreeDropTarget } from "../ui-types";
-import { ChevronDownIcon, ChevronRightIcon, GroupIcon, MeshIcon } from "./icons";
+import { ChevronDownIcon, ChevronRightIcon, ClosedEyeIcon, EyeIcon, GroupIcon, MeshIcon } from "./icons";
 
 interface SceneGraphPanelProps {
   nodes: EditorNode[];
   selectedNodeId: string;
   onSelectNode: (nodeId: string) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
+  onToggleVisibility: (nodeId: string) => void;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
 }
 
 export function SceneGraphPanel(props: SceneGraphPanelProps) {
-  const { nodes, selectedNodeId, onSelectNode, onMoveNode, onContextMenu } = props;
+  const { nodes, selectedNodeId, onSelectNode, onMoveNode, onToggleVisibility, onContextMenu } = props;
   const branches = useMemo(() => buildTree(nodes), [nodes]);
   const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const selectedPathIds = useMemo(() => buildSelectedPathSet(nodeMap, selectedNodeId), [nodeMap, selectedNodeId]);
@@ -73,6 +74,7 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
           onToggleNode={toggleNode}
           onSelectNode={onSelectNode}
           onMoveNode={onMoveNode}
+          onToggleVisibility={onToggleVisibility}
           onContextMenu={onContextMenu}
           onDragStateChange={(nextDragged, nextDropTarget) => {
             setDraggedNodeId(nextDragged);
@@ -98,6 +100,7 @@ interface SceneGraphBranchProps {
   onToggleNode: (nodeId: string) => void;
   onSelectNode: (nodeId: string) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
+  onToggleVisibility: (nodeId: string) => void;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
   onDragStateChange: (draggedNodeId: string | null, target: TreeDropTarget | null) => void;
   onClearDragState: () => void;
@@ -117,6 +120,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
     onToggleNode,
     onSelectNode,
     onMoveNode,
+    onToggleVisibility,
     onContextMenu,
     onDragStateChange,
     onClearDragState,
@@ -209,6 +213,20 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
           </span>
         </div>
 
+        <div className="scene-row__actions">
+          <button
+            type="button"
+            className={`scene-row__action-btn${!branch.node.visible ? " is-hidden" : ""}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleVisibility(branch.node.id);
+            }}
+            title={branch.node.visible ? "Hide item" : "Show item"}
+          >
+            {branch.node.visible ? <EyeIcon width={14} height={14} /> : <ClosedEyeIcon width={14} height={14} />}
+          </button>
+        </div>
+
         <span className="scene-row__type">{isGroup ? "Group" : "Mesh"}</span>
       </div>
 
@@ -237,6 +255,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
               onToggleNode={onToggleNode}
               onSelectNode={onSelectNode}
               onMoveNode={onMoveNode}
+              onToggleVisibility={onToggleVisibility}
               onContextMenu={onContextMenu}
               onDragStateChange={onDragStateChange}
               onClearDragState={onClearDragState}

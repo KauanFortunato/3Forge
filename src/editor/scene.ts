@@ -466,6 +466,7 @@ export class SceneEditor {
   private createObject(node: EditorNode): Object3D {
     const object = this.buildNodeObject(node);
     object.name = node.name;
+    object.visible = node.visible;
     object.userData.nodeId = node.id;
     object.userData.nodeType = node.type;
     object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
@@ -482,34 +483,35 @@ export class SceneEditor {
     let mesh: Mesh;
     switch (node.type) {
       case "box":
-        mesh = new Mesh(new BoxGeometry(node.geometry.width, node.geometry.height, node.geometry.depth), this.createStandardMaterial(node));
+        mesh = new Mesh(new BoxGeometry(node.geometry.width, node.geometry.height, node.geometry.depth), this.createNodeMaterial(node));
         break;
       case "circle":
-        mesh = new Mesh(new CircleGeometry(node.geometry.radius, node.geometry.segments, node.geometry.thetaLenght, node.geometry.thetaStarts), this.createStandardMaterial(node));
+        mesh = new Mesh(new CircleGeometry(node.geometry.radius, node.geometry.segments, node.geometry.thetaLenght, node.geometry.thetaStarts), this.createNodeMaterial(node));
         break;
       case "sphere":
-        mesh = new Mesh(new SphereGeometry(node.geometry.radius, 32, 24), this.createStandardMaterial(node));
+        mesh = new Mesh(new SphereGeometry(node.geometry.radius, 32, 24), this.createNodeMaterial(node));
         break;
       case "cylinder":
-        mesh = new Mesh(new CylinderGeometry(node.geometry.radiusTop, node.geometry.radiusBottom, node.geometry.height, 32), this.createStandardMaterial(node));
+        mesh = new Mesh(new CylinderGeometry(node.geometry.radiusTop, node.geometry.radiusBottom, node.geometry.height, 32), this.createNodeMaterial(node));
         break;
       case "plane":
-        mesh = new Mesh(new PlaneGeometry(node.geometry.width, node.geometry.height), this.createStandardMaterial(node));
+        mesh = new Mesh(new PlaneGeometry(node.geometry.width, node.geometry.height), this.createNodeMaterial(node));
         break;
       case "image":
         mesh = this.createImageMesh(node);
         break;
       case "text":
-        mesh = this.createTextMesh(node, this.createStandardMaterial(node));
+        mesh = this.createTextMesh(node, this.createNodeMaterial(node));
         break;
     }
 
     mesh.castShadow = node.type !== "image";
     mesh.receiveShadow = node.type !== "image";
+    mesh.visible = node.material.visible;
     return mesh;
   }
 
-  private createTextMesh(node: TextNode, material: MeshStandardMaterial): Mesh {
+  private createTextMesh(node: TextNode, material: MeshBasicMaterial | MeshStandardMaterial): Mesh {
     const font = this.resolveFont(node.fontId);
     const geometry = new TextGeometry(node.geometry.text || " ", {
       font,
@@ -527,30 +529,48 @@ export class SceneEditor {
     return new Mesh(geometry, material);
   }
 
-  private createStandardMaterial(node: Exclude<EditorNode, { type: "group" | "image" }>): MeshStandardMaterial {
+  private createNodeMaterial(node: Exclude<EditorNode, { type: "group" }>): MeshBasicMaterial | MeshStandardMaterial {
+    const baseOptions = this.createBaseMaterialOptions(node);
+    if (node.material.type === "basic") {
+      return new MeshBasicMaterial(baseOptions);
+    }
+
     return new MeshStandardMaterial({
+      ...baseOptions,
+      emissive: node.material.emissive,
+      roughness: node.material.roughness,
+      metalness: node.material.metalness,
+    });
+  }
+
+  private createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" }>): ConstructorParameters<typeof MeshBasicMaterial>[0] {
+    return {
       color: node.material.color,
       opacity: node.material.opacity,
-      transparent: node.material.opacity < 1,
+      transparent: node.material.transparent,
+      alphaTest: node.material.alphaTest,
+      depthTest: node.material.depthTest,
+      depthWrite: node.material.depthWrite,
       wireframe: node.material.wireframe,
-      roughness: 0.4,
-      metalness: 0.1,
-      ...((node.type === "plane" || node.type === "circle") ? { side: DoubleSide } : {}),
-    });
+      ...((node.type === "plane" || node.type === "circle" || node.type === "image") ? { side: DoubleSide } : {}),
+    };
   }
 
   private createImageMesh(node: ImageNode): Mesh {
     const geometry = new PlaneGeometry(node.geometry.width, node.geometry.height);
     const texture = this.getTexture(node.image.src);
-    const material = new MeshBasicMaterial({
-      color: node.material.color,
+    const baseOptions = {
+      ...this.createBaseMaterialOptions(node),
       map: texture,
-      opacity: node.material.opacity,
-      transparent: true,
-      alphaTest: 0.01,
-      side: DoubleSide,
-      wireframe: node.material.wireframe,
-    });
+    };
+    const material = node.material.type === "basic"
+      ? new MeshBasicMaterial(baseOptions)
+      : new MeshStandardMaterial({
+        ...baseOptions,
+        emissive: node.material.emissive,
+        roughness: node.material.roughness,
+        metalness: node.material.metalness,
+      });
 
     return new Mesh(geometry, material);
   }

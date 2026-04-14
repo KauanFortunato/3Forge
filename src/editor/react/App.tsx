@@ -614,6 +614,7 @@ export function App() {
                 selectedNodeId={storeView.selectedNodeId}
                 onSelectNode={(nodeId) => store.selectNode(nodeId)}
                 onMoveNode={handleSceneMove}
+                onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
                 onContextMenu={openSceneGraphContextMenu}
               />
             </div>

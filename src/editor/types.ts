@@ -1,8 +1,9 @@
 export type EditorNodeType = "group" | "box" | "circle" | "sphere" | "cylinder" | "plane" | "text" | "image";
 export type EditableFieldType = "number" | "color" | "boolean" | "string";
 export type PropertyGroup = "Transform" | "Geometry" | "Material" | "Text";
-export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text";
+export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text" | "select";
 export type NodePropertyPath = string;
+export type MaterialType = "basic" | "standard";
 
 export interface Vec3Like {
   x: number;
@@ -17,8 +18,17 @@ export interface TransformSpec {
 }
 
 export interface MaterialSpec {
+  type: MaterialType;
   color: string;
+  emissive: string;
+  roughness: number;
+  metalness: number;
   opacity: number;
+  transparent: boolean;
+  visible: boolean;
+  alphaTest: number;
+  depthTest: boolean;
+  depthWrite: boolean;
   wireframe: boolean;
 }
 
@@ -49,6 +59,7 @@ export interface BaseEditorNode {
   name: string;
   type: EditorNodeType;
   parentId: string | null;
+  visible: boolean;
   transform: TransformSpec;
   editable: Record<NodePropertyPath, EditableBinding>;
 }
@@ -145,6 +156,7 @@ export interface NodePropertyDefinition {
   group: PropertyGroup;
   type: EditableFieldType;
   input: PropertyInputKind;
+  options?: Array<{ label: string; value: string }>;
   step?: number;
   min?: number;
   max?: number;

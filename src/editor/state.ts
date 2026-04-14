@@ -1,6 +1,7 @@
 import type { Object3D } from "three";
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary } from "./fonts";
 import { createTransparentImageAsset, fitImageToMaxSize } from "./images";
+import { createMaterialSpec, getMaterialPropertyDefinitions, normalizeMaterialSpec } from "./materials";
 import type {
   BoxNode,
   ComponentBlueprint,
@@ -42,12 +43,6 @@ const BASE_PROPERTY_DEFINITIONS: NodePropertyDefinition[] = [
   { group: "Transform", path: "transform.scale.x", label: "Scale X", type: "number", input: "number", step: 0.1, min: 0.01 },
   { group: "Transform", path: "transform.scale.y", label: "Scale Y", type: "number", input: "number", step: 0.1, min: 0.01 },
   { group: "Transform", path: "transform.scale.z", label: "Scale Z", type: "number", input: "number", step: 0.1, min: 0.01 },
-];
-
-const MATERIAL_PROPERTY_DEFINITIONS: NodePropertyDefinition[] = [
-  { group: "Material", path: "material.color", label: "Color", type: "color", input: "color" },
-  { group: "Material", path: "material.opacity", label: "Opacity", type: "number", input: "number", step: 0.05, min: 0, max: 1 },
-  { group: "Material", path: "material.wireframe", label: "Wireframe", type: "boolean", input: "checkbox" },
 ];
 
 const GEOMETRY_DEFINITIONS: Record<Exclude<EditorNodeType, "group">, NodePropertyDefinition[]> = {
@@ -147,11 +142,7 @@ function createTransform(): TransformSpec {
 }
 
 function createMaterial(color = "#5ad3ff"): MaterialSpec {
-  return {
-    color,
-    opacity: 1,
-    wireframe: false,
-  };
+  return createMaterialSpec(color);
 }
 
 function generateId(prefix = "node"): string {
@@ -166,6 +157,7 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
     name: `${DEFAULT_NODE_NAMES[type]} ${id.slice(-4)}`,
     type,
     parentId,
+    visible: true,
     transform: createTransform(),
     editable: {},
   };
@@ -217,7 +209,7 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
         type: "image",
         geometry: { width: 1.6, height: 1.6 },
         image: createTransparentImageAsset(),
-        material: createMaterial("#ffffff"),
+        material: createMaterialSpec("#ffffff", "basic"),
       } as EditorNodeOfType<T>;
     case "text":
       return {
@@ -246,7 +238,7 @@ export function getPropertyDefinitions(node: EditorNode): NodePropertyDefinition
   return [
     ...BASE_PROPERTY_DEFINITIONS,
     ...GEOMETRY_DEFINITIONS[node.type],
-    ...MATERIAL_PROPERTY_DEFINITIONS,
+    ...getMaterialPropertyDefinitions(node.material.type),
   ];
 }
 
@@ -279,6 +271,10 @@ export function getDisplayValue(node: EditorNode, definition: NodePropertyDefini
     return String(rawValue ?? "");
   }
 
+  if (definition.input === "select") {
+    return String(rawValue ?? definition.options?.[0]?.value ?? "");
+  }
+
   return typeof rawValue === "number" ? Number(rawValue.toFixed(4)) : String(rawValue ?? "");
 }
 
@@ -297,6 +293,12 @@ export function parseInputValue(
 
   if (definition.input === "text") {
     return String(rawValue ?? fallback ?? "");
+  }
+
+  if (definition.input === "select") {
+    const nextValue = String(rawValue ?? fallback ?? "");
+    const allowedValues = definition.options?.map((option) => option.value) ?? [];
+    return allowedValues.includes(nextValue) ? nextValue : fallback;
   }
 
   const numericValue = Number(rawValue);
@@ -417,16 +419,7 @@ function normalizeTransform(value: unknown, fallback: TransformSpec): TransformS
 }
 
 function normalizeMaterial(value: unknown, fallback: MaterialSpec): MaterialSpec {
-  if (!value || typeof value !== "object") {
-    return { ...fallback };
-  }
-
-  const source = value as Record<string, unknown>;
-  return {
-    color: normalizeColor(String(source.color ?? fallback.color), fallback.color),
-    opacity: clampNumber(normalizeNumber(source.opacity, fallback.opacity), 0, 1),
-    wireframe: Boolean(source.wireframe ?? fallback.wireframe),
-  };
+  return normalizeMaterialSpec(value, fallback);
 }
 
 function normalizeImageAsset(value: unknown, fallback: ImageAsset): ImageAsset {
@@ -493,6 +486,7 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
   );
 
   node.name = typeof source.name === "string" ? source.name : node.name;
+  node.visible = typeof source.visible === "boolean" ? source.visible : true;
   node.transform = normalizeTransform(source.transform, node.transform);
 
   if ("material" in node) {
@@ -1027,6 +1021,17 @@ export class EditorStore extends EventTarget {
     this.notify({ reason: "node", source, nodeId });
   }
 
+  toggleNodeVisibility(nodeId: string, source: EditorStoreChange["source"] = "ui"): void {
+    const node = this.getNode(nodeId);
+    if (!node) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    node.visible = !node.visible;
+    this.notify({ reason: "node", source, nodeId });
+  }
+
   updateNodeProperty(nodeId: string, definition: NodePropertyDefinition, rawValue: string | number | boolean, source: EditorStoreChange["source"] = "ui"): void {
     const node = this.getNode(nodeId);
     if (!node) {
@@ -1179,9 +1184,12 @@ export class EditorStore extends EventTarget {
   }
 
   listEditableFields(): EditableFieldEntry[] {
-    return this._blueprint.nodes.flatMap((node) =>
-      Object.values(node.editable).map((binding) => ({ node, binding })),
-    );
+    return this._blueprint.nodes.flatMap((node) => {
+      const visiblePaths = new Set(getPropertyDefinitions(node).map((definition) => definition.path));
+      return Object.values(node.editable)
+        .filter((binding) => visiblePaths.has(binding.path))
+        .map((binding) => ({ node, binding }));
+    });
   }
 
   private ensureUniqueBindingKeys(): void {

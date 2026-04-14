@@ -778,15 +778,29 @@ export class ComponentEditorApp {
     inputHolder.className = "property-row__controls";
 
     const currentValue = getDisplayValue(node, definition);
-    let input: HTMLInputElement;
+    let input: HTMLInputElement | HTMLSelectElement;
     const focusKey = `property:${node.id}:${definition.path}`;
 
     if (definition.input === "checkbox") {
-      input = document.createElement("input");
-      input.type = "checkbox";
-      input.className = "editor-checkbox";
-      input.checked = Boolean(currentValue);
-      input.addEventListener("change", () => this.store.updateNodeProperty(node.id, definition, input.checked));
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "editor-checkbox";
+      checkbox.checked = Boolean(currentValue);
+      checkbox.addEventListener("change", () => this.store.updateNodeProperty(node.id, definition, checkbox.checked));
+      input = checkbox;
+    } else if (definition.input === "select") {
+      const select = document.createElement("select");
+      select.className = "editor-select";
+      select.dataset.focusKey = focusKey;
+      for (const option of definition.options ?? []) {
+        const element = document.createElement("option");
+        element.value = option.value;
+        element.textContent = option.label;
+        select.appendChild(element);
+      }
+      select.value = String(currentValue);
+      select.addEventListener("change", () => this.store.updateNodeProperty(node.id, definition, select.value));
+      input = select;
     } else {
       input = document.createElement("input");
       input.className = "editor-input";

@@ -1,6 +1,6 @@
 import { getAvailableFonts, getFontData } from "./fonts";
 import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageNode } from "./types";
-import { ROOT_NODE_ID, getPropertyValue, toCamelCase, toPascalCase } from "./state";
+import { ROOT_NODE_ID, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
 
 interface CollectedBinding {
   node: EditorNode;
@@ -162,6 +162,7 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
 function collectBindings(nodes: EditorNode[]): CollectedBinding[] {
   return nodes.flatMap((node) =>
     Object.values(node.editable)
+      .filter((binding) => getPropertyDefinitions(node).some((definition) => definition.path === binding.path))
       .sort((a, b) => a.key.localeCompare(b.key))
       .map((binding) => ({ node, binding })),
   );
@@ -170,17 +171,23 @@ function collectBindings(nodes: EditorNode[]): CollectedBinding[] {
 function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<string> {
   const imports = new Set<string>(["Group", "Mesh"]);
   const types = new Set<EditorNodeType>(nodes.map((node) => node.type));
+  const materialNodes = nodes.filter((node): node is Exclude<EditorNode, { type: "group" }> => node.type !== "group");
+  const hasRuntimeMaterialType = materialNodes.some((node) => Boolean(node.editable["material.type"]));
+  const usesBasicMaterial = hasRuntimeMaterialType || materialNodes.some((node) => node.material.type === "basic");
+  const usesStandardMaterial = hasRuntimeMaterialType || materialNodes.some((node) => node.material.type === "standard");
 
   if (types.has("box")) imports.add("BoxGeometry");
   if (types.has("circle")) imports.add("CircleGeometry");
   if (types.has("sphere")) imports.add("SphereGeometry");
   if (types.has("cylinder")) imports.add("CylinderGeometry");
   if (types.has("plane") || types.has("image")) imports.add("PlaneGeometry");
-  if ([...types].some((type) => type !== "group" && type !== "image")) {
+  if (usesBasicMaterial) {
+    imports.add("MeshBasicMaterial");
+  }
+  if (usesStandardMaterial) {
     imports.add("MeshStandardMaterial");
   }
   if (types.has("image")) {
-    imports.add("MeshBasicMaterial");
     imports.add("TextureLoader");
     imports.add("SRGBColorSpace");
   }
@@ -384,32 +391,13 @@ function emitCreationLines(
       }
     }
 
-    if (node.type === "image") {
-      const textureVariable = imageVariables.get(node.id);
-      if (!textureVariable) {
-        throw new Error(`Image texture not found for image node "${node.name}".`);
-      }
-
-      lines.push(
-        `const ${materialVariable} = new MeshBasicMaterial({ color: ${propertyExpression(node, "material.color", bindingAccessor)}, map: ${textureVariable}, opacity: ${propertyExpression(node, "material.opacity", bindingAccessor)}, transparent: true, alphaTest: 0.01, side: DoubleSide, wireframe: ${propertyExpression(node, "material.wireframe", bindingAccessor)} });`,
-      );
-    } else {
-      const materialOptions = [
-        `color: ${propertyExpression(node, "material.color", bindingAccessor)}`,
-        `opacity: ${propertyExpression(node, "material.opacity", bindingAccessor)}`,
-        `transparent: ${propertyExpression(node, "material.opacity", bindingAccessor)} < 1`,
-        `wireframe: ${propertyExpression(node, "material.wireframe", bindingAccessor)}`,
-      ];
-
-      if (node.type === "plane") {
-        materialOptions.push("side: DoubleSide");
-      }
-
-      lines.push(`const ${materialVariable} = new MeshStandardMaterial({ ${materialOptions.join(", ")} });`);
+    for (const line of emitMaterialCreationLines(node, materialVariable, bindingAccessor, imageVariables.get(node.id))) {
+      lines.push(line);
     }
     lines.push(`const ${variableName} = new Mesh(${geometryVariable}, ${materialVariable});`);
     lines.push(`${variableName}.castShadow = ${node.type === "image" ? "false" : "true"};`);
     lines.push(`${variableName}.receiveShadow = ${node.type === "image" ? "false" : "true"};`);
+    lines.push(`${variableName}.visible = ${propertyExpression(node, "material.visible", bindingAccessor)};`);
   }
 
   lines.push(`${variableName}.name = ${JSON.stringify(node.name)};`);
@@ -417,6 +405,62 @@ function emitCreationLines(
   lines.push(`${variableName}.rotation.set(${propertyExpression(node, "transform.rotation.x", bindingAccessor)}, ${propertyExpression(node, "transform.rotation.y", bindingAccessor)}, ${propertyExpression(node, "transform.rotation.z", bindingAccessor)});`);
   lines.push(`${variableName}.scale.set(${propertyExpression(node, "transform.scale.x", bindingAccessor)}, ${propertyExpression(node, "transform.scale.y", bindingAccessor)}, ${propertyExpression(node, "transform.scale.z", bindingAccessor)});`);
 
+  return lines;
+}
+
+function emitMaterialCreationLines(
+  node: Exclude<EditorNode, { type: "group" }>,
+  materialVariable: string,
+  bindingAccessor: string,
+  textureVariable?: string,
+): string[] {
+  const lines: string[] = [];
+  const hasDynamicMaterialType = Boolean(node.editable["material.type"]);
+  const materialTypeExpression = propertyExpression(node, "material.type", bindingAccessor);
+  const sharedOptions = [
+    `color: ${propertyExpression(node, "material.color", bindingAccessor)}`,
+    `opacity: ${propertyExpression(node, "material.opacity", bindingAccessor)}`,
+    `transparent: ${propertyExpression(node, "material.transparent", bindingAccessor)}`,
+    `alphaTest: ${propertyExpression(node, "material.alphaTest", bindingAccessor)}`,
+    `depthTest: ${propertyExpression(node, "material.depthTest", bindingAccessor)}`,
+    `depthWrite: ${propertyExpression(node, "material.depthWrite", bindingAccessor)}`,
+    `wireframe: ${propertyExpression(node, "material.wireframe", bindingAccessor)}`,
+  ];
+
+  if (node.type === "plane" || node.type === "circle" || node.type === "image") {
+    sharedOptions.push("side: DoubleSide");
+  }
+
+  if (node.type === "image") {
+    if (!textureVariable) {
+      throw new Error(`Image texture not found for image node "${node.name}".`);
+    }
+    sharedOptions.push(`map: ${textureVariable}`);
+  }
+
+  const standardOnlyOptions = [
+    `emissive: ${propertyExpression(node, "material.emissive", bindingAccessor)}`,
+    `roughness: ${propertyExpression(node, "material.roughness", bindingAccessor)}`,
+    `metalness: ${propertyExpression(node, "material.metalness", bindingAccessor)}`,
+  ];
+
+  if (hasDynamicMaterialType) {
+    const basicConfigVariable = `${materialVariable}BasicConfig`;
+    const standardConfigVariable = `${materialVariable}StandardConfig`;
+    lines.push(`const ${basicConfigVariable} = { ${sharedOptions.join(", ")} };`);
+    lines.push(`const ${standardConfigVariable} = { ...${basicConfigVariable}, ${standardOnlyOptions.join(", ")} };`);
+    lines.push(
+      `const ${materialVariable} = ${materialTypeExpression} === "basic" ? new MeshBasicMaterial(${basicConfigVariable}) : new MeshStandardMaterial(${standardConfigVariable});`,
+    );
+    return lines;
+  }
+
+  if (node.material.type === "basic") {
+    lines.push(`const ${materialVariable} = new MeshBasicMaterial({ ${sharedOptions.join(", ")} });`);
+    return lines;
+  }
+
+  lines.push(`const ${materialVariable} = new MeshStandardMaterial({ ${[...sharedOptions, ...standardOnlyOptions].join(", ")} });`);
   return lines;
 }
 
