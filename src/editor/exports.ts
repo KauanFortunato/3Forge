@@ -1,3 +1,4 @@
+import { frameToSeconds, getTrackSegments, mapAnimationEaseToGsap } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
 import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageNode } from "./types";
 import { ROOT_NODE_ID, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
@@ -28,6 +29,7 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   const componentTypeName = toPascalCase(componentName);
   const optionTypeName = `${componentTypeName}Options`;
   const resolvedTypeName = `${componentTypeName}ResolvedOptions`;
+  const hasAnimations = blueprint.animation.tracks.some((track) => track.keyframes.length > 0);
 
   const nodes = blueprint.nodes;
   const rootNode = nodes.find((node) => node.id === ROOT_NODE_ID) ?? nodes[0];
@@ -42,6 +44,9 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   const lines: string[] = [];
 
   lines.push(`import { ${Array.from(importNames).sort().join(", ")} } from "three";`);
+  if (hasAnimations) {
+    lines.push(`import gsap from "gsap";`);
+  }
   if (fonts.length > 0) {
     lines.push(`import { FontLoader } from "three/examples/jsm/loaders/FontLoader.js";`);
     lines.push(`import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";`);
@@ -84,6 +89,10 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   lines.push(`export class ${componentTypeName} {`);
   lines.push("  public readonly group: Group;");
   lines.push(`  private readonly options: ${resolvedTypeName};`);
+  if (hasAnimations) {
+    lines.push("  private timeline: gsap.core.Timeline | null = null;");
+    lines.push("  private readonly nodeRefs = new Map<string, Group | Mesh>();");
+  }
   lines.push("");
   lines.push(`  constructor(options: ${optionTypeName} = {}) {`);
   lines.push(`    this.options = { ...defaults, ...options };`);
@@ -96,6 +105,10 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   lines.push("");
   lines.push("    const root = this.group;");
   lines.push(`    root.name = ${JSON.stringify(componentName)};`);
+  if (hasAnimations) {
+    lines.push("    this.nodeRefs.clear();");
+    lines.push(`    this.nodeRefs.set(${JSON.stringify(ROOT_NODE_ID)}, root);`);
+  }
 
   if (fonts.length > 0) {
     lines.push("    const fontLoader = new FontLoader();");
@@ -118,15 +131,22 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
     lines.push(`    root.scale.set(${propertyExpression(rootNode, "transform.scale.x", "this.options")}, ${propertyExpression(rootNode, "transform.scale.y", "this.options")}, ${propertyExpression(rootNode, "transform.scale.z", "this.options")});`);
   }
 
-  emitNode(rootNode, lines, childrenByParent, variableNames, fontVariables, imageVariables, "this.options", true);
+  emitNode(rootNode, lines, childrenByParent, variableNames, fontVariables, imageVariables, "this.options", hasAnimations, true);
 
   lines.push("  }");
   lines.push("");
+  if (hasAnimations) {
+    emitAnimationMethods(lines, blueprint, variableNames);
+  }
   lines.push("  public dispose(): void {");
   lines.push("    this.disposeResources(true);");
   lines.push("  }");
   lines.push("");
   lines.push("  private disposeResources(removeFromParent: boolean): void {");
+  if (hasAnimations) {
+    lines.push("    this.timeline?.kill();");
+    lines.push("    this.timeline = null;");
+  }
   lines.push("    this.group.traverse((object) => {");
   lines.push("      const mesh = object as Mesh;");
   lines.push("      if (!mesh.isMesh) {");
@@ -150,6 +170,9 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   lines.push("    });");
   lines.push("");
   lines.push("    this.group.clear();");
+  if (hasAnimations) {
+    lines.push("    this.nodeRefs.clear();");
+  }
   lines.push("    if (removeFromParent) {");
   lines.push("      this.group.parent?.remove(this.group);");
   lines.push("    }");
@@ -310,6 +333,7 @@ function emitNode(
   fontVariables: Map<string, string>,
   imageVariables: Map<string, string>,
   bindingAccessor: string,
+  captureNodeRefs: boolean,
   skipCreation = false,
 ): void {
   if (!node) return;
@@ -326,8 +350,12 @@ function emitNode(
     lines.push(`    ${parentVariable}.add(${variableName});`);
   }
 
+  if (captureNodeRefs) {
+    lines.push(`    this.nodeRefs.set(${JSON.stringify(node.id)}, ${variableName});`);
+  }
+
   for (const child of childrenByParent.get(node.id) ?? []) {
-    emitNode(child, lines, childrenByParent, variableNames, fontVariables, imageVariables, bindingAccessor);
+    emitNode(child, lines, childrenByParent, variableNames, fontVariables, imageVariables, bindingAccessor, captureNodeRefs);
   }
 }
 
@@ -462,6 +490,79 @@ function emitMaterialCreationLines(
 
   lines.push(`const ${materialVariable} = new MeshStandardMaterial({ ${[...sharedOptions, ...standardOnlyOptions].join(", ")} });`);
   return lines;
+}
+
+function emitAnimationMethods(
+  lines: string[],
+  blueprint: ComponentBlueprint,
+  variableNames: Map<string, string>,
+): void {
+  lines.push(`  public createTimeline(): gsap.core.Timeline {`);
+  lines.push("    this.timeline?.kill();");
+  lines.push("    const timeline = gsap.timeline({ paused: true, repeat: -1 });");
+  lines.push(`    timeline.to({ progress: 0 }, { progress: 1, duration: ${Math.max(frameToSeconds(blueprint.animation.durationFrames, blueprint.animation.fps), 0.0001)}, ease: "none" }, 0);`);
+
+  for (const track of blueprint.animation.tracks) {
+    const segments = getTrackSegments(track);
+    if (track.keyframes.length === 0) {
+      continue;
+    }
+
+    const targetName = `${variableNames.get(track.nodeId) ?? toCamelCase(track.nodeId)}${toPascalCase(track.property)}`;
+    const ownerPath = toTimelineTargetPath(track.property);
+    const propertyKey = toTimelinePropertyKey(track.property);
+    const firstKeyframe = [...track.keyframes].sort((a, b) => a.frame - b.frame)[0];
+
+    lines.push(`    const ${targetName}Target = this.nodeRefs.get(${JSON.stringify(track.nodeId)});`);
+    lines.push(`    if (${targetName}Target) {`);
+    lines.push(
+      `      timeline.set(${targetName}Target.${ownerPath}, { ${propertyKey}: ${serializeLiteral(firstKeyframe.value, "number")} }, ${frameToSeconds(firstKeyframe.frame, blueprint.animation.fps)});`,
+    );
+
+    for (const segment of segments) {
+      lines.push(
+        `      timeline.to(${targetName}Target.${ownerPath}, { ${propertyKey}: ${serializeLiteral(segment.to.value, "number")}, duration: ${frameToSeconds(segment.to.frame - segment.from.frame, blueprint.animation.fps)}, ease: ${JSON.stringify(mapAnimationEaseToGsap(segment.to.ease))} }, ${frameToSeconds(segment.from.frame, blueprint.animation.fps)});`,
+      );
+    }
+
+    lines.push("    }");
+  }
+
+  lines.push("    this.timeline = timeline;");
+  lines.push("    return timeline;");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  public play(): void {");
+  lines.push("    (this.timeline ?? this.createTimeline()).play();");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  public pause(): void {");
+  lines.push("    this.timeline?.pause();");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  public stop(): void {");
+  lines.push("    this.timeline?.pause(0);");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  public seek(frame: number): void {");
+  lines.push(`    const fps = ${blueprint.animation.fps};`);
+  lines.push("    const timeline = this.timeline ?? this.createTimeline();");
+  lines.push("    timeline.pause();");
+  lines.push("    timeline.seek(Math.max(frame, 0) / fps, false);");
+  lines.push("  }");
+  lines.push("");
+}
+
+function toTimelineTargetPath(property: string): string {
+  return property.includes("position")
+    ? "position"
+    : property.includes("rotation")
+      ? "rotation"
+      : "scale";
+}
+
+function toTimelinePropertyKey(property: string): string {
+  return property.split(".").at(-1) ?? "x";
 }
 
 function propertyExpression(node: EditorNode, path: string, bindingAccessor = "resolved"): string {

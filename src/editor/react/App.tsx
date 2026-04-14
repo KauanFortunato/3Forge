@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent } from "react";
+import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
@@ -11,10 +11,11 @@ import {
   ROOT_NODE_ID,
   getPropertyDefinitions,
 } from "../state";
-import type { EditorNode, EditorNodeType, ImageAsset } from "../types";
+import type { AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, ImageAsset } from "../types";
 import type { ContextMenuState, ExportMode, MenuAction, RightPanelTab, ToolMode, TreeDropTarget } from "./ui-types";
 import { useEditorStoreSnapshot } from "./hooks/useEditorStoreSnapshot";
 import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
+import { AnimationTimeline } from "./components/AnimationTimeline";
 import { ContextMenu } from "./components/ContextMenu";
 import { ExportPanel } from "./components/ExportPanel";
 import { FieldsPanel } from "./components/FieldsPanel";
@@ -24,7 +25,6 @@ import {
   FileIcon,
   FrameIcon,
   InfoIcon,
-  LogoGlyph,
   PlusIcon,
   TrashIcon,
   ShortcutIcon,
@@ -35,6 +35,8 @@ import {
   UndoIcon,
   RedoIcon,
 } from "./components/icons";
+
+const APP_LOGO_SRC = "/assets/icons/logo.svg";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MenuBar } from "./components/MenuBar";
 import { Modal } from "./components/Modal";
@@ -64,6 +66,9 @@ interface AutosaveBootState {
 }
 
 const AUTOSAVE_ENABLED_KEY = "3forge-autosave-enabled";
+const RIGHT_PANEL_WIDTH_KEY = "3forge-right-panel-width";
+const TIMELINE_HEIGHT_KEY = "3forge-timeline-height";
+const TIMELINE_VISIBLE_KEY = "3forge-timeline-visible";
 
 function canUseLocalStorage(): boolean {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
@@ -75,6 +80,33 @@ function readAutosaveEnabledPreference(): boolean {
   }
 
   return window.localStorage.getItem(AUTOSAVE_ENABLED_KEY) !== "false";
+}
+
+function readStoredNumberPreference(key: string, fallback: number): number {
+  if (!canUseLocalStorage()) {
+    return fallback;
+  }
+
+  const raw = window.localStorage.getItem(key);
+  if (!raw) {
+    return fallback;
+  }
+
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function readStoredBooleanPreference(key: string, fallback: boolean): boolean {
+  if (!canUseLocalStorage()) {
+    return fallback;
+  }
+
+  const raw = window.localStorage.getItem(key);
+  if (raw === null) {
+    return fallback;
+  }
+
+  return raw === "true";
 }
 
 function readStoredAutosaveBlueprint(): unknown | null {
@@ -111,7 +143,7 @@ function LandingPage({ onStartNew, onLoadProject }: { onStartNew: () => void; on
     <div className="landing-page">
       <div className="landing-page__content">
         <div className="landing-page__logo">
-          <LogoGlyph width={80} height={80} />
+          <img src={APP_LOGO_SRC} alt="3Forge" className="landing-page__logo-image" />
         </div>
         <h1 className="landing-page__title">3Forge Editor</h1>
         <p className="landing-page__subtitle">
@@ -154,18 +186,27 @@ export function App() {
   const [exportMode, setExportMode] = useState<ExportMode>("typescript");
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("inspector");
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [isAnimationPlaying, setIsAnimationPlaying] = useState(false);
+  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
+  const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [statusText, setStatusText] = useState("Ready");
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false);
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(320);
-  const [isResizing, setIsResizing] = useState(false);
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 420));
+  const [timelineHeight, setTimelineHeight] = useState(() => readStoredNumberPreference(TIMELINE_HEIGHT_KEY, 300));
+  const [isTimelineVisible, setIsTimelineVisible] = useState(() => readStoredBooleanPreference(TIMELINE_VISIBLE_KEY, true));
+  const [resizeMode, setResizeMode] = useState<"hierarchy" | "sidebar" | "timeline" | null>(null);
+  const [isCompactLayout, setIsCompactLayout] = useState(() => typeof window !== "undefined" && window.innerWidth <= 840);
 
   const sceneRef = useRef<SceneEditor | null>(null);
   const clipboardRef = useRef<NodeClipboard | null>(null);
   const pendingImageImportRef = useRef<PendingImageImport | null>(null);
   const statusTimerRef = useRef<number | null>(null);
+  const animationFrameUnsubscribeRef = useRef<(() => void) | null>(null);
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fontInputRef = useRef<HTMLInputElement | null>(null);
@@ -198,6 +239,40 @@ export function App() {
   }, [autosaveEnabled]);
 
   useEffect(() => {
+    if (!canUseLocalStorage()) {
+      return;
+    }
+
+    window.localStorage.setItem(RIGHT_PANEL_WIDTH_KEY, String(rightPanelWidth));
+  }, [rightPanelWidth]);
+
+  useEffect(() => {
+    if (!canUseLocalStorage()) {
+      return;
+    }
+
+    window.localStorage.setItem(TIMELINE_HEIGHT_KEY, String(timelineHeight));
+  }, [timelineHeight]);
+
+  useEffect(() => {
+    if (!canUseLocalStorage()) {
+      return;
+    }
+
+    window.localStorage.setItem(TIMELINE_VISIBLE_KEY, isTimelineVisible ? "true" : "false");
+  }, [isTimelineVisible]);
+
+  useEffect(() => {
+    const updateLayoutMode = () => {
+      setIsCompactLayout(window.innerWidth <= 840);
+    };
+
+    updateLayoutMode();
+    window.addEventListener("resize", updateLayoutMode);
+    return () => window.removeEventListener("resize", updateLayoutMode);
+  }, []);
+
+  useEffect(() => {
     if (!autosaveEnabled || !canUseLocalStorage()) {
       return;
     }
@@ -211,8 +286,34 @@ export function App() {
       if (statusTimerRef.current) {
         window.clearTimeout(statusTimerRef.current);
       }
+      animationFrameUnsubscribeRef.current?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (currentFrame > storeView.animation.durationFrames) {
+      setCurrentFrame(storeView.animation.durationFrames);
+      sceneRef.current?.seekAnimation(storeView.animation.durationFrames);
+    }
+  }, [currentFrame, storeView.animation.durationFrames]);
+
+  useEffect(() => {
+    if (selectedTrackId && !storeView.animation.tracks.some((track) => track.id === selectedTrackId)) {
+      setSelectedTrackId(null);
+      setSelectedKeyframeId(null);
+    }
+  }, [selectedTrackId, storeView.animation.tracks]);
+
+  useEffect(() => {
+    if (!selectedTrackId || !selectedKeyframeId) {
+      return;
+    }
+
+    const track = storeView.animation.tracks.find((entry) => entry.id === selectedTrackId);
+    if (!track || !track.keyframes.some((entry) => entry.id === selectedKeyframeId)) {
+      setSelectedKeyframeId(null);
+    }
+  }, [selectedKeyframeId, selectedTrackId, storeView.animation.tracks]);
 
   const getSiblingIndex = useCallback((nodeId: string) => {
     const node = store.getNode(nodeId);
@@ -285,6 +386,99 @@ export function App() {
     setTransientStatus("Framed selection.");
   }, [setTransientStatus]);
 
+  const handleAnimationFrameChange = useCallback((frame: number) => {
+    setCurrentFrame(Math.max(0, Math.min(frame, store.animation.durationFrames)));
+  }, [store.animation.durationFrames]);
+
+  const handleTimelineFrameChange = useCallback((frame: number) => {
+    const nextFrame = Math.max(0, Math.min(Math.round(frame), store.animation.durationFrames));
+    setCurrentFrame(nextFrame);
+    setIsAnimationPlaying(false);
+    sceneRef.current?.seekAnimation(nextFrame);
+  }, [store.animation.durationFrames]);
+
+  const handleAnimationPlayToggle = useCallback(() => {
+    if (isAnimationPlaying) {
+      sceneRef.current?.pauseAnimation();
+      setIsAnimationPlaying(false);
+      setTransientStatus("Animation paused.");
+      return;
+    }
+
+    sceneRef.current?.playAnimation();
+    setIsAnimationPlaying(true);
+    setTransientStatus("Animation playing.");
+  }, [isAnimationPlaying, setTransientStatus]);
+
+  const handleAnimationStop = useCallback(() => {
+    sceneRef.current?.stopAnimation();
+    setCurrentFrame(0);
+    setIsAnimationPlaying(false);
+    setTransientStatus("Animation stopped.");
+  }, [setTransientStatus]);
+
+  const handleAddAnimationTrack = useCallback((property: AnimationPropertyPath) => {
+    if (!selectedNode) {
+      return;
+    }
+
+    const trackId = store.ensureAnimationTrack(selectedNode.id, property);
+    if (!trackId) {
+      return;
+    }
+
+    setSelectedTrackId(trackId);
+    setSelectedKeyframeId(null);
+    setTransientStatus(`Added ${property} track to "${selectedNode.name}".`);
+  }, [selectedNode, setTransientStatus, store]);
+
+  const handleAddAnimationKeyframe = useCallback((trackId: string) => {
+    const track = store.getAnimationTrack(trackId);
+    const sceneValue = track
+      ? sceneRef.current?.getNodeAnimationValue(track.nodeId, track.property)
+      : null;
+    const keyframeId = store.addAnimationKeyframe(
+      trackId,
+      currentFrame,
+      typeof sceneValue === "number" ? sceneValue : undefined,
+    );
+    if (!keyframeId) {
+      return;
+    }
+
+    setSelectedTrackId(trackId);
+    setSelectedKeyframeId(keyframeId);
+    sceneRef.current?.seekAnimation(currentFrame);
+    setTransientStatus(`Added keyframe at ${currentFrame}f.`);
+  }, [currentFrame, setTransientStatus, store]);
+
+  const handleUpdateAnimationKeyframe = useCallback((
+    trackId: string,
+    keyframeId: string,
+    patch: Partial<Pick<AnimationKeyframe, "frame" | "value" | "ease">>,
+  ) => {
+    store.updateAnimationKeyframe(trackId, keyframeId, patch);
+    const nextFrame = typeof patch.frame === "number" ? patch.frame : currentFrame;
+    setCurrentFrame(Math.max(0, Math.min(Math.round(nextFrame), store.animation.durationFrames)));
+    sceneRef.current?.seekAnimation(typeof patch.frame === "number" ? patch.frame : currentFrame);
+  }, [currentFrame, store]);
+
+  const handleRemoveAnimationKeyframe = useCallback((trackId: string, keyframeId: string) => {
+    store.removeAnimationKeyframe(trackId, keyframeId);
+    setSelectedKeyframeId(null);
+    sceneRef.current?.seekAnimation(currentFrame);
+    setTransientStatus("Keyframe removed.");
+  }, [currentFrame, setTransientStatus, store]);
+
+  const handleRemoveAnimationTrack = useCallback((trackId: string) => {
+    store.removeAnimationTrack(trackId);
+    if (selectedTrackId === trackId) {
+      setSelectedTrackId(null);
+      setSelectedKeyframeId(null);
+    }
+    setTransientStatus("Track removed.");
+  }, [selectedTrackId, setTransientStatus, store]);
+
   const handleCopy = useCallback(() => {
     if (!selectedNode || selectedNode.id === ROOT_NODE_ID) {
       return;
@@ -331,6 +525,15 @@ export function App() {
     store.deleteNode(targetId);
     setTransientStatus(`Deleted "${node.name}".`);
   }, [setTransientStatus, store, storeView.selectedNodeId]);
+
+  const handleDeleteSelection = useCallback(() => {
+    if (selectedTrackId && selectedKeyframeId) {
+      handleRemoveAnimationKeyframe(selectedTrackId, selectedKeyframeId);
+      return;
+    }
+
+    handleDelete();
+  }, [handleDelete, handleRemoveAnimationKeyframe, selectedKeyframeId, selectedTrackId]);
 
   const handleDuplicate = useCallback((nodeId?: string | null) => {
     const targetId = nodeId ?? storeView.selectedNodeId;
@@ -459,25 +662,55 @@ export function App() {
     setTransientStatus(nextValue ? "Autosave enabled." : "Autosave disabled.");
   }, [autosaveEnabled, setTransientStatus]);
 
-  const startResizing = useCallback((event: React.PointerEvent) => {
+  const startHierarchyResizing = useCallback((event: ReactPointerEvent) => {
     event.preventDefault();
-    setIsResizing(true);
+    setResizeMode("hierarchy");
+  }, []);
+
+  const startSidebarResizing = useCallback((event: ReactPointerEvent) => {
+    event.preventDefault();
+    setResizeMode("sidebar");
+  }, []);
+
+  const startTimelineResizing = useCallback((event: ReactPointerEvent) => {
+    event.preventDefault();
+    setResizeMode("timeline");
   }, []);
 
   useEffect(() => {
-    if (!isResizing) return;
+    if (!resizeMode) return;
 
     const handlePointerMove = (event: PointerEvent) => {
-      const panel = document.querySelector(".panel--split");
-      if (!panel) return;
+      if (resizeMode === "hierarchy") {
+        const panel = document.querySelector(".panel--split");
+        if (!panel) return;
 
-      const rect = panel.getBoundingClientRect();
-      const newHeight = event.clientY - rect.top;
-      setHierarchyHeight(Math.max(120, Math.min(newHeight, rect.height - 120)));
+        const rect = panel.getBoundingClientRect();
+        const newHeight = event.clientY - rect.top;
+        setHierarchyHeight(Math.max(120, Math.min(newHeight, rect.height - 120)));
+        return;
+      }
+
+      if (resizeMode === "sidebar") {
+        const workspace = document.querySelector(".workspace-shell");
+        if (!workspace) return;
+
+        const rect = workspace.getBoundingClientRect();
+        const newWidth = rect.right - event.clientX;
+        setRightPanelWidth(Math.max(280, Math.min(newWidth, 620)));
+        return;
+      }
+
+      const shell = document.querySelector(".app-shell");
+      if (!shell) return;
+
+      const rect = shell.getBoundingClientRect();
+      const newHeight = rect.bottom - 28 - event.clientY;
+      setTimelineHeight(Math.max(190, Math.min(newHeight, 520)));
     };
 
     const handlePointerUp = () => {
-      setIsResizing(false);
+      setResizeMode(null);
     };
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -487,7 +720,7 @@ export function App() {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [isResizing]);
+  }, [resizeMode]);
 
   const handleSceneMove = useCallback((nodeId: string, target: TreeDropTarget) => {
     if (store.moveNode(nodeId, target.parentId, target.index)) {
@@ -534,8 +767,9 @@ export function App() {
     },
     onCopy: handleCopy,
     onPaste: () => handlePaste(),
-    onDelete: () => handleDelete(),
+    onDelete: handleDeleteSelection,
     onFrame: handleFrameSelection,
+    onPlayPause: handleAnimationPlayToggle,
     onToolChange: handleToolChange,
   });
 
@@ -564,7 +798,7 @@ export function App() {
         { id: "edit-divider-1", separator: true },
         { id: "edit-copy", label: "Copy", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C", disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID, onSelect: handleCopy },
         { id: "edit-paste", label: "Paste", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste() },
-        { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID, onSelect: () => handleDelete() },
+        { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: (!selectedTrackId || !selectedKeyframeId) && (!selectedNode || selectedNode.id === ROOT_NODE_ID), onSelect: handleDeleteSelection },
         { id: "edit-divider-2", separator: true },
         { id: "edit-frame", label: "Frame Selection", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: !selectedNode, onSelect: handleFrameSelection },
       ],
@@ -635,7 +869,13 @@ export function App() {
   }
 
   return (
-    <div className="app-shell" data-status-tick={statusTick}>
+    <div
+      className="app-shell"
+      data-status-tick={statusTick}
+      style={{
+        gridTemplateRows: `32px 54px minmax(0, 1fr) ${isTimelineVisible ? "8px" : "0px"} ${isTimelineVisible ? `${timelineHeight}px` : "0px"} 28px`,
+      }}
+    >
       <MenuBar menus={menus} />
 
       <SecondaryToolbar
@@ -652,9 +892,14 @@ export function App() {
         onToolChange={handleToolChange}
         onViewModeChange={(mode) => store.setViewMode(mode)}
         onFrame={handleFrameSelection}
+        isTimelineVisible={isTimelineVisible}
+        onToggleTimeline={() => setIsTimelineVisible((value) => !value)}
       />
 
-      <div className="workspace">
+      <div
+        className="workspace-shell"
+        style={{ gridTemplateColumns: isCompactLayout ? "1fr" : `minmax(0, 1fr) 8px ${rightPanelWidth}px` }}
+      >
         <main className="viewport-panel">
           <div className="viewport-panel__header viewport-panel__header--compact">
             <span className="viewport-panel__title">Viewport</span>
@@ -668,13 +913,27 @@ export function App() {
             <ViewportHost
               store={store}
               onSceneReady={(scene) => {
+                animationFrameUnsubscribeRef.current?.();
                 sceneRef.current = scene;
                 scene?.setTransformMode(currentTool);
+                if (scene) {
+                  scene.seekAnimation(currentFrame);
+                  animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
+                } else {
+                  animationFrameUnsubscribeRef.current = null;
+                }
               }}
               onContextMenu={openViewportContextMenu}
             />
           </div>
         </main>
+
+        {!isCompactLayout ? (
+          <div
+            className={`panel-splitter panel-splitter--vertical${resizeMode === "sidebar" ? " is-active" : ""}`}
+            onPointerDown={startSidebarResizing}
+          />
+        ) : null}
 
         <aside className="panel panel--right panel--split" style={{ gridTemplateRows: `${hierarchyHeight}px auto 1fr` }}>
           <section className="panel-split__top">
@@ -696,8 +955,8 @@ export function App() {
           </section>
 
           <div
-            className={`panel-resizer${isResizing ? " is-active" : ""}`}
-            onPointerDown={startResizing}
+            className={`panel-splitter panel-splitter--horizontal${resizeMode === "hierarchy" ? " is-active" : ""}`}
+            onPointerDown={startHierarchyResizing}
           />
 
           <section className="panel-split__bottom">
@@ -753,6 +1012,43 @@ export function App() {
           </section>
         </aside>
       </div>
+
+      {isTimelineVisible ? (
+        <>
+          <div
+            className={`panel-splitter panel-splitter--horizontal panel-splitter--timeline${resizeMode === "timeline" ? " is-active" : ""}`}
+            onPointerDown={startTimelineResizing}
+          />
+          <AnimationTimeline
+            animation={storeView.animation}
+            nodes={storeView.blueprintNodes}
+            selectedNode={selectedNode}
+            currentFrame={currentFrame}
+            isPlaying={isAnimationPlaying}
+            selectedTrackId={selectedTrackId}
+            selectedKeyframeId={selectedKeyframeId}
+            onPlayToggle={handleAnimationPlayToggle}
+            onStop={handleAnimationStop}
+            onFrameChange={handleTimelineFrameChange}
+            onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
+            onAddTrack={handleAddAnimationTrack}
+            onRemoveTrack={handleRemoveAnimationTrack}
+            onAddKeyframe={handleAddAnimationKeyframe}
+            onSelectTrack={(trackId) => setSelectedTrackId(trackId)}
+            onSelectKeyframe={(trackId, keyframeId) => {
+              setSelectedTrackId(trackId);
+              setSelectedKeyframeId(keyframeId);
+            }}
+            onUpdateKeyframe={handleUpdateAnimationKeyframe}
+            onRemoveKeyframe={handleRemoveAnimationKeyframe}
+            onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
+            onEndKeyframeDrag={() => {
+              store.commitHistoryTransaction("ui");
+              sceneRef.current?.seekAnimation(currentFrame);
+            }}
+          />
+        </>
+      ) : null}
 
       <footer className="statusbar">
         <span className="statusbar__message">{statusText}</span>

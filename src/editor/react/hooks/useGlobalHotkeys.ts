@@ -7,6 +7,7 @@ interface HotkeyHandlers {
   onPaste: () => void;
   onDelete: () => void;
   onFrame: () => void;
+  onPlayPause: () => void;
   onToolChange: (mode: "select" | "translate" | "rotate" | "scale") => void;
 }
 
@@ -17,7 +18,8 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       const isTyping =
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement;
+        target instanceof HTMLSelectElement ||
+        Boolean(target?.isContentEditable);
 
       if (isTyping) {
         return;
@@ -26,6 +28,12 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       if (event.key === "Delete") {
         event.preventDefault();
         handlers.onDelete();
+        return;
+      }
+
+      if (event.code === "Space") {
+        event.preventDefault();
+        handlers.onPlayPause();
         return;
       }
 

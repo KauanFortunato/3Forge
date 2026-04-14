@@ -1,8 +1,25 @@
 import type { Object3D } from "three";
+import {
+  DEFAULT_ANIMATION_DURATION_FRAMES,
+  DEFAULT_ANIMATION_EASE,
+  DEFAULT_ANIMATION_FPS,
+  createAnimationKeyframe,
+  createAnimationTrack,
+  createDefaultAnimation,
+  getAnimationValue,
+  isAnimationEasePreset,
+  isAnimationPropertyPath,
+  normalizeAnimation,
+  sortTrackKeyframes,
+} from "./animation";
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary } from "./fonts";
 import { createTransparentImageAsset, fitImageToMaxSize } from "./images";
 import { createMaterialSpec, getMaterialPropertyDefinitions, normalizeMaterialSpec } from "./materials";
 import type {
+  AnimationEasePreset,
+  AnimationKeyframe,
+  AnimationPropertyPath,
+  AnimationTrack,
   BoxNode,
   ComponentBlueprint,
   CylinderNode,
@@ -130,6 +147,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
     componentName: "3Forge-Component",
     fonts: [],
     nodes: [root, panel, accent, title],
+    animation: createDefaultAnimation(),
   };
 }
 
@@ -590,11 +608,14 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     }
   }
 
+  const animation = normalizeAnimation(source.animation, new Set(importedNodes.map((node) => node.id)));
+
   return {
     version: 1,
     componentName: typeof source.componentName === "string" ? source.componentName : fallback.componentName,
     fonts: importedFonts,
     nodes: importedNodes,
+    animation,
   };
 }
 
@@ -649,6 +670,10 @@ export class EditorStore extends EventTarget {
 
   get viewMode(): ViewMode {
     return this._viewMode;
+  }
+
+  get animation() {
+    return this._blueprint.animation;
   }
 
   setViewMode(mode: ViewMode, source: EditorStoreChange["source"] = "ui"): void {
@@ -776,6 +801,195 @@ export class EditorStore extends EventTarget {
     this.recordHistorySnapshot();
     this._blueprint.componentName = normalized;
     this.notify({ reason: "meta", source });
+  }
+
+  updateAnimationConfig(
+    patch: Partial<Pick<ComponentBlueprint["animation"], "fps" | "durationFrames">>,
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    const nextFps = typeof patch.fps === "number" && Number.isFinite(patch.fps)
+      ? Math.max(1, Math.round(patch.fps))
+      : this._blueprint.animation.fps;
+    const nextDurationFrames = typeof patch.durationFrames === "number" && Number.isFinite(patch.durationFrames)
+      ? Math.max(1, Math.round(patch.durationFrames))
+      : this._blueprint.animation.durationFrames;
+
+    if (
+      nextFps === this._blueprint.animation.fps &&
+      nextDurationFrames === this._blueprint.animation.durationFrames
+    ) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      fps: nextFps,
+      durationFrames: nextDurationFrames,
+      tracks: this._blueprint.animation.tracks.map((track) => ({
+        ...track,
+        keyframes: track.keyframes
+          .map((keyframe) => ({
+            ...keyframe,
+            frame: Math.max(0, Math.min(keyframe.frame, nextDurationFrames)),
+          }))
+          .filter((keyframe, index, keyframes) => keyframes.findIndex((entry) => entry.frame === keyframe.frame) === index),
+      })),
+    };
+    this.notify({ reason: "animation", source });
+  }
+
+  getAnimationTrack(trackId: string): AnimationTrack | undefined {
+    return this._blueprint.animation.tracks.find((track) => track.id === trackId);
+  }
+
+  getAnimationTracksForNode(nodeId: string): AnimationTrack[] {
+    return this._blueprint.animation.tracks.filter((track) => track.nodeId === nodeId);
+  }
+
+  getAnimationTrackForProperty(nodeId: string, property: AnimationPropertyPath): AnimationTrack | undefined {
+    return this._blueprint.animation.tracks.find((track) => track.nodeId === nodeId && track.property === property);
+  }
+
+  ensureAnimationTrack(
+    nodeId: string,
+    property: AnimationPropertyPath,
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    if (!this.getNode(nodeId)) {
+      return "";
+    }
+
+    const existing = this.getAnimationTrackForProperty(nodeId, property);
+    if (existing) {
+      return existing.id;
+    }
+
+    this.recordHistorySnapshot();
+    const track = createAnimationTrack(nodeId, property);
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      tracks: [...this._blueprint.animation.tracks, track],
+    };
+    this.notify({ reason: "animation", source, nodeId });
+    return track.id;
+  }
+
+  removeAnimationTrack(trackId: string, source: EditorStoreChange["source"] = "ui"): void {
+    const track = this.getAnimationTrack(trackId);
+    if (!track) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      tracks: this._blueprint.animation.tracks.filter((entry) => entry.id !== trackId),
+    };
+    this.notify({ reason: "animation", source, nodeId: track.nodeId });
+  }
+
+  addAnimationKeyframe(
+    trackId: string,
+    frame: number,
+    value?: number,
+    ease: AnimationEasePreset = DEFAULT_ANIMATION_EASE,
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    const track = this.getAnimationTrack(trackId);
+    const node = track ? this.getNode(track.nodeId) : undefined;
+    if (!track || !node) {
+      return "";
+    }
+
+    const normalizedFrame = Math.max(0, Math.min(Math.round(frame), this._blueprint.animation.durationFrames));
+    const nextValue = typeof value === "number" && Number.isFinite(value)
+      ? value
+      : getAnimationValue(node, track.property);
+
+    this.recordHistorySnapshot();
+    const keyframe = createAnimationKeyframe(normalizedFrame, nextValue, ease);
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      tracks: this._blueprint.animation.tracks.map((entry) =>
+        entry.id === trackId
+          ? {
+              ...entry,
+              keyframes: sortTrackKeyframes([
+                ...entry.keyframes.filter((candidate) => candidate.frame !== normalizedFrame),
+                keyframe,
+              ]),
+            }
+          : entry),
+    };
+    this.notify({ reason: "animation", source, nodeId: track.nodeId });
+    return keyframe.id;
+  }
+
+  updateAnimationKeyframe(
+    trackId: string,
+    keyframeId: string,
+    patch: Partial<Pick<AnimationKeyframe, "frame" | "value" | "ease">>,
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    const track = this.getAnimationTrack(trackId);
+    const keyframe = track?.keyframes.find((entry) => entry.id === keyframeId);
+    if (!track || !keyframe) {
+      return;
+    }
+
+    const nextFrame = typeof patch.frame === "number" && Number.isFinite(patch.frame)
+      ? Math.max(0, Math.min(Math.round(patch.frame), this._blueprint.animation.durationFrames))
+      : keyframe.frame;
+    const nextValue = typeof patch.value === "number" && Number.isFinite(patch.value)
+      ? patch.value
+      : keyframe.value;
+    const nextEase = typeof patch.ease === "string" && isAnimationEasePreset(patch.ease)
+      ? patch.ease
+      : keyframe.ease;
+
+    if (nextFrame === keyframe.frame && nextValue === keyframe.value && nextEase === keyframe.ease) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      tracks: this._blueprint.animation.tracks.map((entry) => {
+        if (entry.id !== trackId) {
+          return entry;
+        }
+
+        const nextKeyframes = entry.keyframes
+          .filter((candidate) => candidate.id === keyframeId || candidate.frame !== nextFrame)
+          .map((candidate) => candidate.id === keyframeId
+            ? { ...candidate, frame: nextFrame, value: nextValue, ease: nextEase }
+            : candidate);
+
+        return {
+          ...entry,
+          keyframes: sortTrackKeyframes(nextKeyframes),
+        };
+      }),
+    };
+    this.notify({ reason: "animation", source, nodeId: track.nodeId });
+  }
+
+  removeAnimationKeyframe(trackId: string, keyframeId: string, source: EditorStoreChange["source"] = "ui"): void {
+    const track = this.getAnimationTrack(trackId);
+    if (!track || !track.keyframes.some((entry) => entry.id === keyframeId)) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      tracks: this._blueprint.animation.tracks.map((entry) =>
+        entry.id === trackId
+          ? { ...entry, keyframes: entry.keyframes.filter((candidate) => candidate.id !== keyframeId) }
+          : entry),
+    };
+    this.notify({ reason: "animation", source, nodeId: track.nodeId });
   }
 
   loadBlueprint(rawBlueprint: unknown, source: EditorStoreChange["source"] = "import"): void {
@@ -924,6 +1138,7 @@ export class EditorStore extends EventTarget {
 
     this.recordHistorySnapshot();
     this._blueprint.nodes = this._blueprint.nodes.filter((node) => !idsToDelete.has(node.id));
+    this._blueprint.animation.tracks = this._blueprint.animation.tracks.filter((track) => !idsToDelete.has(track.nodeId));
     this._selectedNodeId = removedNode?.parentId ?? ROOT_NODE_ID;
     this.ensureUniqueBindingKeys();
     this.notify({ reason: "structure", source, nodeId });

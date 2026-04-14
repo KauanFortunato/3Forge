@@ -4,6 +4,17 @@ export type PropertyGroup = "Transform" | "Geometry" | "Material" | "Text";
 export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text" | "select";
 export type NodePropertyPath = string;
 export type MaterialType = "basic" | "standard";
+export type AnimationPropertyPath =
+  | "transform.position.x"
+  | "transform.position.y"
+  | "transform.position.z"
+  | "transform.rotation.x"
+  | "transform.rotation.y"
+  | "transform.rotation.z"
+  | "transform.scale.x"
+  | "transform.scale.y"
+  | "transform.scale.z";
+export type AnimationEasePreset = "linear" | "easeIn" | "easeOut" | "easeInOut" | "backOut" | "bounceOut";
 
 export interface Vec3Like {
   x: number;
@@ -52,6 +63,26 @@ export interface EditableBinding {
   key: string;
   label: string;
   type: EditableFieldType;
+}
+
+export interface AnimationKeyframe {
+  id: string;
+  frame: number;
+  value: number;
+  ease: AnimationEasePreset;
+}
+
+export interface AnimationTrack {
+  id: string;
+  nodeId: string;
+  property: AnimationPropertyPath;
+  keyframes: AnimationKeyframe[];
+}
+
+export interface ComponentAnimation {
+  fps: number;
+  durationFrames: number;
+  tracks: AnimationTrack[];
 }
 
 export interface BaseEditorNode {
@@ -148,6 +179,7 @@ export interface ComponentBlueprint {
   componentName: string;
   fonts: FontAsset[];
   nodes: EditorNode[];
+  animation: ComponentAnimation;
 }
 
 export interface NodePropertyDefinition {
@@ -168,7 +200,7 @@ export interface EditableFieldEntry {
 }
 
 export type EditorStoreChange = {
-  reason: "structure" | "node" | "selection" | "editable" | "meta" | "import" | "history" | "font" | "view";
+  reason: "structure" | "node" | "selection" | "editable" | "meta" | "import" | "history" | "font" | "view" | "animation";
   source: "ui" | "scene" | "system" | "import" | "history";
   nodeId?: string;
 };
