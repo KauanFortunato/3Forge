@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   ANIMATION_EASE_OPTIONS,
@@ -78,6 +78,9 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   const [propertyToAdd, setPropertyToAdd] = useState<AnimationPropertyPath>("transform.position.x");
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [scrubState, setScrubState] = useState<ScrubState | null>(null);
+  const leftBodyRef = useRef<HTMLDivElement | null>(null);
+  const rulerScrollRef = useRef<HTMLDivElement | null>(null);
+  const rightBodyRef = useRef<HTMLDivElement | null>(null);
 
   const groupedTracks = useMemo(() => groupTracksByNode(animation.tracks, nodes), [animation.tracks, nodes]);
   const selectedTrack = animation.tracks.find((track) => track.id === selectedTrackId) ?? null;
@@ -88,6 +91,15 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   );
   const availableProperties = ANIMATION_PROPERTIES.filter((entry) => !takenProperties.has(entry.path));
   const timelineWidth = Math.max(animation.durationFrames, 1) * FRAME_WIDTH;
+  const visibleTracks = useMemo(
+    () => (selectedNode ? animation.tracks.filter((track) => track.nodeId === selectedNode.id) : []),
+    [animation.tracks, selectedNode],
+  );
+  const visibleGroupedTracks = useMemo(() => groupTracksByNode(visibleTracks, nodes), [nodes, visibleTracks]);
+  const visibleTrackCount = visibleTracks.length;
+  const visibleSelectedTrack = visibleTracks.find((track) => track.id === selectedTrackId) ?? null;
+  const visibleSelectedKeyframe = visibleSelectedTrack?.keyframes.find((keyframe) => keyframe.id === selectedKeyframeId) ?? null;
+  const selectedObjectLabel = selectedNode ? `${selectedNode.name} | ${selectedNode.type}` : "No object selected";
 
   useEffect(() => {
     if (availableProperties.length > 0 && !availableProperties.some((entry) => entry.path === propertyToAdd)) {
@@ -140,6 +152,80 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     };
   }, [animation.durationFrames, onFrameChange, scrubState]);
 
+  useEffect(() => {
+    const leftBody = leftBodyRef.current;
+    const rulerScroll = rulerScrollRef.current;
+    const rightBody = rightBodyRef.current;
+    if (!leftBody || !rulerScroll || !rightBody) {
+      return;
+    }
+
+    let syncingLeftTop = false;
+    let syncingRightTop = false;
+    let syncingRulerLeft = false;
+    let syncingRightLeft = false;
+
+    const handleLeftScroll = () => {
+      if (syncingLeftTop) {
+        syncingLeftTop = false;
+        return;
+      }
+
+      syncingRightTop = true;
+      rightBody.scrollTop = leftBody.scrollTop;
+    };
+
+    const handleRulerScroll = () => {
+      if (syncingRulerLeft) {
+        syncingRulerLeft = false;
+        return;
+      }
+
+      syncingRightLeft = true;
+      rightBody.scrollLeft = rulerScroll.scrollLeft;
+    };
+
+    const handleRightScroll = () => {
+      if (syncingRightTop) {
+        syncingRightTop = false;
+      } else {
+        syncingLeftTop = true;
+        leftBody.scrollTop = rightBody.scrollTop;
+      }
+
+      if (syncingRightLeft) {
+        syncingRightLeft = false;
+      } else {
+        syncingRulerLeft = true;
+        rulerScroll.scrollLeft = rightBody.scrollLeft;
+      }
+    };
+
+    leftBody.addEventListener("scroll", handleLeftScroll);
+    rulerScroll.addEventListener("scroll", handleRulerScroll);
+    rightBody.addEventListener("scroll", handleRightScroll);
+
+    leftBody.scrollTop = rightBody.scrollTop;
+    rulerScroll.scrollLeft = rightBody.scrollLeft;
+
+    return () => {
+      leftBody.removeEventListener("scroll", handleLeftScroll);
+      rulerScroll.removeEventListener("scroll", handleRulerScroll);
+      rightBody.removeEventListener("scroll", handleRightScroll);
+    };
+  }, [visibleGroupedTracks.length]);
+
+  useEffect(() => {
+    const leftBody = leftBodyRef.current;
+    const rightBody = rightBodyRef.current;
+    if (!leftBody || !rightBody) {
+      return;
+    }
+
+    leftBody.scrollTop = 0;
+    rightBody.scrollTop = 0;
+  }, [selectedNode?.id]);
+
   return (
     <section className="animation-panel">
       <div className="animation-panel__header">
@@ -189,7 +275,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         </div>
 
         <div className="animation-toolbar animation-toolbar--right">
-          <div className="toolbar-chip animation-toolbar__selection">{selectedNodeLabel}</div>
+          <div className="toolbar-chip animation-toolbar__selection">{selectedObjectLabel}</div>
           <select
             className="editor-select animation-toolbar__select"
             value={propertyToAdd}
@@ -214,9 +300,9 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
           >
             <span>Add Channel</span>
           </button>
-          {selectedTrack && selectedKeyframe ? (
+          {visibleSelectedTrack && visibleSelectedKeyframe ? (
             <div className="animation-keyframe-editor">
-              <div className="toolbar-chip">{getAnimationPropertyLabel(selectedTrack.property)}</div>
+              <div className="toolbar-chip">{getAnimationPropertyLabel(visibleSelectedTrack.property)}</div>
               <label className="field-inline">
                 <span>F</span>
                 <input
@@ -224,8 +310,8 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                   type="number"
                   min={0}
                   max={animation.durationFrames}
-                  value={selectedKeyframe.frame}
-                  onChange={(event) => onUpdateKeyframe(selectedTrack.id, selectedKeyframe.id, { frame: Number(event.target.value) })}
+                  value={visibleSelectedKeyframe.frame}
+                  onChange={(event) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: Number(event.target.value) })}
                 />
               </label>
               <label className="field-inline">
@@ -233,17 +319,17 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 <input
                   className="editor-input editor-input--compact"
                   type="number"
-                  step={selectedTrack.property.includes("rotation") ? 1 : 0.1}
-                  value={displayValueForInput(selectedTrack.property, selectedKeyframe.value)}
-                  onChange={(event) => onUpdateKeyframe(selectedTrack.id, selectedKeyframe.id, { value: parseValueFromInput(selectedTrack.property, Number(event.target.value)) })}
+                  step={visibleSelectedTrack.property.includes("rotation") ? 1 : 0.1}
+                  value={displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value)}
+                  onChange={(event) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { value: parseValueFromInput(visibleSelectedTrack.property, Number(event.target.value)) })}
                 />
               </label>
               <label className="field-inline">
                 <span>Ease</span>
                 <select
                   className="editor-select"
-                  value={selectedKeyframe.ease}
-                  onChange={(event) => onUpdateKeyframe(selectedTrack.id, selectedKeyframe.id, { ease: event.target.value as AnimationEasePreset })}
+                  value={visibleSelectedKeyframe.ease}
+                  onChange={(event) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { ease: event.target.value as AnimationEasePreset })}
                 >
                   {ANIMATION_EASE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -254,7 +340,9 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
               </label>
             </div>
           ) : (
-            <div className="toolbar-chip animation-toolbar__count is-muted">{animation.tracks.length} channels</div>
+            <div className="toolbar-chip animation-toolbar__count is-muted">
+              {selectedNode ? `${visibleTrackCount} channels` : "Select an object"}
+            </div>
           )}
         </div>
       </div>
@@ -262,8 +350,8 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
       <div className="animation-dope-sheet">
         <div className="animation-dope-sheet__left">
           <div className="animation-dope-sheet__left-header">Channels</div>
-          <div className="animation-dope-sheet__left-body">
-            {groupedTracks.length > 0 ? groupedTracks.map(({ node, tracks }) => (
+          <div ref={leftBodyRef} className="animation-dope-sheet__left-body">
+            {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
               <div key={node.id} className={`animation-node${selectedNode?.id === node.id ? " is-selected" : ""}`}>
                 <div className="animation-node__header">
                   <div className="animation-node__title">{node.name}</div>
@@ -284,38 +372,43 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 </div>
               </div>
             )) : (
-              <div className="panel-empty">Add channels for the selected object to start animating.</div>
+              <div className="panel-empty">
+                {selectedNode ? "Add channels for the selected object to start animating." : "Select an object to inspect its channels."}
+              </div>
             )}
           </div>
         </div>
 
         <div className="animation-dope-sheet__right">
-          <div className="animation-ruler-row" style={{ width: timelineWidth + ACTIONS_GAP + ACTIONS_WIDTH }}>
-            <div
-              className="animation-ruler"
-              style={{ width: timelineWidth }}
-              onPointerDown={(event) => {
-                const laneLeft = event.currentTarget.getBoundingClientRect().left;
-                onFrameChange(positionToFrame(event.clientX, laneLeft, animation.durationFrames));
-                setScrubState({ laneLeft });
-              }}
-            >
-              {Array.from({ length: animation.durationFrames + 1 }, (_, frame) => (
-                <div
-                  key={frame}
-                  className={`animation-ruler__tick${frame % 10 === 0 ? " is-major" : ""}`}
-                  style={{ left: frame * FRAME_WIDTH }}
-                >
-                  {frame % 10 === 0 ? <span>{frame}</span> : null}
-                </div>
-              ))}
-              <div className="animation-playhead" style={{ left: currentFrame * FRAME_WIDTH }} />
+          <div ref={rulerScrollRef} className="animation-dope-sheet__ruler-scroll">
+            <div className="animation-ruler-row" style={{ width: timelineWidth + ACTIONS_GAP + ACTIONS_WIDTH }}>
+              <div
+                className="animation-ruler"
+                style={{ width: timelineWidth }}
+                onPointerDown={(event) => {
+                  const laneLeft = event.currentTarget.getBoundingClientRect().left;
+                  onFrameChange(positionToFrame(event.clientX, laneLeft, animation.durationFrames));
+                  setScrubState({ laneLeft });
+                }}
+              >
+                {Array.from({ length: animation.durationFrames + 1 }, (_, frame) => (
+                  <div
+                    key={frame}
+                    className={`animation-ruler__tick${frame % 10 === 0 ? " is-major" : ""}`}
+                    style={{ left: frame * FRAME_WIDTH }}
+                  >
+                    {frame % 10 === 0 ? <span>{frame}</span> : null}
+                  </div>
+                ))}
+                <div className="animation-playhead" style={{ left: currentFrame * FRAME_WIDTH }} />
+              </div>
+              <div className="animation-ruler-row__actions-spacer" aria-hidden="true" />
             </div>
-            <div className="animation-ruler-row__actions-spacer" aria-hidden="true" />
           </div>
 
-          <div className="animation-dope-sheet__rows">
-            {groupedTracks.length > 0 ? groupedTracks.map(({ node, tracks }) => (
+          <div ref={rightBodyRef} className="animation-dope-sheet__right-body">
+            <div className="animation-dope-sheet__rows">
+              {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
               <div key={node.id} className="animation-row-group">
                 <div className="animation-row-group__spacer" style={{ width: timelineWidth + ACTIONS_GAP + ACTIONS_WIDTH }}>
                   <div
@@ -356,10 +449,13 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 ))}
               </div>
             )) : (
-              <div className="panel-empty animation-panel-empty-wide">
-                Select an object, add transform channels, and keyframe directly in the dope sheet.
-              </div>
-            )}
+                <div className="panel-empty animation-panel-empty-wide">
+                  {selectedNode
+                    ? "Add transform channels for the selected object and keyframe directly in the dope sheet."
+                    : "Select an object to view and edit its animation channels."}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

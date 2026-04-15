@@ -305,6 +305,18 @@ export function App() {
   }, [selectedTrackId, storeView.animation.tracks]);
 
   useEffect(() => {
+    if (!selectedTrackId) {
+      return;
+    }
+
+    const track = storeView.animation.tracks.find((entry) => entry.id === selectedTrackId);
+    if (!track || !selectedNode || track.nodeId !== selectedNode.id) {
+      setSelectedTrackId(null);
+      setSelectedKeyframeId(null);
+    }
+  }, [selectedNode, selectedTrackId, storeView.animation.tracks]);
+
+  useEffect(() => {
     if (!selectedTrackId || !selectedKeyframeId) {
       return;
     }

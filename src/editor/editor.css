@@ -17,6 +17,9 @@
   --accent: #7c44de;
   --accent-strong: #9258f3;
   --accent-soft: rgba(124, 68, 222, 0.18);
+  --scrollbar-track: rgba(255, 255, 255, 0.045);
+  --scrollbar-thumb: rgba(124, 68, 222, 0.52);
+  --scrollbar-thumb-hover: rgba(146, 88, 243, 0.72);
   --danger: #ef4444;
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.24);
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
@@ -28,6 +31,35 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--scrollbar-thumb) 0%, rgba(92, 54, 163, 0.72) 100%);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  min-height: 28px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--scrollbar-thumb-hover) 0%, rgba(115, 68, 199, 0.84) 100%);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 html,
@@ -1782,11 +1814,16 @@ input[type=number] {
 .animation-dope-sheet {
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .animation-dope-sheet__left {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: linear-gradient(180deg, #17191d 0%, #15171b 100%);
   display: grid;
@@ -1807,7 +1844,13 @@ input[type=number] {
 }
 
 .animation-dope-sheet__left-body {
-  overflow: auto;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
   padding: 10px;
   display: grid;
   gap: 10px;
@@ -1815,17 +1858,42 @@ input[type=number] {
 }
 
 .animation-dope-sheet__right {
-  overflow: auto;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   background: linear-gradient(180deg, #17191d 0%, #15171b 100%);
   user-select: none;
   -webkit-user-select: none;
 }
 
+.animation-dope-sheet__ruler-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+
+.animation-dope-sheet__right-body {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow-x: auto;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+
 .animation-dope-sheet__rows {
   display: grid;
   gap: 10px;
+  min-height: min-content;
+  width: max-content;
+  min-width: 100%;
+  align-content: start;
   padding: 10px 0 12px;
 }
 
