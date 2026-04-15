@@ -15,6 +15,8 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onSceneReadyRef = useRef(onSceneReady);
   const rightPointerStateRef = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
+  const suppressContextMenuRef = useRef(false);
+  const suppressContextMenuTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     onSceneReadyRef.current = onSceneReady;
@@ -49,10 +51,26 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
       }
     };
 
+    const armContextMenuSuppression = () => {
+      suppressContextMenuRef.current = true;
+      if (suppressContextMenuTimeoutRef.current !== null) {
+        window.clearTimeout(suppressContextMenuTimeoutRef.current);
+      }
+
+      suppressContextMenuTimeoutRef.current = window.setTimeout(() => {
+        suppressContextMenuRef.current = false;
+        suppressContextMenuTimeoutRef.current = null;
+      }, 250);
+    };
+
     const clearPointerState = (event: PointerEvent) => {
       const state = rightPointerStateRef.current;
       if (!state || event.pointerId !== state.pointerId) {
         return;
+      }
+
+      if (state.moved) {
+        armContextMenuSuppression();
       }
 
       rightPointerStateRef.current = null;
@@ -66,6 +84,9 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", clearPointerState);
       window.removeEventListener("pointercancel", clearPointerState);
+      if (suppressContextMenuTimeoutRef.current !== null) {
+        window.clearTimeout(suppressContextMenuTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -96,6 +117,16 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
         }
       }}
       onContextMenu={(event) => {
+        if (suppressContextMenuRef.current) {
+          suppressContextMenuRef.current = false;
+          if (suppressContextMenuTimeoutRef.current !== null) {
+            window.clearTimeout(suppressContextMenuTimeoutRef.current);
+            suppressContextMenuTimeoutRef.current = null;
+          }
+          event.preventDefault();
+          return;
+        }
+
         const state = rightPointerStateRef.current;
         rightPointerStateRef.current = null;
 
