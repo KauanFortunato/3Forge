@@ -13,6 +13,7 @@ import type {
   ComponentAnimation,
   EditorNode,
 } from "../../types";
+import { BufferedInput } from "./BufferedInput";
 
 const FRAME_WIDTH = 14;
 const ACTIONS_WIDTH = 126;
@@ -242,33 +243,32 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
           <div className="animation-toolbar__stats">
             <label className="field-inline">
               <span>Frame</span>
-              <input
+              <BufferedInput
                 className="editor-input editor-input--compact"
-                type="number"
-                min={0}
-                max={animation.durationFrames}
-                value={currentFrame}
-                onChange={(event) => onFrameChange(Number(event.target.value))}
+                type="text"
+                inputMode="numeric"
+                value={String(currentFrame)}
+                onCommit={(value) => onFrameChange(Number(value))}
               />
             </label>
             <label className="field-inline">
               <span>FPS</span>
-              <input
+              <BufferedInput
                 className="editor-input editor-input--compact"
-                type="number"
-                min={1}
-                value={animation.fps}
-                onChange={(event) => onAnimationConfigChange({ fps: Number(event.target.value) })}
+                type="text"
+                inputMode="numeric"
+                value={String(animation.fps)}
+                onCommit={(value) => onAnimationConfigChange({ fps: Number(value) })}
               />
             </label>
             <label className="field-inline">
               <span>End</span>
-              <input
+              <BufferedInput
                 className="editor-input editor-input--compact"
-                type="number"
-                min={1}
-                value={animation.durationFrames}
-                onChange={(event) => onAnimationConfigChange({ durationFrames: Number(event.target.value) })}
+                type="text"
+                inputMode="numeric"
+                value={String(animation.durationFrames)}
+                onCommit={(value) => onAnimationConfigChange({ durationFrames: Number(value) })}
               />
             </label>
           </div>
@@ -305,23 +305,25 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
               <div className="toolbar-chip">{getAnimationPropertyLabel(visibleSelectedTrack.property)}</div>
               <label className="field-inline">
                 <span>F</span>
-                <input
+                <BufferedInput
                   className="editor-input editor-input--compact"
-                  type="number"
-                  min={0}
-                  max={animation.durationFrames}
-                  value={visibleSelectedKeyframe.frame}
-                  onChange={(event) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: Number(event.target.value) })}
+                  type="text"
+                  inputMode="numeric"
+                  value={String(visibleSelectedKeyframe.frame)}
+                  onCommit={(value) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: Number(value) })}
                 />
               </label>
               <label className="field-inline">
                 <span>Val</span>
-                <input
+                <BufferedInput
                   className="editor-input editor-input--compact"
-                  type="number"
-                  step={visibleSelectedTrack.property.includes("rotation") ? 1 : 0.1}
-                  value={displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value)}
-                  onChange={(event) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { value: parseValueFromInput(visibleSelectedTrack.property, Number(event.target.value)) })}
+                  type="text"
+                  inputMode="decimal"
+                  value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
+                  onCommit={(value) =>
+                    onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
+                      value: parseValueFromInput(visibleSelectedTrack.property, Number(value)),
+                    })}
                 />
               </label>
               <label className="field-inline">

@@ -12,6 +12,7 @@ import {
   ViewRenderedIcon,
   ViewSolidIcon,
 } from "./icons";
+import { BufferedInput } from "./BufferedInput";
 
 interface SecondaryToolbarProps {
   componentName: string;
@@ -55,11 +56,11 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       <div className="secondary-toolbar__left">
         <label className="component-name-field">
           <span className="component-name-field__label">Component</span>
-          <input
+          <BufferedInput
             className="editor-input editor-input--compact component-name-field__input"
             type="text"
             value={componentName}
-            onChange={(event) => onComponentNameChange(event.target.value)}
+            onCommit={onComponentNameChange}
           />
         </label>
       </div>

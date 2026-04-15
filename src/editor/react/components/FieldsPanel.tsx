@@ -1,5 +1,6 @@
 import { getPropertyDefinitions } from "../../state";
 import type { EditableFieldEntry } from "../../types";
+import { BufferedInput } from "./BufferedInput";
 
 interface FieldsPanelProps {
   entries: EditableFieldEntry[];
@@ -21,21 +22,21 @@ export function FieldsPanel({ entries, onUpdateBinding, onRemoveEditable }: Fiel
 
           <label className="field-block">
             <span className="field-block__label">Key</span>
-            <input
+            <BufferedInput
               className="editor-input"
               type="text"
               value={entry.binding.key}
-              onChange={(event) => onUpdateBinding(entry.node.id, entry.binding.path, { key: event.target.value })}
+              onCommit={(value) => onUpdateBinding(entry.node.id, entry.binding.path, { key: value })}
             />
           </label>
 
           <label className="field-block">
             <span className="field-block__label">Label</span>
-            <input
+            <BufferedInput
               className="editor-input"
               type="text"
               value={entry.binding.label}
-              onChange={(event) => onUpdateBinding(entry.node.id, entry.binding.path, { label: event.target.value })}
+              onCommit={(value) => onUpdateBinding(entry.node.id, entry.binding.path, { label: value })}
             />
           </label>
 

@@ -12,6 +12,7 @@ import {
   TextPropertyIcon,
   TransformIcon,
 } from "./icons";
+import { BufferedInput } from "./BufferedInput";
 
 type InspectorSectionId = "object" | "transform" | "geometry" | "material" | "text" | "image";
 
@@ -95,11 +96,11 @@ export function InspectorPanel(props: InspectorPanelProps) {
               <div className="inspector-simple-grid">
                 <label className="field-block">
                   <span className="field-block__label">Node Name</span>
-                  <input
+                  <BufferedInput
                     className="editor-input editor-input--compact"
                     type="text"
                     value={node.name}
-                    onChange={(event) => onNodeNameChange(node.id, event.target.value)}
+                    onCommit={(value) => onNodeNameChange(node.id, value)}
                   />
                 </label>
 
@@ -352,14 +353,12 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
           return (
             <div key={definition.path} className={`transform-cell${isEditable ? " is-editable" : ""}`}>
               <span className="transform-cell__axis">{axis}</span>
-              <input
+              <BufferedInput
                 className="editor-input editor-input--compact"
-                type="number"
+                type="text"
+                inputMode="decimal"
                 value={String(currentValue)}
-                step={definition.step}
-                min={definition.min}
-                max={definition.max}
-                onChange={(event) => onNodePropertyChange(node.id, definition, event.target.value)}
+                onCommit={(value) => onNodePropertyChange(node.id, definition, value)}
               />
               <label className={`transform-cell__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
                 <input
@@ -387,13 +386,7 @@ interface PropertyRowProps {
 function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable }: PropertyRowProps) {
   const currentValue = getDisplayValue(node, definition);
   const isEditable = Boolean(node.editable[definition.path]);
-  
-  // Local state for immediate UI feedback without heavy store updates (mostly for colors)
-  const [localValue, setLocalValue] = useState(String(currentValue));
-
-  useEffect(() => {
-    setLocalValue(String(currentValue));
-  }, [currentValue]);
+  const stringValue = String(currentValue);
 
   return (
     <div className={`inspector-property${isEditable ? " is-editable" : ""}`}>
@@ -410,11 +403,8 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
         ) : definition.input === "select" ? (
           <select
             className="editor-select"
-            value={localValue}
-            onChange={(event) => {
-              setLocalValue(event.target.value);
-              onNodePropertyChange(node.id, definition, event.target.value);
-            }}
+            value={stringValue}
+            onChange={(event) => onNodePropertyChange(node.id, definition, event.target.value)}
           >
             {(definition.options ?? []).map((option) => (
               <option key={option.value} value={option.value}>
@@ -422,25 +412,28 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
               </option>
             ))}
           </select>
+        ) : definition.input === "color" ? (
+          <div className="inspector-color-control">
+            <BufferedInput
+              className="editor-input editor-input--compact inspector-color-control__hex"
+              type="text"
+              value={stringValue}
+              onCommit={(value) => onNodePropertyChange(node.id, definition, value)}
+            />
+            <input
+              className="inspector-color-control__swatch"
+              type="color"
+              value={normalizeColorSwatchValue(stringValue)}
+              onChange={(event) => onNodePropertyChange(node.id, definition, event.target.value)}
+            />
+          </div>
         ) : (
-          <input
+          <BufferedInput
             className="editor-input editor-input--compact"
-            type={definition.input === "color" ? "color" : definition.input === "text" ? "text" : "number"}
-            value={localValue}
-            step={definition.step}
-            min={definition.min}
-            max={definition.max}
-            onChange={(event) => {
-              setLocalValue(event.target.value);
-              if (definition.input !== "color") {
-                onNodePropertyChange(node.id, definition, event.target.value);
-              }
-            }}
-            onBlur={(event) => {
-              if (definition.input === "color") {
-                onNodePropertyChange(node.id, definition, event.target.value);
-              }
-            }}
+            type="text"
+            inputMode={definition.input === "text" ? "text" : "decimal"}
+            value={stringValue}
+            onCommit={(value) => onNodePropertyChange(node.id, definition, value)}
           />
         )}
       </div>
@@ -455,6 +448,20 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
       </label>
     </div>
   );
+}
+
+function normalizeColorSwatchValue(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(normalized)) {
+    return normalized;
+  }
+
+  if (/^#[0-9a-f]{3}$/.test(normalized)) {
+    const [, r, g, b] = normalized;
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+
+  return "#ffffff";
 }
 
 function getSectionsForNode(node: EditorNode | undefined): InspectorSection[] {
