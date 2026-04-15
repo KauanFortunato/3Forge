@@ -6,6 +6,7 @@ import { ChevronDownIcon, ChevronRightIcon, ClosedEyeIcon, EyeIcon, GroupIcon, M
 
 interface SceneGraphPanelProps {
   nodes: EditorNode[];
+  animatedNodeIds: Set<string>;
   selectedNodeId: string;
   onSelectNode: (nodeId: string) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
@@ -14,7 +15,7 @@ interface SceneGraphPanelProps {
 }
 
 export function SceneGraphPanel(props: SceneGraphPanelProps) {
-  const { nodes, selectedNodeId, onSelectNode, onMoveNode, onToggleVisibility, onContextMenu } = props;
+  const { nodes, animatedNodeIds, selectedNodeId, onSelectNode, onMoveNode, onToggleVisibility, onContextMenu } = props;
   const branches = useMemo(() => buildTree(nodes), [nodes]);
   const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const selectedPathIds = useMemo(() => buildSelectedPathSet(nodeMap, selectedNodeId), [nodeMap, selectedNodeId]);
@@ -75,6 +76,7 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
           onSelectNode={onSelectNode}
           onMoveNode={onMoveNode}
           onToggleVisibility={onToggleVisibility}
+          animatedNodeIds={animatedNodeIds}
           onContextMenu={onContextMenu}
           onDragStateChange={(nextDragged, nextDropTarget) => {
             setDraggedNodeId(nextDragged);
@@ -101,6 +103,7 @@ interface SceneGraphBranchProps {
   onSelectNode: (nodeId: string) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
+  animatedNodeIds: Set<string>;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
   onDragStateChange: (draggedNodeId: string | null, target: TreeDropTarget | null) => void;
   onClearDragState: () => void;
@@ -121,6 +124,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
     onSelectNode,
     onMoveNode,
     onToggleVisibility,
+    animatedNodeIds,
     onContextMenu,
     onDragStateChange,
     onClearDragState,
@@ -133,6 +137,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
   const isSelected = selectedNodeId === branch.node.id;
   const isAncestor = !isSelected && selectedPathIds.has(branch.node.id);
   const rowDropState = getDropState(dropTarget, branch.node.id);
+  const hasAnimation = animatedNodeIds.has(branch.node.id);
 
   return (
     <div className={`scene-graph__branch${parentId ? " has-parent" : ""}`}>
@@ -227,7 +232,10 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
           </button>
         </div>
 
-        <span className="scene-row__type">{isGroup ? "Group" : "Mesh"}</span>
+        <div className="scene-row__meta">
+          {hasAnimation ? <span className="scene-row__type scene-row__type--animation">Anim</span> : null}
+          <span className="scene-row__type">{isGroup ? "Group" : "Mesh"}</span>
+        </div>
       </div>
 
       {isGroup && !isCollapsed ? (
@@ -256,6 +264,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
               onSelectNode={onSelectNode}
               onMoveNode={onMoveNode}
               onToggleVisibility={onToggleVisibility}
+              animatedNodeIds={animatedNodeIds}
               onContextMenu={onContextMenu}
               onDragStateChange={onDragStateChange}
               onClearDragState={onClearDragState}

@@ -216,6 +216,10 @@ export function App() {
   const typeScriptExport = useMemo(() => generateTypeScriptComponent(blueprintSnapshot), [blueprintSnapshot]);
   const exportPreview = exportMode === "json" ? blueprintJson : typeScriptExport;
   const selectedNode = storeView.selectedNode;
+  const animatedNodeIds = useMemo(
+    () => new Set(storeView.animation.tracks.map((track) => track.nodeId)),
+    [storeView.animation.tracks],
+  );
 
   const setTransientStatus = useCallback((message: string) => {
     setStatusText(message);
@@ -957,6 +961,7 @@ export function App() {
             <div className="panel__body panel__body--flush">
               <SceneGraphPanel
                 nodes={storeView.blueprintNodes}
+                animatedNodeIds={animatedNodeIds}
                 selectedNodeId={storeView.selectedNodeId}
                 onSelectNode={(nodeId) => store.selectNode(nodeId)}
                 onMoveNode={handleSceneMove}

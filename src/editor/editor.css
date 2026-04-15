@@ -735,6 +735,19 @@ button {
   flex: 0 0 auto;
 }
 
+.scene-row__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.scene-row__type--animation {
+  border-color: rgba(124, 68, 222, 0.32);
+  background: rgba(124, 68, 222, 0.14);
+  color: #d5c2ff;
+}
+
 .scene-graph__end-drop {
   height: 4px;
   margin: 2px 0 2px 20px;
