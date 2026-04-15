@@ -8,17 +8,19 @@ interface SceneGraphPanelProps {
   nodes: EditorNode[];
   animatedNodeIds: Set<string>;
   selectedNodeId: string;
-  onSelectNode: (nodeId: string) => void;
+  selectedNodeIds: string[];
+  onSelectNode: (nodeId: string, additive: boolean) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
 }
 
 export function SceneGraphPanel(props: SceneGraphPanelProps) {
-  const { nodes, animatedNodeIds, selectedNodeId, onSelectNode, onMoveNode, onToggleVisibility, onContextMenu } = props;
+  const { nodes, animatedNodeIds, selectedNodeId, selectedNodeIds, onSelectNode, onMoveNode, onToggleVisibility, onContextMenu } = props;
   const branches = useMemo(() => buildTree(nodes), [nodes]);
   const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-  const selectedPathIds = useMemo(() => buildSelectedPathSet(nodeMap, selectedNodeId), [nodeMap, selectedNodeId]);
+  const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
+  const selectedPathIds = useMemo(() => buildSelectedPathSet(nodeMap, selectedNodeIds), [nodeMap, selectedNodeIds]);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<TreeDropTarget | null>(null);
@@ -68,6 +70,7 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
           siblingIndex={index}
           siblingCount={branches.length}
           selectedNodeId={selectedNodeId}
+          selectedNodeIds={selectedNodeIdsSet}
           selectedPathIds={selectedPathIds}
           collapsedIds={collapsedIds}
           draggedNodeId={draggedNodeId}
@@ -95,12 +98,13 @@ interface SceneGraphBranchProps {
   siblingIndex: number;
   siblingCount: number;
   selectedNodeId: string;
+  selectedNodeIds: Set<string>;
   selectedPathIds: Set<string>;
   collapsedIds: Set<string>;
   draggedNodeId: string | null;
   dropTarget: TreeDropTarget | null;
   onToggleNode: (nodeId: string) => void;
-  onSelectNode: (nodeId: string) => void;
+  onSelectNode: (nodeId: string, additive: boolean) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
   animatedNodeIds: Set<string>;
@@ -116,6 +120,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
     siblingIndex,
     siblingCount,
     selectedNodeId,
+    selectedNodeIds,
     selectedPathIds,
     collapsedIds,
     draggedNodeId,
@@ -134,7 +139,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
   const isGroup = branch.node.type === "group";
   const hasChildren = branch.children.length > 0;
   const isCollapsed = isGroup && collapsedIds.has(branch.node.id);
-  const isSelected = selectedNodeId === branch.node.id;
+  const isSelected = selectedNodeIds.has(branch.node.id);
   const isAncestor = !isSelected && selectedPathIds.has(branch.node.id);
   const rowDropState = getDropState(dropTarget, branch.node.id);
   const hasAnimation = animatedNodeIds.has(branch.node.id);
@@ -152,7 +157,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
           draggedNodeId === branch.node.id ? "is-dragging" : "",
         ].filter(Boolean).join(" ")}
         draggable={!isRoot}
-        onClick={() => onSelectNode(branch.node.id)}
+        onClick={(event) => onSelectNode(branch.node.id, event.shiftKey)}
         onContextMenu={(event) => {
           event.preventDefault();
           onContextMenu(event, branch.node.id);
@@ -256,6 +261,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
               siblingIndex={index}
               siblingCount={branch.children.length}
               selectedNodeId={selectedNodeId}
+              selectedNodeIds={selectedNodeIds}
               selectedPathIds={selectedPathIds}
               collapsedIds={collapsedIds}
               draggedNodeId={draggedNodeId}
@@ -325,13 +331,15 @@ function buildTree(nodes: EditorNode[]): TreeBranch[] {
   return (byParent.get(null) ?? []).map(createBranch);
 }
 
-function buildSelectedPathSet(nodeMap: Map<string, EditorNode>, selectedNodeId: string): Set<string> {
+function buildSelectedPathSet(nodeMap: Map<string, EditorNode>, selectedNodeIds: string[]): Set<string> {
   const selectedPathIds = new Set<string>();
-  let current = nodeMap.get(selectedNodeId) ?? null;
 
-  while (current?.parentId) {
-    selectedPathIds.add(current.parentId);
-    current = nodeMap.get(current.parentId) ?? null;
+  for (const selectedNodeId of selectedNodeIds) {
+    let current = nodeMap.get(selectedNodeId) ?? null;
+    while (current?.parentId) {
+      selectedPathIds.add(current.parentId);
+      current = nodeMap.get(current.parentId) ?? null;
+    }
   }
 
   return selectedPathIds;

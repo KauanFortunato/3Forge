@@ -46,8 +46,8 @@ import { ViewportHost } from "./components/ViewportHost";
 const APP_LOGO_SRC = "/assets/icons/logo.svg";
 
 interface NodeClipboard {
-  sourceNodeId: string;
-  nodes: EditorNode[];
+  sourceNodeIds: string[];
+  subtrees: EditorNode[][];
 }
 
 type PendingImageImport =
@@ -215,7 +215,15 @@ export function App() {
   const blueprintJson = useMemo(() => exportBlueprintToJson(blueprintSnapshot), [blueprintSnapshot]);
   const typeScriptExport = useMemo(() => generateTypeScriptComponent(blueprintSnapshot), [blueprintSnapshot]);
   const exportPreview = exportMode === "json" ? blueprintJson : typeScriptExport;
+  const selectedNodeIds = storeView.selectedNodeIds;
+  const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
+  const selectedNodeCount = selectedNodeIds.length;
   const selectedNode = storeView.selectedNode;
+  const inspectorNode = selectedNodeCount > 1 ? undefined : selectedNode;
+  const selectedRootIds = useMemo(
+    () => store.getSelectionRootIds(selectedNodeIds),
+    [selectedNodeIds, store, storeView.blueprintNodes],
+  );
   const animatedNodeIds = useMemo(
     () => new Set(storeView.animation.tracks.map((track) => track.nodeId)),
     [storeView.animation.tracks],
@@ -340,9 +348,23 @@ export function App() {
     return store.getNodeChildren(node.parentId).findIndex((entry) => entry.id === nodeId);
   }, [store]);
 
-  const collectSubtreeNodes = useCallback((rootNodeId: string) => {
-    const ids = new Set([rootNodeId, ...store.getDescendantIds(rootNodeId)]);
-    return store.blueprint.nodes.filter((node) => ids.has(node.id));
+  const collectSubtreeNodes = useCallback((rootNodeId: string) => store.getSubtreeNodes(rootNodeId), [store]);
+
+  const resolveContextSelectionRootIds = useCallback((nodeId?: string | null) => {
+    if (nodeId && !selectedNodeIdsSet.has(nodeId)) {
+      return store.getSelectionRootIds([nodeId]);
+    }
+
+    return selectedRootIds;
+  }, [selectedNodeIdsSet, selectedRootIds, store]);
+
+  const canGroupNodeIds = useCallback((nodeIds: string[]) => {
+    if (nodeIds.length < 2) {
+      return false;
+    }
+
+    const parentId = store.getNode(nodeIds[0])?.parentId ?? ROOT_NODE_ID;
+    return nodeIds.every((nodeId) => store.getNode(nodeId)?.parentId === parentId);
   }, [store]);
 
   const resolveSelectionInsertTarget = useCallback((): InsertTarget => {
@@ -496,16 +518,23 @@ export function App() {
   }, [selectedTrackId, setTransientStatus, store]);
 
   const handleCopy = useCallback(() => {
-    if (!selectedNode || selectedNode.id === ROOT_NODE_ID) {
+    const targetRootIds = selectedRootIds.filter((nodeId) => nodeId !== ROOT_NODE_ID);
+    if (targetRootIds.length === 0) {
       return;
     }
 
     clipboardRef.current = {
-      sourceNodeId: selectedNode.id,
-      nodes: collectSubtreeNodes(selectedNode.id),
+      sourceNodeIds: targetRootIds,
+      subtrees: targetRootIds.map((nodeId) => collectSubtreeNodes(nodeId)),
     };
-    setTransientStatus(`Copied "${selectedNode.name}".`);
-  }, [collectSubtreeNodes, selectedNode, setTransientStatus]);
+    if (targetRootIds.length === 1) {
+      const copiedNode = store.getNode(targetRootIds[0]);
+      setTransientStatus(copiedNode ? `Copied "${copiedNode.name}".` : "Copied selection.");
+      return;
+    }
+
+    setTransientStatus(`Copied ${targetRootIds.length} objects.`);
+  }, [collectSubtreeNodes, selectedRootIds, setTransientStatus, store]);
 
   const handlePaste = useCallback((targetNodeId?: string | null) => {
     const clipboard = clipboardRef.current;
@@ -514,33 +543,40 @@ export function App() {
     }
 
     const target = resolveContextInsertTarget(targetNodeId ?? null);
-    const newRootId = store.pasteNodes(clipboard.nodes, target.parentId);
-    if (!newRootId) {
+    const newRootIds = store.pasteNodeSubtrees(clipboard.subtrees, target.parentId, target.index);
+    if (newRootIds.length === 0) {
       return;
     }
 
-    if (typeof target.index === "number") {
-      store.moveNode(newRootId, target.parentId, target.index);
+    if (newRootIds.length === 1) {
+      const pasted = store.getNode(newRootIds[0]);
+      setTransientStatus(pasted ? `Pasted "${pasted.name}".` : "Pasted selection.");
+      return;
     }
 
-    const pasted = store.getNode(newRootId);
-    setTransientStatus(pasted ? `Pasted "${pasted.name}".` : "Pasted selection.");
+    setTransientStatus(`Pasted ${newRootIds.length} objects.`);
   }, [resolveContextInsertTarget, setTransientStatus, store]);
 
-  const handleDelete = useCallback((nodeId?: string) => {
-    const targetId = nodeId ?? storeView.selectedNodeId;
-    if (targetId === ROOT_NODE_ID) {
+  const handleDelete = useCallback((nodeId?: string | null) => {
+    const targetRootIds = resolveContextSelectionRootIds(nodeId ?? null);
+    if (targetRootIds.length === 0 || (targetRootIds.length === 1 && targetRootIds[0] === ROOT_NODE_ID)) {
       return;
     }
 
-    const node = store.getNode(targetId);
-    if (!node) {
+    if (targetRootIds.length === 1) {
+      const node = store.getNode(targetRootIds[0]);
+      if (!node) {
+        return;
+      }
+
+      store.deleteNode(targetRootIds[0]);
+      setTransientStatus(`Deleted "${node.name}".`);
       return;
     }
 
-    store.deleteNode(targetId);
-    setTransientStatus(`Deleted "${node.name}".`);
-  }, [setTransientStatus, store, storeView.selectedNodeId]);
+    store.deleteSelected();
+    setTransientStatus(`Deleted ${targetRootIds.length} objects.`);
+  }, [resolveContextSelectionRootIds, selectedRootIds, setTransientStatus, store]);
 
   const handleDeleteSelection = useCallback(() => {
     if (selectedTrackId && selectedKeyframeId) {
@@ -571,6 +607,23 @@ export function App() {
     const duplicated = store.getNode(newRootId);
     setTransientStatus(duplicated ? `Duplicated "${duplicated.name}".` : "Duplicated selection.");
   }, [collectSubtreeNodes, getSiblingIndex, setTransientStatus, store, storeView.selectedNodeId]);
+
+  const handleGroupSelection = useCallback((nodeId?: string | null) => {
+    const targetRootIds = resolveContextSelectionRootIds(nodeId ?? null);
+    if (!canGroupNodeIds(targetRootIds)) {
+      return;
+    }
+
+    const groupId = store.groupNodes(targetRootIds);
+    if (!groupId) {
+      return;
+    }
+
+    const groupNode = store.getNode(groupId);
+    setTransientStatus(groupNode
+      ? `Grouped ${targetRootIds.length} objects into "${groupNode.name}".`
+      : `Grouped ${targetRootIds.length} objects.`);
+  }, [canGroupNodeIds, resolveContextSelectionRootIds, setTransientStatus, store]);
 
   const createAddMenuActions = useCallback((resolveTarget: () => InsertTarget): MenuAction[] => {
     const createNodeAction = (type: Exclude<EditorNodeType, "image">) => () => {
@@ -746,23 +799,32 @@ export function App() {
   }, [setTransientStatus, store]);
 
   const openSceneGraphContextMenu = useCallback((event: MouseEvent, nodeId: string | null) => {
-    if (nodeId) {
+    const shouldUseExistingSelection = !nodeId || selectedNodeIdsSet.has(nodeId);
+    if (nodeId && !shouldUseExistingSelection) {
       store.selectNode(nodeId);
     }
 
     const targetNode = nodeId ? store.getNode(nodeId) : null;
+    const contextRootIds = shouldUseExistingSelection
+      ? selectedRootIds
+      : (nodeId ? store.getSelectionRootIds([nodeId]) : []);
+    const canGroupSelection = canGroupNodeIds(contextRootIds);
+    const contextTargetId = contextRootIds.length === 1 ? contextRootIds[0] : nodeId;
     const addActions = createAddMenuActions(() => resolveContextInsertTarget(nodeId));
     const items: MenuAction[] = [
       { id: "ctx-new", label: "New", icon: <MeshIcon width={14} height={14} />, children: addActions },
       { id: "ctx-paste", label: "Paste", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste(nodeId) },
+      canGroupSelection
+        ? { id: "ctx-group-selection", label: "Group Selected", icon: <GroupIcon width={14} height={14} />, onSelect: () => handleGroupSelection(nodeId) }
+        : { id: "ctx-group-selection", label: "Group Selected", icon: <GroupIcon width={14} height={14} />, disabled: true },
       { id: "ctx-divider-1", separator: true },
-      { id: "ctx-duplicate", label: "Duplicate", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C / Ctrl+V", disabled: !targetNode || targetNode.id === ROOT_NODE_ID, onSelect: () => handleDuplicate(nodeId) },
-      { id: "ctx-frame", label: "Frame", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: !targetNode, onSelect: () => { if (nodeId) store.selectNode(nodeId); handleFrameSelection(); } },
-      { id: "ctx-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: !targetNode || targetNode.id === ROOT_NODE_ID, onSelect: () => handleDelete(nodeId ?? undefined) },
+      { id: "ctx-duplicate", label: "Duplicate", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C / Ctrl+V", disabled: !contextTargetId || contextTargetId === ROOT_NODE_ID || contextRootIds.length > 1, onSelect: () => handleDuplicate(contextTargetId) },
+      { id: "ctx-frame", label: "Frame", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: contextRootIds.length === 0 && !targetNode, onSelect: () => { if (nodeId && !shouldUseExistingSelection) store.selectNode(nodeId); handleFrameSelection(); } },
+      { id: "ctx-delete", label: contextRootIds.length > 1 ? "Delete Selected" : "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: contextRootIds.length === 0 || (contextRootIds.length === 1 && contextRootIds[0] === ROOT_NODE_ID), onSelect: () => handleDelete(nodeId ?? undefined) },
     ];
 
     setContextMenu({ x: event.clientX, y: event.clientY, items });
-  }, [createAddMenuActions, handleDelete, handleDuplicate, handleFrameSelection, handlePaste, resolveContextInsertTarget, store]);
+  }, [canGroupNodeIds, createAddMenuActions, handleDelete, handleDuplicate, handleFrameSelection, handleGroupSelection, handlePaste, resolveContextInsertTarget, selectedNodeIdsSet, selectedRootIds, store]);
 
   const openViewportContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -812,11 +874,11 @@ export function App() {
         { id: "edit-undo", label: "Undo", icon: <UndoIcon width={14} height={14} />, shortcut: "Ctrl+Z", disabled: !storeView.canUndo, onSelect: () => store.undo() },
         { id: "edit-redo", label: "Redo", icon: <RedoIcon width={14} height={14} />, shortcut: "Ctrl+Y", disabled: !storeView.canRedo, onSelect: () => store.redo() },
         { id: "edit-divider-1", separator: true },
-        { id: "edit-copy", label: "Copy", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C", disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID, onSelect: handleCopy },
+        { id: "edit-copy", label: "Copy", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C", disabled: selectedRootIds.length === 0 || (selectedRootIds.length === 1 && selectedRootIds[0] === ROOT_NODE_ID), onSelect: handleCopy },
         { id: "edit-paste", label: "Paste", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste() },
-        { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: (!selectedTrackId || !selectedKeyframeId) && (!selectedNode || selectedNode.id === ROOT_NODE_ID), onSelect: handleDeleteSelection },
+        { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: (!selectedTrackId || !selectedKeyframeId) && (selectedRootIds.length === 0 || (selectedRootIds.length === 1 && selectedRootIds[0] === ROOT_NODE_ID)), onSelect: handleDeleteSelection },
         { id: "edit-divider-2", separator: true },
-        { id: "edit-frame", label: "Frame Selection", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: !selectedNode, onSelect: handleFrameSelection },
+        { id: "edit-frame", label: "Frame Selection", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: selectedRootIds.length === 0, onSelect: handleFrameSelection },
       ],
     },
     {
@@ -833,11 +895,9 @@ export function App() {
       ],
     },
   ], [
-    autosaveEnabled,
     createAddMenuActions,
     downloadExportFile,
     handleCopy,
-    handleDelete,
     handleFrameSelection,
     handleNewBlueprint,
     handlePaste,
@@ -845,7 +905,9 @@ export function App() {
     hasAutosave,
     requestImageImport,
     resolveSelectionInsertTarget,
-    selectedNode,
+    selectedKeyframeId,
+    selectedRootIds,
+    selectedTrackId,
     store,
     storeView.canRedo,
     storeView.canUndo,
@@ -896,7 +958,11 @@ export function App() {
 
       <SecondaryToolbar
         componentName={storeView.blueprintComponentName}
-        selectedLabel={selectedNode ? `${selectedNode.name} | ${selectedNode.type === "group" ? "Group" : "Mesh"}` : "No selection"}
+        selectedLabel={selectedNodeCount > 1
+          ? `${selectedNodeCount} selected`
+          : selectedNode
+            ? `${selectedNode.name} | ${selectedNode.type === "group" ? "Group" : "Mesh"}`
+            : "No selection"}
         nodeCount={storeView.blueprintNodes.length}
         canUndo={storeView.canUndo}
         canRedo={storeView.canRedo}
@@ -963,7 +1029,8 @@ export function App() {
                 nodes={storeView.blueprintNodes}
                 animatedNodeIds={animatedNodeIds}
                 selectedNodeId={storeView.selectedNodeId}
-                onSelectNode={(nodeId) => store.selectNode(nodeId)}
+                selectedNodeIds={storeView.selectedNodeIds}
+                onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
                 onMoveNode={handleSceneMove}
                 onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
                 onContextMenu={openSceneGraphContextMenu}
@@ -986,13 +1053,15 @@ export function App() {
             <div className="panel__body">
               {rightPanelTab === "inspector" ? (
                 <InspectorPanel
-                  node={selectedNode}
+                  node={inspectorNode}
+                  emptyMessage={selectedNodeCount > 1 ? "Inspector indisponível para seleção múltipla." : undefined}
                   fonts={storeView.fonts}
                   onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
                   onParentChange={(nodeId, parentId) => {
                     const eligibleChildren = store.getNodeChildren(parentId);
                     store.moveNode(nodeId, parentId, eligibleChildren.length);
                   }}
+                  onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
                   getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
                   onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
                   onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}

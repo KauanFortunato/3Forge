@@ -3,7 +3,7 @@ import {
   AxesHelper,
   Box3,
   BoxGeometry,
-  BoxHelper,
+  Box3Helper,
   Color,
   CylinderGeometry,
   DirectionalLight,
@@ -35,7 +35,7 @@ import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { frameToSeconds, getTrackSegments, mapAnimationEaseToGsap, secondsToFrame } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { EditorStore } from "./state";
-import type { AnimationPropertyPath, EditorNode, EditorStoreChange, ImageNode, TextNode } from "./types";
+import type { AnimationPropertyPath, EditorNode, EditorStoreChange, ImageNode, NodeOriginSpec, TextNode } from "./types";
 
 type GizmoMode = "translate" | "rotate" | "scale";
 type ToolMode = "select" | GizmoMode;
@@ -74,7 +74,7 @@ export class SceneEditor {
   private pointerDownX = 0;
   private pointerDownY = 0;
   private mainLight: DirectionalLight | null = null;
-  private selectionHelper: BoxHelper | null = null;
+  private selectionHelper: Box3Helper | null = null;
   private currentMode: ToolMode = "select";
   private currentGizmoMode: GizmoMode = "translate";
   private isTransformDragging = false;
@@ -152,7 +152,11 @@ export class SceneEditor {
       }
 
       this.store.setNodeTransformFromObject(nodeId, object);
-      this.updateSelectionHelper(object);
+      this.updateSelectionHelper(
+        this.store.selectedNodeIds
+          .map((selectedNodeId) => this.objectMap.get(selectedNodeId))
+          .filter((selectedObject): selectedObject is Object3D => Boolean(selectedObject)),
+      );
     });
 
     this.scene.add(this.viewportRoot);
@@ -195,9 +199,11 @@ export class SceneEditor {
   }
 
   frameSelection(): void {
-    const target = this.objectMap.get(this.store.selectedNodeId) ?? this.viewportRoot;
-    this.selectionBounds.setFromObject(target);
-    if (this.selectionBounds.isEmpty()) {
+    const selectedObjects = this.store.selectedNodeIds
+      .map((nodeId) => this.objectMap.get(nodeId))
+      .filter((object): object is Object3D => Boolean(object));
+
+    if (!this.computeSelectionBounds(selectedObjects.length > 0 ? selectedObjects : [this.viewportRoot])) {
       this.orbitControls.target.set(0, 0, 0);
       return;
     }
@@ -469,6 +475,10 @@ export class SceneEditor {
     });
 
     canvas.addEventListener("pointerup", (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+
       if (this.skipNextSelectionPick) {
         this.skipNextSelectionPick = false;
         return;
@@ -483,16 +493,16 @@ export class SceneEditor {
         return;
       }
 
-      this.pick(event.clientX, event.clientY);
+      this.pick(event.clientX, event.clientY, event.shiftKey);
     });
   }
 
-  private pick(clientX: number, clientY: number): void {
+  private pick(clientX: number, clientY: number, additive = false): void {
     const hits = this.getHitsAtClientPoint(clientX, clientY);
     for (const hit of hits) {
       const nodeId = this.findNodeId(hit.object);
       if (nodeId) {
-        this.store.selectNode(nodeId);
+        this.store.selectNode(nodeId, "scene", additive);
         return;
       }
     }
@@ -545,7 +555,9 @@ export class SceneEditor {
   }
 
   private createObject(node: EditorNode): Object3D {
-    const object = this.buildNodeObject(node);
+    const object = node.type === "group"
+      ? new Group()
+      : this.buildWrappedNodeObject(node);
     object.name = node.name;
     object.visible = node.visible;
     object.userData.nodeId = node.id;
@@ -556,11 +568,15 @@ export class SceneEditor {
     return object;
   }
 
-  private buildNodeObject(node: EditorNode): Object3D {
-    if (node.type === "group") {
-      return new Group();
-    }
+  private buildWrappedNodeObject(node: Exclude<EditorNode, { type: "group" }>): Object3D {
+    const wrapper = new Group();
+    const mesh = this.buildMeshObject(node);
+    this.applyNodeOrigin(mesh, node.origin);
+    wrapper.add(mesh);
+    return wrapper;
+  }
 
+  private buildMeshObject(node: Exclude<EditorNode, { type: "group" }>): Mesh {
     let mesh: Mesh;
     switch (node.type) {
       case "box":
@@ -605,9 +621,21 @@ export class SceneEditor {
     });
 
     geometry.computeBoundingBox();
-    geometry.center();
-
     return new Mesh(geometry, material);
+  }
+
+  private applyNodeOrigin(mesh: Mesh, origin: NodeOriginSpec): void {
+    mesh.geometry.computeBoundingBox();
+    const bounds = mesh.geometry.boundingBox;
+    if (!bounds) {
+      return;
+    }
+
+    mesh.position.set(
+      resolveOriginOffset(bounds.min.x, bounds.max.x, origin.x),
+      resolveOriginOffset(bounds.min.y, bounds.max.y, origin.y),
+      resolveOriginOffset(bounds.min.z, bounds.max.z, origin.z),
+    );
   }
 
   private createNodeMaterial(node: Exclude<EditorNode, { type: "group" }>): MeshBasicMaterial | MeshStandardMaterial {
@@ -683,29 +711,64 @@ export class SceneEditor {
   }
 
   private refreshSelection(): void {
-    const selectedObject = this.objectMap.get(this.store.selectedNodeId);
-    if (selectedObject) {
-      if (this.currentMode === "select") {
-        this.transformControls.detach();
-        this.transformHelper.visible = false;
-      } else {
-        this.transformControls.attach(selectedObject);
-        this.transformHelper.visible = true;
-      }
-      this.updateSelectionHelper(selectedObject);
+    const selectedObjects = this.store.selectedNodeIds
+      .map((nodeId) => this.objectMap.get(nodeId))
+      .filter((object): object is Object3D => Boolean(object));
+    const primaryObject = this.objectMap.get(this.store.selectedNodeId);
+
+    if (selectedObjects.length === 1 && primaryObject && this.currentMode !== "select") {
+      this.transformControls.attach(primaryObject);
+      this.transformHelper.visible = true;
     } else {
       this.transformControls.detach();
       this.transformHelper.visible = false;
-      this.selectionHelper?.removeFromParent();
-      this.selectionHelper = null;
     }
+
+    this.updateSelectionHelper(selectedObjects);
   }
 
-  private updateSelectionHelper(object: Object3D): void {
-    this.selectionHelper?.removeFromParent();
-    this.selectionHelper = new BoxHelper(object, 0x6b2ecf);
-    this.scene.add(this.selectionHelper);
-    this.selectionHelper.update();
+  private updateSelectionHelper(objects: Object3D[]): void {
+    if (!this.computeSelectionBounds(objects)) {
+      this.selectionHelper?.removeFromParent();
+      this.selectionHelper = null;
+      return;
+    }
+
+    if (!this.selectionHelper) {
+      this.selectionHelper = new Box3Helper(this.selectionBounds.clone(), 0x6b2ecf);
+      this.scene.add(this.selectionHelper);
+      return;
+    }
+
+    this.selectionHelper.box.copy(this.selectionBounds);
+  }
+
+  private computeSelectionBounds(objects: Object3D[]): boolean {
+    const bounds = new Box3();
+    let hasBounds = false;
+
+    for (const object of objects) {
+      const objectBounds = new Box3().setFromObject(object);
+      if (objectBounds.isEmpty()) {
+        continue;
+      }
+
+      if (!hasBounds) {
+        bounds.copy(objectBounds);
+        hasBounds = true;
+        continue;
+      }
+
+      bounds.union(objectBounds);
+    }
+
+    if (!hasBounds) {
+      this.selectionBounds.makeEmpty();
+      return false;
+    }
+
+    this.selectionBounds.copy(bounds);
+    return true;
   }
 
   private clearViewportRoot(): void {
@@ -740,7 +803,11 @@ export class SceneEditor {
     const tick = () => {
       this.animationFrame = requestAnimationFrame(tick);
       this.orbitControls.update();
-      this.selectionHelper?.update();
+      this.updateSelectionHelper(
+        this.store.selectedNodeIds
+          .map((nodeId) => this.objectMap.get(nodeId))
+          .filter((object): object is Object3D => Boolean(object)),
+      );
       this.renderer.render(this.scene, this.camera);
       this.orientationRoot.quaternion.copy(this.camera.quaternion).invert();
       this.orientationRenderer.render(this.orientationScene, this.orientationCamera);
@@ -842,4 +909,23 @@ function resolveAnimationTarget(target: Object3D, path: string): [Record<string,
   }
 
   return [owner as Record<string, unknown>, property];
+}
+
+function resolveOriginOffset(
+  min: number,
+  max: number,
+  origin: NodeOriginSpec["x"] | NodeOriginSpec["y"] | NodeOriginSpec["z"],
+): number {
+  switch (origin) {
+    case "left":
+    case "bottom":
+    case "back":
+      return -min;
+    case "right":
+    case "top":
+    case "front":
+      return -max;
+    default:
+      return -((min + max) * 0.5);
+  }
 }

@@ -779,6 +779,10 @@ button {
   gap: 8px;
 }
 
+.field-block--wide {
+  grid-column: 1 / -1;
+}
+
 .editable-card {
   padding: 12px;
   border: 1px solid var(--border);
@@ -898,6 +902,25 @@ button {
 .inspector-simple-grid {
   display: grid;
   gap: 8px;
+}
+
+.inspector-origin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.inspector-origin-field {
+  display: grid;
+  gap: 4px;
+}
+
+.inspector-origin-field span {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
 }
 
 /* Remove spin buttons from number inputs */

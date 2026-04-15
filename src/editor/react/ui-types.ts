@@ -17,7 +17,9 @@ export interface EditorStoreView {
   blueprintComponentName: string;
   blueprintNodes: EditorNode[];
   selectedNodeId: string;
+  selectedNodeIds: string[];
   selectedNode: EditorNode | undefined;
+  selectedNodes: EditorNode[];
   fonts: FontAsset[];
   editableFields: EditableFieldEntry[];
   animation: ComponentAnimation;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
-import type { EditorNode, FontAsset, NodePropertyDefinition } from "../../types";
+import type { EditorNode, FontAsset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
 import {
   CircleFilledIcon,
   CircleIcon,
@@ -18,9 +18,11 @@ type InspectorSectionId = "object" | "transform" | "geometry" | "material" | "te
 
 interface InspectorPanelProps {
   node: EditorNode | undefined;
+  emptyMessage?: string;
   fonts: FontAsset[];
   onNodeNameChange: (nodeId: string, value: string) => void;
   onParentChange: (nodeId: string, parentId: string) => void;
+  onNodeOriginChange: (nodeId: string, origin: Partial<NodeOriginSpec>) => void;
   getEligibleParents: (nodeId: string) => EditorNode[];
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
@@ -38,9 +40,11 @@ interface InspectorSection {
 export function InspectorPanel(props: InspectorPanelProps) {
   const {
     node,
+    emptyMessage,
     fonts,
     onNodeNameChange,
     onParentChange,
+    onNodeOriginChange,
     getEligibleParents,
     onNodePropertyChange,
     onToggleEditable,
@@ -59,7 +63,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
   }, [activeSection, sections]);
 
   if (!node) {
-    return <p className="panel-empty">Selecione um objeto para editar.</p>;
+    return <p className="panel-empty">{emptyMessage ?? "Selecione um objeto para editar."}</p>;
   }
 
   const groupedDefinitions = groupDefinitions(getPropertyDefinitions(node));
@@ -119,6 +123,52 @@ export function InspectorPanel(props: InspectorPanelProps) {
                     ))}
                   </select>
                 </label>
+
+                {node.type !== "group" ? (
+                  <div className="field-block field-block--wide">
+                    <span className="field-block__label">Origin</span>
+                    <div className="inspector-origin-grid">
+                      <label className="inspector-origin-field">
+                        <span>X</span>
+                        <select
+                          className="editor-select"
+                          value={node.origin.x}
+                          onChange={(event) => onNodeOriginChange(node.id, { x: event.target.value as NodeOriginSpec["x"] })}
+                        >
+                          <option value="left">Left</option>
+                          <option value="center">Center</option>
+                          <option value="right">Right</option>
+                        </select>
+                      </label>
+
+                      <label className="inspector-origin-field">
+                        <span>Y</span>
+                        <select
+                          className="editor-select"
+                          value={node.origin.y}
+                          onChange={(event) => onNodeOriginChange(node.id, { y: event.target.value as NodeOriginSpec["y"] })}
+                        >
+                          <option value="top">Top</option>
+                          <option value="center">Center</option>
+                          <option value="bottom">Bottom</option>
+                        </select>
+                      </label>
+
+                      <label className="inspector-origin-field">
+                        <span>Z</span>
+                        <select
+                          className="editor-select"
+                          value={node.origin.z}
+                          onChange={(event) => onNodeOriginChange(node.id, { z: event.target.value as NodeOriginSpec["z"] })}
+                        >
+                          <option value="front">Front</option>
+                          <option value="center">Center</option>
+                          <option value="back">Back</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </section>
           ) : null}

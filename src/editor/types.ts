@@ -4,6 +4,9 @@ export type PropertyGroup = "Transform" | "Geometry" | "Material" | "Text";
 export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text" | "select";
 export type NodePropertyPath = string;
 export type MaterialType = "basic" | "standard";
+export type NodeOriginHorizontal = "left" | "center" | "right";
+export type NodeOriginVertical = "top" | "center" | "bottom";
+export type NodeOriginDepth = "front" | "center" | "back";
 export type AnimationPropertyPath =
   | "transform.position.x"
   | "transform.position.y"
@@ -26,6 +29,12 @@ export interface TransformSpec {
   position: Vec3Like;
   rotation: Vec3Like;
   scale: Vec3Like;
+}
+
+export interface NodeOriginSpec {
+  x: NodeOriginHorizontal;
+  y: NodeOriginVertical;
+  z: NodeOriginDepth;
 }
 
 export interface MaterialSpec {
@@ -92,6 +101,7 @@ export interface BaseEditorNode {
   parentId: string | null;
   visible: boolean;
   transform: TransformSpec;
+  origin: NodeOriginSpec;
   editable: Record<NodePropertyPath, EditableBinding>;
 }
 

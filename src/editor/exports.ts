@@ -30,6 +30,7 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   const optionTypeName = `${componentTypeName}Options`;
   const resolvedTypeName = `${componentTypeName}ResolvedOptions`;
   const hasAnimations = blueprint.animation.tracks.some((track) => track.keyframes.length > 0);
+  const usesNodeOriginHelper = blueprint.nodes.some((node) => node.type !== "group");
 
   const nodes = blueprint.nodes;
   const rootNode = nodes.find((node) => node.id === ROOT_NODE_ID) ?? nodes[0];
@@ -52,6 +53,43 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
     lines.push(`import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";`);
   }
   lines.push("");
+
+  if (usesNodeOriginHelper) {
+    lines.push(`interface NodeOriginSpec {`);
+    lines.push(`  x: "left" | "center" | "right";`);
+    lines.push(`  y: "top" | "center" | "bottom";`);
+    lines.push(`  z: "front" | "center" | "back";`);
+    lines.push(`}`);
+    lines.push("");
+    lines.push(`function resolveOriginOffset(min: number, max: number, origin: NodeOriginSpec["x"] | NodeOriginSpec["y"] | NodeOriginSpec["z"]): number {`);
+    lines.push(`  switch (origin) {`);
+    lines.push(`    case "left":`);
+    lines.push(`    case "bottom":`);
+    lines.push(`    case "back":`);
+    lines.push(`      return -min;`);
+    lines.push(`    case "right":`);
+    lines.push(`    case "top":`);
+    lines.push(`    case "front":`);
+    lines.push(`      return -max;`);
+    lines.push(`    default:`);
+    lines.push(`      return -((min + max) * 0.5);`);
+    lines.push(`  }`);
+    lines.push(`}`);
+    lines.push("");
+    lines.push(`function applyNodeOrigin(mesh: Mesh, geometry: BufferGeometry, origin: NodeOriginSpec): void {`);
+    lines.push(`  geometry.computeBoundingBox();`);
+    lines.push(`  if (!geometry.boundingBox) {`);
+    lines.push(`    return;`);
+    lines.push(`  }`);
+    lines.push("");
+    lines.push(`  mesh.position.set(`);
+    lines.push(`    resolveOriginOffset(geometry.boundingBox.min.x, geometry.boundingBox.max.x, origin.x),`);
+    lines.push(`    resolveOriginOffset(geometry.boundingBox.min.y, geometry.boundingBox.max.y, origin.y),`);
+    lines.push(`    resolveOriginOffset(geometry.boundingBox.min.z, geometry.boundingBox.max.z, origin.z),`);
+    lines.push(`  );`);
+    lines.push(`}`);
+    lines.push("");
+  }
 
   if (fonts.length > 0) {
     for (const font of fonts) {
@@ -194,6 +232,7 @@ function collectBindings(nodes: EditorNode[]): CollectedBinding[] {
 function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<string> {
   const imports = new Set<string>(["Group", "Mesh"]);
   const types = new Set<EditorNodeType>(nodes.map((node) => node.type));
+  const hasRenderableNodes = nodes.some((node) => node.type !== "group");
   const materialNodes = nodes.filter((node): node is Exclude<EditorNode, { type: "group" }> => node.type !== "group");
   const hasRuntimeMaterialType = materialNodes.some((node) => Boolean(node.editable["material.type"]));
   const usesBasicMaterial = hasRuntimeMaterialType || materialNodes.some((node) => node.material.type === "basic");
@@ -219,6 +258,9 @@ function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<
   }
   if (bindings.some(({ binding }) => binding.type === "color")) {
     imports.add("type ColorRepresentation");
+  }
+  if (hasRenderableNodes) {
+    imports.add("type BufferGeometry");
   }
 
   return imports;
@@ -373,6 +415,7 @@ function emitCreationLines(
   } else {
     const geometryVariable = `${variableName}Geometry`;
     const materialVariable = `${variableName}Material`;
+    const meshVariable = `${variableName}Mesh`;
 
     switch (node.type) {
       case "box":
@@ -382,7 +425,7 @@ function emitCreationLines(
         break;
       case "circle":
         lines.push(
-          `const ${geometryVariable} = new SphereGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, ${propertyExpression(node, "geometry.segments", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaStarts", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaLenght", bindingAccessor)});`,
+          `const ${geometryVariable} = new CircleGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, ${propertyExpression(node, "geometry.segments", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaStarts", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaLenght", bindingAccessor)});`,
         );
         break;
       case "sphere":
@@ -413,8 +456,6 @@ function emitCreationLines(
         lines.push(
           `const ${geometryVariable} = new TextGeometry(${propertyExpression(node, "geometry.text", bindingAccessor)}, { font: ${fontVariableName}, size: ${propertyExpression(node, "geometry.size", bindingAccessor)}, depth: ${propertyExpression(node, "geometry.depth", bindingAccessor)}, curveSegments: ${propertyExpression(node, "geometry.curveSegments", bindingAccessor)}, bevelEnabled: ${propertyExpression(node, "geometry.bevelEnabled", bindingAccessor)}, bevelThickness: ${propertyExpression(node, "geometry.bevelThickness", bindingAccessor)}, bevelSize: ${propertyExpression(node, "geometry.bevelSize", bindingAccessor)} });`,
         );
-        lines.push(`${geometryVariable}.computeBoundingBox();`);
-        lines.push(`${geometryVariable}.center();`);
         break;
       }
     }
@@ -422,10 +463,13 @@ function emitCreationLines(
     for (const line of emitMaterialCreationLines(node, materialVariable, bindingAccessor, imageVariables.get(node.id))) {
       lines.push(line);
     }
-    lines.push(`const ${variableName} = new Mesh(${geometryVariable}, ${materialVariable});`);
-    lines.push(`${variableName}.castShadow = ${node.type === "image" ? "false" : "true"};`);
-    lines.push(`${variableName}.receiveShadow = ${node.type === "image" ? "false" : "true"};`);
-    lines.push(`${variableName}.visible = ${propertyExpression(node, "material.visible", bindingAccessor)};`);
+    lines.push(`const ${meshVariable} = new Mesh(${geometryVariable}, ${materialVariable});`);
+    lines.push(`${meshVariable}.castShadow = ${node.type === "image" ? "false" : "true"};`);
+    lines.push(`${meshVariable}.receiveShadow = ${node.type === "image" ? "false" : "true"};`);
+    lines.push(`${meshVariable}.visible = ${propertyExpression(node, "material.visible", bindingAccessor)};`);
+    lines.push(`applyNodeOrigin(${meshVariable}, ${geometryVariable}, ${JSON.stringify(node.origin)});`);
+    lines.push(`const ${variableName} = new Group();`);
+    lines.push(`${variableName}.add(${meshVariable});`);
   }
 
   lines.push(`${variableName}.name = ${JSON.stringify(node.name)};`);
