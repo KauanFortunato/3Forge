@@ -1,8 +1,9 @@
+import { Euler, Quaternion, Vector3 } from "three";
 import type { Object3D } from "three";
+import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import {
-  DEFAULT_ANIMATION_DURATION_FRAMES,
   DEFAULT_ANIMATION_EASE,
-  DEFAULT_ANIMATION_FPS,
+  createAnimationClip,
   createAnimationKeyframe,
   createAnimationTrack,
   createDefaultAnimation,
@@ -12,10 +13,11 @@ import {
   normalizeAnimation,
   sortTrackKeyframes,
 } from "./animation";
-import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary } from "./fonts";
+import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset } from "./fonts";
 import { createTransparentImageAsset, fitImageToMaxSize } from "./images";
 import { createMaterialSpec, getMaterialPropertyDefinitions, normalizeMaterialSpec } from "./materials";
 import type {
+  AnimationClip,
   AnimationEasePreset,
   AnimationKeyframe,
   AnimationPropertyPath,
@@ -474,6 +476,136 @@ function normalizeNodeOrigin(value: unknown, fallback: NodeOriginSpec): NodeOrig
   };
 }
 
+function computeOriginPositionDelta(
+  node: Exclude<EditorNode, { type: "group" }>,
+  previousOrigin: NodeOriginSpec,
+  nextOrigin: NodeOriginSpec,
+  store: Pick<EditorStore, "getFont">,
+): Vec3Like {
+  const previousOffset = getNodeOriginOffset(node, previousOrigin, store);
+  const nextOffset = getNodeOriginOffset(node, nextOrigin, store);
+  const localDelta = new Vector3(
+    previousOffset.x - nextOffset.x,
+    previousOffset.y - nextOffset.y,
+    previousOffset.z - nextOffset.z,
+  );
+
+  localDelta.multiply(new Vector3(
+    node.transform.scale.x,
+    node.transform.scale.y,
+    node.transform.scale.z,
+  ));
+  localDelta.applyQuaternion(new Quaternion().setFromEuler(new Euler(
+    node.transform.rotation.x,
+    node.transform.rotation.y,
+    node.transform.rotation.z,
+  )));
+
+  return {
+    x: localDelta.x,
+    y: localDelta.y,
+    z: localDelta.z,
+  };
+}
+
+function getNodeOriginOffset(
+  node: Exclude<EditorNode, { type: "group" }>,
+  origin: NodeOriginSpec,
+  store: Pick<EditorStore, "getFont">,
+): Vec3Like {
+  switch (node.type) {
+    case "box":
+      return {
+        x: resolveOriginOffset(-node.geometry.width * 0.5, node.geometry.width * 0.5, origin.x),
+        y: resolveOriginOffset(-node.geometry.height * 0.5, node.geometry.height * 0.5, origin.y),
+        z: resolveOriginOffset(-node.geometry.depth * 0.5, node.geometry.depth * 0.5, origin.z),
+      };
+    case "circle":
+      return {
+        x: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.x),
+        y: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.y),
+        z: resolveOriginOffset(0, 0, origin.z),
+      };
+    case "sphere":
+      return {
+        x: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.x),
+        y: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.y),
+        z: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.z),
+      };
+    case "cylinder": {
+      const radius = Math.max(node.geometry.radiusTop, node.geometry.radiusBottom);
+      return {
+        x: resolveOriginOffset(-radius, radius, origin.x),
+        y: resolveOriginOffset(-node.geometry.height * 0.5, node.geometry.height * 0.5, origin.y),
+        z: resolveOriginOffset(-radius, radius, origin.z),
+      };
+    }
+    case "plane":
+    case "image":
+      return {
+        x: resolveOriginOffset(-node.geometry.width * 0.5, node.geometry.width * 0.5, origin.x),
+        y: resolveOriginOffset(-node.geometry.height * 0.5, node.geometry.height * 0.5, origin.y),
+        z: resolveOriginOffset(0, 0, origin.z),
+      };
+    case "text":
+      return getTextNodeOriginOffset(node, origin, store);
+  }
+}
+
+function getTextNodeOriginOffset(
+  node: TextNode,
+  origin: NodeOriginSpec,
+  store: Pick<EditorStore, "getFont">,
+): Vec3Like {
+  const font = store.getFont(node.fontId) ?? store.getFont(DEFAULT_FONT_ID);
+  if (!font) {
+    return { x: 0, y: 0, z: 0 };
+  }
+
+  const geometry = new TextGeometry(node.geometry.text || " ", {
+    font: parseFontAsset(font),
+    size: Math.max(node.geometry.size, 0.01),
+    depth: Math.max(node.geometry.depth, 0),
+    curveSegments: Math.max(1, Math.round(node.geometry.curveSegments)),
+    bevelEnabled: node.geometry.bevelEnabled,
+    bevelThickness: Math.max(node.geometry.bevelThickness, 0),
+    bevelSize: Math.max(node.geometry.bevelSize, 0),
+  });
+
+  geometry.computeBoundingBox();
+  const bounds = geometry.boundingBox;
+  geometry.dispose();
+
+  if (!bounds) {
+    return { x: 0, y: 0, z: 0 };
+  }
+
+  return {
+    x: resolveOriginOffset(bounds.min.x, bounds.max.x, origin.x),
+    y: resolveOriginOffset(bounds.min.y, bounds.max.y, origin.y),
+    z: resolveOriginOffset(bounds.min.z, bounds.max.z, origin.z),
+  };
+}
+
+function resolveOriginOffset(
+  min: number,
+  max: number,
+  origin: NodeOriginSpec["x"] | NodeOriginSpec["y"] | NodeOriginSpec["z"],
+): number {
+  switch (origin) {
+    case "left":
+    case "bottom":
+    case "back":
+      return -min;
+    case "right":
+    case "top":
+    case "front":
+      return -max;
+    default:
+      return -((min + max) * 0.5);
+  }
+}
+
 function normalizeMaterial(value: unknown, fallback: MaterialSpec): MaterialSpec {
   return normalizeMaterialSpec(value, fallback);
 }
@@ -728,6 +860,14 @@ export class EditorStore extends EventTarget {
     return this._blueprint.animation;
   }
 
+  get activeAnimationClip(): AnimationClip {
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      throw new Error("No active animation clip.");
+    }
+    return clip;
+  }
+
   setViewMode(mode: ViewMode, source: EditorStoreChange["source"] = "ui"): void {
     if (this._viewMode === mode) {
       return;
@@ -875,51 +1015,157 @@ export class EditorStore extends EventTarget {
   }
 
   updateAnimationConfig(
-    patch: Partial<Pick<ComponentBlueprint["animation"], "fps" | "durationFrames">>,
+    patch: Partial<Pick<AnimationClip, "fps" | "durationFrames">>,
     source: EditorStoreChange["source"] = "ui",
   ): void {
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      return;
+    }
     const nextFps = typeof patch.fps === "number" && Number.isFinite(patch.fps)
       ? Math.max(1, Math.round(patch.fps))
-      : this._blueprint.animation.fps;
+      : clip.fps;
     const nextDurationFrames = typeof patch.durationFrames === "number" && Number.isFinite(patch.durationFrames)
       ? Math.max(1, Math.round(patch.durationFrames))
-      : this._blueprint.animation.durationFrames;
+      : clip.durationFrames;
 
-    if (
-      nextFps === this._blueprint.animation.fps &&
-      nextDurationFrames === this._blueprint.animation.durationFrames
-    ) {
+    if (nextFps === clip.fps && nextDurationFrames === clip.durationFrames) {
       return;
     }
 
     this.recordHistorySnapshot();
-    this._blueprint.animation = {
-      ...this._blueprint.animation,
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
       fps: nextFps,
       durationFrames: nextDurationFrames,
-      tracks: this._blueprint.animation.tracks.map((track) => ({
+      tracks: entry.tracks.map((track) => ({
         ...track,
         keyframes: track.keyframes
           .map((keyframe) => ({
             ...keyframe,
             frame: Math.max(0, Math.min(keyframe.frame, nextDurationFrames)),
           }))
-          .filter((keyframe, index, keyframes) => keyframes.findIndex((entry) => entry.frame === keyframe.frame) === index),
+          .filter((keyframe, index, keyframes) => keyframes.findIndex((candidate) => candidate.frame === keyframe.frame) === index),
       })),
+    }));
+    this.notify({ reason: "animation", source });
+  }
+
+  getAnimationClip(clipId: string): AnimationClip | undefined {
+    return this._blueprint.animation.clips.find((clip) => clip.id === clipId);
+  }
+
+  getAnimationClipByName(name: string): AnimationClip | undefined {
+    return this._blueprint.animation.clips.find((clip) => clip.name.toLowerCase() === name.trim().toLowerCase());
+  }
+
+  getActiveAnimationClip(): AnimationClip | null {
+    return this.getAnimationClip(this._blueprint.animation.activeClipId) ?? this._blueprint.animation.clips[0] ?? null;
+  }
+
+  getResolvedAnimationClipTracks(clipId: string): AnimationTrack[] {
+    const clip = this.getAnimationClip(clipId);
+    return clip?.tracks ?? [];
+  }
+
+  setActiveAnimationClip(clipId: string, source: EditorStoreChange["source"] = "ui"): void {
+    if (!this.getAnimationClip(clipId) || clipId === this._blueprint.animation.activeClipId) {
+      return;
+    }
+
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      activeClipId: clipId,
     };
     this.notify({ reason: "animation", source });
   }
 
+  createAnimationClip(name?: string, source: EditorStoreChange["source"] = "ui"): string {
+    const clipName = this.makeUniqueAnimationClipName(name?.trim() || `clip_${this._blueprint.animation.clips.length + 1}`);
+    this.recordHistorySnapshot();
+    const clip = this.appendAnimationClip(clipName);
+    this.notify({ reason: "animation", source });
+    return clip.id;
+  }
+
+  renameAnimationClip(clipId: string, name: string, source: EditorStoreChange["source"] = "ui"): void {
+    const clip = this.getAnimationClip(clipId);
+    if (!clip) {
+      return;
+    }
+
+    const nextName = this.makeUniqueAnimationClipName(name.trim() || clip.name, clipId);
+    if (nextName === clip.name) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this.updateAnimationClip(clipId, (entry) => ({ ...entry, name: nextName }));
+    this.notify({ reason: "animation", source });
+  }
+
+  removeAnimationClip(clipId: string, source: EditorStoreChange["source"] = "ui"): void {
+    if (this._blueprint.animation.clips.length <= 1) {
+      return;
+    }
+
+    const clip = this.getAnimationClip(clipId);
+    if (!clip) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    const fallbackClip = this._blueprint.animation.clips.find((entry) => entry.id !== clipId) ?? this._blueprint.animation.clips[0] ?? null;
+    this._blueprint.animation.clips = this._blueprint.animation.clips.filter((entry) => entry.id !== clipId);
+    this._blueprint.animation.activeClipId = fallbackClip?.id ?? "";
+    this.notify({ reason: "animation", source });
+  }
+
+  private updateAnimationClip(clipId: string, updater: (clip: AnimationClip) => AnimationClip): void {
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      clips: this._blueprint.animation.clips.map((clip) => clip.id === clipId ? updater(clip) : clip),
+    };
+  }
+
+  private appendAnimationClip(name: string): AnimationClip {
+    const clip = createAnimationClip(name);
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      clips: [...this._blueprint.animation.clips, clip],
+      activeClipId: clip.id,
+    };
+    return clip;
+  }
+
+  private makeUniqueAnimationClipName(name: string, ignoreClipId?: string): string {
+    const base = name.trim() || "clip";
+    const used = new Set(
+      this._blueprint.animation.clips
+        .filter((clip) => clip.id !== ignoreClipId)
+        .map((clip) => clip.name.toLowerCase()),
+    );
+    let candidate = base;
+    let suffix = 2;
+
+    while (used.has(candidate.toLowerCase())) {
+      candidate = `${base} ${suffix}`;
+      suffix += 1;
+    }
+
+    return candidate;
+  }
+
   getAnimationTrack(trackId: string): AnimationTrack | undefined {
-    return this._blueprint.animation.tracks.find((track) => track.id === trackId);
+    return this.getActiveAnimationClip()?.tracks.find((track) => track.id === trackId);
   }
 
   getAnimationTracksForNode(nodeId: string): AnimationTrack[] {
-    return this._blueprint.animation.tracks.filter((track) => track.nodeId === nodeId);
+    return this.getResolvedAnimationClipTracks(this._blueprint.animation.activeClipId).filter((track) => track.nodeId === nodeId);
   }
 
   getAnimationTrackForProperty(nodeId: string, property: AnimationPropertyPath): AnimationTrack | undefined {
-    return this._blueprint.animation.tracks.find((track) => track.nodeId === nodeId && track.property === property);
+    return this.getActiveAnimationClip()?.tracks.find((track) => track.nodeId === nodeId && track.property === property);
   }
 
   ensureAnimationTrack(
@@ -931,6 +1177,8 @@ export class EditorStore extends EventTarget {
       return "";
     }
 
+    const clip = this.getAnimationClip(this._blueprint.animation.activeClipId)
+      ?? this.appendAnimationClip(this.makeUniqueAnimationClipName(`clip_${this._blueprint.animation.clips.length + 1}`));
     const existing = this.getAnimationTrackForProperty(nodeId, property);
     if (existing) {
       return existing.id;
@@ -938,10 +1186,10 @@ export class EditorStore extends EventTarget {
 
     this.recordHistorySnapshot();
     const track = createAnimationTrack(nodeId, property);
-    this._blueprint.animation = {
-      ...this._blueprint.animation,
-      tracks: [...this._blueprint.animation.tracks, track],
-    };
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: [...entry.tracks, track],
+    }));
     this.notify({ reason: "animation", source, nodeId });
     return track.id;
   }
@@ -951,12 +1199,15 @@ export class EditorStore extends EventTarget {
     if (!track) {
       return;
     }
-
     this.recordHistorySnapshot();
-    this._blueprint.animation = {
-      ...this._blueprint.animation,
-      tracks: this._blueprint.animation.tracks.filter((entry) => entry.id !== trackId),
-    };
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      return;
+    }
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: entry.tracks.filter((candidate) => candidate.id !== trackId),
+    }));
     this.notify({ reason: "animation", source, nodeId: track.nodeId });
   }
 
@@ -973,26 +1224,30 @@ export class EditorStore extends EventTarget {
       return "";
     }
 
-    const normalizedFrame = Math.max(0, Math.min(Math.round(frame), this._blueprint.animation.durationFrames));
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      return "";
+    }
+    const normalizedFrame = Math.max(0, Math.min(Math.round(frame), clip.durationFrames));
     const nextValue = typeof value === "number" && Number.isFinite(value)
       ? value
       : getAnimationValue(node, track.property);
 
     this.recordHistorySnapshot();
     const keyframe = createAnimationKeyframe(normalizedFrame, nextValue, ease);
-    this._blueprint.animation = {
-      ...this._blueprint.animation,
-      tracks: this._blueprint.animation.tracks.map((entry) =>
-        entry.id === trackId
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: entry.tracks.map((candidate) =>
+        candidate.id === trackId
           ? {
-              ...entry,
+              ...candidate,
               keyframes: sortTrackKeyframes([
-                ...entry.keyframes.filter((candidate) => candidate.frame !== normalizedFrame),
+                ...candidate.keyframes.filter((keyCandidate) => keyCandidate.frame !== normalizedFrame),
                 keyframe,
               ]),
             }
-          : entry),
-    };
+          : candidate),
+    }));
     this.notify({ reason: "animation", source, nodeId: track.nodeId });
     return keyframe.id;
   }
@@ -1009,8 +1264,12 @@ export class EditorStore extends EventTarget {
       return;
     }
 
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      return;
+    }
     const nextFrame = typeof patch.frame === "number" && Number.isFinite(patch.frame)
-      ? Math.max(0, Math.min(Math.round(patch.frame), this._blueprint.animation.durationFrames))
+      ? Math.max(0, Math.min(Math.round(patch.frame), clip.durationFrames))
       : keyframe.frame;
     const nextValue = typeof patch.value === "number" && Number.isFinite(patch.value)
       ? patch.value
@@ -1024,25 +1283,25 @@ export class EditorStore extends EventTarget {
     }
 
     this.recordHistorySnapshot();
-    this._blueprint.animation = {
-      ...this._blueprint.animation,
-      tracks: this._blueprint.animation.tracks.map((entry) => {
-        if (entry.id !== trackId) {
-          return entry;
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: entry.tracks.map((candidate) => {
+        if (candidate.id !== trackId) {
+          return candidate;
         }
 
-        const nextKeyframes = entry.keyframes
-          .filter((candidate) => candidate.id === keyframeId || candidate.frame !== nextFrame)
-          .map((candidate) => candidate.id === keyframeId
-            ? { ...candidate, frame: nextFrame, value: nextValue, ease: nextEase }
-            : candidate);
+        const nextKeyframes = candidate.keyframes
+          .filter((keyCandidate) => keyCandidate.id === keyframeId || keyCandidate.frame !== nextFrame)
+          .map((keyCandidate) => keyCandidate.id === keyframeId
+            ? { ...keyCandidate, frame: nextFrame, value: nextValue, ease: nextEase }
+            : keyCandidate);
 
         return {
-          ...entry,
+          ...candidate,
           keyframes: sortTrackKeyframes(nextKeyframes),
         };
       }),
-    };
+    }));
     this.notify({ reason: "animation", source, nodeId: track.nodeId });
   }
 
@@ -1051,15 +1310,18 @@ export class EditorStore extends EventTarget {
     if (!track || !track.keyframes.some((entry) => entry.id === keyframeId)) {
       return;
     }
-
     this.recordHistorySnapshot();
-    this._blueprint.animation = {
-      ...this._blueprint.animation,
-      tracks: this._blueprint.animation.tracks.map((entry) =>
-        entry.id === trackId
-          ? { ...entry, keyframes: entry.keyframes.filter((candidate) => candidate.id !== keyframeId) }
-          : entry),
-    };
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      return;
+    }
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: entry.tracks.map((candidate) =>
+        candidate.id === trackId
+          ? { ...candidate, keyframes: candidate.keyframes.filter((keyCandidate) => keyCandidate.id !== keyframeId) }
+          : candidate),
+    }));
     this.notify({ reason: "animation", source, nodeId: track.nodeId });
   }
 
@@ -1342,7 +1604,10 @@ export class EditorStore extends EventTarget {
 
     this.recordHistorySnapshot();
     this._blueprint.nodes = this._blueprint.nodes.filter((node) => !idsToDelete.has(node.id));
-    this._blueprint.animation.tracks = this._blueprint.animation.tracks.filter((track) => !idsToDelete.has(track.nodeId));
+    this._blueprint.animation.clips = this._blueprint.animation.clips.map((clip) => ({
+      ...clip,
+      tracks: clip.tracks.filter((track) => !idsToDelete.has(track.nodeId)),
+    }));
     this._selectedNodeIds = this.sanitizeSelectionIds([fallbackParentId], fallbackParentId);
     this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, fallbackParentId);
     this.ensureUniqueBindingKeys();
@@ -1359,7 +1624,10 @@ export class EditorStore extends EventTarget {
 
     this.recordHistorySnapshot();
     this._blueprint.nodes = this._blueprint.nodes.filter((node) => !idsToDelete.has(node.id));
-    this._blueprint.animation.tracks = this._blueprint.animation.tracks.filter((track) => !idsToDelete.has(track.nodeId));
+    this._blueprint.animation.clips = this._blueprint.animation.clips.map((clip) => ({
+      ...clip,
+      tracks: clip.tracks.filter((track) => !idsToDelete.has(track.nodeId)),
+    }));
     this._selectedNodeIds = this.sanitizeSelectionIds([removedNode?.parentId ?? ROOT_NODE_ID], removedNode?.parentId ?? ROOT_NODE_ID);
     this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, removedNode?.parentId ?? ROOT_NODE_ID);
     this.ensureUniqueBindingKeys();
@@ -1479,7 +1747,12 @@ export class EditorStore extends EventTarget {
       return;
     }
 
+    const positionDelta = computeOriginPositionDelta(node, node.origin, nextOrigin, this);
+
     this.recordHistorySnapshot();
+    node.transform.position.x += positionDelta.x;
+    node.transform.position.y += positionDelta.y;
+    node.transform.position.z += positionDelta.z;
     node.origin = nextOrigin;
     this.notify({ reason: "node", source, nodeId });
   }

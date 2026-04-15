@@ -233,7 +233,11 @@ export class SceneEditor {
       return 0;
     }
 
-    return secondsToFrame(this.animationTimeline.time(), this.store.animation.fps);
+    const clip = this.store.getActiveAnimationClip();
+    if (!clip) {
+      return 0;
+    }
+    return secondsToFrame(this.animationTimeline.time(), clip.fps);
   }
 
   getNodeAnimationValue(nodeId: string, property: AnimationPropertyPath): number | null {
@@ -252,6 +256,9 @@ export class SceneEditor {
   }
 
   playAnimation(): void {
+    if (!this.store.getActiveAnimationClip()) {
+      return;
+    }
     if (!this.animationTimeline) {
       this.rebuildAnimationTimeline(false);
     }
@@ -270,11 +277,16 @@ export class SceneEditor {
       return;
     }
 
-    this.animationTimeline.pause(0);
+    this.animationTimeline.pause();
+    this.seekAnimation(0);
     this.emitAnimationFrame();
   }
 
   seekAnimation(frame: number): void {
+    if (!this.store.getActiveAnimationClip()) {
+      this.emitAnimationFrame(0);
+      return;
+    }
     if (!this.animationTimeline) {
       this.rebuildAnimationTimeline(false);
     }
@@ -284,7 +296,13 @@ export class SceneEditor {
       return;
     }
 
-    const time = frameToSeconds(frame, this.store.animation.fps);
+    const clip = this.store.getActiveAnimationClip();
+    if (!clip) {
+      this.emitAnimationFrame(0);
+      return;
+    }
+    const normalizedFrame = Math.max(0, Math.min(Math.round(frame), clip.durationFrames));
+    const time = frameToSeconds(normalizedFrame, clip.fps);
     this.animationTimeline.pause();
     this.animationTimeline.seek(time, false);
     this.emitAnimationFrame();
@@ -827,11 +845,18 @@ export class SceneEditor {
       repeat: -1,
       onUpdate: () => this.emitAnimationFrame(),
     });
-    const totalDuration = frameToSeconds(this.store.animation.durationFrames, this.store.animation.fps);
+    const clip = this.store.getActiveAnimationClip();
+    if (!clip) {
+      this.animationTimeline = timeline;
+      this.emitAnimationFrame(0);
+      return;
+    }
+    const tracks = clip.tracks;
+    const totalDuration = frameToSeconds(clip.durationFrames, clip.fps);
     const hold = { progress: 0 };
     timeline.to(hold, { progress: 1, duration: Math.max(totalDuration, 0.0001), ease: "none" }, 0);
 
-    for (const track of this.store.animation.tracks) {
+    for (const track of tracks) {
       const target = this.objectMap.get(track.nodeId);
       if (!target) {
         continue;
@@ -848,17 +873,17 @@ export class SceneEditor {
         continue;
       }
 
-      timeline.set(owner, { [property]: ordered[0].value }, frameToSeconds(ordered[0].frame, this.store.animation.fps));
+      timeline.set(owner, { [property]: ordered[0].value }, frameToSeconds(ordered[0].frame, clip.fps));
 
       for (const segment of getTrackSegments(track)) {
         timeline.to(
           owner,
           {
             [property]: segment.to.value,
-            duration: frameToSeconds(segment.to.frame - segment.from.frame, this.store.animation.fps),
+            duration: frameToSeconds(segment.to.frame - segment.from.frame, clip.fps),
             ease: mapAnimationEaseToGsap(segment.to.ease),
           },
-          frameToSeconds(segment.from.frame, this.store.animation.fps),
+          frameToSeconds(segment.from.frame, clip.fps),
         );
       }
     }
@@ -870,9 +895,9 @@ export class SceneEditor {
       return;
     }
 
-    const clampedFrame = Math.max(0, Math.min(previousFrame, this.store.animation.durationFrames));
+    const clampedFrame = Math.max(0, Math.min(previousFrame, clip.durationFrames));
     timeline.pause();
-    timeline.seek(frameToSeconds(clampedFrame, this.store.animation.fps), false);
+    timeline.seek(frameToSeconds(clampedFrame, clip.fps), false);
     if (!wasPaused) {
       timeline.play();
     }

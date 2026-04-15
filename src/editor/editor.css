@@ -1870,7 +1870,7 @@ input[type=number] {
 
 .animation-dope-sheet {
   display: grid;
-  grid-template-columns: 250px minmax(0, 1fr);
+  grid-template-columns: 250px minmax(0, 1fr) 272px;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -1924,6 +1924,32 @@ input[type=number] {
   background: linear-gradient(180deg, #17191d 0%, #15171b 100%);
   user-select: none;
   -webkit-user-select: none;
+}
+
+.animation-dope-sheet__sidebar {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 40px minmax(0, 1fr);
+  border-left: 1px solid var(--border);
+  background: linear-gradient(180deg, #15181d 0%, #13151a 100%);
+}
+
+.animation-dope-sheet__sidebar-header {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-soft);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.animation-dope-sheet__sidebar-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
 }
 
 .animation-dope-sheet__ruler-scroll {
@@ -2052,6 +2078,30 @@ input[type=number] {
   border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.animation-keyframe-editor--panel {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding-left: 0;
+  border-left: 0;
+}
+
+.animation-keyframe-editor--panel .field-inline {
+  display: grid;
+  gap: 6px;
+}
+
+.animation-keyframe-editor--panel .field-inline span {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.animation-keyframe-editor__track {
+  justify-self: start;
+}
+
 .animation-lane {
   position: relative;
   display: grid;
@@ -2131,6 +2181,11 @@ input[type=number] {
   padding: 16px;
 }
 
+.animation-panel-empty-side {
+  padding: 0;
+  min-height: 120px;
+}
+
 @media (max-width: 1280px) {
   .workspace-shell {
     grid-template-columns: minmax(0, 1fr) 8px 380px;
@@ -2156,7 +2211,7 @@ input[type=number] {
   }
 
   .animation-dope-sheet {
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: 220px minmax(0, 1fr) 240px;
   }
 }
 
@@ -2204,7 +2259,7 @@ input[type=number] {
     min-width: 140px;
   }
 
-  .animation-keyframe-editor {
+  .animation-keyframe-editor:not(.animation-keyframe-editor--panel) {
     display: none;
   }
 
@@ -2215,6 +2270,11 @@ input[type=number] {
   .animation-dope-sheet__left {
     border-right: 0;
     border-bottom: 1px solid var(--border);
+  }
+
+  .animation-dope-sheet__sidebar {
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
 
   .animation-lane {

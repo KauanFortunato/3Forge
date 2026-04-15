@@ -1,4 +1,4 @@
-import { frameToSeconds, getTrackSegments, mapAnimationEaseToGsap } from "./animation";
+import { frameToSeconds, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
 import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageNode } from "./types";
 import { ROOT_NODE_ID, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
@@ -29,7 +29,8 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   const componentTypeName = toPascalCase(componentName);
   const optionTypeName = `${componentTypeName}Options`;
   const resolvedTypeName = `${componentTypeName}ResolvedOptions`;
-  const hasAnimations = blueprint.animation.tracks.some((track) => track.keyframes.length > 0);
+  const animationClips = blueprint.animation.clips;
+  const hasAnimations = animationClips.some((clip) => clip.tracks.some((track) => track.keyframes.length > 0));
   const usesNodeOriginHelper = blueprint.nodes.some((node) => node.type !== "group");
 
   const nodes = blueprint.nodes;
@@ -98,10 +99,20 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
     lines.push("");
   }
 
+  if (fonts.length > 0) {
+    lines.push("const fontLoader = new FontLoader();");
+    for (const font of fonts) {
+      lines.push(`const ${font.fontVariableName} = fontLoader.parse(${font.dataVariableName});`);
+    }
+    lines.push("");
+  }
+
   if (images.length > 0) {
     for (const image of images) {
       lines.push(`const ${image.dataVariableName} = ${JSON.stringify(image.node.image.src)} as const;`);
     }
+    lines.push("");
+    lines.push("const textureLoader = new TextureLoader();");
     lines.push("");
   }
 
@@ -129,6 +140,7 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   lines.push(`  private readonly options: ${resolvedTypeName};`);
   if (hasAnimations) {
     lines.push("  private timeline: gsap.core.Timeline | null = null;");
+    lines.push("  private currentClipName: string | null = null;");
     lines.push("  private readonly nodeRefs = new Map<string, Group | Mesh>();");
   }
   lines.push("");
@@ -148,16 +160,17 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
     lines.push(`    this.nodeRefs.set(${JSON.stringify(ROOT_NODE_ID)}, root);`);
   }
 
-  if (fonts.length > 0) {
-    lines.push("    const fontLoader = new FontLoader();");
-    for (const font of fonts) {
-      lines.push(`    const ${font.fontVariableName} = fontLoader.parse(${font.dataVariableName});`);
-    }
-  }
   if (images.length > 0) {
-    lines.push("    const textureLoader = new TextureLoader();");
+    lines.push("    const [");
     for (const image of images) {
-      lines.push(`    const ${image.textureVariableName} = await textureLoader.loadAsync(${image.dataVariableName});`);
+      lines.push(`      ${image.textureVariableName},`);
+    }
+    lines.push("    ] = await Promise.all([");
+    for (const image of images) {
+      lines.push(`      textureLoader.loadAsync(${image.dataVariableName}),`);
+    }
+    lines.push("    ]);");
+    for (const image of images) {
       lines.push(`    ${image.textureVariableName}.colorSpace = SRGBColorSpace;`);
       lines.push(`    ${image.textureVariableName}.needsUpdate = true;`);
     }
@@ -221,12 +234,13 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
 }
 
 function collectBindings(nodes: EditorNode[]): CollectedBinding[] {
-  return nodes.flatMap((node) =>
-    Object.values(node.editable)
-      .filter((binding) => getPropertyDefinitions(node).some((definition) => definition.path === binding.path))
+  return nodes.flatMap((node) => {
+    const validPaths = new Set(getPropertyDefinitions(node).map((definition) => definition.path));
+    return Object.values(node.editable)
+      .filter((binding) => validPaths.has(binding.path))
       .sort((a, b) => a.key.localeCompare(b.key))
-      .map((binding) => ({ node, binding })),
-  );
+      .map((binding) => ({ node, binding }));
+  });
 }
 
 function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<string> {
@@ -541,43 +555,75 @@ function emitAnimationMethods(
   blueprint: ComponentBlueprint,
   variableNames: Map<string, string>,
 ): void {
-  lines.push(`  public createTimeline(): gsap.core.Timeline {`);
-  lines.push("    this.timeline?.kill();");
-  lines.push("    const timeline = gsap.timeline({ paused: true, repeat: -1 });");
-  lines.push(`    timeline.to({ progress: 0 }, { progress: 1, duration: ${Math.max(frameToSeconds(blueprint.animation.durationFrames, blueprint.animation.fps), 0.0001)}, ease: "none" }, 0);`);
+  const clips = blueprint.animation.clips.filter((clip) => clip.tracks.some((track) => track.keyframes.length > 0));
 
-  for (const track of blueprint.animation.tracks) {
-    const segments = getTrackSegments(track);
-    if (track.keyframes.length === 0) {
-      continue;
-    }
+  lines.push("  private buildTimelineForClip(clipName: string): { timeline: gsap.core.Timeline; fps: number; durationFrames: number } | null {");
+  lines.push("    switch (clipName) {");
 
-    const targetName = `${variableNames.get(track.nodeId) ?? toCamelCase(track.nodeId)}${toPascalCase(track.property)}`;
-    const ownerPath = toTimelineTargetPath(track.property);
-    const propertyKey = toTimelinePropertyKey(track.property);
-    const firstKeyframe = [...track.keyframes].sort((a, b) => a.frame - b.frame)[0];
+  for (const clip of clips) {
+    lines.push(`      case ${JSON.stringify(clip.name)}: {`);
+    lines.push("        const timeline = gsap.timeline({ paused: true, repeat: -1 });");
+    lines.push(`        timeline.to({ progress: 0 }, { progress: 1, duration: ${Math.max(frameToSeconds(clip.durationFrames, clip.fps), 0.0001)}, ease: "none" }, 0);`);
 
-    lines.push(`    const ${targetName}Target = this.nodeRefs.get(${JSON.stringify(track.nodeId)});`);
-    lines.push(`    if (${targetName}Target) {`);
-    lines.push(
-      `      timeline.set(${targetName}Target.${ownerPath}, { ${propertyKey}: ${serializeLiteral(firstKeyframe.value, "number")} }, ${frameToSeconds(firstKeyframe.frame, blueprint.animation.fps)});`,
-    );
+    for (const track of clip.tracks) {
+      if (track.keyframes.length === 0) {
+        continue;
+      }
 
-    for (const segment of segments) {
+      const orderedKeyframes = sortTrackKeyframes(track.keyframes);
+      const segments = orderedKeyframes.slice(0, -1).flatMap((from, index) => {
+        const to = orderedKeyframes[index + 1];
+        return to && to.frame > from.frame ? [{ from, to }] : [];
+      });
+      const targetName = `${variableNames.get(track.nodeId) ?? toCamelCase(track.nodeId)}${toPascalCase(track.property)}${toPascalCase(clip.name)}`;
+      const ownerPath = toTimelineTargetPath(track.property);
+      const propertyKey = toTimelinePropertyKey(track.property);
+      const firstKeyframe = orderedKeyframes[0];
+
+      lines.push(`        const ${targetName}Target = this.nodeRefs.get(${JSON.stringify(track.nodeId)});`);
+      lines.push(`        if (${targetName}Target) {`);
       lines.push(
-        `      timeline.to(${targetName}Target.${ownerPath}, { ${propertyKey}: ${serializeLiteral(segment.to.value, "number")}, duration: ${frameToSeconds(segment.to.frame - segment.from.frame, blueprint.animation.fps)}, ease: ${JSON.stringify(mapAnimationEaseToGsap(segment.to.ease))} }, ${frameToSeconds(segment.from.frame, blueprint.animation.fps)});`,
+        `          timeline.set(${targetName}Target.${ownerPath}, { ${propertyKey}: ${serializeLiteral(firstKeyframe.value, "number")} }, ${frameToSeconds(firstKeyframe.frame, clip.fps)});`,
       );
+
+      for (const segment of segments) {
+        lines.push(
+          `          timeline.to(${targetName}Target.${ownerPath}, { ${propertyKey}: ${serializeLiteral(segment.to.value, "number")}, duration: ${frameToSeconds(segment.to.frame - segment.from.frame, clip.fps)}, ease: ${JSON.stringify(mapAnimationEaseToGsap(segment.to.ease))} }, ${frameToSeconds(segment.from.frame, clip.fps)});`,
+        );
+      }
+
+      lines.push("        }");
     }
 
-    lines.push("    }");
+      lines.push(`        return { timeline, fps: ${clip.fps}, durationFrames: ${clip.durationFrames} };`);
+    lines.push("      }");
   }
 
-  lines.push("    this.timeline = timeline;");
-  lines.push("    return timeline;");
+  lines.push("      default:");
+  lines.push("        return null;");
+  lines.push("    }");
+  lines.push("  }");
+  lines.push("");
+  lines.push(`  public createTimeline(clipName: string = ${JSON.stringify(clips[0]?.name ?? "")}): gsap.core.Timeline | null {`);
+  lines.push("    this.timeline?.kill();");
+  lines.push("    const clip = this.buildTimelineForClip(clipName);");
+  lines.push("    if (!clip) {");
+  lines.push("      this.timeline = null;");
+  lines.push("      this.currentClipName = null;");
+  lines.push("      return null;");
+  lines.push("    }");
+  lines.push("    this.timeline = clip.timeline;");
+  lines.push("    this.currentClipName = clipName;");
+  lines.push("    return this.timeline;");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  public playClip(clipName: string): void {");
+  lines.push("    const timeline = this.currentClipName === clipName && this.timeline ? this.timeline : this.createTimeline(clipName);");
+  lines.push("    timeline?.play();");
   lines.push("  }");
   lines.push("");
   lines.push("  public play(): void {");
-  lines.push("    (this.timeline ?? this.createTimeline()).play();");
+  lines.push(`    this.playClip(this.currentClipName ?? ${JSON.stringify(clips[0]?.name ?? "")});`);
   lines.push("  }");
   lines.push("");
   lines.push("  public pause(): void {");
@@ -585,14 +631,23 @@ function emitAnimationMethods(
   lines.push("  }");
   lines.push("");
   lines.push("  public stop(): void {");
-  lines.push("    this.timeline?.pause(0);");
+  lines.push("    this.timeline?.pause();");
+  lines.push("    this.seek(0);");
   lines.push("  }");
   lines.push("");
   lines.push("  public seek(frame: number): void {");
-  lines.push(`    const fps = ${blueprint.animation.fps};`);
-  lines.push("    const timeline = this.timeline ?? this.createTimeline();");
+  lines.push(`    const clipName = this.currentClipName ?? ${JSON.stringify(clips[0]?.name ?? "")};`);
+  lines.push("    const clip = this.buildTimelineForClip(clipName);");
+  lines.push("    if (!clip) {");
+  lines.push("      return;");
+  lines.push("    }");
+  lines.push("    const timeline = this.timeline ?? this.createTimeline(clipName);");
+  lines.push("    if (!timeline) {");
+  lines.push("      return;");
+  lines.push("    }");
+  lines.push("    const normalizedFrame = Math.max(0, Math.min(Math.round(frame), clip.durationFrames));");
   lines.push("    timeline.pause();");
-  lines.push("    timeline.seek(Math.max(frame, 0) / fps, false);");
+  lines.push("    timeline.seek(normalizedFrame / clip.fps, false);");
   lines.push("  }");
   lines.push("");
 }

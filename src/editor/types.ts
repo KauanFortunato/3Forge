@@ -88,10 +88,17 @@ export interface AnimationTrack {
   keyframes: AnimationKeyframe[];
 }
 
-export interface ComponentAnimation {
+export interface AnimationClip {
+  id: string;
+  name: string;
   fps: number;
   durationFrames: number;
   tracks: AnimationTrack[];
+}
+
+export interface ComponentAnimation {
+  activeClipId: string;
+  clips: AnimationClip[];
 }
 
 export interface BaseEditorNode {

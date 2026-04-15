@@ -6,6 +6,7 @@ import {
   getAnimationPropertyLabel,
 } from "../../animation";
 import type {
+  AnimationClip,
   AnimationEasePreset,
   AnimationKeyframe,
   AnimationPropertyPath,
@@ -30,7 +31,11 @@ interface AnimationTimelineProps {
   onPlayToggle: () => void;
   onStop: () => void;
   onFrameChange: (frame: number) => void;
-  onAnimationConfigChange: (patch: Partial<Pick<ComponentAnimation, "fps" | "durationFrames">>) => void;
+  onAnimationConfigChange: (patch: Partial<Pick<AnimationClip, "fps" | "durationFrames">>) => void;
+  onCreateClip: () => void;
+  onSelectClip: (clipId: string) => void;
+  onRenameClip: (clipId: string, name: string) => void;
+  onRemoveClip: (clipId: string) => void;
   onAddTrack: (property: AnimationPropertyPath) => void;
   onRemoveTrack: (trackId: string) => void;
   onAddKeyframe: (trackId: string) => void;
@@ -65,6 +70,10 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     onStop,
     onFrameChange,
     onAnimationConfigChange,
+    onCreateClip,
+    onSelectClip,
+    onRenameClip,
+    onRemoveClip,
     onAddTrack,
     onRemoveTrack,
     onAddKeyframe,
@@ -83,18 +92,26 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const rightBodyRef = useRef<HTMLDivElement | null>(null);
 
-  const groupedTracks = useMemo(() => groupTracksByNode(animation.tracks, nodes), [animation.tracks, nodes]);
-  const selectedTrack = animation.tracks.find((track) => track.id === selectedTrackId) ?? null;
+  const activeClip = useMemo(
+    () => animation.clips.find((clip) => clip.id === animation.activeClipId) ?? animation.clips[0],
+    [animation.activeClipId, animation.clips],
+  );
+  const resolvedTracks = useMemo(
+    () => getResolvedClipTracks(animation, activeClip?.id ?? ""),
+    [activeClip?.id, animation],
+  );
+  const groupedTracks = useMemo(() => groupTracksByNode(resolvedTracks, nodes), [nodes, resolvedTracks]);
+  const selectedTrack = resolvedTracks.find((track) => track.id === selectedTrackId) ?? null;
   const selectedKeyframe = selectedTrack?.keyframes.find((keyframe) => keyframe.id === selectedKeyframeId) ?? null;
   const selectedNodeLabel = selectedNode ? `${selectedNode.name} · ${selectedNode.type}` : "No node selected";
   const takenProperties = new Set(
-    selectedNode ? animation.tracks.filter((track) => track.nodeId === selectedNode.id).map((track) => track.property) : [],
+    selectedNode ? resolvedTracks.filter((track) => track.nodeId === selectedNode.id).map((track) => track.property) : [],
   );
   const availableProperties = ANIMATION_PROPERTIES.filter((entry) => !takenProperties.has(entry.path));
-  const timelineWidth = Math.max(animation.durationFrames, 1) * FRAME_WIDTH;
+  const timelineWidth = Math.max(activeClip?.durationFrames ?? 1, 1) * FRAME_WIDTH;
   const visibleTracks = useMemo(
-    () => (selectedNode ? animation.tracks.filter((track) => track.nodeId === selectedNode.id) : []),
-    [animation.tracks, selectedNode],
+    () => (selectedNode ? resolvedTracks.filter((track) => track.nodeId === selectedNode.id) : []),
+    [resolvedTracks, selectedNode],
   );
   const visibleGroupedTracks = useMemo(() => groupTracksByNode(visibleTracks, nodes), [nodes, visibleTracks]);
   const visibleTrackCount = visibleTracks.length;
@@ -114,7 +131,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      const frame = positionToFrame(event.clientX, dragState.laneLeft, animation.durationFrames);
+      const frame = positionToFrame(event.clientX, dragState.laneLeft, activeClip?.durationFrames ?? 1);
       onUpdateKeyframe(dragState.trackId, dragState.keyframeId, { frame });
       onFrameChange(frame);
     };
@@ -130,7 +147,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [animation.durationFrames, dragState, onEndKeyframeDrag, onFrameChange, onUpdateKeyframe]);
+  }, [activeClip?.durationFrames, dragState, onEndKeyframeDrag, onFrameChange, onUpdateKeyframe]);
 
   useEffect(() => {
     if (!scrubState) {
@@ -138,7 +155,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      onFrameChange(positionToFrame(event.clientX, scrubState.laneLeft, animation.durationFrames));
+      onFrameChange(positionToFrame(event.clientX, scrubState.laneLeft, activeClip?.durationFrames ?? 1));
     };
 
     const handlePointerUp = () => {
@@ -151,7 +168,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [animation.durationFrames, onFrameChange, scrubState]);
+  }, [activeClip?.durationFrames, onFrameChange, scrubState]);
 
   useEffect(() => {
     const leftBody = leftBodyRef.current;
@@ -232,6 +249,18 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
       <div className="animation-panel__header">
         <div className="animation-toolbar animation-toolbar--left">
           <div className="button-row">
+            <select
+              className="editor-select animation-toolbar__select"
+              value={activeClip?.id ?? ""}
+              onChange={(event) => onSelectClip(event.target.value)}
+            >
+              {animation.clips.map((clip) => (
+                <option key={clip.id} value={clip.id}>{clip.name}</option>
+              ))}
+            </select>
+            <button type="button" className="tool-button tool-button--icon" onClick={onCreateClip}>
+              <span>New Clip</span>
+            </button>
             <button type="button" className={`tool-button tool-button--icon${isPlaying ? " is-active" : ""}`} onClick={onPlayToggle}>
               <span>{isPlaying ? "Pause" : "Play"}</span>
             </button>
@@ -257,7 +286,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 className="editor-input editor-input--compact"
                 type="text"
                 inputMode="numeric"
-                value={String(animation.fps)}
+                value={String(activeClip?.fps ?? 24)}
                 onCommit={(value) => onAnimationConfigChange({ fps: Number(value) })}
               />
             </label>
@@ -267,10 +296,26 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 className="editor-input editor-input--compact"
                 type="text"
                 inputMode="numeric"
-                value={String(animation.durationFrames)}
+                value={String(activeClip?.durationFrames ?? 1)}
                 onCommit={(value) => onAnimationConfigChange({ durationFrames: Number(value) })}
               />
             </label>
+            {activeClip ? (
+              <label className="field-inline">
+                <span>Name</span>
+                <BufferedInput
+                  className="editor-input editor-input--compact"
+                  type="text"
+                  value={activeClip.name}
+                  onCommit={(value) => onRenameClip(activeClip.id, value)}
+                />
+              </label>
+            ) : null}
+            {activeClip && animation.clips.length > 1 ? (
+              <button type="button" className="tool-button tool-button--icon" onClick={() => onRemoveClip(activeClip.id)}>
+                <span>Delete Clip</span>
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -300,52 +345,9 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
           >
             <span>Add Channel</span>
           </button>
-          {visibleSelectedTrack && visibleSelectedKeyframe ? (
-            <div className="animation-keyframe-editor">
-              <div className="toolbar-chip">{getAnimationPropertyLabel(visibleSelectedTrack.property)}</div>
-              <label className="field-inline">
-                <span>F</span>
-                <BufferedInput
-                  className="editor-input editor-input--compact"
-                  type="text"
-                  inputMode="numeric"
-                  value={String(visibleSelectedKeyframe.frame)}
-                  onCommit={(value) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: Number(value) })}
-                />
-              </label>
-              <label className="field-inline">
-                <span>Val</span>
-                <BufferedInput
-                  className="editor-input editor-input--compact"
-                  type="text"
-                  inputMode="decimal"
-                  value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
-                  onCommit={(value) =>
-                    onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
-                      value: parseValueFromInput(visibleSelectedTrack.property, Number(value)),
-                    })}
-                />
-              </label>
-              <label className="field-inline">
-                <span>Ease</span>
-                <select
-                  className="editor-select"
-                  value={visibleSelectedKeyframe.ease}
-                  onChange={(event) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { ease: event.target.value as AnimationEasePreset })}
-                >
-                  {ANIMATION_EASE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          ) : (
-            <div className="toolbar-chip animation-toolbar__count is-muted">
-              {selectedNode ? `${visibleTrackCount} channels` : "Select an object"}
-            </div>
-          )}
+          <div className="toolbar-chip animation-toolbar__count is-muted">
+            {selectedNode ? `${visibleTrackCount} channels` : "Select an object"}
+          </div>
         </div>
       </div>
 
@@ -389,11 +391,11 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 style={{ width: timelineWidth }}
                 onPointerDown={(event) => {
                   const laneLeft = event.currentTarget.getBoundingClientRect().left;
-                  onFrameChange(positionToFrame(event.clientX, laneLeft, animation.durationFrames));
+                  onFrameChange(positionToFrame(event.clientX, laneLeft, activeClip?.durationFrames ?? 1));
                   setScrubState({ laneLeft });
                 }}
               >
-                {Array.from({ length: animation.durationFrames + 1 }, (_, frame) => (
+                {Array.from({ length: (activeClip?.durationFrames ?? 1) + 1 }, (_, frame) => (
                   <div
                     key={frame}
                     className={`animation-ruler__tick${frame % 10 === 0 ? " is-major" : ""}`}
@@ -418,7 +420,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                     style={{ width: timelineWidth }}
                     onPointerDown={(event) => {
                       const laneLeft = event.currentTarget.getBoundingClientRect().left;
-                      onFrameChange(positionToFrame(event.clientX, laneLeft, animation.durationFrames));
+                      onFrameChange(positionToFrame(event.clientX, laneLeft, activeClip?.durationFrames ?? 1));
                       setScrubState({ laneLeft });
                     }}
                   />
@@ -428,13 +430,14 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                   <TrackLane
                     key={track.id}
                     track={track}
-                    durationFrames={animation.durationFrames}
+                    durationFrames={activeClip?.durationFrames ?? 1}
                     currentFrame={currentFrame}
                     timelineWidth={timelineWidth}
                     isSelected={selectedTrackId === track.id}
                     selectedKeyframeId={selectedTrackId === track.id ? selectedKeyframeId : null}
                     onAddKeyframe={() => onAddKeyframe(track.id)}
                     onRemoveTrack={() => onRemoveTrack(track.id)}
+                    isReadOnly={false}
                     onSelectTrack={() => onSelectTrack(track.id)}
                     onSelectKeyframe={(keyframeId) => onSelectKeyframe(track.id, keyframeId)}
                     onFrameChange={onFrameChange}
@@ -460,6 +463,65 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
             </div>
           </div>
         </div>
+
+        <aside className="animation-dope-sheet__sidebar">
+          <div className="animation-dope-sheet__sidebar-header">Keyframe</div>
+          <div className="animation-dope-sheet__sidebar-body">
+            {visibleSelectedTrack && visibleSelectedKeyframe ? (
+              <div className="animation-keyframe-editor animation-keyframe-editor--panel">
+                <div className="toolbar-chip animation-keyframe-editor__track">{getAnimationPropertyLabel(visibleSelectedTrack.property)}</div>
+                <label className="field-inline">
+                  <span>Frame</span>
+                  <BufferedInput
+                    className="editor-input editor-input--compact"
+                    type="text"
+                    inputMode="numeric"
+                    value={String(visibleSelectedKeyframe.frame)}
+                    onCommit={(value) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: Number(value) })}
+                  />
+                </label>
+                <label className="field-inline">
+                  <span>Value</span>
+                  <BufferedInput
+                    className="editor-input editor-input--compact"
+                    type="text"
+                    inputMode="decimal"
+                    value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
+                    onCommit={(value) =>
+                      onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
+                        value: parseValueFromInput(visibleSelectedTrack.property, Number(value)),
+                      })}
+                  />
+                </label>
+                <label className="field-inline">
+                  <span>Ease</span>
+                  <select
+                    className="editor-select"
+                    value={visibleSelectedKeyframe.ease}
+                    onChange={(event) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { ease: event.target.value as AnimationEasePreset })}
+                  >
+                    {ANIMATION_EASE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="tool-button tool-button--icon"
+                  onClick={() => onRemoveKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id)}
+                >
+                  <span>Delete Key</span>
+                </button>
+              </div>
+            ) : (
+              <div className="panel-empty animation-panel-empty-side">
+                Select a keyframe to edit its timing, value and ease.
+              </div>
+            )}
+          </div>
+        </aside>
       </div>
     </section>
   );
@@ -471,6 +533,7 @@ interface TrackLaneProps {
   currentFrame: number;
   timelineWidth: number;
   isSelected: boolean;
+  isReadOnly: boolean;
   selectedKeyframeId: string | null;
   onAddKeyframe: () => void;
   onRemoveTrack: () => void;
@@ -488,6 +551,7 @@ function TrackLane(props: TrackLaneProps) {
     currentFrame,
     timelineWidth,
     isSelected,
+    isReadOnly,
     selectedKeyframeId,
     onAddKeyframe,
     onRemoveTrack,
@@ -527,6 +591,9 @@ function TrackLane(props: TrackLaneProps) {
               onFrameChange(keyframe.frame);
             }}
             onPointerDown={(event) => {
+              if (isReadOnly) {
+                return;
+              }
               event.stopPropagation();
               onSelectTrack();
               onSelectKeyframe(keyframe.id);
@@ -546,6 +613,7 @@ function TrackLane(props: TrackLaneProps) {
             event.stopPropagation();
           }}
           onClick={() => onAddKeyframe()}
+          disabled={isReadOnly}
         >
           <span>+ Key</span>
         </button>
@@ -557,6 +625,7 @@ function TrackLane(props: TrackLaneProps) {
             event.stopPropagation();
           }}
           onClick={() => onRemoveTrack()}
+          disabled={isReadOnly}
         >
           <span>Remove</span>
         </button>
@@ -581,6 +650,11 @@ function groupTracksByNode(tracks: AnimationTrack[], nodes: EditorNode[]) {
       tracks: [...groupedTracks].sort((a, b) => a.property.localeCompare(b.property)),
     }))
     .filter((entry): entry is { node: EditorNode; tracks: AnimationTrack[] } => Boolean(entry.node));
+}
+
+function getResolvedClipTracks(animation: ComponentAnimation, clipId: string): AnimationTrack[] {
+  const clip = animation.clips.find((entry) => entry.id === clipId);
+  return clip?.tracks ?? [];
 }
 
 function positionToFrame(clientX: number, laneLeft: number, durationFrames: number): number {

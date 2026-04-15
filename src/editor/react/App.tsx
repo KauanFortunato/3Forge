@@ -224,9 +224,17 @@ export function App() {
     () => store.getSelectionRootIds(selectedNodeIds),
     [selectedNodeIds, store, storeView.blueprintNodes],
   );
+  const activeClip = useMemo(
+    () => storeView.animation.clips.find((clip) => clip.id === storeView.animation.activeClipId) ?? storeView.animation.clips[0],
+    [storeView.animation.activeClipId, storeView.animation.clips],
+  );
+  const activeClipTracks = useMemo(
+    () => activeClip?.tracks ?? [],
+    [activeClip],
+  );
   const animatedNodeIds = useMemo(
-    () => new Set(storeView.animation.tracks.map((track) => track.nodeId)),
-    [storeView.animation.tracks],
+    () => new Set(storeView.animation.clips.flatMap((clip) => clip.tracks.map((track) => track.nodeId))),
+    [storeView.animation.clips],
   );
 
   const setTransientStatus = useCallback((message: string) => {
@@ -303,41 +311,41 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (currentFrame > storeView.animation.durationFrames) {
-      setCurrentFrame(storeView.animation.durationFrames);
-      sceneRef.current?.seekAnimation(storeView.animation.durationFrames);
+    if (activeClip && currentFrame > activeClip.durationFrames) {
+      setCurrentFrame(activeClip.durationFrames);
+      sceneRef.current?.seekAnimation(activeClip.durationFrames);
     }
-  }, [currentFrame, storeView.animation.durationFrames]);
+  }, [activeClip, currentFrame]);
 
   useEffect(() => {
-    if (selectedTrackId && !storeView.animation.tracks.some((track) => track.id === selectedTrackId)) {
+    if (selectedTrackId && !activeClipTracks.some((track) => track.id === selectedTrackId)) {
       setSelectedTrackId(null);
       setSelectedKeyframeId(null);
     }
-  }, [selectedTrackId, storeView.animation.tracks]);
+  }, [activeClipTracks, selectedTrackId]);
 
   useEffect(() => {
     if (!selectedTrackId) {
       return;
     }
 
-    const track = storeView.animation.tracks.find((entry) => entry.id === selectedTrackId);
+    const track = activeClipTracks.find((entry) => entry.id === selectedTrackId);
     if (!track || !selectedNode || track.nodeId !== selectedNode.id) {
       setSelectedTrackId(null);
       setSelectedKeyframeId(null);
     }
-  }, [selectedNode, selectedTrackId, storeView.animation.tracks]);
+  }, [activeClipTracks, selectedNode, selectedTrackId]);
 
   useEffect(() => {
     if (!selectedTrackId || !selectedKeyframeId) {
       return;
     }
 
-    const track = storeView.animation.tracks.find((entry) => entry.id === selectedTrackId);
+    const track = activeClipTracks.find((entry) => entry.id === selectedTrackId);
     if (!track || !track.keyframes.some((entry) => entry.id === selectedKeyframeId)) {
       setSelectedKeyframeId(null);
     }
-  }, [selectedKeyframeId, selectedTrackId, storeView.animation.tracks]);
+  }, [activeClipTracks, selectedKeyframeId, selectedTrackId]);
 
   const getSiblingIndex = useCallback((nodeId: string) => {
     const node = store.getNode(nodeId);
@@ -425,15 +433,16 @@ export function App() {
   }, [setTransientStatus]);
 
   const handleAnimationFrameChange = useCallback((frame: number) => {
-    setCurrentFrame(Math.max(0, Math.min(frame, store.animation.durationFrames)));
-  }, [store.animation.durationFrames]);
+    const durationFrames = store.getActiveAnimationClip()?.durationFrames ?? 0;
+    setCurrentFrame(Math.max(0, Math.min(frame, durationFrames)));
+  }, [store]);
 
   const handleTimelineFrameChange = useCallback((frame: number) => {
-    const nextFrame = Math.max(0, Math.min(Math.round(frame), store.animation.durationFrames));
+    const nextFrame = Math.max(0, Math.min(Math.round(frame), store.getActiveAnimationClip()?.durationFrames ?? 0));
     setCurrentFrame(nextFrame);
     setIsAnimationPlaying(false);
     sceneRef.current?.seekAnimation(nextFrame);
-  }, [store.animation.durationFrames]);
+  }, [store]);
 
   const handleAnimationPlayToggle = useCallback(() => {
     if (isAnimationPlaying) {
@@ -497,7 +506,7 @@ export function App() {
   ) => {
     store.updateAnimationKeyframe(trackId, keyframeId, patch);
     const nextFrame = typeof patch.frame === "number" ? patch.frame : currentFrame;
-    setCurrentFrame(Math.max(0, Math.min(Math.round(nextFrame), store.animation.durationFrames)));
+    setCurrentFrame(Math.max(0, Math.min(Math.round(nextFrame), store.getActiveAnimationClip()?.durationFrames ?? 0)));
     sceneRef.current?.seekAnimation(typeof patch.frame === "number" ? patch.frame : currentFrame);
   }, [currentFrame, store]);
 
@@ -516,6 +525,36 @@ export function App() {
     }
     setTransientStatus("Track removed.");
   }, [selectedTrackId, setTransientStatus, store]);
+
+  const handleCreateAnimationClip = useCallback(() => {
+    const clipId = store.createAnimationClip();
+    setSelectedTrackId(null);
+    setSelectedKeyframeId(null);
+    setCurrentFrame(0);
+    sceneRef.current?.seekAnimation(0);
+    setTransientStatus(`Created clip "${store.getAnimationClip(clipId)?.name ?? "clip"}".`);
+  }, [setTransientStatus, store]);
+
+  const handleSelectAnimationClip = useCallback((clipId: string) => {
+    store.setActiveAnimationClip(clipId);
+    setSelectedTrackId(null);
+    setSelectedKeyframeId(null);
+    setCurrentFrame(0);
+    sceneRef.current?.seekAnimation(0);
+  }, [store]);
+
+  const handleRenameAnimationClip = useCallback((clipId: string, name: string) => {
+    store.renameAnimationClip(clipId, name);
+  }, [store]);
+
+  const handleRemoveAnimationClip = useCallback((clipId: string) => {
+    store.removeAnimationClip(clipId);
+    setSelectedTrackId(null);
+    setSelectedKeyframeId(null);
+    setCurrentFrame(0);
+    sceneRef.current?.seekAnimation(0);
+    setTransientStatus("Clip removed.");
+  }, [setTransientStatus, store]);
 
   const handleCopy = useCallback(() => {
     const targetRootIds = selectedRootIds.filter((nodeId) => nodeId !== ROOT_NODE_ID);
@@ -1117,6 +1156,10 @@ export function App() {
             onStop={handleAnimationStop}
             onFrameChange={handleTimelineFrameChange}
             onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
+            onCreateClip={handleCreateAnimationClip}
+            onSelectClip={handleSelectAnimationClip}
+            onRenameClip={handleRenameAnimationClip}
+            onRemoveClip={handleRemoveAnimationClip}
             onAddTrack={handleAddAnimationTrack}
             onRemoveTrack={handleRemoveAnimationTrack}
             onAddKeyframe={handleAddAnimationKeyframe}

@@ -1,4 +1,5 @@
 import type {
+  AnimationClip,
   AnimationEasePreset,
   AnimationKeyframe,
   AnimationPropertyPath,
@@ -10,6 +11,7 @@ import type {
 export const DEFAULT_ANIMATION_FPS = 24;
 export const DEFAULT_ANIMATION_DURATION_FRAMES = 120;
 export const DEFAULT_ANIMATION_EASE: AnimationEasePreset = "easeInOut";
+export const DEFAULT_ANIMATION_CLIP_NAME = "main";
 
 export const ANIMATION_PROPERTIES: Array<{ path: AnimationPropertyPath; label: string }> = [
   { path: "transform.position.x", label: "Position X" },
@@ -34,9 +36,21 @@ export const ANIMATION_EASE_OPTIONS: Array<{ value: AnimationEasePreset; label: 
 
 export function createDefaultAnimation(): ComponentAnimation {
   return {
-    fps: DEFAULT_ANIMATION_FPS,
-    durationFrames: DEFAULT_ANIMATION_DURATION_FRAMES,
-    tracks: [],
+    activeClipId: "",
+    clips: [],
+  };
+}
+
+export function createAnimationClip(
+  name: string,
+  overrides: Partial<Pick<AnimationClip, "fps" | "durationFrames" | "tracks">> = {},
+): AnimationClip {
+  return {
+    id: generateAnimationId("clip"),
+    name: name.trim() || "clip",
+    fps: overrides.fps ?? DEFAULT_ANIMATION_FPS,
+    durationFrames: overrides.durationFrames ?? DEFAULT_ANIMATION_DURATION_FRAMES,
+    tracks: overrides.tracks ? [...overrides.tracks] : [],
   };
 }
 
@@ -93,45 +107,27 @@ export function normalizeAnimation(rawAnimation: unknown, validNodeIds: Set<stri
   }
 
   const source = rawAnimation as Record<string, unknown>;
-  const fps = normalizePositiveInteger(source.fps, fallback.fps);
-  const durationFrames = normalizePositiveInteger(source.durationFrames, fallback.durationFrames);
-  const rawTracks = Array.isArray(source.tracks) ? source.tracks : [];
-  const tracks: AnimationTrack[] = [];
-  const seenTrackIds = new Set<string>();
-
-  for (const rawTrack of rawTracks) {
-    if (!rawTrack || typeof rawTrack !== "object") {
-      continue;
+  const clipsSource = Array.isArray(source.clips) ? source.clips : null;
+  if (clipsSource) {
+    const clips = normalizeAnimationClips(clipsSource, validNodeIds, fallback.clips);
+    if (clips.length === 0) {
+      return fallback;
     }
 
-    const trackSource = rawTrack as Record<string, unknown>;
-    const nodeId = typeof trackSource.nodeId === "string" ? trackSource.nodeId : "";
-    const property = typeof trackSource.property === "string" ? trackSource.property : "";
-    if (!validNodeIds.has(nodeId) || !isAnimationPropertyPath(property)) {
-      continue;
-    }
+    const activeClipId = typeof source.activeClipId === "string" && clips.some((clip) => clip.id === source.activeClipId)
+      ? source.activeClipId
+      : clips[0].id;
 
-    let trackId = typeof trackSource.id === "string" && trackSource.id.trim() ? trackSource.id : generateAnimationId("track");
-    while (seenTrackIds.has(trackId)) {
-      trackId = generateAnimationId("track");
-    }
-    seenTrackIds.add(trackId);
-
-    const rawKeyframes = Array.isArray(trackSource.keyframes) ? trackSource.keyframes : [];
-    const keyframes = normalizeTrackKeyframes(rawKeyframes, durationFrames);
-
-    tracks.push({
-      id: trackId,
-      nodeId,
-      property,
-      keyframes,
-    });
+    return {
+      activeClipId,
+      clips,
+    };
   }
 
+  const enterClip = normalizeLegacyAnimationClip(source, validNodeIds);
   return {
-    fps,
-    durationFrames,
-    tracks,
+    activeClipId: enterClip.id,
+    clips: [enterClip],
   };
 }
 
@@ -218,6 +214,105 @@ function normalizeTrackKeyframes(rawKeyframes: unknown[], durationFrames: number
   }
 
   return sortTrackKeyframes(normalized);
+}
+
+function normalizeAnimationClips(
+  rawClips: unknown[],
+  validNodeIds: Set<string>,
+  fallbackClips: AnimationClip[],
+): AnimationClip[] {
+  const normalized: AnimationClip[] = [];
+  const seenClipIds = new Set<string>();
+  const usedNames = new Set<string>();
+
+  for (const rawClip of rawClips) {
+    if (!rawClip || typeof rawClip !== "object") {
+      continue;
+    }
+
+    const clipSource = rawClip as Record<string, unknown>;
+    const fallbackClip = fallbackClips[normalized.length] ?? fallbackClips[0] ?? createAnimationClip(DEFAULT_ANIMATION_CLIP_NAME);
+    let clipId = typeof clipSource.id === "string" && clipSource.id.trim() ? clipSource.id : generateAnimationId("clip");
+    while (seenClipIds.has(clipId)) {
+      clipId = generateAnimationId("clip");
+    }
+    seenClipIds.add(clipId);
+
+    const baseName = typeof clipSource.name === "string" && clipSource.name.trim() ? clipSource.name.trim() : fallbackClip.name;
+    const name = makeUniqueClipName(baseName, usedNames);
+    usedNames.add(name.toLowerCase());
+    const fps = normalizePositiveInteger(clipSource.fps, fallbackClip.fps);
+    const durationFrames = normalizePositiveInteger(clipSource.durationFrames, fallbackClip.durationFrames);
+    const tracks = normalizeAnimationTracks(Array.isArray(clipSource.tracks) ? clipSource.tracks : [], validNodeIds, durationFrames);
+    normalized.push({
+      id: clipId,
+      name,
+      fps,
+      durationFrames,
+      tracks,
+    });
+  }
+
+  return normalized;
+}
+
+function normalizeLegacyAnimationClip(source: Record<string, unknown>, validNodeIds: Set<string>): AnimationClip {
+  const fallback = createAnimationClip(DEFAULT_ANIMATION_CLIP_NAME);
+  const fps = normalizePositiveInteger(source.fps, fallback.fps);
+  const durationFrames = normalizePositiveInteger(source.durationFrames, fallback.durationFrames);
+  const tracks = normalizeAnimationTracks(Array.isArray(source.tracks) ? source.tracks : [], validNodeIds, durationFrames);
+  return {
+    ...fallback,
+    fps,
+    durationFrames,
+    tracks,
+  };
+}
+
+function normalizeAnimationTracks(rawTracks: unknown[], validNodeIds: Set<string>, durationFrames: number): AnimationTrack[] {
+  const tracks: AnimationTrack[] = [];
+  const seenTrackIds = new Set<string>();
+
+  for (const rawTrack of rawTracks) {
+    if (!rawTrack || typeof rawTrack !== "object") {
+      continue;
+    }
+
+    const trackSource = rawTrack as Record<string, unknown>;
+    const nodeId = typeof trackSource.nodeId === "string" ? trackSource.nodeId : "";
+    const property = typeof trackSource.property === "string" ? trackSource.property : "";
+    if (!validNodeIds.has(nodeId) || !isAnimationPropertyPath(property)) {
+      continue;
+    }
+
+    let trackId = typeof trackSource.id === "string" && trackSource.id.trim() ? trackSource.id : generateAnimationId("track");
+    while (seenTrackIds.has(trackId)) {
+      trackId = generateAnimationId("track");
+    }
+    seenTrackIds.add(trackId);
+
+    tracks.push({
+      id: trackId,
+      nodeId,
+      property,
+      keyframes: normalizeTrackKeyframes(Array.isArray(trackSource.keyframes) ? trackSource.keyframes : [], durationFrames),
+    });
+  }
+
+  return tracks;
+}
+
+function makeUniqueClipName(name: string, usedNames: Set<string>): string {
+  const base = name.trim() || "clip";
+  let candidate = base;
+  let suffix = 2;
+
+  while (usedNames.has(candidate.toLowerCase())) {
+    candidate = `${base} ${suffix}`;
+    suffix += 1;
+  }
+
+  return candidate;
 }
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
