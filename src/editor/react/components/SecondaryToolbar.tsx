@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ToolMode } from "../ui-types";
 import type { ViewMode } from "../../types";
 import {
+  AlignCenterIcon,
   CursorIcon,
   FrameIcon,
   MoveIcon,
@@ -23,12 +24,14 @@ interface SecondaryToolbarProps {
   currentTool: ToolMode;
   viewMode: ViewMode;
   isTimelineVisible: boolean;
+  canAlignToParentCenter: boolean;
   onComponentNameChange: (value: string) => void;
   onUndo: () => void;
   onRedo: () => void;
   onToolChange: (mode: ToolMode) => void;
   onViewModeChange: (mode: ViewMode) => void;
   onFrame: () => void;
+  onAlignToParentCenter: () => void;
   onToggleTimeline: () => void;
 }
 
@@ -42,12 +45,14 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     currentTool,
     viewMode,
     isTimelineVisible,
+    canAlignToParentCenter,
     onComponentNameChange,
     onUndo,
     onRedo,
     onToolChange,
     onViewModeChange,
     onFrame,
+    onAlignToParentCenter,
     onToggleTimeline,
   } = props;
 
@@ -68,6 +73,7 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       <div className="secondary-toolbar__center">
         <div className="toolbar-chip">{selectedLabel}</div>
         <div className="toolbar-chip is-muted">{nodeCount} nodes</div>
+        {currentTool === "translate" ? <div className="toolbar-chip toolbar-chip--hint">Hold Shift to snap</div> : null}
       </div>
 
       <div className="secondary-toolbar__right">
@@ -108,6 +114,13 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
         </div>
 
         <div className="toolbar-icon-group">
+          <ToolbarIconButton
+            label="Align rendered center to parent group origin"
+            disabled={!canAlignToParentCenter}
+            onClick={onAlignToParentCenter}
+          >
+            <AlignCenterIcon />
+          </ToolbarIconButton>
           <ToolbarIconButton label="Select (1)" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
             <CursorIcon />
           </ToolbarIconButton>
@@ -120,7 +133,7 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
           <ToolbarIconButton label="Scale (4)" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
             <ScaleIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Frame (F)" onClick={onFrame}>
+          <ToolbarIconButton label="Frame Selection (F)" onClick={onFrame}>
             <FrameIcon />
           </ToolbarIconButton>
         </div>

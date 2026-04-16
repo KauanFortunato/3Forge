@@ -219,6 +219,12 @@ export function App() {
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const selectedNodeCount = selectedNodeIds.length;
   const selectedNode = storeView.selectedNode;
+  const canAlignSelectionToParentCenter = Boolean(
+    selectedNodeCount === 1 &&
+    selectedNode &&
+    selectedNode.id !== ROOT_NODE_ID &&
+    selectedNode.type !== "group"
+  );
   const inspectorNode = selectedNodeCount > 1 ? undefined : selectedNode;
   const selectedRootIds = useMemo(
     () => store.getSelectionRootIds(selectedNodeIds),
@@ -432,6 +438,18 @@ export function App() {
     setTransientStatus("Framed selection.");
   }, [setTransientStatus]);
 
+  const handleAlignSelectionToParentCenter = useCallback(() => {
+    if (!selectedNode || selectedNode.id === ROOT_NODE_ID || selectedNode.type === "group") {
+      return;
+    }
+
+    if (!store.alignNodeToParentCenter(selectedNode.id)) {
+      return;
+    }
+
+    setTransientStatus(`Aligned "${selectedNode.name}" to the parent group center.`);
+  }, [selectedNode, setTransientStatus, store]);
+
   const handleAnimationFrameChange = useCallback((frame: number) => {
     const durationFrames = store.getActiveAnimationClip()?.durationFrames ?? 0;
     setCurrentFrame(Math.max(0, Math.min(frame, durationFrames)));
@@ -581,7 +599,9 @@ export function App() {
       return;
     }
 
-    const target = resolveContextInsertTarget(targetNodeId ?? null);
+    const target = targetNodeId
+      ? resolveContextInsertTarget(targetNodeId)
+      : resolveSelectionInsertTarget();
     const newRootIds = store.pasteNodeSubtrees(clipboard.subtrees, target.parentId, target.index);
     if (newRootIds.length === 0) {
       return;
@@ -594,7 +614,7 @@ export function App() {
     }
 
     setTransientStatus(`Pasted ${newRootIds.length} objects.`);
-  }, [resolveContextInsertTarget, setTransientStatus, store]);
+  }, [resolveContextInsertTarget, resolveSelectionInsertTarget, setTransientStatus, store]);
 
   const handleDelete = useCallback((nodeId?: string | null) => {
     const targetRootIds = resolveContextSelectionRootIds(nodeId ?? null);
@@ -918,6 +938,7 @@ export function App() {
         { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: (!selectedTrackId || !selectedKeyframeId) && (selectedRootIds.length === 0 || (selectedRootIds.length === 1 && selectedRootIds[0] === ROOT_NODE_ID)), onSelect: handleDeleteSelection },
         { id: "edit-divider-2", separator: true },
         { id: "edit-frame", label: "Frame Selection", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: selectedRootIds.length === 0, onSelect: handleFrameSelection },
+        { id: "edit-center-in-group", label: "Center In Group", disabled: !canAlignSelectionToParentCenter, onSelect: handleAlignSelectionToParentCenter },
       ],
     },
     {
@@ -936,6 +957,8 @@ export function App() {
   ], [
     createAddMenuActions,
     downloadExportFile,
+    canAlignSelectionToParentCenter,
+    handleAlignSelectionToParentCenter,
     handleCopy,
     handleFrameSelection,
     handleNewBlueprint,
@@ -1013,6 +1036,8 @@ export function App() {
         onToolChange={handleToolChange}
         onViewModeChange={(mode) => store.setViewMode(mode)}
         onFrame={handleFrameSelection}
+        canAlignToParentCenter={canAlignSelectionToParentCenter}
+        onAlignToParentCenter={handleAlignSelectionToParentCenter}
         isTimelineVisible={isTimelineVisible}
         onToggleTimeline={() => setIsTimelineVisible((value) => !value)}
       />

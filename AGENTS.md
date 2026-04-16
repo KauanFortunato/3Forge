@@ -10,12 +10,19 @@ Use the Node version from `.nvmrc` (`nvm use` on supported shells) or Node `>=22
 - `npm run dev`: start the Vite editor locally with host exposure and auto-open.
 - `npm run build`: create a production bundle in `dist/`.
 - `npm run preview`: serve the production build locally.
+- `npm run test`: run the automated test suite with Vitest.
+- `npm run typecheck`: run TypeScript compiler to check for type errors.
+- `npm run validate`: run full validation (types, tests, and build). **ALWAYS run this command before committing changes.**
 
 ## Coding Style & Naming Conventions
 This repo uses TypeScript with `strict` mode and React JSX. Follow the existing style: 2-space indentation, double quotes, semicolons, and trailing commas where the formatter would keep them. Use `PascalCase` for React components and editor classes, `camelCase` for functions and state helpers, and `useX` names for hooks. Keep CSS class names descriptive and component-scoped, as in `landing-page__title` and `panel__body`.
 
 ## Testing Guidelines
-There is no automated test suite configured yet. Before opening a PR, run `npm run build` and manually smoke-test the affected editor flows in `npm run dev`, especially viewport interaction, scene graph edits, blueprint save/load, TypeScript export, and timeline changes. When adding tests later, place them near the feature they cover and name them after the behavior under test.
+The project uses **Vitest** for unit and integration testing, and **React Testing Library** for UI components. Tests are located alongside the files they cover (e.g., `state.test.ts` next to `state.ts`). 
+- When adding new features, include corresponding test files.
+- Ensure that `npm run test` passes without failures.
+- Use `jsdom` environment for tests involving the DOM or React components.
+- Mock external dependencies where necessary to maintain isolation.
 
 ## Commit & Pull Request Guidelines
 Recent commits use short, imperative subjects such as `Fix viewport right-click drag context menu` and `Add GSAP animation timeline and editor polish`. Keep commit titles concise, sentence case, and focused on one change. PRs should describe the user-visible impact, note any export or data-model changes, link related issues, and include screenshots or short recordings for UI changes.

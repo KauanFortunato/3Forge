@@ -260,4 +260,48 @@ describe("EditorStore", () => {
       height: 1.2,
     });
   });
+
+  it("aligns a renderable node to the center of its parent group", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const planeId = store.insertNode("plane", ROOT_NODE_ID);
+    const plane = store.getNode(planeId);
+
+    expect(plane?.type).toBe("plane");
+    if (!plane || plane.type !== "plane") {
+      throw new Error("Expected plane node.");
+    }
+
+    plane.origin = { x: "left", y: "top", z: "front" };
+    plane.geometry.width = 2;
+    plane.geometry.height = 4;
+    plane.transform.position = { x: 7, y: -3, z: 2 };
+
+    expect(store.alignNodeToParentCenter(plane.id)).toBe(true);
+    expect(plane.transform.position.x).toBeCloseTo(-1);
+    expect(plane.transform.position.y).toBeCloseTo(2);
+    expect(plane.transform.position.z).toBeCloseTo(0);
+    expect(store.alignNodeToParentCenter(ROOT_NODE_ID)).toBe(false);
+  });
+
+  it("aligns a rotated and scaled node using its rendered center", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const planeId = store.insertNode("plane", ROOT_NODE_ID);
+    const plane = store.getNode(planeId);
+
+    expect(plane?.type).toBe("plane");
+    if (!plane || plane.type !== "plane") {
+      throw new Error("Expected plane node.");
+    }
+
+    plane.origin = { x: "left", y: "top", z: "front" };
+    plane.geometry.width = 2;
+    plane.geometry.height = 4;
+    plane.transform.rotation.z = Math.PI * 0.5;
+    plane.transform.scale = { x: 2, y: 0.5, z: 1 };
+
+    expect(store.alignNodeToParentCenter(plane.id)).toBe(true);
+    expect(plane.transform.position.x).toBeCloseTo(-1);
+    expect(plane.transform.position.y).toBeCloseTo(-2);
+    expect(plane.transform.position.z).toBeCloseTo(0);
+  });
 });

@@ -240,6 +240,12 @@ button {
   opacity: 0.6;
 }
 
+.toolbar-chip--hint {
+  border-color: rgba(123, 68, 222, 0.28);
+  background: rgba(107, 46, 207, 0.12);
+  color: var(--text);
+}
+
 .toolbar-icon-group {
   display: inline-flex;
   align-items: center;
