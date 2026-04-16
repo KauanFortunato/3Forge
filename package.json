@@ -9,7 +9,12 @@
   "scripts": {
     "dev": "node ./scripts/vite-wrapper.mjs dev --open --host",
     "build": "node ./scripts/vite-wrapper.mjs build",
-    "preview": "node ./scripts/vite-wrapper.mjs preview --host"
+    "preview": "node ./scripts/vite-wrapper.mjs preview --host",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "validate": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
     "gsap": "^3.13.0",
@@ -18,11 +23,17 @@
     "three": "^0.181.2"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.181.0",
     "@vitejs/plugin-react": "^5.1.4",
+    "@vitest/coverage-v8": "^4.1.4",
+    "jsdom": "^29.0.2",
     "typescript": "~5.9.3",
-    "vite": "^7.3.0"
+    "vite": "^7.3.0",
+    "vitest": "^4.1.4"
   }
 }

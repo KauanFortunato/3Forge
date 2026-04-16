@@ -140,6 +140,24 @@ npm run build
 npm run preview
 ```
 
+### Run Tests
+
+```bash
+npm run test
+```
+
+For local iteration:
+
+```bash
+npm run test:watch
+```
+
+For validation before changes are merged:
+
+```bash
+npm run validate
+```
+
 ## Editor Workflow
 
 Typical usage looks like this:
