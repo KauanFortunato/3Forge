@@ -5,5 +5,8 @@ dist
 *.env
 *.log
 .agents
+.serena
+.codex
+graphify-out
 skills-lock.json
 /documents

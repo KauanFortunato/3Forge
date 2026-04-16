@@ -32,6 +32,7 @@ import gsap from "gsap";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
+import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import { frameToSeconds, getTrackSegments, mapAnimationEaseToGsap, secondsToFrame } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { EditorStore } from "./state";
@@ -39,6 +40,8 @@ import type { AnimationPropertyPath, EditorNode, EditorStoreChange, ImageNode, N
 
 type GizmoMode = "translate" | "rotate" | "scale";
 type ToolMode = "select" | GizmoMode;
+
+const DRAG_SNAP_THRESHOLD = 0.18;
 
 export class SceneEditor {
   private readonly textureLoader = new TextureLoader();
@@ -71,6 +74,7 @@ export class SceneEditor {
 
   private animationFrame = 0;
   private animationTimeline: gsap.core.Timeline | null = null;
+  private isSnapModifierPressed = false;
   private pointerDownX = 0;
   private pointerDownY = 0;
   private mainLight: DirectionalLight | null = null;
@@ -151,6 +155,7 @@ export class SceneEditor {
         return;
       }
 
+      this.applyDragAlignmentSnap(nodeId, object);
       this.store.setNodeTransformFromObject(nodeId, object);
       this.updateSelectionHelper(
         this.store.selectedNodeIds
@@ -163,6 +168,9 @@ export class SceneEditor {
     this.scene.add(this.transformHelper);
     this.addHelpers();
     this.bindPointerSelection();
+    window.addEventListener("keydown", this.handleWindowKeyDown);
+    window.addEventListener("keyup", this.handleWindowKeyUp);
+    window.addEventListener("blur", this.handleWindowBlur);
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.container);
@@ -313,6 +321,9 @@ export class SceneEditor {
     this.unsubscribe();
     this.resizeObserver.disconnect();
     this.animationTimeline?.kill();
+    window.removeEventListener("keydown", this.handleWindowKeyDown);
+    window.removeEventListener("keyup", this.handleWindowKeyUp);
+    window.removeEventListener("blur", this.handleWindowBlur);
     this.transformControls.detach();
     this.transformControls.dispose();
     this.orbitControls.dispose();
@@ -324,6 +335,22 @@ export class SceneEditor {
     this.renderer.domElement.remove();
     this.orientationRenderer.domElement.remove();
   }
+
+  private readonly handleWindowKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Shift") {
+      this.isSnapModifierPressed = true;
+    }
+  };
+
+  private readonly handleWindowKeyUp = (event: KeyboardEvent): void => {
+    if (event.key === "Shift") {
+      this.isSnapModifierPressed = false;
+    }
+  };
+
+  private readonly handleWindowBlur = (): void => {
+    this.isSnapModifierPressed = false;
+  };
 
   private readonly handleOrientationPointerDown = (event: PointerEvent): void => {
     const rect = this.orientationRenderer.domElement.getBoundingClientRect();
@@ -743,6 +770,87 @@ export class SceneEditor {
     }
 
     this.updateSelectionHelper(selectedObjects);
+  }
+
+  private applyDragAlignmentSnap(nodeId: string, object: Object3D): void {
+    if (
+      !this.isTransformDragging ||
+      !this.isSnapModifierPressed ||
+      this.currentGizmoMode !== "translate"
+    ) {
+      return;
+    }
+
+    const node = this.store.getNode(nodeId);
+    const parent = object.parent;
+    if (!node || !parent) {
+      return;
+    }
+
+    const movingShape = this.createWorldAlignmentShape(nodeId, object);
+    if (!movingShape) {
+      return;
+    }
+
+    const candidateShapes = this.store.getNodeChildren(node.parentId)
+      .filter((entry) => entry.id !== nodeId)
+      .map((entry) => this.objectMap.get(entry.id))
+      .filter((entry): entry is Object3D => Boolean(entry))
+      .map((entry) => {
+        const candidateNodeId = String(entry.userData.nodeId ?? "");
+        return candidateNodeId ? this.createWorldAlignmentShape(candidateNodeId, entry) : null;
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+    if (candidateShapes.length === 0) {
+      return;
+    }
+
+    const activeAxes = this.getActiveAlignmentAxes();
+    if (activeAxes.length === 0) {
+      return;
+    }
+
+    const snap = findAlignmentSnaps(movingShape, candidateShapes, DRAG_SNAP_THRESHOLD, undefined, activeAxes);
+    if (snap.matches.length === 0) {
+      return;
+    }
+
+    const nextWorldPivot = new Vector3(
+      snap.position.x,
+      snap.position.y,
+      snap.position.z,
+    );
+    const nextLocalPivot = parent.worldToLocal(nextWorldPivot.clone());
+    object.position.copy(nextLocalPivot);
+  }
+
+  private getActiveAlignmentAxes(): Array<"x" | "y" | "z"> {
+    const axis = this.transformControls.axis ?? "XYZ";
+    const activeAxes: Array<"x" | "y" | "z"> = [];
+
+    if (axis.includes("X")) {
+      activeAxes.push("x");
+    }
+    if (axis.includes("Y")) {
+      activeAxes.push("y");
+    }
+    if (axis.includes("Z")) {
+      activeAxes.push("z");
+    }
+
+    return activeAxes;
+  }
+
+  private createWorldAlignmentShape(nodeId: string, object: Object3D) {
+    const worldPivot = object.getWorldPosition(new Vector3());
+    const worldBounds = new Box3().setFromObject(object);
+
+    if (worldBounds.isEmpty()) {
+      return createAlignmentShape(nodeId, worldPivot, worldPivot, worldPivot);
+    }
+
+    return createAlignmentShape(nodeId, worldPivot, worldBounds.min, worldBounds.max);
   }
 
   private updateSelectionHelper(objects: Object3D[]): void {

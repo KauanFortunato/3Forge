@@ -482,24 +482,13 @@ function computeOriginPositionDelta(
   nextOrigin: NodeOriginSpec,
   store: Pick<EditorStore, "getFont">,
 ): Vec3Like {
-  const previousOffset = getNodeOriginOffset(node, previousOrigin, store);
-  const nextOffset = getNodeOriginOffset(node, nextOrigin, store);
+  const previousOffset = getTransformedNodeOriginOffset(node, previousOrigin, store);
+  const nextOffset = getTransformedNodeOriginOffset(node, nextOrigin, store);
   const localDelta = new Vector3(
     previousOffset.x - nextOffset.x,
     previousOffset.y - nextOffset.y,
     previousOffset.z - nextOffset.z,
   );
-
-  localDelta.multiply(new Vector3(
-    node.transform.scale.x,
-    node.transform.scale.y,
-    node.transform.scale.z,
-  ));
-  localDelta.applyQuaternion(new Quaternion().setFromEuler(new Euler(
-    node.transform.rotation.x,
-    node.transform.rotation.y,
-    node.transform.rotation.z,
-  )));
 
   return {
     x: localDelta.x,
@@ -550,6 +539,32 @@ function getNodeOriginOffset(
     case "text":
       return getTextNodeOriginOffset(node, origin, store);
   }
+}
+
+function getTransformedNodeOriginOffset(
+  node: Exclude<EditorNode, { type: "group" }>,
+  origin: NodeOriginSpec,
+  store: Pick<EditorStore, "getFont">,
+): Vec3Like {
+  const localOffset = getNodeOriginOffset(node, origin, store);
+  const transformedOffset = new Vector3(localOffset.x, localOffset.y, localOffset.z);
+
+  transformedOffset.multiply(new Vector3(
+    node.transform.scale.x,
+    node.transform.scale.y,
+    node.transform.scale.z,
+  ));
+  transformedOffset.applyQuaternion(new Quaternion().setFromEuler(new Euler(
+    node.transform.rotation.x,
+    node.transform.rotation.y,
+    node.transform.rotation.z,
+  )));
+
+  return {
+    x: transformedOffset.x,
+    y: transformedOffset.y,
+    z: transformedOffset.z,
+  };
 }
 
 function getTextNodeOriginOffset(
@@ -1755,6 +1770,29 @@ export class EditorStore extends EventTarget {
     node.transform.position.z += positionDelta.z;
     node.origin = nextOrigin;
     this.notify({ reason: "node", source, nodeId });
+  }
+
+  alignNodeToParentCenter(nodeId: string, source: EditorStoreChange["source"] = "ui"): boolean {
+    const node = this.getNode(nodeId);
+    if (!node || node.id === ROOT_NODE_ID || node.type === "group") {
+      return false;
+    }
+
+    const centerOffset = getTransformedNodeOriginOffset(node, node.origin, this);
+    const nextPosition = {
+      x: -centerOffset.x,
+      y: -centerOffset.y,
+      z: -centerOffset.z,
+    };
+
+    if (isVec3Equal(node.transform.position, nextPosition)) {
+      return false;
+    }
+
+    this.recordHistorySnapshot();
+    node.transform.position = nextPosition;
+    this.notify({ reason: "node", source, nodeId });
+    return true;
   }
 
   toggleNodeVisibility(nodeId: string, source: EditorStoreChange["source"] = "ui"): void {

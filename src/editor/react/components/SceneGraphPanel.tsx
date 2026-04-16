@@ -21,6 +21,7 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
   const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const selectedPathIds = useMemo(() => buildSelectedPathSet(nodeMap, selectedNodeIds), [nodeMap, selectedNodeIds]);
+  const selectionRevealIds = useMemo(() => buildSelectionRevealSet(selectedNodeIds, selectedPathIds), [selectedNodeIds, selectedPathIds]);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<TreeDropTarget | null>(null);
@@ -28,12 +29,12 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
   useEffect(() => {
     setCollapsedIds((current) => {
       const next = new Set(current);
-      for (const id of selectedPathIds) {
+      for (const id of selectionRevealIds) {
         next.delete(id);
       }
       return next;
     });
-  }, [selectedPathIds]);
+  }, [selectionRevealIds]);
 
   const clearDragState = () => {
     setDraggedNodeId(null);
@@ -343,6 +344,14 @@ function buildSelectedPathSet(nodeMap: Map<string, EditorNode>, selectedNodeIds:
   }
 
   return selectedPathIds;
+}
+
+function buildSelectionRevealSet(selectedNodeIds: string[], selectedPathIds: Set<string>): Set<string> {
+  const revealIds = new Set(selectedPathIds);
+  for (const nodeId of selectedNodeIds) {
+    revealIds.add(nodeId);
+  }
+  return revealIds;
 }
 
 function resolveDropTarget(
