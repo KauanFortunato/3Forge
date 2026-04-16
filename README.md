@@ -82,7 +82,7 @@ The generated class rebuilds the component with `three` primitives and exposes a
 .
 ├── public/
 │   ├── assets/
-│   │   └── icons/
+│   │   └── web/
 │   └── assets/fonts/
 ├── scripts/
 │   └── vite-wrapper.mjs

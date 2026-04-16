@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MenuAction } from "../ui-types";
 import { MenuList } from "./ContextMenu";
 
-const APP_LOGO_SRC = "/assets/icons/logo.svg";
+const APP_LOGO_SRC = "/assets/web/logo.svg";
 
 interface TopMenu {
   id: string;

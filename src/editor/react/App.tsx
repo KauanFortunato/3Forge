@@ -43,7 +43,7 @@ import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { ViewportHost } from "./components/ViewportHost";
 
-const APP_LOGO_SRC = "/assets/icons/logo.svg";
+const APP_LOGO_SRC = "/assets/web/logo.svg";
 
 interface NodeClipboard {
   sourceNodeIds: string[];
@@ -149,7 +149,7 @@ function LandingPage({ onStartNew, onLoadProject }: { onStartNew: () => void; on
         <p className="landing-page__subtitle">
           Design, prototype, and export high-performance 3D components for your applications.
         </p>
-        
+
         <div className="landing-page__actions">
           <button type="button" className="landing-btn landing-btn--primary" onClick={onStartNew}>
             <PlusIcon width={20} height={20} />
@@ -158,7 +158,7 @@ function LandingPage({ onStartNew, onLoadProject }: { onStartNew: () => void; on
               <span className="landing-btn__desc">Start from a clean slate</span>
             </div>
           </button>
-          
+
           <button type="button" className="landing-btn landing-btn--secondary" onClick={onLoadProject}>
             <DownloadIcon width={20} height={20} />
             <div className="landing-btn__text">
@@ -167,7 +167,7 @@ function LandingPage({ onStartNew, onLoadProject }: { onStartNew: () => void; on
             </div>
           </button>
         </div>
-        
+
         <div className="landing-page__footer">
           Developed for modern 3D workflows. All assets are stored locally.
         </div>
@@ -955,14 +955,14 @@ export function App() {
   if (!isStarted) {
     return (
       <div className="app-shell app-shell--landing">
-        <LandingPage 
+        <LandingPage
           onStartNew={() => {
             handleNewBlueprint();
             setIsStarted(true);
-          }} 
+          }}
           onLoadProject={() => {
             jsonInputRef.current?.click();
-          }} 
+          }}
         />
         <input
           ref={jsonInputRef}

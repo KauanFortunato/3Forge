@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-`src/editor` contains the editor core: scene orchestration in `scene.ts`, serializable blueprint state in `state.ts`, shared data types in `types.ts`, and export logic in `exports.ts`. React UI lives in `src/editor/react`, with top-level screens in `App.tsx`, reusable panels in `components/`, and shared hooks in `hooks/`. Static assets belong in `public/assets` (`icons/`, `fonts/`). Build and dev wrappers live in `scripts/`.
+`src/editor` contains the editor core: scene orchestration in `scene.ts`, serializable blueprint state in `state.ts`, shared data types in `types.ts`, and export logic in `exports.ts`. React UI lives in `src/editor/react`, with top-level screens in `App.tsx`, reusable panels in `components/`, and shared hooks in `hooks/`. Static assets belong in `public/assets` (`web/`, `fonts/`). Build and dev wrappers live in `scripts/`.
 
 ## Build, Test, and Development Commands
 Use the Node version from `.nvmrc` (`nvm use` on supported shells) or Node `>=22.12.0`.
