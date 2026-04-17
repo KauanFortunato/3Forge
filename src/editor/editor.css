@@ -1545,8 +1545,15 @@ input[type=number] {
 }
 
 @keyframes landing-fade-in {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .landing-page__logo {
@@ -2326,7 +2333,7 @@ input[type=number] {
 }
 
 .animation-panel-empty-side {
-  padding: 0;
+  padding: 12px;
   min-height: 120px;
 }
 
