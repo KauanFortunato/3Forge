@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
@@ -215,6 +215,15 @@ export function App() {
   const blueprintJson = useMemo(() => exportBlueprintToJson(blueprintSnapshot), [blueprintSnapshot]);
   const typeScriptExport = useMemo(() => generateTypeScriptComponent(blueprintSnapshot), [blueprintSnapshot]);
   const exportPreview = exportMode === "json" ? blueprintJson : typeScriptExport;
+  const shellBodyClassName = `app-shell__body${isTimelineVisible ? " has-timeline" : ""}`;
+  const rightPanelStyle = useMemo(
+    () => ({ "--hierarchy-panel-height": `${hierarchyHeight}px` }) as CSSProperties,
+    [hierarchyHeight],
+  );
+  const timelineDockStyle = useMemo(
+    () => ({ gridTemplateRows: `8px ${timelineHeight}px` }) as CSSProperties,
+    [timelineHeight],
+  );
   const selectedNodeIds = storeView.selectedNodeIds;
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const selectedNodeCount = selectedNodeIds.length;
@@ -1003,13 +1012,7 @@ export function App() {
   }
 
   return (
-    <div
-      className="app-shell"
-      data-status-tick={statusTick}
-      style={{
-        gridTemplateRows: `32px 54px minmax(0, 1fr) ${isTimelineVisible ? "8px" : "0px"} ${isTimelineVisible ? `${timelineHeight}px` : "0px"} 28px`,
-      }}
-    >
+    <div className="app-shell" data-status-tick={statusTick}>
       <MenuBar menus={menus} />
 
       <SecondaryToolbar
@@ -1034,168 +1037,170 @@ export function App() {
         onToggleTimeline={() => setIsTimelineVisible((value) => !value)}
       />
 
-      <div
-        className="workspace-shell"
-        style={{ gridTemplateColumns: isCompactLayout ? "1fr" : `minmax(0, 1fr) 8px ${rightPanelWidth}px` }}
-      >
-        <main className="viewport-panel">
-          <div className="viewport-panel__header viewport-panel__header--compact">
-            <span className="viewport-panel__title">Viewport</span>
-            <div className="viewport-panel__badges">
-              <span className="badge">{currentTool}</span>
-              <span className="badge">{storeView.blueprintNodes.length} items</span>
-            </div>
-          </div>
-
-          <div className="viewport-panel__body">
-            <ViewportHost
-              store={store}
-              onSceneReady={(scene) => {
-                animationFrameUnsubscribeRef.current?.();
-                sceneRef.current = scene;
-                scene?.setTransformMode(currentTool);
-                if (scene) {
-                  scene.seekAnimation(currentFrame);
-                  animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
-                } else {
-                  animationFrameUnsubscribeRef.current = null;
-                }
-              }}
-              onContextMenu={openViewportContextMenu}
-            />
-          </div>
-        </main>
-
-        {!isCompactLayout ? (
-          <div
-            className={`panel-splitter panel-splitter--vertical${resizeMode === "sidebar" ? " is-active" : ""}`}
-            onPointerDown={startSidebarResizing}
-          />
-        ) : null}
-
-        <aside className="panel panel--right panel--split" style={{ gridTemplateRows: `${hierarchyHeight}px auto 1fr` }}>
-          <section className="panel-split__top">
-            <div className="panel__header">
-              <p className="panel__eyebrow">Hierarchy</p>
-              <span className="panel__meta">{storeView.blueprintNodes.length} items</span>
+      <div className={shellBodyClassName}>
+        <div
+          className="workspace-shell"
+          style={{ gridTemplateColumns: isCompactLayout ? "1fr" : `minmax(0, 1fr) 8px ${rightPanelWidth}px` }}
+        >
+          <main className="viewport-panel">
+            <div className="viewport-panel__header viewport-panel__header--compact">
+              <span className="viewport-panel__title">Viewport</span>
+              <div className="viewport-panel__badges">
+                <span className="badge">{currentTool}</span>
+                <span className="badge">{storeView.blueprintNodes.length} items</span>
+              </div>
             </div>
 
-            <div className="panel__body panel__body--flush">
-              <SceneGraphPanel
-                nodes={storeView.blueprintNodes}
-                animatedNodeIds={animatedNodeIds}
-                selectedNodeId={storeView.selectedNodeId}
-                selectedNodeIds={storeView.selectedNodeIds}
-                onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
-                onMoveNode={handleSceneMove}
-                onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
-                onContextMenu={openSceneGraphContextMenu}
+            <div className="viewport-panel__body">
+              <ViewportHost
+                store={store}
+                onSceneReady={(scene) => {
+                  animationFrameUnsubscribeRef.current?.();
+                  sceneRef.current = scene;
+                  scene?.setTransformMode(currentTool);
+                  if (scene) {
+                    scene.seekAnimation(currentFrame);
+                    animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
+                  } else {
+                    animationFrameUnsubscribeRef.current = null;
+                  }
+                }}
+                onContextMenu={openViewportContextMenu}
               />
             </div>
-          </section>
+          </main>
 
-          <div
-            className={`panel-splitter panel-splitter--horizontal${resizeMode === "hierarchy" ? " is-active" : ""}`}
-            onPointerDown={startHierarchyResizing}
-          />
+          {!isCompactLayout ? (
+            <div
+              className={`panel-splitter panel-splitter--vertical${resizeMode === "sidebar" ? " is-active" : ""}`}
+              onPointerDown={startSidebarResizing}
+            />
+          ) : null}
 
-          <section className="panel-split__bottom">
-            <div className="panel-tabs">
-              <button type="button" className={`panel-tab${rightPanelTab === "inspector" ? " is-active" : ""}`} onClick={() => setRightPanelTab("inspector")}>Inspector</button>
-              <button type="button" className={`panel-tab${rightPanelTab === "fields" ? " is-active" : ""}`} onClick={() => setRightPanelTab("fields")}>Fields</button>
-              <button type="button" className={`panel-tab${rightPanelTab === "export" ? " is-active" : ""}`} onClick={() => setRightPanelTab("export")}>Export</button>
-            </div>
+          <aside className="panel panel--right panel--split" style={rightPanelStyle}>
+            <section className="panel-split__top">
+              <div className="panel__header">
+                <p className="panel__eyebrow">Hierarchy</p>
+                <span className="panel__meta">{storeView.blueprintNodes.length} items</span>
+              </div>
 
-            <div className="panel__body">
-              {rightPanelTab === "inspector" ? (
-                <InspectorPanel
-                  node={inspectorNode}
-                  emptyMessage={selectedNodeCount > 1 ? "Inspector indisponível para seleção múltipla." : undefined}
-                  fonts={storeView.fonts}
-                  onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
-                  onParentChange={(nodeId, parentId) => {
-                    const eligibleChildren = store.getNodeChildren(parentId);
-                    store.moveNode(nodeId, parentId, eligibleChildren.length);
-                  }}
-                  onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
-                  onGroupPivotPresetApply={handleApplyGroupPivotPreset}
-                  getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
-                  onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
-                  onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
-                  onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
-                  onImportFont={() => fontInputRef.current?.click()}
-                  onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
+              <div className="panel__body panel__body--flush">
+                <SceneGraphPanel
+                  nodes={storeView.blueprintNodes}
+                  animatedNodeIds={animatedNodeIds}
+                  selectedNodeId={storeView.selectedNodeId}
+                  selectedNodeIds={storeView.selectedNodeIds}
+                  onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
+                  onMoveNode={handleSceneMove}
+                  onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
+                  onContextMenu={openSceneGraphContextMenu}
                 />
-              ) : null}
+              </div>
+            </section>
 
-              {rightPanelTab === "fields" ? (
-                <FieldsPanel
-                  entries={storeView.editableFields}
-                  onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
-                  onRemoveEditable={(nodeId, path) => {
-                    const node = store.getNode(nodeId);
-                    const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
-                    if (definition) {
-                      store.toggleEditableProperty(nodeId, definition, false);
-                    }
-                  }}
-                />
-              ) : null}
+            <div
+              className={`panel-splitter panel-splitter--horizontal${resizeMode === "hierarchy" ? " is-active" : ""}`}
+              onPointerDown={startHierarchyResizing}
+            />
 
-              {rightPanelTab === "export" ? (
-                <ExportPanel
-                  exportMode={exportMode}
-                  preview={exportPreview}
-                  onExportModeChange={setExportMode}
-                  onCopy={copyExportText}
-                  onDownload={() => downloadExportFile(exportMode)}
-                />
-              ) : null}
-            </div>
-          </section>
-        </aside>
+            <section className="panel-split__bottom">
+              <div className="panel-tabs">
+                <button type="button" className={`panel-tab${rightPanelTab === "inspector" ? " is-active" : ""}`} onClick={() => setRightPanelTab("inspector")}>Inspector</button>
+                <button type="button" className={`panel-tab${rightPanelTab === "fields" ? " is-active" : ""}`} onClick={() => setRightPanelTab("fields")}>Fields</button>
+                <button type="button" className={`panel-tab${rightPanelTab === "export" ? " is-active" : ""}`} onClick={() => setRightPanelTab("export")}>Export</button>
+              </div>
+
+              <div className="panel__body">
+                {rightPanelTab === "inspector" ? (
+                  <InspectorPanel
+                    node={inspectorNode}
+                    emptyMessage={selectedNodeCount > 1 ? "Inspector indisponível para seleção múltipla." : undefined}
+                    fonts={storeView.fonts}
+                    onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
+                    onParentChange={(nodeId, parentId) => {
+                      const eligibleChildren = store.getNodeChildren(parentId);
+                      store.moveNode(nodeId, parentId, eligibleChildren.length);
+                    }}
+                    onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
+                    onGroupPivotPresetApply={handleApplyGroupPivotPreset}
+                    getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
+                    onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
+                    onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
+                    onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
+                    onImportFont={() => fontInputRef.current?.click()}
+                    onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
+                  />
+                ) : null}
+
+                {rightPanelTab === "fields" ? (
+                  <FieldsPanel
+                    entries={storeView.editableFields}
+                    onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
+                    onRemoveEditable={(nodeId, path) => {
+                      const node = store.getNode(nodeId);
+                      const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
+                      if (definition) {
+                        store.toggleEditableProperty(nodeId, definition, false);
+                      }
+                    }}
+                  />
+                ) : null}
+
+                {rightPanelTab === "export" ? (
+                  <ExportPanel
+                    exportMode={exportMode}
+                    preview={exportPreview}
+                    onExportModeChange={setExportMode}
+                    onCopy={copyExportText}
+                    onDownload={() => downloadExportFile(exportMode)}
+                  />
+                ) : null}
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        {isTimelineVisible ? (
+          <div className="app-shell__timeline-dock" style={timelineDockStyle}>
+            <div
+              className={`panel-splitter panel-splitter--horizontal panel-splitter--timeline${resizeMode === "timeline" ? " is-active" : ""}`}
+              onPointerDown={startTimelineResizing}
+            />
+            <AnimationTimeline
+              animation={storeView.animation}
+              nodes={storeView.blueprintNodes}
+              selectedNode={selectedNode}
+              currentFrame={currentFrame}
+              isPlaying={isAnimationPlaying}
+              selectedTrackId={selectedTrackId}
+              selectedKeyframeId={selectedKeyframeId}
+              onPlayToggle={handleAnimationPlayToggle}
+              onStop={handleAnimationStop}
+              onFrameChange={handleTimelineFrameChange}
+              onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
+              onCreateClip={handleCreateAnimationClip}
+              onSelectClip={handleSelectAnimationClip}
+              onRenameClip={handleRenameAnimationClip}
+              onRemoveClip={handleRemoveAnimationClip}
+              onAddTrack={handleAddAnimationTrack}
+              onRemoveTrack={handleRemoveAnimationTrack}
+              onAddKeyframe={handleAddAnimationKeyframe}
+              onSelectTrack={(trackId) => setSelectedTrackId(trackId)}
+              onSelectKeyframe={(trackId, keyframeId) => {
+                setSelectedTrackId(trackId);
+                setSelectedKeyframeId(keyframeId);
+              }}
+              onUpdateKeyframe={handleUpdateAnimationKeyframe}
+              onRemoveKeyframe={handleRemoveAnimationKeyframe}
+              onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
+              onEndKeyframeDrag={() => {
+                store.commitHistoryTransaction("ui");
+                sceneRef.current?.seekAnimation(currentFrame);
+              }}
+            />
+          </div>
+        ) : null}
       </div>
-
-      {isTimelineVisible ? (
-        <>
-          <div
-            className={`panel-splitter panel-splitter--horizontal panel-splitter--timeline${resizeMode === "timeline" ? " is-active" : ""}`}
-            onPointerDown={startTimelineResizing}
-          />
-          <AnimationTimeline
-            animation={storeView.animation}
-            nodes={storeView.blueprintNodes}
-            selectedNode={selectedNode}
-            currentFrame={currentFrame}
-            isPlaying={isAnimationPlaying}
-            selectedTrackId={selectedTrackId}
-            selectedKeyframeId={selectedKeyframeId}
-            onPlayToggle={handleAnimationPlayToggle}
-            onStop={handleAnimationStop}
-            onFrameChange={handleTimelineFrameChange}
-            onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
-            onCreateClip={handleCreateAnimationClip}
-            onSelectClip={handleSelectAnimationClip}
-            onRenameClip={handleRenameAnimationClip}
-            onRemoveClip={handleRemoveAnimationClip}
-            onAddTrack={handleAddAnimationTrack}
-            onRemoveTrack={handleRemoveAnimationTrack}
-            onAddKeyframe={handleAddAnimationKeyframe}
-            onSelectTrack={(trackId) => setSelectedTrackId(trackId)}
-            onSelectKeyframe={(trackId, keyframeId) => {
-              setSelectedTrackId(trackId);
-              setSelectedKeyframeId(keyframeId);
-            }}
-            onUpdateKeyframe={handleUpdateAnimationKeyframe}
-            onRemoveKeyframe={handleRemoveAnimationKeyframe}
-            onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
-            onEndKeyframeDrag={() => {
-              store.commitHistoryTransaction("ui");
-              sceneRef.current?.seekAnimation(currentFrame);
-            }}
-          />
-        </>
-      ) : null}
 
       <footer className="statusbar">
         <span className="statusbar__message">{statusText}</span>

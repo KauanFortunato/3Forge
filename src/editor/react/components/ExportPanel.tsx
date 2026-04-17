@@ -12,6 +12,14 @@ interface ExportPanelProps {
 export function ExportPanel({ exportMode, preview, onExportModeChange, onCopy, onDownload }: ExportPanelProps) {
   return (
     <div className="export-stack">
+      <div className="panel-section-header">
+        <div>
+          <p className="panel__eyebrow">Export</p>
+          <h3 className="panel-section-header__title">{exportMode === "json" ? "Blueprint Snapshot" : "Runtime Component"}</h3>
+        </div>
+        <span className="panel__meta">{exportMode === "json" ? "Serializable state" : "Three.js output"}</span>
+      </div>
+
       <div className="export-toolbar">
         <div className="segmented-control">
           <button

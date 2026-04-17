@@ -18,6 +18,7 @@ interface SceneGraphPanelProps {
 export function SceneGraphPanel(props: SceneGraphPanelProps) {
   const { nodes, animatedNodeIds, selectedNodeId, selectedNodeIds, onSelectNode, onMoveNode, onToggleVisibility, onContextMenu } = props;
   const branches = useMemo(() => buildTree(nodes), [nodes]);
+  const firstBranchId = branches[0]?.node.id ?? null;
   const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const selectedPathIds = useMemo(() => buildSelectedPathSet(nodeMap, selectedNodeIds), [nodeMap, selectedNodeIds]);
@@ -56,6 +57,19 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
   return (
     <div
       className="scene-graph"
+      role="tree"
+      aria-label="Scene hierarchy"
+      tabIndex={selectedNodeIds.length === 0 ? 0 : -1}
+      onKeyDown={(event) => {
+        if (selectedNodeIds.length > 0 || !firstBranchId) {
+          return;
+        }
+
+        if (event.key === "Enter" || event.key === " " || event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          onSelectNode(firstBranchId, false);
+        }
+      }}
       onContextMenu={(event) => {
         if (event.target === event.currentTarget) {
           event.preventDefault();
@@ -157,8 +171,26 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
           rowDropState ? `is-drop-${rowDropState}` : "",
           draggedNodeId === branch.node.id ? "is-dragging" : "",
         ].filter(Boolean).join(" ")}
+        role="treeitem"
+        tabIndex={isSelected ? 0 : -1}
+        aria-selected={isSelected}
+        aria-expanded={isGroup ? !isCollapsed : undefined}
         draggable={!isRoot}
         onClick={(event) => onSelectNode(branch.node.id, event.shiftKey)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelectNode(branch.node.id, event.shiftKey);
+          }
+
+          if (isGroup && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+            const shouldExpand = event.key === "ArrowRight";
+            if (shouldExpand === isCollapsed) {
+              event.preventDefault();
+              onToggleNode(branch.node.id);
+            }
+          }
+        }}
         onContextMenu={(event) => {
           event.preventDefault();
           onContextMenu(event, branch.node.id);
@@ -247,6 +279,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
       {isGroup && !isCollapsed ? (
         <div
           className="scene-graph__children"
+          role="group"
           onContextMenu={(event) => {
             if (event.target === event.currentTarget) {
               event.preventDefault();

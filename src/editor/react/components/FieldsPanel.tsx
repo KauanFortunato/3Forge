@@ -10,7 +10,12 @@ interface FieldsPanelProps {
 
 export function FieldsPanel({ entries, onUpdateBinding, onRemoveEditable }: FieldsPanelProps) {
   if (entries.length === 0) {
-    return <p className="panel-empty">Marque propriedades como editaveis para gerar opcoes de runtime.</p>;
+    return (
+      <div className="panel-empty panel-empty--card">
+        <strong className="panel-empty__title">No Runtime Fields Yet</strong>
+        <span className="panel-empty__body">Mark properties as editable in the Inspector to generate runtime options here.</span>
+      </div>
+    );
   }
 
   return (

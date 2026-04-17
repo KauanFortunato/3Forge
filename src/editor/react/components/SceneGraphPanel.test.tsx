@@ -63,4 +63,29 @@ describe("SceneGraphPanel", () => {
     expect(screen.getByText("Fixture Group Copy")).toBeTruthy();
     expect(screen.getAllByText("Plane Child")).toHaveLength(2);
   });
+
+  it("allows keyboard users to enter the tree when nothing is selected", () => {
+    const store = createHierarchyStore();
+    const handleSelectNode = vi.fn();
+
+    render(
+      <SceneGraphPanel
+        nodes={store.blueprint.nodes}
+        animatedNodeIds={new Set()}
+        selectedNodeId=""
+        selectedNodeIds={[]}
+        onSelectNode={handleSelectNode}
+        onMoveNode={vi.fn()}
+        onToggleVisibility={vi.fn()}
+        onContextMenu={vi.fn()}
+      />,
+    );
+
+    const tree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    expect(tree.getAttribute("tabindex")).toBe("0");
+
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+
+    expect(handleSelectNode).toHaveBeenCalledWith(ROOT_NODE_ID, false);
+  });
 });

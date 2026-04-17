@@ -66,12 +66,36 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       </div>
 
       <div className="secondary-toolbar__center">
-        <div className="toolbar-chip">{selectedLabel}</div>
-        <div className="toolbar-chip is-muted">{nodeCount} nodes</div>
+        <div className="toolbar-context">
+          <span className="toolbar-context__label">Selection</span>
+          <span className="toolbar-context__value">{selectedLabel}</span>
+        </div>
+        <div className="toolbar-context toolbar-context--compact">
+          <span className="toolbar-context__label">Scene</span>
+          <span className="toolbar-context__value">{nodeCount} nodes</span>
+        </div>
         {currentTool === "translate" ? <div className="toolbar-chip toolbar-chip--hint">Hold Shift to snap</div> : null}
       </div>
 
       <div className="secondary-toolbar__right">
+        <div className="toolbar-icon-group">
+          <ToolbarIconButton label="Select (1)" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
+            <CursorIcon />
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Move (2)" isActive={currentTool === "translate"} onClick={() => onToolChange("translate")}>
+            <MoveIcon />
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Rotate (3)" isActive={currentTool === "rotate"} onClick={() => onToolChange("rotate")}>
+            <RotateIcon />
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Scale (4)" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
+            <ScaleIcon />
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Frame Selection (F)" onClick={onFrame}>
+            <FrameIcon />
+          </ToolbarIconButton>
+        </div>
+
         <div className="toolbar-icon-group">
           <ToolbarIconButton
             label="Solid View"
@@ -90,39 +114,22 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
         </div>
 
         <div className="toolbar-icon-group">
+          <button
+            type="button"
+            className={`tool-button tool-button--label${isTimelineVisible ? " is-active" : ""}`}
+            onClick={onToggleTimeline}
+            aria-pressed={isTimelineVisible}
+          >
+            Timeline {isTimelineVisible ? "On" : "Off"}
+          </button>
+        </div>
+
+        <div className="toolbar-icon-group">
           <ToolbarIconButton label="Undo" disabled={!canUndo} onClick={onUndo}>
             <UndoIcon />
           </ToolbarIconButton>
           <ToolbarIconButton label="Redo" disabled={!canRedo} onClick={onRedo}>
             <RedoIcon />
-          </ToolbarIconButton>
-        </div>
-
-        <div className="toolbar-icon-group">
-          <button
-            type="button"
-            className={`tool-button tool-button--label${isTimelineVisible ? " is-active" : ""}`}
-            onClick={onToggleTimeline}
-          >
-            Timeline
-          </button>
-        </div>
-
-        <div className="toolbar-icon-group">
-          <ToolbarIconButton label="Select (1)" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
-            <CursorIcon />
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Move (2)" isActive={currentTool === "translate"} onClick={() => onToolChange("translate")}>
-            <MoveIcon />
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Rotate (3)" isActive={currentTool === "rotate"} onClick={() => onToolChange("rotate")}>
-            <RotateIcon />
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Scale (4)" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
-            <ScaleIcon />
-          </ToolbarIconButton>
-          <ToolbarIconButton label="Frame Selection (F)" onClick={onFrame}>
-            <FrameIcon />
           </ToolbarIconButton>
         </div>
       </div>

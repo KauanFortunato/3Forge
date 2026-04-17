@@ -376,8 +376,13 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 </div>
               </div>
             )) : (
-              <div className="panel-empty">
-                {selectedNode ? "Add channels for the selected object to start animating." : "Select an object to inspect its channels."}
+              <div className="panel-empty panel-empty--card">
+                <strong className="panel-empty__title">Channels</strong>
+                <span className="panel-empty__body">
+                  {selectedNode
+                    ? "Add channels for the selected object to start animating."
+                    : "Select an object to inspect and animate its channels."}
+                </span>
               </div>
             )}
           </div>
@@ -454,10 +459,13 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 ))}
               </div>
             )) : (
-                <div className="panel-empty animation-panel-empty-wide">
-                  {selectedNode
-                    ? "Add transform channels for the selected object and keyframe directly in the dope sheet."
-                    : "Select an object to view and edit its animation channels."}
+                <div className="panel-empty panel-empty--card animation-panel-empty-wide">
+                  <strong className="panel-empty__title">Dope Sheet</strong>
+                  <span className="panel-empty__body">
+                    {selectedNode
+                      ? "Add transform channels for the selected object and then keyframe directly in the dope sheet."
+                      : "Select an object to view and edit its animation channels."}
+                  </span>
                 </div>
               )}
             </div>
@@ -516,8 +524,9 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 </button>
               </div>
             ) : (
-              <div className="panel-empty animation-panel-empty-side">
-                Select a keyframe to edit its timing, value and ease.
+              <div className="panel-empty panel-empty--card animation-panel-empty-side">
+                <strong className="panel-empty__title">Keyframe</strong>
+                <span className="panel-empty__body">Select a keyframe to edit its timing, value and ease.</span>
               </div>
             )}
           </div>

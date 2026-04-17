@@ -71,4 +71,27 @@ describe("App", () => {
     expect(within(hierarchyPanel as HTMLElement).getAllByText("Fixture Group Copy")).toHaveLength(1);
     expect(within(hierarchyPanel as HTMLElement).getAllByText("Plane Child")).toHaveLength(2);
   });
+
+  it("keeps the footer visible and removes the timeline dock cleanly when the timeline is hidden", () => {
+    const { container } = render(<App />);
+    const appShell = container.querySelector(".app-shell");
+    const shellBody = container.querySelector(".app-shell__body");
+    const footer = container.querySelector("footer.statusbar");
+
+    expect(appShell).toBeTruthy();
+    expect(shellBody).toBeTruthy();
+    expect(footer).toBeTruthy();
+    expect(appShell?.children[2]).toBe(shellBody ?? null);
+    expect(appShell?.children[3]).toBe(footer ?? null);
+    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(screen.getByText("snapshot saved")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Timeline On" }));
+
+    expect(appShell?.children[2]).toBe(shellBody ?? null);
+    expect(appShell?.children[3]).toBe(footer ?? null);
+    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeFalsy();
+    expect(screen.getByRole("button", { name: "Timeline Off" })).toBeTruthy();
+    expect(screen.getByText("snapshot saved")).toBeTruthy();
+  });
 });

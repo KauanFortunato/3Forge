@@ -70,7 +70,12 @@ export function InspectorPanel(props: InspectorPanelProps) {
   }, [node?.id]);
 
   if (!node) {
-    return <p className="panel-empty">{emptyMessage ?? "Selecione um objeto para editar."}</p>;
+    return (
+      <div className="panel-empty panel-empty--card">
+        <strong className="panel-empty__title">Inspector</strong>
+        <span className="panel-empty__body">{emptyMessage ?? "Selecione um objeto para editar."}</span>
+      </div>
+    );
   }
 
   const groupedDefinitions = groupDefinitions(getPropertyDefinitions(node));
@@ -85,9 +90,11 @@ export function InspectorPanel(props: InspectorPanelProps) {
               type="button"
               className={`inspector-section-tab${activeSection === section.id ? " is-active" : ""}`}
               title={section.label}
+              aria-label={section.label}
               onClick={() => setActiveSection(section.id)}
             >
-              {section.icon}
+              <span className="inspector-section-tab__icon">{section.icon}</span>
+              <span className="inspector-section-tab__label">{section.label}</span>
             </button>
           ))}
         </div>
