@@ -128,10 +128,30 @@ npm install
 npm run dev
 ```
 
+### Run the TypeScript Export Runner
+
+```bash
+npm run dev:export-runner
+```
+
+Save one or more generated TypeScript exports into:
+
+```text
+playgrounds/export-runner/src/generated/*.ts
+```
+
+Then choose the file in the runner, build it, and test runtime animation methods if they exist.
+
 ### Production Build
 
 ```bash
 npm run build
+```
+
+To build the export runner separately:
+
+```bash
+npm run build:export-runner
 ```
 
 ### Preview the Production Build
