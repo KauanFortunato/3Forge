@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-export-runner
 .local-tools
 .env
 *.env
@@ -10,3 +11,5 @@ dist
 graphify-out
 skills-lock.json
 /documents
+playgrounds/export-runner/src/generated/*.ts
+!playgrounds/export-runner/src/generated/component.ts

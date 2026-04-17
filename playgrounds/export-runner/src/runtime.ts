@@ -1,0 +1,90 @@
+import type { Group } from "three";
+
+export interface ExportRunnerComponentInstance {
+  group: Group;
+  build: () => Promise<void> | void;
+  dispose: () => void;
+  play?: () => void;
+  pause?: () => void;
+  stop?: () => void;
+  seek?: (frame: number) => void;
+  createTimeline?: (clipName?: string) => unknown;
+  playClip?: (clipName: string) => void;
+}
+
+export interface ExportRunnerComponentConstructor {
+  new (options?: Record<string, unknown>): ExportRunnerComponentInstance;
+}
+
+export interface ResolvedExportedComponent {
+  exportName: string;
+  constructor: ExportRunnerComponentConstructor;
+}
+
+export interface GeneratedModuleEntry {
+  fileName: string;
+  modulePath: string;
+  importModule: () => Promise<Record<string, unknown>>;
+}
+
+export interface RunnerAnimationCapabilities {
+  canPlay: boolean;
+  canPause: boolean;
+  canStop: boolean;
+  canSeek: boolean;
+  canCreateTimeline: boolean;
+  canPlayClip: boolean;
+}
+
+export function discoverGeneratedModules(
+  moduleImporters: Record<string, () => Promise<Record<string, unknown>>>,
+): GeneratedModuleEntry[] {
+  return Object.entries(moduleImporters)
+    .filter(([modulePath]) => !modulePath.endsWith(".test.ts") && !modulePath.endsWith(".d.ts"))
+    .map(([modulePath, importModule]) => ({
+      fileName: toDisplayFileName(modulePath),
+      modulePath,
+      importModule,
+    }))
+    .sort((left, right) => left.fileName.localeCompare(right.fileName));
+}
+
+export function resolveExportedComponent(moduleRecord: Record<string, unknown>): ResolvedExportedComponent | null {
+  for (const [exportName, candidate] of Object.entries(moduleRecord)) {
+    if (!isExportRunnerConstructor(candidate)) {
+      continue;
+    }
+
+    return {
+      exportName,
+      constructor: candidate,
+    };
+  }
+
+  return null;
+}
+
+export function getAnimationCapabilities(instance: ExportRunnerComponentInstance | null): RunnerAnimationCapabilities {
+  return {
+    canPlay: typeof instance?.play === "function",
+    canPause: typeof instance?.pause === "function",
+    canStop: typeof instance?.stop === "function",
+    canSeek: typeof instance?.seek === "function",
+    canCreateTimeline: typeof instance?.createTimeline === "function",
+    canPlayClip: typeof instance?.playClip === "function",
+  };
+}
+
+function isExportRunnerConstructor(candidate: unknown): candidate is ExportRunnerComponentConstructor {
+  if (typeof candidate !== "function") {
+    return false;
+  }
+
+  const prototype = candidate.prototype as Partial<ExportRunnerComponentInstance> | undefined;
+  return typeof prototype?.build === "function" && typeof prototype?.dispose === "function";
+}
+
+function toDisplayFileName(modulePath: string): string {
+  const normalizedPath = modulePath.replace(/^\.\/generated\//, "");
+  return normalizedPath.replace(/\.ts$/, "");
+}
