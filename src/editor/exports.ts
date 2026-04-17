@@ -39,6 +39,7 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   const importNames = collectImports(nodes, bindings);
   const childrenByParent = buildChildrenMap(nodes);
   const variableNames = createVariableNames(nodes);
+  const groupContentVariableNames = createGroupContentVariableNames(nodes, variableNames);
   const fonts = collectFonts(blueprint, nodes);
   const images = collectImages(nodes);
   const fontVariables = new Map(fonts.map((font) => [font.font.id, font.fontVariableName]));
@@ -155,6 +156,11 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   lines.push("");
   lines.push("    const root = this.group;");
   lines.push(`    root.name = ${JSON.stringify(componentName)};`);
+  if (rootNode?.type === "group") {
+    lines.push("    const rootContent = new Group();");
+    lines.push(`    rootContent.position.set(${rootNode.pivotOffset.x}, ${rootNode.pivotOffset.y}, ${rootNode.pivotOffset.z});`);
+    lines.push("    root.add(rootContent);");
+  }
   if (hasAnimations) {
     lines.push("    this.nodeRefs.clear();");
     lines.push(`    this.nodeRefs.set(${JSON.stringify(ROOT_NODE_ID)}, root);`);
@@ -182,7 +188,7 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
     lines.push(`    root.scale.set(${propertyExpression(rootNode, "transform.scale.x", "this.options")}, ${propertyExpression(rootNode, "transform.scale.y", "this.options")}, ${propertyExpression(rootNode, "transform.scale.z", "this.options")});`);
   }
 
-  emitNode(rootNode, lines, childrenByParent, variableNames, fontVariables, imageVariables, "this.options", hasAnimations, true);
+  emitNode(rootNode, lines, childrenByParent, variableNames, groupContentVariableNames, fontVariables, imageVariables, "this.options", hasAnimations, true);
 
   lines.push("  }");
   lines.push("");
@@ -386,6 +392,7 @@ function emitNode(
   lines: string[],
   childrenByParent: Map<string | null, EditorNode[]>,
   variableNames: Map<string, string>,
+  groupContentVariableNames: Map<string, string>,
   fontVariables: Map<string, string>,
   imageVariables: Map<string, string>,
   bindingAccessor: string,
@@ -402,7 +409,9 @@ function emitNode(
   }
 
   if (node.id !== ROOT_NODE_ID) {
-    const parentVariable = variableNames.get(node.parentId ?? ROOT_NODE_ID) ?? "root";
+    const parentVariable = groupContentVariableNames.get(node.parentId ?? ROOT_NODE_ID)
+      ?? variableNames.get(node.parentId ?? ROOT_NODE_ID)
+      ?? "root";
     lines.push(`    ${parentVariable}.add(${variableName});`);
   }
 
@@ -411,7 +420,7 @@ function emitNode(
   }
 
   for (const child of childrenByParent.get(node.id) ?? []) {
-    emitNode(child, lines, childrenByParent, variableNames, fontVariables, imageVariables, bindingAccessor, captureNodeRefs);
+    emitNode(child, lines, childrenByParent, variableNames, groupContentVariableNames, fontVariables, imageVariables, bindingAccessor, captureNodeRefs);
   }
 }
 
@@ -426,6 +435,9 @@ function emitCreationLines(
 
   if (node.type === "group") {
     lines.push(`const ${variableName} = new Group();`);
+    lines.push(`const ${variableName}Content = new Group();`);
+    lines.push(`${variableName}Content.position.set(${node.pivotOffset.x}, ${node.pivotOffset.y}, ${node.pivotOffset.z});`);
+    lines.push(`${variableName}.add(${variableName}Content);`);
   } else {
     const geometryVariable = `${variableName}Geometry`;
     const materialVariable = `${variableName}Material`;
@@ -492,6 +504,21 @@ function emitCreationLines(
   lines.push(`${variableName}.scale.set(${propertyExpression(node, "transform.scale.x", bindingAccessor)}, ${propertyExpression(node, "transform.scale.y", bindingAccessor)}, ${propertyExpression(node, "transform.scale.z", bindingAccessor)});`);
 
   return lines;
+}
+
+function createGroupContentVariableNames(nodes: EditorNode[], variableNames: Map<string, string>): Map<string, string> {
+  const names = new Map<string, string>();
+  names.set(ROOT_NODE_ID, "rootContent");
+
+  for (const node of nodes) {
+    if (node.type !== "group" || node.id === ROOT_NODE_ID) {
+      continue;
+    }
+
+    names.set(node.id, `${variableNames.get(node.id) ?? toCamelCase(node.name)}Content`);
+  }
+
+  return names;
 }
 
 function emitMaterialCreationLines(

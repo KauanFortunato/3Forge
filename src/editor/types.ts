@@ -7,6 +7,14 @@ export type MaterialType = "basic" | "standard";
 export type NodeOriginHorizontal = "left" | "center" | "right";
 export type NodeOriginVertical = "top" | "center" | "bottom";
 export type NodeOriginDepth = "front" | "center" | "back";
+export type GroupPivotPreset =
+  | "center"
+  | "bottom-center"
+  | "top-center"
+  | "left-center"
+  | "right-center"
+  | "front-center"
+  | "back-center";
 export type AnimationPropertyPath =
   | "transform.position.x"
   | "transform.position.y"
@@ -114,6 +122,7 @@ export interface BaseEditorNode {
 
 export interface GroupNode extends BaseEditorNode {
   type: "group";
+  pivotOffset: Vec3Like;
 }
 
 export interface BoxNode extends BaseEditorNode {

@@ -64,6 +64,7 @@ export class SceneEditor {
   private readonly pointer = new Vector2();
   private readonly viewportRoot = new Group();
   private readonly objectMap = new Map<string, Object3D>();
+  private readonly childContainerMap = new Map<string, Object3D>();
   private readonly selectionBounds = new Box3();
   private readonly selectionSize = new Vector3();
   private readonly selectionCenter = new Vector3();
@@ -577,6 +578,7 @@ export class SceneEditor {
   private rebuildScene(): void {
     this.clearViewportRoot();
     this.objectMap.clear();
+    this.childContainerMap.clear();
 
     for (const node of this.store.blueprint.nodes) {
       const object = this.createObject(node);
@@ -588,7 +590,8 @@ export class SceneEditor {
       if (!object) continue;
 
       if (node.parentId && this.objectMap.has(node.parentId)) {
-        this.objectMap.get(node.parentId)?.add(object);
+        const parentContainer = this.childContainerMap.get(node.parentId) ?? this.objectMap.get(node.parentId);
+        parentContainer?.add(object);
       } else {
         this.viewportRoot.add(object);
       }
@@ -601,7 +604,7 @@ export class SceneEditor {
 
   private createObject(node: EditorNode): Object3D {
     const object = node.type === "group"
-      ? new Group()
+      ? this.buildGroupObject(node)
       : this.buildWrappedNodeObject(node);
     object.name = node.name;
     object.visible = node.visible;
@@ -611,6 +614,15 @@ export class SceneEditor {
     object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
     object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
     return object;
+  }
+
+  private buildGroupObject(node: Extract<EditorNode, { type: "group" }>): Object3D {
+    const wrapper = new Group();
+    const content = new Group();
+    content.position.set(node.pivotOffset.x, node.pivotOffset.y, node.pivotOffset.z);
+    wrapper.add(content);
+    this.childContainerMap.set(node.id, content);
+    return wrapper;
   }
 
   private buildWrappedNodeObject(node: Exclude<EditorNode, { type: "group" }>): Object3D {

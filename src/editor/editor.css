@@ -916,6 +916,13 @@ button {
   gap: 8px;
 }
 
+.inspector-inline-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
 .inspector-origin-field {
   display: grid;
   gap: 4px;
@@ -927,6 +934,13 @@ button {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+
+.field-block__hint {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text-soft);
 }
 
 /* Remove spin buttons from number inputs */

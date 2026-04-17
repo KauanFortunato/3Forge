@@ -108,16 +108,6 @@ export function FrameIcon(props: IconProps) {
   );
 }
 
-export function AlignCenterIcon(props: IconProps) {
-  return (
-    <BaseIcon {...props}>
-      <circle cx="10" cy="10" r="2.4" />
-      <path d="M10 2.8v3.4M10 13.8v3.4M2.8 10h3.4M13.8 10h3.4" />
-      <rect x="4.6" y="4.6" width="10.8" height="10.8" rx="1.6" opacity="0.35" />
-    </BaseIcon>
-  );
-}
-
 export function ChevronRightIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>

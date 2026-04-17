@@ -16,6 +16,7 @@ import {
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset } from "./fonts";
 import { createTransparentImageAsset, fitImageToMaxSize } from "./images";
 import { createMaterialSpec, getMaterialPropertyDefinitions, normalizeMaterialSpec } from "./materials";
+import { computeGroupContentBounds, getBoundsOriginOffset, transformOffsetByTransform } from "./spatial";
 import type {
   AnimationClip,
   AnimationEasePreset,
@@ -32,6 +33,7 @@ import type {
   EditorStoreChange,
   FontAsset,
   GroupNode,
+  GroupPivotPreset,
   ImageAsset,
   ImageNode,
   MaterialSpec,
@@ -118,6 +120,16 @@ const DEFAULT_NODE_NAMES: Record<EditorNodeType, string> = {
   text: "Text",
 };
 
+const GROUP_PIVOT_PRESET_ORIGINS: Record<GroupPivotPreset, NodeOriginSpec> = {
+  center: { x: "center", y: "center", z: "center" },
+  "bottom-center": { x: "center", y: "bottom", z: "center" },
+  "top-center": { x: "center", y: "top", z: "center" },
+  "left-center": { x: "left", y: "center", z: "center" },
+  "right-center": { x: "right", y: "center", z: "center" },
+  "front-center": { x: "center", y: "center", z: "front" },
+  "back-center": { x: "center", y: "center", z: "back" },
+};
+
 export function createDefaultBlueprint(): ComponentBlueprint {
   const root = createNode("group", null, ROOT_NODE_ID);
   root.name = "Component Root";
@@ -173,6 +185,14 @@ function createNodeOrigin(): NodeOriginSpec {
   };
 }
 
+function createPivotOffset(): Vec3Like {
+  return {
+    x: 0,
+    y: 0,
+    z: 0,
+  };
+}
+
 function createMaterial(color = "#5ad3ff"): MaterialSpec {
   return createMaterialSpec(color);
 }
@@ -200,6 +220,7 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
       return {
         ...base,
         type: "group",
+        pivotOffset: createPivotOffset(),
       } as EditorNodeOfType<T>;
     case "box":
       return {
@@ -692,6 +713,9 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
   node.visible = typeof source.visible === "boolean" ? source.visible : true;
   node.transform = normalizeTransform(source.transform, node.transform);
   node.origin = normalizeNodeOrigin(source.origin, node.origin);
+  if (node.type === "group") {
+    node.pivotOffset = normalizeVec3(source.pivotOffset, node.pivotOffset);
+  }
 
   if ("material" in node) {
     node.material = normalizeMaterial(source.material, node.material);
@@ -1772,25 +1796,35 @@ export class EditorStore extends EventTarget {
     this.notify({ reason: "node", source, nodeId });
   }
 
-  alignNodeToParentCenter(nodeId: string, source: EditorStoreChange["source"] = "ui"): boolean {
+  setGroupPivotFromPreset(
+    nodeId: string,
+    preset: GroupPivotPreset,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
     const node = this.getNode(nodeId);
-    if (!node || node.id === ROOT_NODE_ID || node.type === "group") {
+    if (!node || node.type !== "group") {
       return false;
     }
 
-    const centerOffset = getTransformedNodeOriginOffset(node, node.origin, this);
-    const nextPosition = {
-      x: -centerOffset.x,
-      y: -centerOffset.y,
-      z: -centerOffset.z,
-    };
+    const contentBounds = computeGroupContentBounds(node.id, this);
+    const nextOffset = contentBounds
+      ? getBoundsOriginOffset(contentBounds, GROUP_PIVOT_PRESET_ORIGINS[preset])
+      : createPivotOffset();
+    const positionDelta = transformOffsetByTransform({
+      x: node.pivotOffset.x - nextOffset.x,
+      y: node.pivotOffset.y - nextOffset.y,
+      z: node.pivotOffset.z - nextOffset.z,
+    }, node.transform);
 
-    if (isVec3Equal(node.transform.position, nextPosition)) {
+    if (isVec3Equal(node.pivotOffset, nextOffset) && isVec3Equal(positionDelta, createPivotOffset())) {
       return false;
     }
 
     this.recordHistorySnapshot();
-    node.transform.position = nextPosition;
+    node.transform.position.x += positionDelta.x;
+    node.transform.position.y += positionDelta.y;
+    node.transform.position.z += positionDelta.z;
+    node.pivotOffset = nextOffset;
     this.notify({ reason: "node", source, nodeId });
     return true;
   }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
-import type { EditorNode, FontAsset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
+import type { EditorNode, FontAsset, GroupPivotPreset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
 import {
   CircleFilledIcon,
   CircleIcon,
@@ -23,6 +23,7 @@ interface InspectorPanelProps {
   onNodeNameChange: (nodeId: string, value: string) => void;
   onParentChange: (nodeId: string, parentId: string) => void;
   onNodeOriginChange: (nodeId: string, origin: Partial<NodeOriginSpec>) => void;
+  onGroupPivotPresetApply: (nodeId: string, preset: GroupPivotPreset) => void;
   getEligibleParents: (nodeId: string) => EditorNode[];
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
@@ -45,6 +46,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
     onNodeNameChange,
     onParentChange,
     onNodeOriginChange,
+    onGroupPivotPresetApply,
     getEligibleParents,
     onNodePropertyChange,
     onToggleEditable,
@@ -55,12 +57,17 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
   const sections = useMemo(() => getSectionsForNode(node), [node]);
   const [activeSection, setActiveSection] = useState<InspectorSectionId>("object");
+  const [groupPivotPreset, setGroupPivotPreset] = useState<GroupPivotPreset>("center");
 
   useEffect(() => {
     if (!sections.some((section) => section.id === activeSection)) {
       setActiveSection(sections[0]?.id ?? "object");
     }
   }, [activeSection, sections]);
+
+  useEffect(() => {
+    setGroupPivotPreset("center");
+  }, [node?.id]);
 
   if (!node) {
     return <p className="panel-empty">{emptyMessage ?? "Selecione um objeto para editar."}</p>;
@@ -124,7 +131,38 @@ export function InspectorPanel(props: InspectorPanelProps) {
                   </select>
                 </label>
 
-                {node.type !== "group" ? (
+                {node.type === "group" ? (
+                  <div className="field-block field-block--wide">
+                    <span className="field-block__label">Pivot From Content</span>
+                    <div className="inspector-inline-actions">
+                      <select
+                        aria-label="Group pivot preset"
+                        className="editor-select"
+                        value={groupPivotPreset}
+                        onChange={(event) => setGroupPivotPreset(event.target.value as GroupPivotPreset)}
+                      >
+                        <option value="center">Center</option>
+                        <option value="bottom-center">Bottom Center</option>
+                        <option value="top-center">Top Center</option>
+                        <option value="left-center">Left Center</option>
+                        <option value="right-center">Right Center</option>
+                        <option value="front-center">Front Center</option>
+                        <option value="back-center">Back Center</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        className="tool-button"
+                        onClick={() => onGroupPivotPresetApply(node.id, groupPivotPreset)}
+                      >
+                        Apply Pivot
+                      </button>
+                    </div>
+                    <p className="field-block__hint">
+                      Computes the group pivot from current content bounds and keeps the visible layout unchanged.
+                    </p>
+                  </div>
+                ) : (
                   <div className="field-block field-block--wide">
                     <span className="field-block__label">Origin</span>
                     <div className="inspector-origin-grid">
@@ -168,7 +206,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
                       </label>
                     </div>
                   </div>
-                ) : null}
+                )}
               </div>
             </section>
           ) : null}

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultFontAsset, getFontData } from "./fonts";
 import { createTransparentImageAsset } from "./images";
 import { exportBlueprintToJson } from "./exports";
+import { computeGroupContentBounds, computeNodeWorldBounds, computeNodeWorldPosition } from "./spatial";
 import {
   createDefaultBlueprint,
   EditorStore,
@@ -261,31 +262,119 @@ describe("EditorStore", () => {
     });
   });
 
-  it("aligns a renderable node to the center of its parent group", () => {
+  it("repositions a group pivot to content center without changing world layout", () => {
     const store = new EditorStore(createDefaultBlueprint());
-    const planeId = store.insertNode("plane", ROOT_NODE_ID);
+    const groupId = store.insertNode("group", ROOT_NODE_ID);
+    const planeId = store.insertNode("plane", groupId);
+    const boxId = store.insertNode("box", groupId);
+    const group = store.getNode(groupId);
     const plane = store.getNode(planeId);
+    const box = store.getNode(boxId);
 
+    expect(group?.type).toBe("group");
     expect(plane?.type).toBe("plane");
-    if (!plane || plane.type !== "plane") {
-      throw new Error("Expected plane node.");
+    expect(box?.type).toBe("box");
+    if (!group || group.type !== "group" || !plane || plane.type !== "plane" || !box || box.type !== "box") {
+      throw new Error("Expected test nodes.");
     }
 
-    plane.origin = { x: "left", y: "top", z: "front" };
     plane.geometry.width = 2;
     plane.geometry.height = 4;
-    plane.transform.position = { x: 7, y: -3, z: 2 };
+    plane.transform.position = { x: 2, y: 4, z: 0 };
+    box.geometry.width = 2;
+    box.geometry.height = 2;
+    box.geometry.depth = 2;
+    box.transform.position = { x: -1, y: 1, z: 3 };
 
-    expect(store.alignNodeToParentCenter(plane.id)).toBe(true);
-    expect(plane.transform.position.x).toBeCloseTo(-1);
-    expect(plane.transform.position.y).toBeCloseTo(2);
-    expect(plane.transform.position.z).toBeCloseTo(0);
-    expect(store.alignNodeToParentCenter(ROOT_NODE_ID)).toBe(false);
+    const beforePlaneWorld = computeNodeWorldPosition(planeId, store);
+    const beforeBoxWorld = computeNodeWorldPosition(boxId, store);
+    const beforeGroupWorldBounds = computeNodeWorldBounds(groupId, store);
+
+    expect(store.setGroupPivotFromPreset(groupId, "center")).toBe(true);
+
+    expect(group.pivotOffset.x).toBeCloseTo(-0.5);
+    expect(group.pivotOffset.y).toBeCloseTo(-3);
+    expect(group.pivotOffset.z).toBeCloseTo(-2);
+    expect(computeNodeWorldPosition(planeId, store)).toEqual(beforePlaneWorld);
+    expect(computeNodeWorldPosition(boxId, store)).toEqual(beforeBoxWorld);
+    expect(computeNodeWorldBounds(groupId, store)).toEqual(beforeGroupWorldBounds);
   });
 
-  it("aligns a rotated and scaled node using its rendered center", () => {
+  it("computes bottom-center pivot from current group content bounds", () => {
     const store = new EditorStore(createDefaultBlueprint());
-    const planeId = store.insertNode("plane", ROOT_NODE_ID);
+    const groupId = store.insertNode("group", ROOT_NODE_ID);
+    const planeId = store.insertNode("plane", groupId);
+    const group = store.getNode(groupId);
+    const plane = store.getNode(planeId);
+
+    expect(group?.type).toBe("group");
+    expect(plane?.type).toBe("plane");
+    if (!group || group.type !== "group" || !plane || plane.type !== "plane") {
+      throw new Error("Expected group hierarchy.");
+    }
+
+    plane.geometry.width = 2;
+    plane.geometry.height = 4;
+    plane.transform.position = { x: 2, y: 4, z: 0 };
+
+    const contentBounds = computeGroupContentBounds(groupId, store);
+    expect(contentBounds).toEqual({
+      min: { x: 1, y: 2, z: 0 },
+      max: { x: 3, y: 6, z: 0 },
+    });
+
+    expect(store.setGroupPivotFromPreset(groupId, "bottom-center")).toBe(true);
+    expect(group.pivotOffset.x).toBeCloseTo(-2);
+    expect(group.pivotOffset.y).toBeCloseTo(-2);
+    expect(group.pivotOffset.z).toBeCloseTo(0);
+  });
+
+  it("preserves nested group world positions when recalculating a child group pivot", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const parentGroupId = store.insertNode("group", ROOT_NODE_ID);
+    const childGroupId = store.insertNode("group", parentGroupId);
+    const planeId = store.insertNode("plane", childGroupId);
+    const parentGroup = store.getNode(parentGroupId);
+    const childGroup = store.getNode(childGroupId);
+    const plane = store.getNode(planeId);
+
+    expect(parentGroup?.type).toBe("group");
+    expect(childGroup?.type).toBe("group");
+    expect(plane?.type).toBe("plane");
+    if (!parentGroup || parentGroup.type !== "group" || !childGroup || childGroup.type !== "group" || !plane || plane.type !== "plane") {
+      throw new Error("Expected nested group hierarchy.");
+    }
+
+    parentGroup.transform.position = { x: 5, y: -2, z: 1 };
+    parentGroup.transform.rotation.z = Math.PI / 4;
+    childGroup.transform.position = { x: 1, y: 3, z: -2 };
+    childGroup.transform.rotation.y = Math.PI / 6;
+    plane.geometry.width = 2;
+    plane.geometry.height = 2;
+    plane.transform.position = { x: 4, y: -1, z: 2 };
+
+    const beforePlaneWorld = computeNodeWorldPosition(planeId, store);
+    const beforeChildBounds = computeNodeWorldBounds(childGroupId, store);
+
+    expect(store.setGroupPivotFromPreset(childGroupId, "center")).toBe(true);
+    const afterPlaneWorld = computeNodeWorldPosition(planeId, store);
+    const afterChildBounds = computeNodeWorldBounds(childGroupId, store);
+
+    expect(afterPlaneWorld?.x).toBeCloseTo(beforePlaneWorld?.x ?? 0);
+    expect(afterPlaneWorld?.y).toBeCloseTo(beforePlaneWorld?.y ?? 0);
+    expect(afterPlaneWorld?.z).toBeCloseTo(beforePlaneWorld?.z ?? 0);
+    expect(afterChildBounds?.min.x).toBeCloseTo(beforeChildBounds?.min.x ?? 0);
+    expect(afterChildBounds?.min.y).toBeCloseTo(beforeChildBounds?.min.y ?? 0);
+    expect(afterChildBounds?.min.z).toBeCloseTo(beforeChildBounds?.min.z ?? 0);
+    expect(afterChildBounds?.max.x).toBeCloseTo(beforeChildBounds?.max.x ?? 0);
+    expect(afterChildBounds?.max.y).toBeCloseTo(beforeChildBounds?.max.y ?? 0);
+    expect(afterChildBounds?.max.z).toBeCloseTo(beforeChildBounds?.max.z ?? 0);
+  });
+
+  it("keeps serialization stable for groups with persisted pivot offsets", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const groupId = store.insertNode("group", ROOT_NODE_ID);
+    const planeId = store.insertNode("plane", groupId);
     const plane = store.getNode(planeId);
 
     expect(plane?.type).toBe("plane");
@@ -293,15 +382,35 @@ describe("EditorStore", () => {
       throw new Error("Expected plane node.");
     }
 
-    plane.origin = { x: "left", y: "top", z: "front" };
-    plane.geometry.width = 2;
-    plane.geometry.height = 4;
-    plane.transform.rotation.z = Math.PI * 0.5;
-    plane.transform.scale = { x: 2, y: 0.5, z: 1 };
+    plane.transform.position = { x: 3, y: -2, z: 1 };
+    expect(store.setGroupPivotFromPreset(groupId, "center")).toBe(true);
 
-    expect(store.alignNodeToParentCenter(plane.id)).toBe(true);
-    expect(plane.transform.position.x).toBeCloseTo(-1);
-    expect(plane.transform.position.y).toBeCloseTo(-2);
-    expect(plane.transform.position.z).toBeCloseTo(0);
+    const json = exportBlueprintToJson(store.getSnapshot());
+    const reloaded = new EditorStore(JSON.parse(json));
+    const reloadedGroup = reloaded.getNode(groupId);
+    const originalGroup = store.getNode(groupId);
+
+    expect(reloadedGroup?.type).toBe("group");
+    expect(originalGroup?.type).toBe("group");
+    if (!reloadedGroup || reloadedGroup.type !== "group" || !originalGroup || originalGroup.type !== "group") {
+      throw new Error("Expected reloaded group.");
+    }
+
+    expect(reloadedGroup.pivotOffset).toEqual(originalGroup.pivotOffset);
+  });
+
+  it("treats empty groups safely when applying a pivot preset", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const groupId = store.insertNode("group", ROOT_NODE_ID);
+    const group = store.getNode(groupId);
+
+    expect(group?.type).toBe("group");
+    if (!group || group.type !== "group") {
+      throw new Error("Expected group node.");
+    }
+
+    expect(store.setGroupPivotFromPreset(groupId, "center")).toBe(false);
+    expect(group.pivotOffset).toEqual({ x: 0, y: 0, z: 0 });
+    expect(group.transform.position).toEqual({ x: 0, y: 0, z: 0 });
   });
 });

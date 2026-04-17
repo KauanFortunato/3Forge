@@ -16,6 +16,7 @@ function createCommonProps() {
     onNodeNameChange: vi.fn(),
     onParentChange: vi.fn(),
     onNodeOriginChange: vi.fn(),
+    onGroupPivotPresetApply: vi.fn(),
     getEligibleParents: vi.fn(() => [rootGroup, wrapperGroup]),
     onNodePropertyChange: vi.fn(),
     onToggleEditable: vi.fn(),
@@ -97,5 +98,24 @@ describe("InspectorPanel", () => {
 
     expect(props.onTextFontChange).toHaveBeenCalledWith("text-1", "fixture-font");
     expect(props.onImportFont).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a group pivot preset from current content", async () => {
+    const user = userEvent.setup();
+    const node = createNode("group", ROOT_NODE_ID, "group-1");
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Group pivot preset" }), "bottom-center");
+    await user.click(screen.getByRole("button", { name: "Apply Pivot" }));
+
+    expect(props.onGroupPivotPresetApply).toHaveBeenCalledWith("group-1", "bottom-center");
   });
 });
