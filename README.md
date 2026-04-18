@@ -1,3 +1,28 @@
+<div align="center">
+
+<img src="./documents/logo_with_name.png" width="320" />
+
+<br/>
+
+<br/>
+
+<img src="https://img.shields.io/badge/Three.js-black?logo=three.js" />
+<img src="https://img.shields.io/badge/React-19-blue?logo=react" />
+<img src="https://img.shields.io/badge/TypeScript-blue?logo=typescript" />
+<img src="https://img.shields.io/badge/GSAP-green" />
+
+</div>
+<br/>
+<br/>
+
+<p align="center">
+  <img src="./documents/demo.gif" width="900" />
+</p>
+
+<p align="center">
+  <i>Visual scene editing, timeline animation, and TypeScript export</i>
+</p>
+
 # 3Forge
 
 3Forge is a desktop-first 3D authoring editor built with `Three.js`, `React`, and `TypeScript`.
