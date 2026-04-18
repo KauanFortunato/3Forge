@@ -14,7 +14,7 @@ export const pwaManifest = {
   display: "standalone",
   scope: "/",
   start_url: "/",
-  lang: "pt",
+  lang: "en",
   icons: [
     {
       src: "/assets/android/icons/android-icon-192.png",
