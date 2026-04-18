@@ -84,3 +84,4 @@ Cada entrada deve indicar:
   Resumo: o editor passou a gerar `manifest.webmanifest`, `service worker` para app shell e meta tags mobile/iOS para instalacao, sem assumir offline completo nesta fase.
   Arquivos principais: `vite.config.mjs`, `scripts/pwa-config.mjs`, `src/editor/pwa.ts`, `src/editor/main.tsx`, `index.html`
   Testes: `src/editor/pwa.test.ts`, `src/editor/pwa-config.test.ts`
+- Reestruturado o fluxo de entrada, persistência local, recentes, Save/Save As, Exit e tratamento de clipboard permission no 3Forge.
