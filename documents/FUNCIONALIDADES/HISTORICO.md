@@ -79,3 +79,8 @@ Cada entrada deve indicar:
   Resumo: os componentes exportados passaram a expor `restart()`, `reverse()` e `getClipNames()`, com `seek()` e `createTimeline()` reaproveitando timelines por clip em vez de reconstruir a estrutura a cada chamada.
   Arquivos principais: `src/editor/exports.ts`, `playgrounds/export-runner/src/runtime.ts`, `playgrounds/export-runner/src/ExportRunnerApp.tsx`
   Testes: `src/editor/exports.runtime.test.ts`, `playgrounds/export-runner/src/runtime.test.ts`
+
+- `adicionado`: Base de PWA
+  Resumo: o editor passou a gerar `manifest.webmanifest`, `service worker` para app shell e meta tags mobile/iOS para instalacao, sem assumir offline completo nesta fase.
+  Arquivos principais: `vite.config.mjs`, `scripts/pwa-config.mjs`, `src/editor/pwa.ts`, `src/editor/main.tsx`, `index.html`
+  Testes: `src/editor/pwa.test.ts`, `src/editor/pwa-config.test.ts`
