@@ -1,17 +1,44 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
+import {
+  BrowserFileSystemFileHandle,
+  getBlueprintFileName,
+  openBlueprintWithPicker,
+  readBlueprintFromFile,
+  saveBlueprintAs,
+  saveBlueprintToExistingHandle,
+  supportsFileSystemAccess,
+} from "../fileAccess";
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
+import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
+import { writeTextToClipboard } from "../clipboard";
 import {
   createDefaultBlueprint,
-  EDITOR_AUTOSAVE_KEY,
   EditorStore,
   ROOT_NODE_ID,
   getPropertyDefinitions,
 } from "../state";
 import type { AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset } from "../types";
+import type { ComponentBlueprint } from "../types";
+import {
+  buildRecentProjectLabel,
+  clearWorkspaceSessionActive,
+  createRecentProjectEntry,
+  createRecentProjectId,
+  createWorkspaceFromBootState,
+  createWorkspaceProjectContext,
+  markWorkspaceSessionActive,
+  persistRecentSnapshot,
+  persistWorkspace,
+  readRecentSnapshot,
+  readWorkspaceBootState,
+  removeRecentProject,
+  upsertRecentProject,
+} from "../workspace";
+import type { PersistedWorkspaceRecord, RecentProjectEntry, WorkspaceProjectContext } from "../workspace";
 import type { ContextMenuState, ExportMode, MenuAction, RightPanelTab, ToolMode, TreeDropTarget } from "./ui-types";
 import { useEditorStoreSnapshot } from "./hooks/useEditorStoreSnapshot";
 import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
@@ -59,27 +86,12 @@ interface InsertTarget {
   index?: number;
 }
 
-interface AutosaveBootState {
-  autosaveEnabled: boolean;
-  hasAutosave: boolean;
-  initialBlueprint: unknown;
-}
-
-const AUTOSAVE_ENABLED_KEY = "3forge-autosave-enabled";
 const RIGHT_PANEL_WIDTH_KEY = "3forge-right-panel-width";
 const TIMELINE_HEIGHT_KEY = "3forge-timeline-height";
 const TIMELINE_VISIBLE_KEY = "3forge-timeline-visible";
 
 function canUseLocalStorage(): boolean {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
-}
-
-function readAutosaveEnabledPreference(): boolean {
-  if (!canUseLocalStorage()) {
-    return true;
-  }
-
-  return window.localStorage.getItem(AUTOSAVE_ENABLED_KEY) !== "false";
 }
 
 function readStoredNumberPreference(key: string, fallback: number): number {
@@ -109,36 +121,62 @@ function readStoredBooleanPreference(key: string, fallback: boolean): boolean {
   return raw === "true";
 }
 
-function readStoredAutosaveBlueprint(): unknown | null {
-  if (!canUseLocalStorage()) {
-    return null;
-  }
+function downloadTextFile(content: string, fileName: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 
-  const raw = window.localStorage.getItem(EDITOR_AUTOSAVE_KEY);
-  if (!raw) {
-    return null;
-  }
-
+function formatRecentProjectTime(timestamp: number): string {
   try {
-    return JSON.parse(raw);
+    return new Date(timestamp).toLocaleString();
   } catch {
-    window.localStorage.removeItem(EDITOR_AUTOSAVE_KEY);
-    return null;
+    return "Recently updated";
   }
 }
 
-function getAutosaveBootState(): AutosaveBootState {
-  const autosaveEnabled = readAutosaveEnabledPreference();
-  const storedBlueprint = readStoredAutosaveBlueprint();
+function getProjectSourceLabel(source: WorkspaceProjectContext["source"], canOverwriteFile: boolean): string {
+  if (source === "file-handle" && canOverwriteFile) {
+    return "Linked file";
+  }
 
-  return {
-    autosaveEnabled,
-    hasAutosave: storedBlueprint !== null,
-    initialBlueprint: autosaveEnabled ? (storedBlueprint ?? createDefaultBlueprint()) : createDefaultBlueprint(),
-  };
+  if (source === "imported-file") {
+    return "Imported copy";
+  }
+
+  return "Local workspace";
 }
 
-function LandingPage({ onStartNew, onLoadProject }: { onStartNew: () => void; onLoadProject: () => void }) {
+interface LandingPageProps {
+  persistedWorkspace: PersistedWorkspaceRecord | null;
+  recentProjects: RecentProjectEntry[];
+  onContinue: () => void;
+  onStartNew: () => void;
+  onOpenFile: () => void;
+  onOpenRecent: (recentProjectId: string) => void;
+  onRemoveRecent: (recentProjectId: string) => void;
+}
+
+function LandingPage({
+  persistedWorkspace,
+  recentProjects,
+  onContinue,
+  onStartNew,
+  onOpenFile,
+  onOpenRecent,
+  onRemoveRecent,
+}: LandingPageProps) {
+  const localProjectLabel = persistedWorkspace?.context.fileName
+    ?? persistedWorkspace?.blueprint.componentName
+    ?? "Last session";
+  const localProjectSourceLabel = persistedWorkspace
+    ? getProjectSourceLabel(persistedWorkspace.context.source, persistedWorkspace.context.canOverwriteFile)
+    : null;
+
   return (
     <div className="landing-page">
       <div className="landing-page__content">
@@ -150,26 +188,87 @@ function LandingPage({ onStartNew, onLoadProject }: { onStartNew: () => void; on
           Design, prototype, and export high-performance 3D components for your applications.
         </p>
 
-        <div className="landing-page__actions">
-          <button type="button" className="landing-btn landing-btn--primary" onClick={onStartNew}>
-            <PlusIcon width={20} height={20} />
-            <div className="landing-btn__text">
-              <span className="landing-btn__label">New Project</span>
-              <span className="landing-btn__desc">Start from a clean slate</span>
+        <div className="landing-page__grid">
+          <section className="landing-page__panel landing-page__panel--primary">
+            <div className="landing-page__panel-header">
+              <p className="landing-page__eyebrow">Workspace</p>
+              <h2 className="landing-page__panel-title">Start from a local project or a file.</h2>
             </div>
-          </button>
 
-          <button type="button" className="landing-btn landing-btn--secondary" onClick={onLoadProject}>
-            <DownloadIcon width={20} height={20} />
-            <div className="landing-btn__text">
-              <span className="landing-btn__label">Load Project</span>
-              <span className="landing-btn__desc">Import a .json blueprint</span>
+            <div className="landing-page__actions">
+              {persistedWorkspace ? (
+                <button type="button" className="landing-btn landing-btn--primary" onClick={onContinue}>
+                  <FrameIcon width={20} height={20} />
+                  <div className="landing-btn__text">
+                    <span className="landing-btn__label">Continue where you left off</span>
+                    <span className="landing-btn__desc">{`${localProjectSourceLabel} · ${localProjectLabel}`}</span>
+                  </div>
+                </button>
+              ) : null}
+
+              <button type="button" className="landing-btn landing-btn--secondary" onClick={onOpenFile}>
+                <DownloadIcon width={20} height={20} />
+                <div className="landing-btn__text">
+                  <span className="landing-btn__label">Open file</span>
+                  <span className="landing-btn__desc">Load a blueprint from your machine</span>
+                </div>
+              </button>
+
+              <button type="button" className="landing-btn landing-btn--secondary" onClick={onStartNew}>
+                <PlusIcon width={20} height={20} />
+                <div className="landing-btn__text">
+                  <span className="landing-btn__label">New project</span>
+                  <span className="landing-btn__desc">Start from a clean slate</span>
+                </div>
+              </button>
             </div>
-          </button>
+          </section>
+
+          <section className="landing-page__panel landing-page__panel--recent">
+            <div className="landing-page__panel-header">
+              <p className="landing-page__eyebrow">Recents</p>
+              <h2 className="landing-page__panel-title">Open recent</h2>
+            </div>
+
+            {recentProjects.length > 0 ? (
+              <div className="landing-page__recent-list">
+                {recentProjects.map((entry) => (
+                  <div key={entry.id} className="landing-recent">
+                    <button
+                      type="button"
+                      className="landing-recent__remove"
+                      aria-label={`Remove ${entry.label} from recents`}
+                      onClick={() => onRemoveRecent(entry.id)}
+                    >
+                      <span aria-hidden="true">x</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="landing-recent__open"
+                      onClick={() => onOpenRecent(entry.id)}
+                    >
+                      <span className="landing-recent__title">{entry.label}</span>
+                      <span className="landing-recent__meta">
+                        {entry.source === "file-handle" ? "Linked file" : "Local snapshot"}
+                        {" · "}
+                        {entry.componentName}
+                        {" · "}
+                        {formatRecentProjectTime(entry.updatedAt)}
+                      </span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="landing-page__empty">
+                Projects you opened or imported recently appear here and can be reopened later.
+              </div>
+            )}
+          </section>
         </div>
 
         <div className="landing-page__footer">
-          Developed for modern 3D workflows. All assets are stored locally.
+          Reload keeps your current session in place. Reopening the app brings you back to this launcher without deleting local work.
         </div>
       </div>
     </div>
@@ -177,11 +276,22 @@ function LandingPage({ onStartNew, onLoadProject }: { onStartNew: () => void; on
 }
 
 export function App() {
-  const [bootState] = useState(getAutosaveBootState);
-  const [store] = useState(() => new EditorStore(bootState.initialBlueprint));
-  const [autosaveEnabled, setAutosaveEnabled] = useState(bootState.autosaveEnabled);
-  const [hasAutosave, setHasAutosave] = useState(bootState.hasAutosave);
-  const [isStarted, setIsStarted] = useState(bootState.hasAutosave);
+  const [bootState] = useState(readWorkspaceBootState);
+  const [initialWorkspace] = useState(() => {
+    const workspace = createWorkspaceFromBootState(bootState);
+    if (!workspace.context.recentProjectId) {
+      workspace.context = createWorkspaceProjectContext({
+        ...workspace.context,
+        recentProjectId: createRecentProjectId(),
+      });
+    }
+    return workspace;
+  });
+  const [store] = useState(() => new EditorStore(initialWorkspace.blueprint));
+  const [projectContext, setProjectContext] = useState<WorkspaceProjectContext>(initialWorkspace.context);
+  const [recentProjects, setRecentProjects] = useState(bootState.recentProjects);
+  const [persistedWorkspace, setPersistedWorkspace] = useState<PersistedWorkspaceRecord | null>(bootState.persistedWorkspace);
+  const [isStarted, setIsStarted] = useState(bootState.shouldOpenEditor);
   const storeView = useEditorStoreSnapshot(store);
   const [exportMode, setExportMode] = useState<ExportMode>("typescript");
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("inspector");
@@ -207,6 +317,7 @@ export function App() {
   const pendingImageImportRef = useRef<PendingImageImport | null>(null);
   const statusTimerRef = useRef<number | null>(null);
   const animationFrameUnsubscribeRef = useRef<(() => void) | null>(null);
+  const activeFileHandleRef = useRef<BrowserFileSystemFileHandle | null>(null);
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fontInputRef = useRef<HTMLInputElement | null>(null);
@@ -245,6 +356,7 @@ export function App() {
     () => new Set(storeView.animation.clips.flatMap((clip) => clip.tracks.map((track) => track.nodeId))),
     [storeView.animation.clips],
   );
+  const shouldPersistWorkspace = isStarted || bootState.persistedWorkspace !== null;
 
   const setTransientStatus = useCallback((message: string) => {
     setStatusText(message);
@@ -258,14 +370,6 @@ export function App() {
       statusTimerRef.current = null;
     }, 2200);
   }, []);
-
-  useEffect(() => {
-    if (!canUseLocalStorage()) {
-      return;
-    }
-
-    window.localStorage.setItem(AUTOSAVE_ENABLED_KEY, autosaveEnabled ? "true" : "false");
-  }, [autosaveEnabled]);
 
   useEffect(() => {
     if (!canUseLocalStorage()) {
@@ -292,6 +396,43 @@ export function App() {
   }, [isTimelineVisible]);
 
   useEffect(() => {
+    if (!shouldPersistWorkspace) {
+      return;
+    }
+
+    persistWorkspace(blueprintSnapshot, projectContext);
+    setPersistedWorkspace({
+      blueprint: blueprintSnapshot,
+      context: {
+        ...projectContext,
+        updatedAt: Date.now(),
+      },
+    });
+
+    if (projectContext.recentProjectId) {
+      persistRecentSnapshot(projectContext.recentProjectId, blueprintSnapshot);
+      const entry = createRecentProjectEntry({
+        id: projectContext.recentProjectId,
+        label: buildRecentProjectLabel(projectContext.fileName, blueprintSnapshot.componentName),
+        componentName: blueprintSnapshot.componentName,
+        source: projectContext.fileHandleId ? "file-handle" : "snapshot",
+        fileName: projectContext.fileName,
+        fileHandleId: projectContext.fileHandleId,
+      });
+      setRecentProjects(upsertRecentProject(entry));
+    }
+  }, [blueprintSnapshot, projectContext, shouldPersistWorkspace]);
+
+  useEffect(() => {
+    if (isStarted) {
+      markWorkspaceSessionActive();
+      return;
+    }
+
+    clearWorkspaceSessionActive();
+  }, [isStarted]);
+
+  useEffect(() => {
     const updateLayoutMode = () => {
       setIsCompactLayout(window.innerWidth <= 840);
     };
@@ -300,15 +441,6 @@ export function App() {
     window.addEventListener("resize", updateLayoutMode);
     return () => window.removeEventListener("resize", updateLayoutMode);
   }, []);
-
-  useEffect(() => {
-    if (!autosaveEnabled || !canUseLocalStorage()) {
-      return;
-    }
-
-    window.localStorage.setItem(EDITOR_AUTOSAVE_KEY, blueprintJson);
-    setHasAutosave(true);
-  }, [autosaveEnabled, blueprintJson]);
 
   useEffect(() => {
     return () => {
@@ -719,34 +851,110 @@ export function App() {
     ];
   }, [requestImageImport, setTransientStatus, store]);
 
+  const syncRecentProject = useCallback(async (
+    blueprint: ComponentBlueprint,
+    {
+      recentProjectId = createRecentProjectId(),
+      fileName = projectContext.fileName,
+      handle = null,
+    }: {
+      recentProjectId?: string;
+      fileName?: string | null;
+      handle?: BrowserFileSystemFileHandle | null;
+    } = {},
+  ) => {
+    let fileHandleId = projectContext.fileHandleId;
+    if (handle) {
+      fileHandleId ??= createRecentProjectId();
+      activeFileHandleRef.current = handle;
+      const handleStored = await saveRecentFileHandle(fileHandleId, handle);
+      if (!handleStored) {
+        fileHandleId = null;
+      }
+    }
+
+    persistRecentSnapshot(recentProjectId, blueprint);
+    const entry = createRecentProjectEntry({
+      id: recentProjectId,
+      label: buildRecentProjectLabel(fileName ?? null, blueprint.componentName),
+      componentName: blueprint.componentName,
+      source: fileHandleId ? "file-handle" : "snapshot",
+      fileName: fileName ?? null,
+      fileHandleId,
+    });
+    setRecentProjects(upsertRecentProject(entry));
+
+    return {
+      recentProjectId,
+      fileHandleId,
+    };
+  }, [projectContext.fileHandleId, projectContext.fileName, projectContext.recentProjectId]);
+
+  const applyWorkspaceBlueprint = useCallback((
+    rawBlueprint: unknown,
+    context: WorkspaceProjectContext,
+    message: string,
+  ) => {
+    if (!context.fileHandleId) {
+      activeFileHandleRef.current = null;
+    }
+    store.loadBlueprint(rawBlueprint, "ui");
+    setProjectContext(context);
+    setCurrentFrame(0);
+    setIsAnimationPlaying(false);
+    setSelectedTrackId(null);
+    setSelectedKeyframeId(null);
+    setIsStarted(true);
+    setTransientStatus(message);
+  }, [setTransientStatus, store]);
+
   const downloadExportFile = useCallback((mode: ExportMode) => {
     const content = mode === "json" ? blueprintJson : typeScriptExport;
     const extension = mode === "json" ? "json" : "ts";
     const fileName = `${blueprintSnapshot.componentName || "3forge-component"}.${extension}`;
-    const blob = new Blob([content], { type: mode === "json" ? "application/json" : "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = fileName;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    downloadTextFile(content, fileName, mode === "json" ? "application/json" : "text/plain");
     setTransientStatus(`Downloaded ${fileName}.`);
   }, [blueprintJson, blueprintSnapshot.componentName, setTransientStatus, typeScriptExport]);
 
   const copyExportText = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(exportPreview);
+    const result = await writeTextToClipboard(exportPreview);
+    if (result.status === "copied") {
       setTransientStatus("Export copied.");
-    } catch {
-      setTransientStatus("Unable to copy export.");
+      return;
     }
+
+    if (result.status === "denied") {
+      setTransientStatus("Clipboard permission denied. Use download instead.");
+      return;
+    }
+
+    if (result.status === "unsupported") {
+      setTransientStatus("Clipboard API unavailable. Use download instead.");
+      return;
+    }
+
+    setTransientStatus("Unable to copy export.");
   }, [exportPreview, setTransientStatus]);
 
   const importJsonFromFile = useCallback(async (file: File) => {
-    const text = await file.text();
-    store.loadBlueprint(JSON.parse(text));
-    setTransientStatus(`Imported ${file.name}.`);
-  }, [setTransientStatus, store]);
+    const rawBlueprint = await readBlueprintFromFile(file);
+    const blueprint = rawBlueprint as ComponentBlueprint;
+    const { recentProjectId } = await syncRecentProject(blueprint, {
+      fileName: file.name,
+    });
+
+    applyWorkspaceBlueprint(
+      rawBlueprint,
+      createWorkspaceProjectContext({
+        source: "imported-file",
+        fileName: file.name,
+        recentProjectId,
+        fileHandleId: null,
+        canOverwriteFile: false,
+      }),
+      `Imported ${file.name}.`,
+    );
+  }, [applyWorkspaceBlueprint, syncRecentProject]);
 
   const importFontFromFile = useCallback(async (file: File) => {
     const font = await fontFileToAsset(file);
@@ -774,27 +982,224 @@ export function App() {
   }, [resolveSelectionInsertTarget, setTransientStatus, store]);
 
   const handleNewBlueprint = useCallback(() => {
-    store.loadBlueprint(createDefaultBlueprint(), "ui");
-    setTransientStatus("Created new blueprint.");
-  }, [setTransientStatus, store]);
+    activeFileHandleRef.current = null;
+    applyWorkspaceBlueprint(
+      createDefaultBlueprint(),
+      createWorkspaceProjectContext({
+        source: "local",
+        fileName: null,
+        recentProjectId: createRecentProjectId(),
+        fileHandleId: null,
+        canOverwriteFile: false,
+      }),
+      "Created new project.",
+    );
+  }, [applyWorkspaceBlueprint]);
 
-  const handleRestoreAutosave = useCallback(() => {
-    const storedBlueprint = readStoredAutosaveBlueprint();
-    if (!storedBlueprint) {
-      setHasAutosave(false);
-      setTransientStatus("No autosave found.");
+  const handleContinueWorkspace = useCallback(() => {
+    if (!persistedWorkspace) {
+      setTransientStatus("No local project available.");
       return;
     }
 
-    store.loadBlueprint(storedBlueprint);
-    setTransientStatus("Autosave restored.");
-  }, [setTransientStatus, store]);
+    applyWorkspaceBlueprint(
+      persistedWorkspace.blueprint,
+      persistedWorkspace.context,
+      "Restored local project.",
+    );
+  }, [applyWorkspaceBlueprint, persistedWorkspace, setTransientStatus]);
 
-  const handleToggleAutosave = useCallback(() => {
-    const nextValue = !autosaveEnabled;
-    setAutosaveEnabled(nextValue);
-    setTransientStatus(nextValue ? "Autosave enabled." : "Autosave disabled.");
-  }, [autosaveEnabled, setTransientStatus]);
+  const handleOpenFile = useCallback(async () => {
+    if (!supportsFileSystemAccess()) {
+      jsonInputRef.current?.click();
+      return;
+    }
+
+    try {
+      const result = await openBlueprintWithPicker();
+      if (!result) {
+        return;
+      }
+
+      const blueprint = result.blueprint as ComponentBlueprint;
+      const { recentProjectId, fileHandleId } = await syncRecentProject(blueprint, {
+        fileName: result.fileName,
+        handle: result.handle,
+      });
+
+      applyWorkspaceBlueprint(
+        result.blueprint,
+        createWorkspaceProjectContext({
+          source: fileHandleId ? "file-handle" : "imported-file",
+          fileName: result.fileName,
+          recentProjectId,
+          fileHandleId,
+          canOverwriteFile: true,
+        }),
+        `Opened ${result.fileName}.`,
+      );
+    } catch {
+      setTransientStatus("Unable to open file.");
+    }
+  }, [applyWorkspaceBlueprint, setTransientStatus, syncRecentProject]);
+
+  const handleOpenRecent = useCallback(async (recentProjectId: string) => {
+    const entry = recentProjects.find((candidate) => candidate.id === recentProjectId);
+    if (!entry) {
+      setTransientStatus("Recent project no longer exists.");
+      return;
+    }
+
+    let handle: BrowserFileSystemFileHandle | null = null;
+    let rawBlueprint: unknown | null = null;
+    let openedFromSnapshot = false;
+
+    if (entry.fileHandleId) {
+      handle = activeFileHandleRef.current && projectContext.fileHandleId === entry.fileHandleId
+        ? activeFileHandleRef.current
+        : await readRecentFileHandle(entry.fileHandleId);
+      if (handle) {
+        try {
+          rawBlueprint = await readBlueprintFromFile(await handle.getFile());
+          activeFileHandleRef.current = handle;
+        } catch {
+          handle = null;
+        }
+      }
+    }
+
+    if (!rawBlueprint) {
+      rawBlueprint = readRecentSnapshot(entry.id);
+      openedFromSnapshot = true;
+    }
+
+    if (!rawBlueprint) {
+      if (entry.fileHandleId) {
+        await removeRecentFileHandle(entry.fileHandleId);
+      }
+      setRecentProjects(removeRecentProject(entry.id));
+      setTransientStatus("Recent project is no longer available.");
+      return;
+    }
+
+    applyWorkspaceBlueprint(
+      rawBlueprint,
+      createWorkspaceProjectContext({
+        source: handle ? "file-handle" : "imported-file",
+        fileName: entry.fileName,
+        recentProjectId: entry.id,
+        fileHandleId: handle ? entry.fileHandleId : null,
+        canOverwriteFile: Boolean(handle),
+      }),
+      openedFromSnapshot
+        ? `Opened recent "${entry.label}" from local snapshot.`
+        : `Opened recent "${entry.label}".`,
+    );
+  }, [applyWorkspaceBlueprint, projectContext.fileHandleId, recentProjects, setTransientStatus]);
+
+  const handleRemoveRecent = useCallback(async (recentProjectId: string) => {
+    const entry = recentProjects.find((candidate) => candidate.id === recentProjectId);
+    if (!entry) {
+      return;
+    }
+
+    if (entry.fileHandleId) {
+      await removeRecentFileHandle(entry.fileHandleId);
+    }
+
+    setRecentProjects(removeRecentProject(recentProjectId));
+    setTransientStatus(`Removed "${entry.label}" from recents.`);
+  }, [recentProjects, setTransientStatus]);
+
+  const handleSaveAsProject = useCallback(async () => {
+    const suggestedName = projectContext.fileName ?? getBlueprintFileName(blueprintSnapshot.componentName);
+    const result = await saveBlueprintAs(blueprintSnapshot, suggestedName);
+
+    if (result.status === "saved") {
+      const { recentProjectId, fileHandleId } = await syncRecentProject(blueprintSnapshot, {
+        fileName: result.handle.name,
+        handle: result.handle,
+      });
+      setProjectContext(createWorkspaceProjectContext({
+        source: fileHandleId ? "file-handle" : "imported-file",
+        fileName: result.handle.name,
+        recentProjectId,
+        fileHandleId,
+        canOverwriteFile: true,
+      }));
+      setTransientStatus(`Saved ${result.handle.name}.`);
+      return;
+    }
+
+    if (result.status === "cancelled") {
+      setTransientStatus("Save As cancelled.");
+      return;
+    }
+
+    if (result.status === "permission-denied") {
+      setTransientStatus("Write permission denied for the selected file.");
+      return;
+    }
+
+    if (result.status === "unsupported") {
+      const fileName = getBlueprintFileName(blueprintSnapshot.componentName);
+      downloadTextFile(blueprintJson, fileName, "application/json");
+      setTransientStatus(`File System Access unavailable. Downloaded ${fileName} instead.`);
+      return;
+    }
+
+    setTransientStatus("Unable to save the project.");
+  }, [blueprintJson, blueprintSnapshot, projectContext.fileName, setTransientStatus, syncRecentProject]);
+
+  const handleSaveProject = useCallback(async () => {
+    const linkedHandle = activeFileHandleRef.current
+      ?? (projectContext.fileHandleId ? await readRecentFileHandle(projectContext.fileHandleId) : null);
+
+    if (!linkedHandle) {
+      await handleSaveAsProject();
+      return;
+    }
+
+    activeFileHandleRef.current = linkedHandle;
+    const result = await saveBlueprintToExistingHandle(blueprintSnapshot, linkedHandle);
+
+    if (result.status === "saved") {
+      const { recentProjectId, fileHandleId } = await syncRecentProject(blueprintSnapshot, {
+        recentProjectId: projectContext.recentProjectId ?? createRecentProjectId(),
+        fileName: linkedHandle.name,
+        handle: linkedHandle,
+      });
+      setProjectContext(createWorkspaceProjectContext({
+        source: fileHandleId ? "file-handle" : "imported-file",
+        fileName: linkedHandle.name,
+        recentProjectId,
+        fileHandleId,
+        canOverwriteFile: true,
+      }));
+      setTransientStatus(`Saved ${linkedHandle.name}.`);
+      return;
+    }
+
+    if (result.status === "permission-denied") {
+      setTransientStatus("Write permission denied. Falling back to Save As.");
+      await handleSaveAsProject();
+      return;
+    }
+
+    if (result.status === "unsupported") {
+      setTransientStatus("Direct overwrite is unavailable here. Falling back to Save As.");
+      await handleSaveAsProject();
+      return;
+    }
+
+    setTransientStatus("Unable to overwrite the current file. Falling back to Save As.");
+    await handleSaveAsProject();
+  }, [blueprintSnapshot, handleSaveAsProject, projectContext.fileHandleId, projectContext.recentProjectId, setTransientStatus, syncRecentProject]);
+
+  const handleExitProject = useCallback(() => {
+    setIsStarted(false);
+    setTransientStatus("Exited current project. Local snapshot kept.");
+  }, [setTransientStatus]);
 
   const startHierarchyResizing = useCallback((event: ReactPointerEvent) => {
     event.preventDefault();
@@ -914,6 +1319,10 @@ export function App() {
     onFrame: handleFrameSelection,
     onPlayPause: handleAnimationPlayToggle,
     onToolChange: handleToolChange,
+    onNew: handleNewBlueprint,
+    onOpen: () => { void handleOpenFile(); },
+    onSave: () => { void handleSaveProject(); },
+    onSaveAs: () => { void handleSaveAsProject(); },
   });
 
   const menus = useMemo(() => [
@@ -921,15 +1330,31 @@ export function App() {
       id: "file",
       label: "File",
       items: [
-        { id: "file-new", label: "New Blueprint", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+N", onSelect: handleNewBlueprint },
-        { id: "file-restore", label: "Restore Autosave", icon: <UndoIcon width={14} height={14} />, disabled: !hasAutosave, onSelect: handleRestoreAutosave },
+        { id: "file-new", label: "New Project", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+N", onSelect: handleNewBlueprint },
+        { id: "file-open", label: "Open File", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+O", onSelect: handleOpenFile },
+        {
+          id: "file-open-recent",
+          label: "Open Recent",
+          children: recentProjects.length > 0
+            ? recentProjects.map((entry) => ({
+              id: `file-open-recent-${entry.id}`,
+              label: entry.label,
+              onSelect: () => handleOpenRecent(entry.id),
+            }))
+            : [{ id: "file-open-recent-empty", label: "No recent projects", disabled: true }],
+        },
         { id: "file-divider-1", separator: true },
+        { id: "file-save", label: "Save", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+S", onSelect: () => void handleSaveProject() },
+        { id: "file-save-as", label: "Save As", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+Shift+S", onSelect: () => void handleSaveAsProject() },
+        { id: "file-divider-2", separator: true },
         { id: "file-import-json", label: "Import JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
         { id: "file-import-image", label: "Import Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
         { id: "file-import-font", label: "Import Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
-        { id: "file-divider-2", separator: true },
+        { id: "file-divider-3", separator: true },
         { id: "file-export-json", label: "Download Blueprint JSON", onSelect: () => downloadExportFile("json") },
         { id: "file-export-ts", label: "Download TypeScript", onSelect: () => downloadExportFile("typescript") },
+        { id: "file-divider-4", separator: true },
+        { id: "file-exit", label: "Exit", danger: true, onSelect: handleExitProject },
       ],
     },
     {
@@ -963,12 +1388,16 @@ export function App() {
     createAddMenuActions,
     downloadExportFile,
     handleCopy,
+    handleExitProject,
     handleFrameSelection,
     handleNewBlueprint,
+    handleOpenFile,
+    handleOpenRecent,
     handlePaste,
-    handleRestoreAutosave,
-    hasAutosave,
+    handleSaveAsProject,
+    handleSaveProject,
     requestImageImport,
+    recentProjects,
     resolveSelectionInsertTarget,
     selectedKeyframeId,
     selectedRootIds,
@@ -982,13 +1411,13 @@ export function App() {
     return (
       <div className="app-shell app-shell--landing">
         <LandingPage
-          onStartNew={() => {
-            handleNewBlueprint();
-            setIsStarted(true);
-          }}
-          onLoadProject={() => {
-            jsonInputRef.current?.click();
-          }}
+          persistedWorkspace={persistedWorkspace}
+          recentProjects={recentProjects}
+          onContinue={handleContinueWorkspace}
+          onStartNew={handleNewBlueprint}
+          onOpenFile={() => { void handleOpenFile(); }}
+          onOpenRecent={(recentProjectId) => { void handleOpenRecent(recentProjectId); }}
+          onRemoveRecent={(recentProjectId) => { void handleRemoveRecent(recentProjectId); }}
         />
         <input
           ref={jsonInputRef}
@@ -1001,7 +1430,6 @@ export function App() {
             if (!file) return;
             try {
               await importJsonFromFile(file);
-              setIsStarted(true);
             } catch {
               setTransientStatus("Unable to import JSON.");
             }
@@ -1205,14 +1633,8 @@ export function App() {
       <footer className="statusbar">
         <span className="statusbar__message">{statusText}</span>
         <div className="statusbar__right">
-          <button
-            type="button"
-            className={`statusbar__toggle${autosaveEnabled ? " is-active" : ""}`}
-            onClick={handleToggleAutosave}
-          >
-            autosave {autosaveEnabled ? "on" : "off"}
-          </button>
-          <span className="statusbar__chip">{hasAutosave ? "snapshot saved" : "no snapshot"}</span>
+          <span className="statusbar__chip">local workspace saved</span>
+          <span className="statusbar__chip">{getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)}</span>
           <span className="statusbar__chip">{storeView.blueprintNodes.length} nodes</span>
         </div>
       </footer>

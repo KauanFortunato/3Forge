@@ -8,6 +8,10 @@ interface HotkeyHandlers {
   onDelete: () => void;
   onFrame: () => void;
   onPlayPause: () => void;
+  onNew: () => void;
+  onOpen: () => void;
+  onSave: () => void;
+  onSaveAs: () => void;
   onToolChange: (mode: "select" | "translate" | "rotate" | "scale") => void;
 }
 
@@ -40,8 +44,36 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       const isUndo = event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "z";
       const isRedo = (event.ctrlKey && event.key.toLowerCase() === "y")
         || (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "z");
+      const isNew = event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "n";
+      const isOpen = event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "o";
+      const isSave = event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "s";
+      const isSaveAs = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "s";
       const isCopy = event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "c";
       const isPaste = event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "v";
+
+      if (isNew) {
+        event.preventDefault();
+        handlers.onNew();
+        return;
+      }
+
+      if (isOpen) {
+        event.preventDefault();
+        handlers.onOpen();
+        return;
+      }
+
+      if (isSaveAs) {
+        event.preventDefault();
+        handlers.onSaveAs();
+        return;
+      }
+
+      if (isSave) {
+        event.preventDefault();
+        handlers.onSave();
+        return;
+      }
 
       if (isUndo) {
         event.preventDefault();
