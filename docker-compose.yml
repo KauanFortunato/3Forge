@@ -1,0 +1,12 @@
+version: "3.7"
+
+services:
+  web:
+    image: nginx:alpine
+    container_name: 3forge_web
+    restart: unless-stopped
+    volumes:
+      - /home/umbrel/umbrel/app-data/3forge/dist:/usr/share/nginx/html:ro
+      - /home/umbrel/umbrel/app-data/3forge/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "3010:80"
