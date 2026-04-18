@@ -71,10 +71,13 @@ describe("export runner runtime", () => {
     expect(capabilities).toEqual({
       canPlay: true,
       canPause: true,
+      canRestart: false,
+      canReverse: false,
       canStop: true,
       canSeek: true,
       canCreateTimeline: true,
       canPlayClip: false,
+      clipNames: [],
     });
   });
 });

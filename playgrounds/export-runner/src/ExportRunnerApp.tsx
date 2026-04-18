@@ -179,6 +179,13 @@ export function ExportRunnerApp() {
       scene.add(instance.group);
       mountedGroupRef.current = instance.group;
       instanceRef.current = instance;
+      const availableClips = typeof instance.getClipNames === "function" ? instance.getClipNames() : [];
+      setClipName((current) => {
+        if (availableClips.length === 0) {
+          return "";
+        }
+        return availableClips.includes(current.trim()) ? current.trim() : availableClips[0];
+      });
       fitCameraToGroup(instance.group);
       setSelectedModuleExportName(resolvedComponent.exportName);
       setBuildCount((value) => value + 1);
@@ -193,7 +200,7 @@ export function ExportRunnerApp() {
     setStatus("Disposed exported component.");
   }, [disposeMountedComponent]);
 
-  const runAnimationAction = useCallback((action: "play" | "pause" | "stop") => {
+  const runAnimationAction = useCallback((action: "play" | "pause" | "restart" | "reverse" | "stop") => {
     const instance = instanceRef.current;
     const method = instance?.[action];
     if (typeof method !== "function") {
@@ -216,9 +223,15 @@ export function ExportRunnerApp() {
       return;
     }
 
-    instance.seek(frame);
-    setStatus(`Seeked to frame ${Math.round(frame)}.`);
-  }, [frameInput]);
+    const normalizedClip = clipName.trim();
+    if (animationCapabilities.clipNames.length > 0 && normalizedClip && !animationCapabilities.clipNames.includes(normalizedClip)) {
+      setStatus(`Clip "${normalizedClip}" is not available in the current export.`);
+      return;
+    }
+
+    instance.seek(frame, normalizedClip || undefined);
+    setStatus(`Seeked to frame ${Math.round(frame)}${normalizedClip ? ` in "${normalizedClip}"` : ""}.`);
+  }, [animationCapabilities.clipNames, clipName, frameInput]);
 
   const handlePlayClip = useCallback(() => {
     const instance = instanceRef.current;
@@ -231,10 +244,14 @@ export function ExportRunnerApp() {
       setStatus("Clip name is required.");
       return;
     }
+    if (animationCapabilities.clipNames.length > 0 && !animationCapabilities.clipNames.includes(normalizedClip)) {
+      setStatus(`Clip "${normalizedClip}" is not available in the current export.`);
+      return;
+    }
 
     instance.playClip(normalizedClip);
     setStatus(`Playing clip "${normalizedClip}".`);
-  }, [clipName]);
+  }, [animationCapabilities.clipNames, clipName]);
 
   return (
     <div className="runner-shell">
@@ -256,6 +273,7 @@ export function ExportRunnerApp() {
               onChange={(event) => {
                 setSelectedModulePath(event.target.value);
                 setSelectedModuleExportName(null);
+                setClipName("");
               }}
             >
               {generatedModules.length > 0 ? generatedModules.map((entry) => (
@@ -317,6 +335,12 @@ export function ExportRunnerApp() {
             <button type="button" className="runner-button" disabled={!animationCapabilities.canPause} onClick={() => runAnimationAction("pause")}>
               Pause
             </button>
+            <button type="button" className="runner-button" disabled={!animationCapabilities.canRestart} onClick={() => runAnimationAction("restart")}>
+              Restart
+            </button>
+            <button type="button" className="runner-button" disabled={!animationCapabilities.canReverse} onClick={() => runAnimationAction("reverse")}>
+              Reverse
+            </button>
             <button type="button" className="runner-button" disabled={!animationCapabilities.canStop} onClick={() => runAnimationAction("stop")}>
               Stop
             </button>
@@ -340,13 +364,23 @@ export function ExportRunnerApp() {
           <div className="runner-inline-fields">
             <label className="runner-field">
               <span>Clip Name</span>
-              <input
-                className="runner-input"
-                type="text"
-                value={clipName}
-                onChange={(event) => setClipName(event.target.value)}
-                placeholder="Optional explicit clip"
-              />
+              {animationCapabilities.clipNames.length > 0 ? (
+                <select className="runner-select" value={clipName} onChange={(event) => setClipName(event.target.value)}>
+                  {animationCapabilities.clipNames.map((availableClip) => (
+                    <option key={availableClip} value={availableClip}>
+                      {availableClip}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className="runner-input"
+                  type="text"
+                  value={clipName}
+                  onChange={(event) => setClipName(event.target.value)}
+                  placeholder="Optional explicit clip"
+                />
+              )}
             </label>
             <button type="button" className="runner-button" disabled={!animationCapabilities.canPlayClip} onClick={handlePlayClip}>
               Play Clip

@@ -67,3 +67,15 @@ Cada entrada deve indicar:
   Resumo: foi criado um playground separado para validar os componentes exportados em TypeScript, com viewport simples, montagem real da classe exportada, JSON de options e controles de animacao quando a API existir.
   Arquivos principais: `playgrounds/export-runner/`, `package.json`, `tsconfig.json`, `vitest.config.mjs`, `documents/FUNCIONALIDADES/RUNNER_DE_EXPORT_TS.md`
   Testes: `playgrounds/export-runner/src/runtime.test.ts`
+
+### 2026-04-18
+
+- `alterado`: Pipeline de export TypeScript
+  Resumo: o export passou a separar definicao de clip, instanciacao de timeline e controlo de playback, substituindo a geracao imperativa por clip por definicoes estaveis com cache por timeline.
+  Arquivos principais: `src/editor/exports.ts`, `src/editor/exports.test.ts`, `src/editor/exports.runtime.test.ts`, `documents/FUNCIONALIDADES/OTIMIZACAO_DO_EXPORT.md`
+  Testes: `src/editor/exports.test.ts`, `src/editor/exports.runtime.test.ts`
+
+- `alterado`: API exportada de animacao
+  Resumo: os componentes exportados passaram a expor `restart()`, `reverse()` e `getClipNames()`, com `seek()` e `createTimeline()` reaproveitando timelines por clip em vez de reconstruir a estrutura a cada chamada.
+  Arquivos principais: `src/editor/exports.ts`, `playgrounds/export-runner/src/runtime.ts`, `playgrounds/export-runner/src/ExportRunnerApp.tsx`
+  Testes: `src/editor/exports.runtime.test.ts`, `playgrounds/export-runner/src/runtime.test.ts`

@@ -1,4 +1,4 @@
-import { frameToSeconds, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
+import { frameToSeconds, getTrackSegments, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
 import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageNode } from "./types";
 import { ROOT_NODE_ID, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
@@ -20,6 +20,37 @@ interface CollectedImage {
   textureVariableName: string;
 }
 
+type TimelineTargetKey = "position" | "rotation" | "scale";
+type TimelineAxisKey = "x" | "y" | "z";
+
+interface CollectedAnimationSegment {
+  atSeconds: number;
+  durationSeconds: number;
+  value: number;
+  ease: string;
+}
+
+interface CollectedAnimationTrack {
+  nodeId: string;
+  target: TimelineTargetKey;
+  key: TimelineAxisKey;
+  initialValue: number;
+  segments: CollectedAnimationSegment[];
+}
+
+interface CollectedAnimationClip {
+  name: string;
+  fps: number;
+  durationFrames: number;
+  tracks: CollectedAnimationTrack[];
+}
+
+interface ExportCollections {
+  bindings: CollectedBinding[];
+  fonts: CollectedFont[];
+  images: CollectedImage[];
+}
+
 export function exportBlueprintToJson(blueprint: ComponentBlueprint): string {
   return JSON.stringify(blueprint, null, 2);
 }
@@ -29,19 +60,16 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   const componentTypeName = toPascalCase(componentName);
   const optionTypeName = `${componentTypeName}Options`;
   const resolvedTypeName = `${componentTypeName}ResolvedOptions`;
-  const animationClips = blueprint.animation.clips;
-  const hasAnimations = animationClips.some((clip) => clip.tracks.some((track) => track.keyframes.length > 0));
-  const usesNodeOriginHelper = blueprint.nodes.some((node) => node.type !== "group");
-
   const nodes = blueprint.nodes;
+  const animationClips = collectAnimationClips(blueprint, nodes);
+  const hasAnimations = animationClips.length > 0;
+  const usesNodeOriginHelper = nodes.some((node) => node.type !== "group");
   const rootNode = nodes.find((node) => node.id === ROOT_NODE_ID) ?? nodes[0];
-  const bindings = collectBindings(nodes);
-  const importNames = collectImports(nodes, bindings);
   const childrenByParent = buildChildrenMap(nodes);
   const variableNames = createVariableNames(nodes);
   const groupContentVariableNames = createGroupContentVariableNames(nodes, variableNames);
-  const fonts = collectFonts(blueprint, nodes);
-  const images = collectImages(nodes);
+  const { bindings, fonts, images } = collectExportCollections(blueprint, nodes);
+  const importNames = collectImports(nodes, bindings);
   const fontVariables = new Map(fonts.map((font) => [font.font.id, font.fontVariableName]));
   const imageVariables = new Map(images.map((image) => [image.node.id, image.textureVariableName]));
   const lines: string[] = [];
@@ -136,6 +164,9 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   }
   lines.push("};");
   lines.push("");
+  if (hasAnimations) {
+    emitAnimationDefinitions(lines, animationClips);
+  }
   lines.push(`export class ${componentTypeName} {`);
   lines.push("  public readonly group: Group;");
   lines.push(`  private readonly options: ${resolvedTypeName};`);
@@ -143,6 +174,7 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
     lines.push("  private timeline: gsap.core.Timeline | null = null;");
     lines.push("  private currentClipName: string | null = null;");
     lines.push("  private readonly nodeRefs = new Map<string, Group | Mesh>();");
+    lines.push("  private readonly timelineCache = new Map<string, gsap.core.Timeline>();");
   }
   lines.push("");
   lines.push(`  constructor(options: ${optionTypeName} = {}) {`);
@@ -193,7 +225,7 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   lines.push("  }");
   lines.push("");
   if (hasAnimations) {
-    emitAnimationMethods(lines, blueprint, variableNames);
+    emitAnimationMethods(lines, animationClips);
   }
   lines.push("  public dispose(): void {");
   lines.push("    this.disposeResources(true);");
@@ -201,8 +233,12 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   lines.push("");
   lines.push("  private disposeResources(removeFromParent: boolean): void {");
   if (hasAnimations) {
-    lines.push("    this.timeline?.kill();");
+    lines.push("    for (const timeline of this.timelineCache.values()) {");
+    lines.push("      timeline.kill();");
+    lines.push("    }");
+    lines.push("    this.timelineCache.clear();");
     lines.push("    this.timeline = null;");
+    lines.push("    this.currentClipName = null;");
   }
   lines.push("    this.group.traverse((object) => {");
   lines.push("      const mesh = object as Mesh;");
@@ -239,14 +275,70 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   return lines.join("\n");
 }
 
-function collectBindings(nodes: EditorNode[]): CollectedBinding[] {
-  return nodes.flatMap((node) => {
+function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNode[]): ExportCollections {
+  const bindings: CollectedBinding[] = [];
+  const availableFonts = getAvailableFonts(blueprint.fonts);
+  const fontsById = new Map(availableFonts.map((font) => [font.id, font]));
+  const collectedFontIds = new Set<string>();
+  const fontUsedNames = new Set<string>();
+  const imageUsedNames = new Set<string>();
+  const fonts: CollectedFont[] = [];
+  const images: CollectedImage[] = [];
+
+  for (const node of nodes) {
     const validPaths = new Set(getPropertyDefinitions(node).map((definition) => definition.path));
-    return Object.values(node.editable)
+    const nodeBindings = Object.values(node.editable)
       .filter((binding) => validPaths.has(binding.path))
-      .sort((a, b) => a.key.localeCompare(b.key))
+      .sort((left, right) => left.key.localeCompare(right.key))
       .map((binding) => ({ node, binding }));
-  });
+    bindings.push(...nodeBindings);
+
+    if (node.type === "text" && !collectedFontIds.has(node.fontId)) {
+      const font = fontsById.get(node.fontId);
+      if (!font) {
+        throw new Error(`Font not found for text node "${node.name}".`);
+      }
+
+      const base = toCamelCase(font.name) || "font";
+      let dataVariableName = `${base}FontData`;
+      let fontVariableName = `${base}Font`;
+      let suffix = 2;
+
+      while (fontUsedNames.has(dataVariableName) || fontUsedNames.has(fontVariableName)) {
+        dataVariableName = `${base}FontData${suffix}`;
+        fontVariableName = `${base}Font${suffix}`;
+        suffix += 1;
+      }
+
+      fontUsedNames.add(dataVariableName);
+      fontUsedNames.add(fontVariableName);
+      collectedFontIds.add(node.fontId);
+      fonts.push({ font, dataVariableName, fontVariableName });
+    }
+
+    if (node.type === "image") {
+      const base = toCamelCase(node.name || node.image.name) || "image";
+      let dataVariableName = `${base}ImageData`;
+      let textureVariableName = `${base}Texture`;
+      let suffix = 2;
+
+      while (imageUsedNames.has(dataVariableName) || imageUsedNames.has(textureVariableName)) {
+        dataVariableName = `${base}ImageData${suffix}`;
+        textureVariableName = `${base}Texture${suffix}`;
+        suffix += 1;
+      }
+
+      imageUsedNames.add(dataVariableName);
+      imageUsedNames.add(textureVariableName);
+      images.push({ node, dataVariableName, textureVariableName });
+    }
+  }
+
+  return {
+    bindings,
+    fonts,
+    images,
+  };
 }
 
 function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<string> {
@@ -284,69 +376,6 @@ function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<
   }
 
   return imports;
-}
-
-function collectImages(nodes: EditorNode[]): CollectedImage[] {
-  const usedNames = new Set<string>();
-  const collected: CollectedImage[] = [];
-
-  for (const node of nodes) {
-    if (node.type !== "image") {
-      continue;
-    }
-
-    const base = toCamelCase(node.name || node.image.name) || "image";
-    let dataVariableName = `${base}ImageData`;
-    let textureVariableName = `${base}Texture`;
-    let suffix = 2;
-
-    while (usedNames.has(dataVariableName) || usedNames.has(textureVariableName)) {
-      dataVariableName = `${base}ImageData${suffix}`;
-      textureVariableName = `${base}Texture${suffix}`;
-      suffix += 1;
-    }
-
-    usedNames.add(dataVariableName);
-    usedNames.add(textureVariableName);
-    collected.push({ node, dataVariableName, textureVariableName });
-  }
-
-  return collected;
-}
-
-function collectFonts(blueprint: ComponentBlueprint, nodes: EditorNode[]): CollectedFont[] {
-  const availableFonts = getAvailableFonts(blueprint.fonts);
-  const fontsById = new Map(availableFonts.map((font) => [font.id, font]));
-  const usedNames = new Set<string>();
-  const collected: CollectedFont[] = [];
-
-  for (const node of nodes) {
-    if (node.type !== "text" || collected.some((entry) => entry.font.id === node.fontId)) {
-      continue;
-    }
-
-    const font = fontsById.get(node.fontId);
-    if (!font) {
-      continue;
-    }
-
-    const base = toCamelCase(font.name) || "font";
-    let dataVariableName = `${base}FontData`;
-    let fontVariableName = `${base}Font`;
-    let suffix = 2;
-
-    while (usedNames.has(dataVariableName) || usedNames.has(fontVariableName)) {
-      dataVariableName = `${base}FontData${suffix}`;
-      fontVariableName = `${base}Font${suffix}`;
-      suffix += 1;
-    }
-
-    usedNames.add(dataVariableName);
-    usedNames.add(fontVariableName);
-    collected.push({ font, dataVariableName, fontVariableName });
-  }
-
-  return collected;
 }
 
 function buildChildrenMap(nodes: EditorNode[]): Map<string | null, EditorNode[]> {
@@ -577,80 +606,220 @@ function emitMaterialCreationLines(
   return lines;
 }
 
-function emitAnimationMethods(
-  lines: string[],
-  blueprint: ComponentBlueprint,
-  variableNames: Map<string, string>,
-): void {
-  const clips = blueprint.animation.clips.filter((clip) => clip.tracks.some((track) => track.keyframes.length > 0));
+function collectAnimationClips(blueprint: ComponentBlueprint, nodes: EditorNode[]): CollectedAnimationClip[] {
+  const validNodeIds = new Set(nodes.map((node) => node.id));
 
-  lines.push("  private buildTimelineForClip(clipName: string): { timeline: gsap.core.Timeline; fps: number; durationFrames: number } | null {");
-  lines.push("    switch (clipName) {");
-
-  for (const clip of clips) {
-    lines.push(`      case ${JSON.stringify(clip.name)}: {`);
-    lines.push("        const timeline = gsap.timeline({ paused: true, repeat: -1 });");
-    lines.push(`        timeline.to({ progress: 0 }, { progress: 1, duration: ${Math.max(frameToSeconds(clip.durationFrames, clip.fps), 0.0001)}, ease: "none" }, 0);`);
-
-    for (const track of clip.tracks) {
-      if (track.keyframes.length === 0) {
-        continue;
+  return blueprint.animation.clips.flatMap((clip) => {
+    const tracks = clip.tracks.flatMap((track) => {
+      if (!validNodeIds.has(track.nodeId) || track.keyframes.length === 0) {
+        return [];
       }
 
       const orderedKeyframes = sortTrackKeyframes(track.keyframes);
-      const segments = orderedKeyframes.slice(0, -1).flatMap((from, index) => {
-        const to = orderedKeyframes[index + 1];
-        return to && to.frame > from.frame ? [{ from, to }] : [];
-      });
-      const targetName = `${variableNames.get(track.nodeId) ?? toCamelCase(track.nodeId)}${toPascalCase(track.property)}${toPascalCase(clip.name)}`;
-      const ownerPath = toTimelineTargetPath(track.property);
-      const propertyKey = toTimelinePropertyKey(track.property);
-      const firstKeyframe = orderedKeyframes[0];
-
-      lines.push(`        const ${targetName}Target = this.nodeRefs.get(${JSON.stringify(track.nodeId)});`);
-      lines.push(`        if (${targetName}Target) {`);
-      lines.push(
-        `          timeline.set(${targetName}Target.${ownerPath}, { ${propertyKey}: ${serializeLiteral(firstKeyframe.value, "number")} }, ${frameToSeconds(firstKeyframe.frame, clip.fps)});`,
-      );
-
-      for (const segment of segments) {
-        lines.push(
-          `          timeline.to(${targetName}Target.${ownerPath}, { ${propertyKey}: ${serializeLiteral(segment.to.value, "number")}, duration: ${frameToSeconds(segment.to.frame - segment.from.frame, clip.fps)}, ease: ${JSON.stringify(mapAnimationEaseToGsap(segment.to.ease))} }, ${frameToSeconds(segment.from.frame, clip.fps)});`,
-        );
+      if (orderedKeyframes.length === 0) {
+        return [];
       }
 
-      lines.push("        }");
+      const target = toTimelineTargetKey(track.property);
+      const key = toTimelineAxisKey(track.property);
+      const initialKeyframe = orderedKeyframes[0];
+
+      return [{
+        nodeId: track.nodeId,
+        target,
+        key,
+        initialValue: initialKeyframe.value,
+        segments: getTrackSegments(track).map((segment) => ({
+          atSeconds: frameToSeconds(segment.from.frame, clip.fps),
+          durationSeconds: frameToSeconds(segment.to.frame - segment.from.frame, clip.fps),
+          value: segment.to.value,
+          ease: mapAnimationEaseToGsap(segment.to.ease),
+        })),
+      }] satisfies CollectedAnimationTrack[];
+    });
+
+    if (tracks.length === 0) {
+      return [];
     }
 
-      lines.push(`        return { timeline, fps: ${clip.fps}, durationFrames: ${clip.durationFrames} };`);
-    lines.push("      }");
-  }
+    return [{
+      name: clip.name,
+      fps: clip.fps,
+      durationFrames: clip.durationFrames,
+      tracks,
+    }] satisfies CollectedAnimationClip[];
+  });
+}
 
-  lines.push("      default:");
-  lines.push("        return null;");
-  lines.push("    }");
+function emitAnimationDefinitions(lines: string[], clips: CollectedAnimationClip[]): void {
+  lines.push("interface AnimationSegmentDefinition {");
+  lines.push("  at: number;");
+  lines.push("  duration: number;");
+  lines.push("  value: number;");
+  lines.push("  ease: string;");
+  lines.push("}");
+  lines.push("");
+  lines.push("interface AnimationTrackDefinition {");
+  lines.push("  target: \"position\" | \"rotation\" | \"scale\";");
+  lines.push("  key: \"x\" | \"y\" | \"z\";");
+  lines.push("  nodeId: string;");
+  lines.push("  initialValue: number;");
+  lines.push("  segments: AnimationSegmentDefinition[];");
+  lines.push("}");
+  lines.push("");
+  lines.push("interface AnimationClipDefinition {");
+  lines.push("  name: string;");
+  lines.push("  fps: number;");
+  lines.push("  durationFrames: number;");
+  lines.push("  tracks: AnimationTrackDefinition[];");
+  lines.push("}");
+  lines.push("");
+  lines.push("const animationClipOrder = [");
+  for (const clip of clips) {
+    lines.push(`  ${JSON.stringify(clip.name)},`);
+  }
+  lines.push("] as const;");
+  lines.push("");
+  lines.push("const animationClipDefinitions: Record<string, AnimationClipDefinition> = {");
+  for (const clip of clips) {
+    lines.push(`  ${JSON.stringify(clip.name)}: {`);
+    lines.push(`    name: ${JSON.stringify(clip.name)},`);
+    lines.push(`    fps: ${clip.fps},`);
+    lines.push(`    durationFrames: ${clip.durationFrames},`);
+    lines.push("    tracks: [");
+    for (const track of clip.tracks) {
+      lines.push("      {");
+      lines.push(`        nodeId: ${JSON.stringify(track.nodeId)},`);
+      lines.push(`        target: ${JSON.stringify(track.target)},`);
+      lines.push(`        key: ${JSON.stringify(track.key)},`);
+      lines.push(`        initialValue: ${serializeLiteral(track.initialValue, "number")},`);
+      lines.push("        segments: [");
+      for (const segment of track.segments) {
+        lines.push("          {");
+        lines.push(`            at: ${serializeLiteral(segment.atSeconds, "number")},`);
+        lines.push(`            duration: ${serializeLiteral(segment.durationSeconds, "number")},`);
+        lines.push(`            value: ${serializeLiteral(segment.value, "number")},`);
+        lines.push(`            ease: ${JSON.stringify(segment.ease)},`);
+        lines.push("          },");
+      }
+      lines.push("        ],");
+      lines.push("      },");
+    }
+    lines.push("    ],");
+    lines.push("  },");
+  }
+  lines.push("};");
+  lines.push("");
+}
+
+function emitAnimationMethods(
+  lines: string[],
+  clips: CollectedAnimationClip[],
+): void {
+  const defaultClipName = clips[0]?.name ?? "";
+
+  lines.push("  private getClipDefinition(clipName: string): AnimationClipDefinition | null {");
+  lines.push("    return animationClipDefinitions[clipName] ?? null;");
   lines.push("  }");
   lines.push("");
-  lines.push(`  public createTimeline(clipName: string = ${JSON.stringify(clips[0]?.name ?? "")}): gsap.core.Timeline | null {`);
-  lines.push("    this.timeline?.kill();");
-  lines.push("    const clip = this.buildTimelineForClip(clipName);");
+  lines.push("  private resolveRequestedClipName(clipName?: string): string {");
+  lines.push(`    return clipName?.trim() || this.currentClipName || animationClipOrder[0] || ${JSON.stringify(defaultClipName)};`);
+  lines.push("  }");
+  lines.push("");
+  lines.push("  private createTimelineInstance(clip: AnimationClipDefinition): gsap.core.Timeline {");
+  lines.push("    const timeline = gsap.timeline({ paused: true });");
+  lines.push("    timeline.set({}, {}, clip.durationFrames / Math.max(clip.fps, 1));");
+  lines.push("    for (const track of clip.tracks) {");
+  lines.push("      const node = this.nodeRefs.get(track.nodeId);");
+  lines.push("      if (!node) {");
+  lines.push("        continue;");
+  lines.push("      }");
+  lines.push("      const owner = track.target === \"position\" ? node.position : track.target === \"rotation\" ? node.rotation : node.scale;");
+  lines.push("      timeline.set(owner, { [track.key]: track.initialValue }, 0);");
+  lines.push("      for (const segment of track.segments) {");
+  lines.push("        timeline.to(owner, { [track.key]: segment.value, duration: segment.duration, ease: segment.ease, immediateRender: false }, segment.at);");
+  lines.push("      }");
+  lines.push("    }");
+  lines.push("    timeline.pause(0);");
+  lines.push("    return timeline;");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  private getOrCreateTimeline(clipName?: string): { clip: AnimationClipDefinition; timeline: gsap.core.Timeline } | null {");
+  lines.push("    const resolvedClipName = this.resolveRequestedClipName(clipName);");
+  lines.push("    const clip = this.getClipDefinition(resolvedClipName);");
   lines.push("    if (!clip) {");
+  lines.push("      return null;");
+  lines.push("    }");
+  lines.push("    let timeline = this.timelineCache.get(clip.name) ?? null;");
+  lines.push("    if (!timeline) {");
+  lines.push("      timeline = this.createTimelineInstance(clip);");
+  lines.push("      this.timelineCache.set(clip.name, timeline);");
+  lines.push("    }");
+  lines.push("    return { clip, timeline };");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  private activateClip(clipName?: string): { clip: AnimationClipDefinition; timeline: gsap.core.Timeline } | null {");
+  lines.push("    const resolved = this.getOrCreateTimeline(clipName);");
+  lines.push("    if (!resolved) {");
   lines.push("      this.timeline = null;");
   lines.push("      this.currentClipName = null;");
   lines.push("      return null;");
   lines.push("    }");
-  lines.push("    this.timeline = clip.timeline;");
-  lines.push("    this.currentClipName = clipName;");
-  lines.push("    return this.timeline;");
+  lines.push("    if (this.currentClipName && this.currentClipName !== resolved.clip.name) {");
+  lines.push("      this.timeline?.pause();");
+  lines.push("    }");
+  lines.push("    const { clip, timeline } = resolved;");
+  lines.push("    this.timeline = timeline;");
+  lines.push("    this.currentClipName = clip.name;");
+  lines.push("    return { clip, timeline };");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  public getClipNames(): string[] {");
+  lines.push("    return [...animationClipOrder];");
+  lines.push("  }");
+  lines.push("");
+  lines.push(`  public createTimeline(clipName: string = ${JSON.stringify(defaultClipName)}): gsap.core.Timeline | null {`);
+  lines.push("    return this.getOrCreateTimeline(clipName)?.timeline ?? null;");
   lines.push("  }");
   lines.push("");
   lines.push("  public playClip(clipName: string): void {");
-  lines.push("    const timeline = this.currentClipName === clipName && this.timeline ? this.timeline : this.createTimeline(clipName);");
-  lines.push("    timeline?.play();");
+  lines.push("    const previousClipName = this.currentClipName;");
+  lines.push("    const resolved = this.activateClip(clipName);");
+  lines.push("    if (!resolved) {");
+  lines.push("      return;");
+  lines.push("    }");
+  lines.push("    const { clip, timeline } = resolved;");
+  lines.push("    timeline.reversed(false);");
+  lines.push("    if (previousClipName !== clip.name || timeline.progress() >= 1) {");
+  lines.push("      timeline.restart();");
+  lines.push("      return;");
+  lines.push("    }");
+  lines.push("    timeline.play();");
   lines.push("  }");
   lines.push("");
   lines.push("  public play(): void {");
-  lines.push(`    this.playClip(this.currentClipName ?? ${JSON.stringify(clips[0]?.name ?? "")});`);
+  lines.push("    this.playClip(this.resolveRequestedClipName());");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  public restart(clipName?: string): void {");
+  lines.push("    const resolved = this.activateClip(clipName);");
+  lines.push("    if (!resolved) {");
+  lines.push("      return;");
+  lines.push("    }");
+  lines.push("    resolved.timeline.reversed(false);");
+  lines.push("    resolved.timeline.restart();");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  public reverse(clipName?: string): void {");
+  lines.push("    const resolved = this.activateClip(clipName);");
+  lines.push("    if (!resolved) {");
+  lines.push("      return;");
+  lines.push("    }");
+  lines.push("    const { timeline } = resolved;");
+  lines.push("    if (timeline.progress() <= 0) {");
+  lines.push("      timeline.pause(timeline.duration());");
+  lines.push("    }");
+  lines.push("    timeline.reverse();");
   lines.push("  }");
   lines.push("");
   lines.push("  public pause(): void {");
@@ -658,28 +827,27 @@ function emitAnimationMethods(
   lines.push("  }");
   lines.push("");
   lines.push("  public stop(): void {");
-  lines.push("    this.timeline?.pause();");
-  lines.push("    this.seek(0);");
+  lines.push("    const resolved = this.activateClip();");
+  lines.push("    if (!resolved) {");
+  lines.push("      return;");
+  lines.push("    }");
+  lines.push("    resolved.timeline.reversed(false);");
+  lines.push("    resolved.timeline.pause(0);");
   lines.push("  }");
   lines.push("");
-  lines.push("  public seek(frame: number): void {");
-  lines.push(`    const clipName = this.currentClipName ?? ${JSON.stringify(clips[0]?.name ?? "")};`);
-  lines.push("    const clip = this.buildTimelineForClip(clipName);");
-  lines.push("    if (!clip) {");
+  lines.push("  public seek(frame: number, clipName?: string): void {");
+  lines.push("    const resolved = this.activateClip(clipName);");
+  lines.push("    if (!resolved) {");
   lines.push("      return;");
   lines.push("    }");
-  lines.push("    const timeline = this.timeline ?? this.createTimeline(clipName);");
-  lines.push("    if (!timeline) {");
-  lines.push("      return;");
-  lines.push("    }");
-  lines.push("    const normalizedFrame = Math.max(0, Math.min(Math.round(frame), clip.durationFrames));");
-  lines.push("    timeline.pause();");
-  lines.push("    timeline.seek(normalizedFrame / clip.fps, false);");
+  lines.push("    const normalizedFrame = Math.max(0, Math.min(Math.round(frame), resolved.clip.durationFrames));");
+  lines.push("    resolved.timeline.reversed(false);");
+  lines.push("    resolved.timeline.pause(normalizedFrame / Math.max(resolved.clip.fps, 1), false);");
   lines.push("  }");
   lines.push("");
 }
 
-function toTimelineTargetPath(property: string): string {
+function toTimelineTargetKey(property: string): TimelineTargetKey {
   return property.includes("position")
     ? "position"
     : property.includes("rotation")
@@ -687,8 +855,9 @@ function toTimelineTargetPath(property: string): string {
       : "scale";
 }
 
-function toTimelinePropertyKey(property: string): string {
-  return property.split(".").at(-1) ?? "x";
+function toTimelineAxisKey(property: string): TimelineAxisKey {
+  const propertyKey = property.split(".").at(-1);
+  return propertyKey === "y" || propertyKey === "z" ? propertyKey : "x";
 }
 
 function propertyExpression(node: EditorNode, path: string, bindingAccessor = "resolved"): string {

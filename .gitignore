@@ -11,5 +11,8 @@ dist-export-runner
 graphify-out
 skills-lock.json
 /documents
+!/documents/
+!/documents/FUNCIONALIDADES/
+!/documents/FUNCIONALIDADES/OTIMIZACAO_DO_EXPORT.md
 playgrounds/export-runner/src/generated/*.ts
 !playgrounds/export-runner/src/generated/component.ts

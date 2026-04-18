@@ -4,10 +4,13 @@ export interface ExportRunnerComponentInstance {
   group: Group;
   build: () => Promise<void> | void;
   dispose: () => void;
+  getClipNames?: () => string[];
   play?: () => void;
   pause?: () => void;
+  restart?: (clipName?: string) => void;
+  reverse?: (clipName?: string) => void;
   stop?: () => void;
-  seek?: (frame: number) => void;
+  seek?: (frame: number, clipName?: string) => void;
   createTimeline?: (clipName?: string) => unknown;
   playClip?: (clipName: string) => void;
 }
@@ -30,10 +33,13 @@ export interface GeneratedModuleEntry {
 export interface RunnerAnimationCapabilities {
   canPlay: boolean;
   canPause: boolean;
+  canRestart: boolean;
+  canReverse: boolean;
   canStop: boolean;
   canSeek: boolean;
   canCreateTimeline: boolean;
   canPlayClip: boolean;
+  clipNames: string[];
 }
 
 export function discoverGeneratedModules(
@@ -68,10 +74,13 @@ export function getAnimationCapabilities(instance: ExportRunnerComponentInstance
   return {
     canPlay: typeof instance?.play === "function",
     canPause: typeof instance?.pause === "function",
+    canRestart: typeof instance?.restart === "function",
+    canReverse: typeof instance?.reverse === "function",
     canStop: typeof instance?.stop === "function",
     canSeek: typeof instance?.seek === "function",
     canCreateTimeline: typeof instance?.createTimeline === "function",
     canPlayClip: typeof instance?.playClip === "function",
+    clipNames: typeof instance?.getClipNames === "function" ? instance.getClipNames() : [],
   };
 }
 
