@@ -2330,6 +2330,7 @@ input[type=number] {
 
 .animation-panel-empty-wide {
   padding: 16px;
+  margin: 14px;
 }
 
 .animation-panel-empty-side {
