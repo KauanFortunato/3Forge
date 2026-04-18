@@ -216,6 +216,84 @@ O `3Forge` ja aponta para esta familia visual:
 - Em breakpoints menores, o objetivo e manter previsibilidade estrutural, nao imitar app mobile.
 - O viewport continua a ser o centro, mesmo quando os paineis forem reordenados.
 
+## Mobile e Tablet
+
+### Regra de produto
+
+- `desktop` continua a ser o modo principal de autoria completa.
+- `tablet` pode manter capacidades de edicao, desde que a composicao continue clara e controlada.
+- `phone` nao deve tentar replicar o editor inteiro; por defeito deve assumir papel de `viewer / launcher / playback`.
+
+### Phone
+
+- Em telefone, preferir:
+  - launcher claro
+  - abrir ficheiro
+  - continuar sessao local
+  - abrir recente
+  - viewport dominante
+  - playback de animacao
+- Em telefone, evitar:
+  - scene graph completa
+  - inspector denso
+  - export panel
+  - timeline de autoria completa
+  - toolbar de edicao pesada
+  - menus desktop encolhidos artificialmente
+- O chrome de telefone deve ser curto, direto e orientado a consumo do projeto.
+- O viewport deve ocupar a maior parte da altura util.
+- Status e metadados devem ser resumidos; nao empilhar chips ou badges sem necessidade.
+
+### Tablet
+
+- Tablet pode continuar editavel, mas com composicao compacta e intencional.
+- Em tablet, reorganizar o editor por prioridade:
+  - viewport primeiro
+  - painel lateral/tabulado depois
+  - timeline em modo mais compacto quando necessario
+- A toolbar em tablet deve ser reagrupada por intencao, nao apenas quebrada em varias linhas.
+- Se faltar espaco, reduzir redundancia e cromes antes de esconder capacidades essenciais.
+
+### Landing / Welcome em mobile
+
+- A welcome screen e parte do produto, nao splash descartavel.
+- Em mobile, a landing deve funcionar como launcher real.
+- A landing precisa:
+  - mostrar logo sem corte
+  - permitir scroll vertical quando o conteudo exceder a altura
+  - priorizar as acoes principais antes de blocos decorativos
+  - evitar hero page longa ou demasiado promocional
+- Em `phone`, remover densidade desnecessaria antes de reduzir tipografia ou hit area.
+- Nao usar `overflow: hidden` na shell da landing se isso puder cortar conteudo ou impedir scroll.
+
+### Shell responsiva
+
+- Diferenciar explicitamente `phone`, `tablet` e `desktop` quando o produto mudar de natureza.
+- Nao depender apenas de um unico booleano `compact`.
+- Se `phone` usar viewer mode, a shell deve mudar de estrutura e nao apenas esconder meia duzia de paineis.
+- Footer, viewport e docks precisam continuar em regioes previsiveis em todos os modos.
+
+### Playback mobile
+
+- Em telefone, animacao deve ser controlada por UI curta:
+  - play/pause
+  - stop
+  - clip selector
+  - scrubber simples
+- A UI de playback deve parecer robusta, nao um prototipo improvisado.
+- Se nao houver clips, mostrar estado vazio curto e explicito.
+
+### Regras de decisao para menor largura
+
+- Em telas pequenas, cortar complexidade antes de cortar clareza.
+- Remover chrome desnecessario antes de encolher controles uteis.
+- Manter a ordem:
+  - acao principal
+  - contexto
+  - navegacao secundaria
+  - detalhe tecnico
+- Se um bloco nao ajudar `abrir`, `continuar`, `ver` ou `controlar`, ele provavelmente nao pertence ao phone.
+
 ## Empty States
 
 - Empty states devem orientar a proxima acao, nao apenas descrever ausencia.

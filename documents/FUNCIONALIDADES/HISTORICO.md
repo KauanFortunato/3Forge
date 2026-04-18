@@ -84,4 +84,13 @@ Cada entrada deve indicar:
   Resumo: o editor passou a gerar `manifest.webmanifest`, `service worker` para app shell e meta tags mobile/iOS para instalacao, sem assumir offline completo nesta fase.
   Arquivos principais: `vite.config.mjs`, `scripts/pwa-config.mjs`, `src/editor/pwa.ts`, `src/editor/main.tsx`, `index.html`
   Testes: `src/editor/pwa.test.ts`, `src/editor/pwa-config.test.ts`
-- Reestruturado o fluxo de entrada, persistência local, recentes, Save/Save As, Exit e tratamento de clipboard permission no 3Forge.
+
+- `alterado`: Fluxo de entrada, persistencia local e recentes
+  Resumo: a welcome screen passou a diferenciar reload de reentrada, o workspace local foi separado do ficheiro externo, `Exit` preserva o snapshot local e `Save` / `Save As` passaram a respeitar handle, fallback e recentes.
+  Arquivos principais: `src/editor/react/App.tsx`, `src/editor/workspace.ts`, `src/editor/fileAccess.ts`, `src/editor/recentFileHandles.ts`, `src/editor/clipboard.ts`
+  Testes: `src/editor/react/App.test.tsx`, `src/editor/workspace.test.ts`, `src/editor/fileAccess.test.ts`, `src/editor/clipboard.test.ts`
+
+- `alterado`: UI responsiva para phone viewer e tablet editor
+  Resumo: o editor agora distingue `phone`, `tablet` e `desktop`; telefone usa launcher + viewport + playback mobile, enquanto tablet mantém o editor em modo compacto com toolbar reorganizada e melhor empilhamento dos paineis.
+  Arquivos principais: `src/editor/react/App.tsx`, `src/editor/react/components/PhoneViewerChrome.tsx`, `src/editor/editor.css`
+  Testes: `src/editor/react/App.test.tsx`

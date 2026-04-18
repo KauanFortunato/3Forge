@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "../animation";
 import { createDefaultBlueprint } from "../state";
 import {
   createWorkspaceProjectContext,
@@ -68,12 +69,24 @@ function mockNavigationType(type: "navigate" | "reload") {
 }
 
 function getRecentOpenButton(container: HTMLElement, pattern: RegExp): HTMLButtonElement {
-  const buttons = within(container).getAllByRole("button", { name: pattern });
-  const match = buttons.find((button) => button.classList.contains("landing-recent__open"));
+  const buttons = within(container).getAllByRole("button");
+  const match = buttons.find((button) => (
+    button.classList.contains("landing-recent__open")
+      && pattern.test(button.textContent ?? "")
+  ));
   if (!match) {
     throw new Error(`Recent open button not found for ${pattern}`);
   }
   return match as HTMLButtonElement;
+}
+
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    writable: true,
+    value: width,
+  });
+  window.dispatchEvent(new Event("resize"));
 }
 
 function persistLocalWorkspace(componentName = "Fixture") {
@@ -90,6 +103,7 @@ async function openFileMenu() {
 
 describe("App", () => {
   beforeEach(() => {
+    setViewportWidth(1280);
     window.localStorage.clear();
     window.sessionStorage.clear();
     recentHandleStore.clear();
@@ -107,6 +121,21 @@ describe("App", () => {
     expect(screen.queryByTestId("viewport-host")).toBeNull();
   });
 
+  it("adapts the launcher copy for phone layouts", () => {
+    persistLocalWorkspace("Pocket Resume");
+    setViewportWidth(390);
+
+    const { container } = render(<App />);
+
+    expect(screen.getByRole("heading", { name: "3Forge" })).toBeTruthy();
+    expect(screen.getByText("Phone mode is focused on loading projects and playing timelines. Use tablet or desktop for full editing.")).toBeTruthy();
+    expect(screen.getByText("Recent projects")).toBeTruthy();
+    expect(screen.queryByText("Full editor")).toBeNull();
+    expect(container.querySelector(".app-shell--landing")).toBeTruthy();
+    expect(container.querySelector(".landing-page__logo-image")).toBeTruthy();
+    expect(container.querySelector(".landing-page__quick-actions")).toBeTruthy();
+  });
+
   it("skips the welcome screen on reload when the workspace session is still active", () => {
     persistLocalWorkspace("Reloaded Session");
     markWorkspaceSessionActive();
@@ -116,6 +145,68 @@ describe("App", () => {
 
     expect(screen.getByTestId("viewport-host")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Continue where you left off/i })).toBeNull();
+  });
+
+  it("switches to a phone viewer shell on narrow screens", () => {
+    persistLocalWorkspace("Pocket Review");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+    setViewportWidth(390);
+
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: "Pocket Review" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Exit project" })).toBeTruthy();
+    expect(screen.getByTestId("viewport-host")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "File" })).toBeNull();
+    expect(screen.queryByDisplayValue("Pocket Review")).toBeNull();
+  });
+
+  it("keeps the editor chrome available on tablet layouts", () => {
+    persistLocalWorkspace("Tablet Edit");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+    setViewportWidth(900);
+
+    render(<App />);
+
+    expect(screen.getByRole("button", { name: "File" })).toBeTruthy();
+    expect(screen.getByDisplayValue("Tablet Edit")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Exit project" })).toBeNull();
+  });
+
+  it("offers playback controls on phone layouts without mounting the editor timeline", () => {
+    const blueprint = createDefaultBlueprint();
+    blueprint.componentName = "Phone Motion";
+    const panelNode = blueprint.nodes.find((node) => node.name === "Hero Panel");
+    const track = createAnimationTrack(panelNode?.id ?? blueprint.nodes[1]?.id ?? "node", "transform.position.y");
+    track.keyframes = [
+      createAnimationKeyframe(0, 0.8),
+      createAnimationKeyframe(24, 1.3),
+    ];
+    const clip = createAnimationClip("intro", { durationFrames: 48, tracks: [track] });
+    blueprint.animation = {
+      activeClipId: clip.id,
+      clips: [clip],
+    };
+    persistWorkspace(blueprint, createWorkspaceProjectContext());
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+    setViewportWidth(390);
+
+    render(<App />);
+
+    expect(screen.getByRole("combobox", { name: "Animation clip" })).toBeTruthy();
+    expect(screen.queryByText("Tracks")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Play animation" }));
+    expect(fakeScene.playAnimation).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop animation" }));
+    expect(fakeScene.stopAnimation).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(screen.getByRole("slider", { name: "Animation progress" }), { target: { value: "12" } });
+    expect(fakeScene.seekAnimation).toHaveBeenCalledWith(12);
   });
 
   it("continues from the persisted local project on demand", () => {

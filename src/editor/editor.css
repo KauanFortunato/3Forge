@@ -100,11 +100,19 @@ button {
   overflow: hidden;
 }
 
+.app-shell--phone {
+  grid-template-rows: auto minmax(0, 1fr) 28px;
+}
+
 .app-shell__body {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
+}
+
+.app-shell__body--phone {
+  background: linear-gradient(180deg, #1b1d21 0%, #17191d 100%);
 }
 
 .app-shell__body.has-timeline {
@@ -201,6 +209,120 @@ button {
 
 .secondary-toolbar__right {
   justify-content: flex-end;
+}
+
+.phone-viewer-shell {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.phone-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, #1d1f23 0%, #181a1e 100%);
+}
+
+.phone-viewer-header__meta {
+  min-width: 0;
+}
+
+.phone-viewer-header__eyebrow,
+.phone-playback__eyebrow {
+  margin: 0 0 4px;
+  font-size: 0.62rem;
+  color: var(--text-soft);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.phone-viewer-header__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.phone-viewer-header__subtitle,
+.phone-playback__empty {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--text-soft);
+}
+
+.phone-viewer-header__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.phone-viewer-header__view-toggle {
+  gap: 6px;
+}
+
+.phone-playback {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(180deg, #1b1d22 0%, #17191d 100%);
+}
+
+.phone-playback--empty {
+  gap: 0;
+}
+
+.phone-playback__top,
+.phone-playback__scrubber {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.phone-playback__top {
+  justify-content: space-between;
+}
+
+.phone-playback__meta {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.phone-playback__clip-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.phone-playback__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.phone-playback__scrubber {
+  min-width: 0;
+}
+
+.phone-playback__slider {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.phone-playback__frame-label {
+  flex: 0 0 auto;
+  font-size: 0.74rem;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
 }
 
 .component-name-field {
@@ -373,7 +495,6 @@ button {
 .workspace-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 8px 420px;
-  gap: 10px;
   min-height: 0;
   padding: var(--shell-gap);
   overflow: hidden;
@@ -405,7 +526,6 @@ button {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: linear-gradient(180deg, var(--bg-panel) 0%, #262930 100%);
-  box-shadow: var(--shadow);
   overflow: hidden;
 }
 
@@ -1527,25 +1647,54 @@ input[type=number] {
 
 /* Landing Page */
 .app-shell--landing {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   background: radial-gradient(circle at center, #1c1e26 0%, #121316 100%);
   height: 100vh;
   width: 100vw;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .landing-page {
   max-width: 1120px;
   width: 100%;
+  min-height: 100%;
+  margin: 0 auto;
   padding: 40px;
   animation: landing-fade-in 0.8s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .landing-page__content {
   display: grid;
+  align-content: start;
   gap: 28px;
+}
+
+.landing-page__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.landing-summary-card {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.landing-summary-card__label {
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.landing-summary-card__value {
+  font-size: 0.95rem;
+  color: var(--text);
 }
 
 @keyframes landing-fade-in {
@@ -1561,6 +1710,8 @@ input[type=number] {
 }
 
 .landing-page__logo {
+  display: grid;
+  place-items: center;
   margin-bottom: 8px;
   filter: drop-shadow(0 0 20px rgba(124, 68, 222, 0.3));
 }
@@ -1639,10 +1790,23 @@ input[type=number] {
   color: var(--text);
 }
 
+.landing-page__panel-copy {
+  margin: -2px 0 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+
 .landing-page__actions {
   display: grid;
   grid-template-columns: 1fr;
   gap: 14px;
+}
+
+.landing-page__quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .landing-btn {
@@ -1678,6 +1842,12 @@ input[type=number] {
 .landing-btn--primary {
   border-color: rgba(146, 88, 243, 0.36);
   background: linear-gradient(180deg, rgba(124, 68, 222, 0.18) 0%, rgba(255, 255, 255, 0.04) 100%);
+}
+
+.landing-btn--compact {
+  min-height: 76px;
+  padding: 16px;
+  gap: 12px;
 }
 
 .landing-btn__text {
@@ -1806,6 +1976,20 @@ input[type=number] {
   border: 1px solid var(--border);
   border-radius: 999px;
   background: #22242a;
+}
+
+.statusbar--phone {
+  padding: 0 10px;
+}
+
+.statusbar--phone .statusbar__message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar--phone .statusbar__right {
+  flex: 0 0 auto;
 }
 
 .animation-panel {
@@ -2452,17 +2636,34 @@ input[type=number] {
     max-width: 960px;
   }
 
+  .landing-page__summary {
+    grid-template-columns: 1fr;
+  }
+
   .landing-page__grid {
     grid-template-columns: 1fr;
   }
 
   .secondary-toolbar {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    row-gap: 10px;
   }
 
-  .secondary-toolbar__center,
-  .secondary-toolbar__right {
+  .secondary-toolbar__left {
+    grid-column: 1 / -1;
+  }
+
+  .secondary-toolbar__center {
+    grid-column: 1 / 2;
     justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .secondary-toolbar__right {
+    grid-column: 2 / 3;
+    justify-content: flex-end;
+    flex-wrap: wrap;
   }
 
   .workspace-shell {
@@ -2555,6 +2756,127 @@ input[type=number] {
   .animation-lane__actions,
   .animation-ruler-row__actions-spacer,
   .animation-row-group__spacer-actions {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell--landing {
+    height: 100%;
+    min-height: 100vh;
+  }
+
+  .landing-page {
+    padding: 20px 14px;
+  }
+
+  .landing-page__content {
+    gap: 18px;
+  }
+
+  .landing-page__summary {
+    gap: 10px;
+  }
+
+  .landing-page__logo {
+    min-height: 72px;
+  }
+
+  .landing-page__title {
+    font-size: 2rem;
+  }
+
+  .landing-page__subtitle {
+    font-size: 0.9rem;
+  }
+
+  .landing-page__panel {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .landing-page--phone .landing-page__panel-title {
+    font-size: 1.05rem;
+  }
+
+  .landing-page--phone .landing-page__panel-copy {
+    font-size: 0.78rem;
+  }
+
+  .landing-page--phone .landing-page__logo-image {
+    width: 64px;
+    height: 64px;
+  }
+
+  .landing-page__actions {
+    gap: 10px;
+  }
+
+  .landing-page__quick-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-btn {
+    padding: 14px;
+  }
+
+  .landing-btn--compact {
+    min-height: 0;
+    padding: 14px;
+  }
+
+  .landing-btn__desc {
+    font-size: 0.76rem;
+  }
+
+  .landing-page__recent-list {
+    gap: 10px;
+  }
+
+  .landing-page__footer {
+    font-size: 0.68rem;
+    line-height: 1.5;
+  }
+
+  .phone-viewer-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .phone-viewer-header__actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .phone-playback {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .phone-playback__top,
+  .phone-playback__scrubber {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .phone-playback__controls {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .phone-playback__controls .tool-button {
+    flex: 1 1 0;
+  }
+
+  .phone-playback__frame-label:last-child {
+    align-self: flex-end;
+  }
+
+  .statusbar--phone {
+    gap: 8px;
+  }
+
+  .statusbar--phone .statusbar__right {
     display: none;
   }
 }

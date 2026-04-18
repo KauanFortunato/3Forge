@@ -65,6 +65,7 @@ import {
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MenuBar } from "./components/MenuBar";
 import { Modal } from "./components/Modal";
+import { PhonePlaybackBar, PhoneViewerHeader } from "./components/PhoneViewerChrome";
 import { SceneGraphPanel } from "./components/SceneGraphPanel";
 import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
@@ -89,6 +90,10 @@ interface InsertTarget {
 const RIGHT_PANEL_WIDTH_KEY = "3forge-right-panel-width";
 const TIMELINE_HEIGHT_KEY = "3forge-timeline-height";
 const TIMELINE_VISIBLE_KEY = "3forge-timeline-visible";
+const PHONE_LAYOUT_MAX_WIDTH = 720;
+const TABLET_LAYOUT_MAX_WIDTH = 1080;
+
+type LayoutMode = "phone" | "tablet" | "desktop";
 
 function canUseLocalStorage(): boolean {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
@@ -151,7 +156,20 @@ function getProjectSourceLabel(source: WorkspaceProjectContext["source"], canOve
   return "Local workspace";
 }
 
+function resolveLayoutMode(width: number): LayoutMode {
+  if (width <= PHONE_LAYOUT_MAX_WIDTH) {
+    return "phone";
+  }
+
+  if (width <= TABLET_LAYOUT_MAX_WIDTH) {
+    return "tablet";
+  }
+
+  return "desktop";
+}
+
 interface LandingPageProps {
+  layoutMode: LayoutMode;
   persistedWorkspace: PersistedWorkspaceRecord | null;
   recentProjects: RecentProjectEntry[];
   onContinue: () => void;
@@ -162,6 +180,7 @@ interface LandingPageProps {
 }
 
 function LandingPage({
+  layoutMode,
   persistedWorkspace,
   recentProjects,
   onContinue,
@@ -173,27 +192,62 @@ function LandingPage({
   const localProjectLabel = persistedWorkspace?.context.fileName
     ?? persistedWorkspace?.blueprint.componentName
     ?? "Last session";
+  const isPhoneLayout = layoutMode === "phone";
+  const isTabletLayout = layoutMode === "tablet";
   const localProjectSourceLabel = persistedWorkspace
     ? getProjectSourceLabel(persistedWorkspace.context.source, persistedWorkspace.context.canOverwriteFile)
     : null;
 
   return (
-    <div className="landing-page">
+    <div className={`landing-page landing-page--${layoutMode}`}>
       <div className="landing-page__content">
         <div className="landing-page__logo">
           <img src={APP_LOGO_SRC} alt="3Forge" className="landing-page__logo-image" />
         </div>
-        <h1 className="landing-page__title">3Forge Editor</h1>
+        <h1 className="landing-page__title">{isPhoneLayout ? "3Forge" : "3Forge Editor"}</h1>
         <p className="landing-page__subtitle">
-          Design, prototype, and export high-performance 3D components for your applications.
+          {isPhoneLayout
+            ? "Open projects, review scenes and play animations on this device."
+            : isTabletLayout
+              ? "Resume quickly, open files and keep editing in a compact workspace."
+              : "Design, prototype, and export high-performance 3D components for your applications."}
         </p>
+
+        {!isPhoneLayout ? (
+          <div className="landing-page__summary">
+            <div className="landing-summary-card">
+              <span className="landing-summary-card__label">Mode</span>
+              <strong className="landing-summary-card__value">{isTabletLayout ? "Compact editor" : "Full editor"}</strong>
+            </div>
+            <div className="landing-summary-card">
+              <span className="landing-summary-card__label">Local session</span>
+              <strong className="landing-summary-card__value">{persistedWorkspace ? "Available" : "Empty"}</strong>
+            </div>
+            <div className="landing-summary-card">
+              <span className="landing-summary-card__label">Recents</span>
+              <strong className="landing-summary-card__value">{recentProjects.length}</strong>
+            </div>
+          </div>
+        ) : null}
 
         <div className="landing-page__grid">
           <section className="landing-page__panel landing-page__panel--primary">
             <div className="landing-page__panel-header">
               <p className="landing-page__eyebrow">Workspace</p>
-              <h2 className="landing-page__panel-title">Start from a local project or a file.</h2>
+              <h2 className="landing-page__panel-title">
+                {isPhoneLayout
+                  ? "Open or resume a project on this device."
+                  : isTabletLayout
+                    ? "Resume fast or start another project."
+                    : "Start from a local project or a file."}
+              </h2>
             </div>
+
+            {isPhoneLayout ? (
+              <p className="landing-page__panel-copy">
+                Phone mode is focused on loading projects and playing timelines. Use tablet or desktop for full editing.
+              </p>
+            ) : null}
 
             <div className="landing-page__actions">
               {persistedWorkspace ? (
@@ -206,28 +260,50 @@ function LandingPage({
                 </button>
               ) : null}
 
-              <button type="button" className="landing-btn landing-btn--secondary" onClick={onOpenFile}>
-                <DownloadIcon width={20} height={20} />
-                <div className="landing-btn__text">
-                  <span className="landing-btn__label">Open file</span>
-                  <span className="landing-btn__desc">Load a blueprint from your machine</span>
-                </div>
-              </button>
+              {isPhoneLayout ? (
+                <div className="landing-page__quick-actions">
+                  <button type="button" className="landing-btn landing-btn--secondary landing-btn--compact" onClick={onOpenFile}>
+                    <DownloadIcon width={18} height={18} />
+                    <div className="landing-btn__text">
+                      <span className="landing-btn__label">Open file</span>
+                      <span className="landing-btn__desc">Load a blueprint</span>
+                    </div>
+                  </button>
 
-              <button type="button" className="landing-btn landing-btn--secondary" onClick={onStartNew}>
-                <PlusIcon width={20} height={20} />
-                <div className="landing-btn__text">
-                  <span className="landing-btn__label">New project</span>
-                  <span className="landing-btn__desc">Start from a clean slate</span>
+                  <button type="button" className="landing-btn landing-btn--secondary landing-btn--compact" onClick={onStartNew}>
+                    <PlusIcon width={18} height={18} />
+                    <div className="landing-btn__text">
+                      <span className="landing-btn__label">New project</span>
+                      <span className="landing-btn__desc">Start clean</span>
+                    </div>
+                  </button>
                 </div>
-              </button>
+              ) : (
+                <>
+                  <button type="button" className="landing-btn landing-btn--secondary" onClick={onOpenFile}>
+                    <DownloadIcon width={20} height={20} />
+                    <div className="landing-btn__text">
+                      <span className="landing-btn__label">Open file</span>
+                      <span className="landing-btn__desc">Load a blueprint from your machine</span>
+                    </div>
+                  </button>
+
+                  <button type="button" className="landing-btn landing-btn--secondary" onClick={onStartNew}>
+                    <PlusIcon width={20} height={20} />
+                    <div className="landing-btn__text">
+                      <span className="landing-btn__label">New project</span>
+                      <span className="landing-btn__desc">Start from a clean slate</span>
+                    </div>
+                  </button>
+                </>
+              )}
             </div>
           </section>
 
           <section className="landing-page__panel landing-page__panel--recent">
             <div className="landing-page__panel-header">
               <p className="landing-page__eyebrow">Recents</p>
-              <h2 className="landing-page__panel-title">Open recent</h2>
+              <h2 className="landing-page__panel-title">{isPhoneLayout ? "Recent projects" : "Open recent"}</h2>
             </div>
 
             {recentProjects.length > 0 ? (
@@ -268,7 +344,9 @@ function LandingPage({
         </div>
 
         <div className="landing-page__footer">
-          Reload keeps your current session in place. Reopening the app brings you back to this launcher without deleting local work.
+          {isPhoneLayout
+            ? "Reload keeps your current session. Leaving the app returns here without deleting local work."
+            : "Reload keeps your current session in place. Reopening the app brings you back to this launcher without deleting local work."}
         </div>
       </div>
     </div>
@@ -310,7 +388,9 @@ export function App() {
   const [timelineHeight, setTimelineHeight] = useState(() => readStoredNumberPreference(TIMELINE_HEIGHT_KEY, 300));
   const [isTimelineVisible, setIsTimelineVisible] = useState(() => readStoredBooleanPreference(TIMELINE_VISIBLE_KEY, true));
   const [resizeMode, setResizeMode] = useState<"hierarchy" | "sidebar" | "timeline" | null>(null);
-  const [isCompactLayout, setIsCompactLayout] = useState(() => typeof window !== "undefined" && window.innerWidth <= 840);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => (
+    typeof window === "undefined" ? "desktop" : resolveLayoutMode(window.innerWidth)
+  ));
 
   const sceneRef = useRef<SceneEditor | null>(null);
   const clipboardRef = useRef<NodeClipboard | null>(null);
@@ -326,7 +406,11 @@ export function App() {
   const blueprintJson = useMemo(() => exportBlueprintToJson(blueprintSnapshot), [blueprintSnapshot]);
   const typeScriptExport = useMemo(() => generateTypeScriptComponent(blueprintSnapshot), [blueprintSnapshot]);
   const exportPreview = exportMode === "json" ? blueprintJson : typeScriptExport;
-  const shellBodyClassName = `app-shell__body${isTimelineVisible ? " has-timeline" : ""}`;
+  const isPhoneLayout = layoutMode === "phone";
+  const isCompactLayout = layoutMode !== "desktop";
+  const effectiveToolMode = isPhoneLayout ? "select" : currentTool;
+  const showEditingTimeline = isTimelineVisible && !isPhoneLayout;
+  const shellBodyClassName = `app-shell__body${showEditingTimeline ? " has-timeline" : ""}${isPhoneLayout ? " app-shell__body--phone" : ""}`;
   const rightPanelStyle = useMemo(
     () => ({ "--hierarchy-panel-height": `${hierarchyHeight}px` }) as CSSProperties,
     [hierarchyHeight],
@@ -352,6 +436,7 @@ export function App() {
     () => activeClip?.tracks ?? [],
     [activeClip],
   );
+  const activeProjectLabel = projectContext.fileName ?? storeView.blueprintComponentName;
   const animatedNodeIds = useMemo(
     () => new Set(storeView.animation.clips.flatMap((clip) => clip.tracks.map((track) => track.nodeId))),
     [storeView.animation.clips],
@@ -434,13 +519,17 @@ export function App() {
 
   useEffect(() => {
     const updateLayoutMode = () => {
-      setIsCompactLayout(window.innerWidth <= 840);
+      setLayoutMode(resolveLayoutMode(window.innerWidth));
     };
 
     updateLayoutMode();
     window.addEventListener("resize", updateLayoutMode);
     return () => window.removeEventListener("resize", updateLayoutMode);
   }, []);
+
+  useEffect(() => {
+    sceneRef.current?.setTransformMode(effectiveToolMode);
+  }, [effectiveToolMode]);
 
   useEffect(() => {
     return () => {
@@ -1409,8 +1498,9 @@ export function App() {
 
   if (!isStarted) {
     return (
-      <div className="app-shell app-shell--landing">
+      <div className={`app-shell app-shell--landing app-shell--${layoutMode}`}>
         <LandingPage
+          layoutMode={layoutMode}
           persistedWorkspace={persistedWorkspace}
           recentProjects={recentProjects}
           onContinue={handleContinueWorkspace}
@@ -1440,202 +1530,264 @@ export function App() {
   }
 
   return (
-    <div className="app-shell" data-status-tick={statusTick}>
-      <MenuBar menus={menus} />
+    <div className={`app-shell app-shell--${layoutMode}`} data-status-tick={statusTick}>
+      {!isPhoneLayout ? <MenuBar menus={menus} /> : null}
 
-      <SecondaryToolbar
-        componentName={storeView.blueprintComponentName}
-        selectedLabel={selectedNodeCount > 1
-          ? `${selectedNodeCount} selected`
-          : selectedNode
-            ? `${selectedNode.name} | ${selectedNode.type === "group" ? "Group" : "Mesh"}`
-            : "No selection"}
-        nodeCount={storeView.blueprintNodes.length}
-        canUndo={storeView.canUndo}
-        canRedo={storeView.canRedo}
-        currentTool={currentTool}
-        viewMode={storeView.viewMode}
-        onComponentNameChange={(value) => store.updateComponentName(value)}
-        onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}
-        onRedo={() => { if (store.redo()) setTransientStatus("Redo."); }}
-        onToolChange={handleToolChange}
-        onViewModeChange={(mode) => store.setViewMode(mode)}
-        onFrame={handleFrameSelection}
-        isTimelineVisible={isTimelineVisible}
-        onToggleTimeline={() => setIsTimelineVisible((value) => !value)}
-      />
+      {!isPhoneLayout ? (
+        <SecondaryToolbar
+          componentName={storeView.blueprintComponentName}
+          selectedLabel={selectedNodeCount > 1
+            ? `${selectedNodeCount} selected`
+            : selectedNode
+              ? `${selectedNode.name} | ${selectedNode.type === "group" ? "Group" : "Mesh"}`
+              : "No selection"}
+          nodeCount={storeView.blueprintNodes.length}
+          canUndo={storeView.canUndo}
+          canRedo={storeView.canRedo}
+          currentTool={currentTool}
+          viewMode={storeView.viewMode}
+          onComponentNameChange={(value) => store.updateComponentName(value)}
+          onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}
+          onRedo={() => { if (store.redo()) setTransientStatus("Redo."); }}
+          onToolChange={handleToolChange}
+          onViewModeChange={(mode) => store.setViewMode(mode)}
+          onFrame={handleFrameSelection}
+          isTimelineVisible={isTimelineVisible}
+          onToggleTimeline={() => setIsTimelineVisible((value) => !value)}
+        />
+      ) : (
+        <PhoneViewerHeader
+          projectName={activeProjectLabel}
+          sourceLabel={getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)}
+          viewMode={storeView.viewMode}
+          onFrame={handleFrameSelection}
+          onViewModeChange={(mode) => store.setViewMode(mode)}
+          onExit={handleExitProject}
+        />
+      )}
 
       <div className={shellBodyClassName}>
-        <div
-          className="workspace-shell"
-          style={{ gridTemplateColumns: isCompactLayout ? "1fr" : `minmax(0, 1fr) 8px ${rightPanelWidth}px` }}
-        >
-          <main className="viewport-panel">
-            <div className="viewport-panel__header viewport-panel__header--compact">
-              <span className="viewport-panel__title">Viewport</span>
-              <div className="viewport-panel__badges">
-                <span className="badge">{currentTool}</span>
-                <span className="badge">{storeView.blueprintNodes.length} items</span>
-              </div>
-            </div>
-
-            <div className="viewport-panel__body">
-              <ViewportHost
-                store={store}
-                onSceneReady={(scene) => {
-                  animationFrameUnsubscribeRef.current?.();
-                  sceneRef.current = scene;
-                  scene?.setTransformMode(currentTool);
-                  if (scene) {
-                    scene.seekAnimation(currentFrame);
-                    animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
-                  } else {
-                    animationFrameUnsubscribeRef.current = null;
-                  }
-                }}
-                onContextMenu={openViewportContextMenu}
-              />
-            </div>
-          </main>
-
-          {!isCompactLayout ? (
-            <div
-              className={`panel-splitter panel-splitter--vertical${resizeMode === "sidebar" ? " is-active" : ""}`}
-              onPointerDown={startSidebarResizing}
-            />
-          ) : null}
-
-          <aside className="panel panel--right panel--split" style={rightPanelStyle}>
-            <section className="panel-split__top">
-              <div className="panel__header">
-                <p className="panel__eyebrow">Hierarchy</p>
-                <span className="panel__meta">{storeView.blueprintNodes.length} items</span>
+        {isPhoneLayout ? (
+          <div className="phone-viewer-shell">
+            <main className="viewport-panel viewport-panel--phone">
+              <div className="viewport-panel__header viewport-panel__header--compact">
+                <span className="viewport-panel__title">Viewport</span>
+                <div className="viewport-panel__badges">
+                  <span className="badge">{storeView.viewMode}</span>
+                  <span className="badge">{storeView.blueprintNodes.length} items</span>
+                </div>
               </div>
 
-              <div className="panel__body panel__body--flush">
-                <SceneGraphPanel
-                  nodes={storeView.blueprintNodes}
-                  animatedNodeIds={animatedNodeIds}
-                  selectedNodeId={storeView.selectedNodeId}
-                  selectedNodeIds={storeView.selectedNodeIds}
-                  onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
-                  onMoveNode={handleSceneMove}
-                  onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
-                  onContextMenu={openSceneGraphContextMenu}
+              <div className="viewport-panel__body">
+                <ViewportHost
+                  store={store}
+                  onSceneReady={(scene) => {
+                    animationFrameUnsubscribeRef.current?.();
+                    sceneRef.current = scene;
+                    scene?.setTransformMode(effectiveToolMode);
+                    if (scene) {
+                      scene.seekAnimation(currentFrame);
+                      animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
+                    } else {
+                      animationFrameUnsubscribeRef.current = null;
+                    }
+                  }}
+                  onContextMenu={(event) => event.preventDefault()}
                 />
               </div>
-            </section>
+            </main>
 
-            <div
-              className={`panel-splitter panel-splitter--horizontal${resizeMode === "hierarchy" ? " is-active" : ""}`}
-              onPointerDown={startHierarchyResizing}
-            />
-
-            <section className="panel-split__bottom">
-              <div className="panel-tabs">
-                <button type="button" className={`panel-tab${rightPanelTab === "inspector" ? " is-active" : ""}`} onClick={() => setRightPanelTab("inspector")}>Inspector</button>
-                <button type="button" className={`panel-tab${rightPanelTab === "fields" ? " is-active" : ""}`} onClick={() => setRightPanelTab("fields")}>Fields</button>
-                <button type="button" className={`panel-tab${rightPanelTab === "export" ? " is-active" : ""}`} onClick={() => setRightPanelTab("export")}>Export</button>
-              </div>
-
-              <div className="panel__body">
-                {rightPanelTab === "inspector" ? (
-                  <InspectorPanel
-                    node={inspectorNode}
-                    emptyMessage={selectedNodeCount > 1 ? "Inspector indisponível para seleção múltipla." : undefined}
-                    fonts={storeView.fonts}
-                    onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
-                    onParentChange={(nodeId, parentId) => {
-                      const eligibleChildren = store.getNodeChildren(parentId);
-                      store.moveNode(nodeId, parentId, eligibleChildren.length);
-                    }}
-                    onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
-                    onGroupPivotPresetApply={handleApplyGroupPivotPreset}
-                    getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
-                    onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
-                    onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
-                    onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
-                    onImportFont={() => fontInputRef.current?.click()}
-                    onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
-                  />
-                ) : null}
-
-                {rightPanelTab === "fields" ? (
-                  <FieldsPanel
-                    entries={storeView.editableFields}
-                    onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
-                    onRemoveEditable={(nodeId, path) => {
-                      const node = store.getNode(nodeId);
-                      const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
-                      if (definition) {
-                        store.toggleEditableProperty(nodeId, definition, false);
-                      }
-                    }}
-                  />
-                ) : null}
-
-                {rightPanelTab === "export" ? (
-                  <ExportPanel
-                    exportMode={exportMode}
-                    preview={exportPreview}
-                    onExportModeChange={setExportMode}
-                    onCopy={copyExportText}
-                    onDownload={() => downloadExportFile(exportMode)}
-                  />
-                ) : null}
-              </div>
-            </section>
-          </aside>
-        </div>
-
-        {isTimelineVisible ? (
-          <div className="app-shell__timeline-dock" style={timelineDockStyle}>
-            <div
-              className={`panel-splitter panel-splitter--horizontal panel-splitter--timeline${resizeMode === "timeline" ? " is-active" : ""}`}
-              onPointerDown={startTimelineResizing}
-            />
-            <AnimationTimeline
-              animation={storeView.animation}
-              nodes={storeView.blueprintNodes}
-              selectedNode={selectedNode}
+            <PhonePlaybackBar
+              clips={storeView.animation.clips}
+              activeClipId={storeView.animation.activeClipId || activeClip?.id || null}
               currentFrame={currentFrame}
               isPlaying={isAnimationPlaying}
-              selectedTrackId={selectedTrackId}
-              selectedKeyframeId={selectedKeyframeId}
+              onSelectClip={handleSelectAnimationClip}
               onPlayToggle={handleAnimationPlayToggle}
               onStop={handleAnimationStop}
               onFrameChange={handleTimelineFrameChange}
-              onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
-              onCreateClip={handleCreateAnimationClip}
-              onSelectClip={handleSelectAnimationClip}
-              onRenameClip={handleRenameAnimationClip}
-              onRemoveClip={handleRemoveAnimationClip}
-              onAddTrack={handleAddAnimationTrack}
-              onRemoveTrack={handleRemoveAnimationTrack}
-              onAddKeyframe={handleAddAnimationKeyframe}
-              onSelectTrack={(trackId) => setSelectedTrackId(trackId)}
-              onSelectKeyframe={(trackId, keyframeId) => {
-                setSelectedTrackId(trackId);
-                setSelectedKeyframeId(keyframeId);
-              }}
-              onUpdateKeyframe={handleUpdateAnimationKeyframe}
-              onRemoveKeyframe={handleRemoveAnimationKeyframe}
-              onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
-              onEndKeyframeDrag={() => {
-                store.commitHistoryTransaction("ui");
-                sceneRef.current?.seekAnimation(currentFrame);
-              }}
             />
           </div>
-        ) : null}
+        ) : (
+          <>
+            <div
+              className={`workspace-shell workspace-shell--${layoutMode}`}
+              style={{ gridTemplateColumns: isCompactLayout ? "1fr" : `minmax(0, 1fr) 8px ${rightPanelWidth}px` }}
+            >
+              <main className="viewport-panel">
+                <div className="viewport-panel__header viewport-panel__header--compact">
+                  <span className="viewport-panel__title">Viewport</span>
+                  <div className="viewport-panel__badges">
+                    <span className="badge">{currentTool}</span>
+                    <span className="badge">{storeView.blueprintNodes.length} items</span>
+                  </div>
+                </div>
+
+                <div className="viewport-panel__body">
+                  <ViewportHost
+                    store={store}
+                    onSceneReady={(scene) => {
+                      animationFrameUnsubscribeRef.current?.();
+                      sceneRef.current = scene;
+                      scene?.setTransformMode(effectiveToolMode);
+                      if (scene) {
+                        scene.seekAnimation(currentFrame);
+                        animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
+                      } else {
+                        animationFrameUnsubscribeRef.current = null;
+                      }
+                    }}
+                    onContextMenu={openViewportContextMenu}
+                  />
+                </div>
+              </main>
+
+              {!isCompactLayout ? (
+                <div
+                  className={`panel-splitter panel-splitter--vertical${resizeMode === "sidebar" ? " is-active" : ""}`}
+                  onPointerDown={startSidebarResizing}
+                />
+              ) : null}
+
+              <aside className="panel panel--right panel--split" style={rightPanelStyle}>
+                <section className="panel-split__top">
+                  <div className="panel__header">
+                    <p className="panel__eyebrow">Hierarchy</p>
+                    <span className="panel__meta">{storeView.blueprintNodes.length} items</span>
+                  </div>
+
+                  <div className="panel__body panel__body--flush">
+                    <SceneGraphPanel
+                      nodes={storeView.blueprintNodes}
+                      animatedNodeIds={animatedNodeIds}
+                      selectedNodeId={storeView.selectedNodeId}
+                      selectedNodeIds={storeView.selectedNodeIds}
+                      onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
+                      onMoveNode={handleSceneMove}
+                      onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
+                      onContextMenu={openSceneGraphContextMenu}
+                    />
+                  </div>
+                </section>
+
+                <div
+                  className={`panel-splitter panel-splitter--horizontal${resizeMode === "hierarchy" ? " is-active" : ""}`}
+                  onPointerDown={startHierarchyResizing}
+                />
+
+                <section className="panel-split__bottom">
+                  <div className="panel-tabs">
+                    <button type="button" className={`panel-tab${rightPanelTab === "inspector" ? " is-active" : ""}`} onClick={() => setRightPanelTab("inspector")}>Inspector</button>
+                    <button type="button" className={`panel-tab${rightPanelTab === "fields" ? " is-active" : ""}`} onClick={() => setRightPanelTab("fields")}>Fields</button>
+                    <button type="button" className={`panel-tab${rightPanelTab === "export" ? " is-active" : ""}`} onClick={() => setRightPanelTab("export")}>Export</button>
+                  </div>
+
+                  <div className="panel__body">
+                    {rightPanelTab === "inspector" ? (
+                      <InspectorPanel
+                        node={inspectorNode}
+                        emptyMessage={selectedNodeCount > 1 ? "Inspector indisponível para seleção múltipla." : undefined}
+                        fonts={storeView.fonts}
+                        onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
+                        onParentChange={(nodeId, parentId) => {
+                          const eligibleChildren = store.getNodeChildren(parentId);
+                          store.moveNode(nodeId, parentId, eligibleChildren.length);
+                        }}
+                        onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
+                        onGroupPivotPresetApply={handleApplyGroupPivotPreset}
+                        getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
+                        onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
+                        onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
+                        onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
+                        onImportFont={() => fontInputRef.current?.click()}
+                        onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
+                      />
+                    ) : null}
+
+                    {rightPanelTab === "fields" ? (
+                      <FieldsPanel
+                        entries={storeView.editableFields}
+                        onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
+                        onRemoveEditable={(nodeId, path) => {
+                          const node = store.getNode(nodeId);
+                          const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
+                          if (definition) {
+                            store.toggleEditableProperty(nodeId, definition, false);
+                          }
+                        }}
+                      />
+                    ) : null}
+
+                    {rightPanelTab === "export" ? (
+                      <ExportPanel
+                        exportMode={exportMode}
+                        preview={exportPreview}
+                        onExportModeChange={setExportMode}
+                        onCopy={copyExportText}
+                        onDownload={() => downloadExportFile(exportMode)}
+                      />
+                    ) : null}
+                  </div>
+                </section>
+              </aside>
+            </div>
+
+            {showEditingTimeline ? (
+              <div className="app-shell__timeline-dock" style={timelineDockStyle}>
+                <div
+                  className={`panel-splitter panel-splitter--horizontal panel-splitter--timeline${resizeMode === "timeline" ? " is-active" : ""}`}
+                  onPointerDown={startTimelineResizing}
+                />
+                <AnimationTimeline
+                  animation={storeView.animation}
+                  nodes={storeView.blueprintNodes}
+                  selectedNode={selectedNode}
+                  currentFrame={currentFrame}
+                  isPlaying={isAnimationPlaying}
+                  selectedTrackId={selectedTrackId}
+                  selectedKeyframeId={selectedKeyframeId}
+                  onPlayToggle={handleAnimationPlayToggle}
+                  onStop={handleAnimationStop}
+                  onFrameChange={handleTimelineFrameChange}
+                  onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
+                  onCreateClip={handleCreateAnimationClip}
+                  onSelectClip={handleSelectAnimationClip}
+                  onRenameClip={handleRenameAnimationClip}
+                  onRemoveClip={handleRemoveAnimationClip}
+                  onAddTrack={handleAddAnimationTrack}
+                  onRemoveTrack={handleRemoveAnimationTrack}
+                  onAddKeyframe={handleAddAnimationKeyframe}
+                  onSelectTrack={(trackId) => setSelectedTrackId(trackId)}
+                  onSelectKeyframe={(trackId, keyframeId) => {
+                    setSelectedTrackId(trackId);
+                    setSelectedKeyframeId(keyframeId);
+                  }}
+                  onUpdateKeyframe={handleUpdateAnimationKeyframe}
+                  onRemoveKeyframe={handleRemoveAnimationKeyframe}
+                  onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
+                  onEndKeyframeDrag={() => {
+                    store.commitHistoryTransaction("ui");
+                    sceneRef.current?.seekAnimation(currentFrame);
+                  }}
+                />
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
 
-      <footer className="statusbar">
+      <footer className={`statusbar${isPhoneLayout ? " statusbar--phone" : ""}`}>
         <span className="statusbar__message">{statusText}</span>
         <div className="statusbar__right">
-          <span className="statusbar__chip">local workspace saved</span>
-          <span className="statusbar__chip">{getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)}</span>
-          <span className="statusbar__chip">{storeView.blueprintNodes.length} nodes</span>
+          {isPhoneLayout ? (
+            <span className="statusbar__chip">{`${getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)} · ${storeView.blueprintNodes.length} nodes`}</span>
+          ) : (
+            <>
+              <span className="statusbar__chip">local workspace saved</span>
+              <span className="statusbar__chip">{getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)}</span>
+              <span className="statusbar__chip">{storeView.blueprintNodes.length} nodes</span>
+            </>
+          )}
         </div>
       </footer>
 

@@ -36,5 +36,5 @@ jobs:
       - name: Restart container
         run: |
           cd /home/umbrel/umbrel/app-data/3forge
-          # docker compose up -d
+          docker compose up -d
           docker compose restart
