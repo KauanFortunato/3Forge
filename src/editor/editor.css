@@ -1718,8 +1718,8 @@ input[type=number] {
 
 .landing-page__logo-image {
   display: block;
-  width: 80px;
-  height: 80px;
+  width: 100px;
+  height: 100px;
   margin: 0 auto;
   object-fit: contain;
 }

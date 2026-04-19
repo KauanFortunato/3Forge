@@ -3,6 +3,9 @@ export const PWA_BACKGROUND_COLOR = "#111318";
 export const PWA_APP_NAME = "3Forge";
 export const PWA_APP_SHORT_NAME = "3Forge";
 export const PWA_DESCRIPTION = "Editor 3D visual baseado em Three.js, React e TypeScript.";
+export const PWA_ANDROID_ICON_192 = "/assets/android/icons/android-icon-192.png";
+export const PWA_ANDROID_ICON_512 = "/assets/android/icons/android-icon-512.png";
+export const PWA_APPLE_ICON_180 = "/assets/ios/icons/ios-icon-180.png";
 
 export const pwaManifest = {
   id: "/",
@@ -14,22 +17,22 @@ export const pwaManifest = {
   display: "standalone",
   scope: "/",
   start_url: "/",
-  lang: "en",
+  lang: "pt",
   icons: [
     {
-      src: "/assets/android/icons/android-icon-192.png",
+      src: PWA_ANDROID_ICON_192,
       sizes: "192x192",
       type: "image/png",
-      purpose: "any",
+      purpose: "any maskable",
     },
     {
-      src: "/assets/android/icons/android-icon-512.png",
+      src: PWA_ANDROID_ICON_512,
       sizes: "512x512",
       type: "image/png",
-      purpose: "any",
+      purpose: "any maskable",
     },
     {
-      src: "/assets/ios/icons/ios-icon-180.png",
+      src: PWA_APPLE_ICON_180,
       sizes: "180x180",
       type: "image/png",
       purpose: "any",
@@ -38,7 +41,7 @@ export const pwaManifest = {
 };
 
 const APPLE_TOUCH_ICONS = [
-  { href: "/assets/ios/icons/ios-icon-180.png", sizes: "180x180" },
+  { href: PWA_APPLE_ICON_180, sizes: "180x180" },
   { href: "/assets/ios/icons/ios-icon-152.png", sizes: "152x152" },
   { href: "/assets/ios/icons/ios-icon-120.png", sizes: "120x120" },
 ];
@@ -124,6 +127,16 @@ export function createPwaHeadTags() {
     },
     {
       tag: "meta",
+      attrs: { name: "msapplication-TileColor", content: PWA_BACKGROUND_COLOR },
+      injectTo: "head",
+    },
+    {
+      tag: "meta",
+      attrs: { name: "msapplication-TileImage", content: PWA_ANDROID_ICON_192 },
+      injectTo: "head",
+    },
+    {
+      tag: "meta",
       attrs: { name: "description", content: PWA_DESCRIPTION },
       injectTo: "head",
     },
@@ -134,6 +147,15 @@ export function createPwaHeadTags() {
       tag: "link",
       attrs: {
         rel: "apple-touch-icon",
+        href: icon.href,
+        sizes: icon.sizes,
+      },
+      injectTo: "head",
+    });
+    tags.push({
+      tag: "link",
+      attrs: {
+        rel: "apple-touch-icon-precomposed",
         href: icon.href,
         sizes: icon.sizes,
       },
