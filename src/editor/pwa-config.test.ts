@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-// @ts-expect-error The PWA config is authored in Vite-side ESM and validated by build output.
+// @ts-ignore The PWA config is authored in Vite-side ESM and validated by build output.
 import {
   PWA_ANDROID_ICON_192,
   PWA_ANDROID_ICON_512,

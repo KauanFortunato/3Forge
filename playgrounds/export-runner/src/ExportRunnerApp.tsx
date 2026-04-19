@@ -200,18 +200,27 @@ export function ExportRunnerApp() {
     setStatus("Disposed exported component.");
   }, [disposeMountedComponent]);
 
-  const runAnimationAction = useCallback((action: "play" | "pause" | "restart" | "reverse" | "stop") => {
+  const runAnimationAction = useCallback(async (action: "play" | "pause" | "restart" | "reverse" | "stop") => {
     const instance = instanceRef.current;
     const method = instance?.[action];
     if (typeof method !== "function") {
       return;
     }
 
-    method.call(instance);
-    setStatus(`${action[0].toUpperCase()}${action.slice(1)} animation.`);
+    try {
+      const result = await method.call(instance);
+      if (result && typeof result === "object" && "status" in result && "clipName" in result) {
+        const playbackResult = result as { status: string; clipName: string; direction: string };
+        setStatus(`${action[0].toUpperCase()}${action.slice(1)} ${playbackResult.direction} playback ${playbackResult.status} for "${playbackResult.clipName}".`);
+        return;
+      }
+      setStatus(`${action[0].toUpperCase()}${action.slice(1)} animation.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : `Unable to ${action} animation.`);
+    }
   }, []);
 
-  const handleSeek = useCallback(() => {
+  const handleSeek = useCallback(async () => {
     const instance = instanceRef.current;
     if (typeof instance?.seek !== "function") {
       return;
@@ -229,11 +238,11 @@ export function ExportRunnerApp() {
       return;
     }
 
-    instance.seek(frame, normalizedClip || undefined);
+    await instance.seek(frame, normalizedClip || undefined);
     setStatus(`Seeked to frame ${Math.round(frame)}${normalizedClip ? ` in "${normalizedClip}"` : ""}.`);
   }, [animationCapabilities.clipNames, clipName, frameInput]);
 
-  const handlePlayClip = useCallback(() => {
+  const handlePlayClip = useCallback(async () => {
     const instance = instanceRef.current;
     if (typeof instance?.playClip !== "function") {
       return;
@@ -249,8 +258,17 @@ export function ExportRunnerApp() {
       return;
     }
 
-    instance.playClip(normalizedClip);
-    setStatus(`Playing clip "${normalizedClip}".`);
+    try {
+      const result = await instance.playClip(normalizedClip);
+      if (result && typeof result === "object" && "status" in result) {
+        const playbackResult = result as { status: string; clipName: string; direction: string };
+        setStatus(`${playbackResult.direction === "reverse" ? "Reverse" : "Playback"} ${playbackResult.status} for "${playbackResult.clipName}".`);
+        return;
+      }
+      setStatus(`Playing clip "${normalizedClip}".`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : `Unable to play clip "${normalizedClip}".`);
+    }
   }, [animationCapabilities.clipNames, clipName]);
 
   return (

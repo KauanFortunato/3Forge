@@ -15,3 +15,5 @@ declare module "node:path" {
 declare module "node:url" {
   export function pathToFileURL(path: string): URL;
 }
+
+declare module "*.mjs";

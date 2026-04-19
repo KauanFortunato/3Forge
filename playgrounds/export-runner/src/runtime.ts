@@ -5,14 +5,14 @@ export interface ExportRunnerComponentInstance {
   build: () => Promise<void> | void;
   dispose: () => void;
   getClipNames?: () => string[];
-  play?: () => void;
-  pause?: () => void;
-  restart?: (clipName?: string) => void;
-  reverse?: (clipName?: string) => void;
-  stop?: () => void;
-  seek?: (frame: number, clipName?: string) => void;
-  createTimeline?: (clipName?: string) => unknown;
-  playClip?: (clipName: string) => void;
+  play?: (clipName?: string) => Promise<unknown> | unknown;
+  pause?: () => Promise<void> | void;
+  restart?: (clipName?: string) => Promise<unknown> | unknown;
+  reverse?: (clipName?: string) => Promise<unknown> | unknown;
+  stop?: () => Promise<void> | void;
+  seek?: (frame: number, clipName?: string) => Promise<void> | void;
+  createTimeline?: (clipName?: string) => Promise<unknown> | unknown;
+  playClip?: (clipName: string) => Promise<unknown> | unknown;
 }
 
 export interface ExportRunnerComponentConstructor {

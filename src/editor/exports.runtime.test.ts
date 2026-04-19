@@ -13,15 +13,15 @@ interface ExportedComponentInstance {
   group: Group;
   build: () => Promise<void> | void;
   dispose: () => void;
-  createTimeline?: (clipName?: string) => unknown;
+  createTimeline?: (clipName?: string) => Promise<unknown> | unknown;
   getClipNames?: () => string[];
-  play?: () => void;
-  playClip?: (clipName: string) => void;
-  pause?: () => void;
-  restart?: (clipName?: string) => void;
-  reverse?: (clipName?: string) => void;
-  seek?: (frame: number, clipName?: string) => void;
-  stop?: () => void;
+  play?: (clipName?: string) => Promise<unknown> | unknown;
+  playClip?: (clipName: string) => Promise<unknown> | unknown;
+  pause?: () => Promise<void> | void;
+  restart?: (clipName?: string) => Promise<unknown> | unknown;
+  reverse?: (clipName?: string) => Promise<unknown> | unknown;
+  seek?: (frame: number, clipName?: string) => Promise<void> | void;
+  stop?: () => Promise<void> | void;
 }
 
 const tempFiles: string[] = [];
@@ -45,15 +45,15 @@ describe("exported component runtime", () => {
     expect(secondTimeline).toBe(firstTimeline);
     expect(instance.getClipNames?.()).toEqual(["main", "secondary"]);
 
-    instance.seek?.(24, "main");
+    await instance.seek?.(24, "main");
     expect(findNode(instance.group, "Animated Box A").position.x).toBeCloseTo(2, 5);
     expect(findNode(instance.group, "Animated Box B").scale.y).toBeCloseTo(1.5, 5);
 
-    instance.seek?.(30, "secondary");
+    await instance.seek?.(30, "secondary");
     expect(findNode(instance.group, "Animated Box A").rotation.z).toBeCloseTo(0.6, 5);
     expect(findNode(instance.group, "Animated Box B").position.y).toBeCloseTo(2.5, 5);
 
-    instance.stop?.();
+    await instance.stop?.();
     expect(findNode(instance.group, "Animated Box A").rotation.z).toBeCloseTo(0, 5);
     expect(findNode(instance.group, "Animated Box B").position.y).toBeCloseTo(1, 5);
 
@@ -70,17 +70,25 @@ describe("exported component runtime", () => {
     const timeline = instance.createTimeline?.("main") as { progress: () => number; reversed: () => boolean } | null;
     expect(timeline).toBeTruthy();
 
-    instance.seek?.(48, "main");
+    await instance.seek?.(48, "main");
     expect(findNode(instance.group, "Animated Box A").position.x).toBeCloseTo(4, 5);
 
-    instance.restart?.("main");
+    await expect(instance.restart?.("main")).resolves.toEqual(expect.objectContaining({
+      status: "completed",
+      clipName: "main",
+      direction: "forward",
+    }));
     expect(timeline?.reversed()).toBe(false);
-    expect(timeline?.progress()).toBeLessThan(0.05);
-
-    instance.stop?.();
-    instance.reverse?.("main");
-    expect(timeline?.reversed()).toBe(true);
     expect(timeline?.progress()).toBeGreaterThan(0.95);
+
+    await instance.stop?.();
+    await expect(instance.reverse?.("main")).resolves.toEqual(expect.objectContaining({
+      status: "completed",
+      clipName: "main",
+      direction: "reverse",
+    }));
+    expect(timeline?.reversed()).toBe(true);
+    expect(timeline?.progress()).toBeLessThan(0.05);
 
     instance.dispose();
   });
@@ -96,7 +104,7 @@ describe("exported component runtime", () => {
     expect(timeline).toBeTruthy();
     expect(timeline?.duration()).toBeCloseTo(3, 5);
 
-    instance.seek?.(72, "hold");
+    await instance.seek?.(72, "hold");
     expect(findNode(instance.group, "Hold Box").position.x).toBeCloseTo(6, 5);
     expect(findNode(instance.group, "Hold Box").scale.y).toBeCloseTo(1.4, 5);
 
@@ -110,14 +118,59 @@ describe("exported component runtime", () => {
 
     await instance.build();
 
-    instance.seek?.(24, "main");
+    await instance.seek?.(24, "main");
     expect(findNode(instance.group, "Animated Box A").position.x).toBeCloseTo(2, 5);
 
-    instance.playClip?.("secondary");
-    instance.playClip?.("main");
-    instance.pause?.();
+    void instance.playClip?.("secondary");
+    void instance.playClip?.("main");
+    await instance.pause?.();
 
     expect(findNode(instance.group, "Animated Box A").position.x).toBeCloseTo(0, 5);
+
+    instance.dispose();
+  });
+
+  it("returns an interrupted result when playback is cancelled before completion", async () => {
+    const blueprint = createAnimatedBlueprint();
+    const ExportedComponent = await loadExportedComponent(blueprint);
+    const instance = new ExportedComponent();
+
+    await instance.build();
+
+    const playback = instance.playClip?.("main") as Promise<{ status: string; clipName: string; direction: string }> | undefined;
+    expect(playback).toBeTruthy();
+
+    await instance.stop?.();
+
+    await expect(playback).resolves.toEqual(expect.objectContaining({
+      status: "interrupted",
+      clipName: "main",
+      direction: "forward",
+    }));
+
+    instance.dispose();
+  });
+
+  it("resolves playback promises when a short clip finishes in forward and reverse", async () => {
+    const blueprint = createQuickPlaybackBlueprint();
+    const ExportedComponent = await loadExportedComponent(blueprint);
+    const instance = new ExportedComponent();
+
+    await instance.build();
+
+    await expect(instance.playClip?.("blink")).resolves.toEqual(expect.objectContaining({
+      status: "completed",
+      clipName: "blink",
+      direction: "forward",
+    }));
+
+    await instance.seek?.(2, "blink");
+
+    await expect(instance.reverse?.("blink")).resolves.toEqual(expect.objectContaining({
+      status: "completed",
+      clipName: "blink",
+      direction: "reverse",
+    }));
 
     instance.dispose();
   });
@@ -234,6 +287,37 @@ function createTrailingHoldBlueprint(): ComponentBlueprint {
       ...createDefaultAnimation(),
       activeClipId: holdClip.id,
       clips: [holdClip],
+    },
+  };
+}
+
+function createQuickPlaybackBlueprint(): ComponentBlueprint {
+  const root = createNode("group", null, ROOT_NODE_ID);
+  root.name = "Component Root";
+
+  const quickBox = createNode("box", ROOT_NODE_ID, "quick-box");
+  quickBox.name = "Quick Box";
+
+  const quickClip = createAnimationClip("blink", {
+    fps: 1000,
+    durationFrames: 2,
+    tracks: [],
+  });
+
+  const positionTrack = createAnimationTrack(quickBox.id, "transform.position.x");
+  positionTrack.keyframes.push(createAnimationKeyframe(0, 0, "linear"));
+  positionTrack.keyframes.push(createAnimationKeyframe(2, 1, "linear"));
+  quickClip.tracks.push(positionTrack);
+
+  return {
+    version: 1,
+    componentName: "Quick Playback Sample",
+    fonts: [],
+    nodes: [root, quickBox],
+    animation: {
+      ...createDefaultAnimation(),
+      activeClipId: quickClip.id,
+      clips: [quickClip],
     },
   };
 }
