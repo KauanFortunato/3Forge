@@ -51,11 +51,19 @@ interface ExportCollections {
   images: CollectedImage[];
 }
 
+export interface GenerateTypeScriptComponentOptions {
+  fontAssetPathsById?: Record<string, string>;
+  imageAssetPathsByNodeId?: Record<string, string>;
+}
+
 export function exportBlueprintToJson(blueprint: ComponentBlueprint): string {
   return JSON.stringify(blueprint, null, 2);
 }
 
-export function generateTypeScriptComponent(blueprint: ComponentBlueprint): string {
+export function generateTypeScriptComponent(
+  blueprint: ComponentBlueprint,
+  options: GenerateTypeScriptComponentOptions = {},
+): string {
   const componentName = blueprint.componentName.trim() || "3ForgeComponent";
   const componentTypeName = toPascalCase(componentName);
   const optionTypeName = `${componentTypeName}Options`;
@@ -72,6 +80,10 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
   const importNames = collectImports(nodes, bindings);
   const fontVariables = new Map(fonts.map((font) => [font.font.id, font.fontVariableName]));
   const imageVariables = new Map(images.map((image) => [image.node.id, image.textureVariableName]));
+  const fontAssetPathsById = options.fontAssetPathsById ?? {};
+  const imageAssetPathsByNodeId = options.imageAssetPathsByNodeId ?? {};
+  const inlineFonts = fonts.filter((font) => !fontAssetPathsById[font.font.id]);
+  const externalFonts = fonts.filter((font) => Boolean(fontAssetPathsById[font.font.id]));
   const lines: string[] = [];
 
   lines.push(`import { ${Array.from(importNames).sort().join(", ")} } from "three";`);
@@ -121,8 +133,8 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
     lines.push("");
   }
 
-  if (fonts.length > 0) {
-    for (const font of fonts) {
+  if (inlineFonts.length > 0) {
+    for (const font of inlineFonts) {
       lines.push(`const ${font.dataVariableName} = ${getFontData(font.font)} as const;`);
     }
     lines.push("");
@@ -130,15 +142,13 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
 
   if (fonts.length > 0) {
     lines.push("const fontLoader = new FontLoader();");
-    for (const font of fonts) {
-      lines.push(`const ${font.fontVariableName} = fontLoader.parse(${font.dataVariableName});`);
-    }
     lines.push("");
   }
 
   if (images.length > 0) {
     for (const image of images) {
-      lines.push(`const ${image.dataVariableName} = ${JSON.stringify(image.node.image.src)} as const;`);
+      const imageSource = imageAssetPathsByNodeId[image.node.id] ?? image.node.image.src;
+      lines.push(`const ${image.dataVariableName} = ${JSON.stringify(imageSource)} as const;`);
     }
     lines.push("");
     lines.push("const textureLoader = new TextureLoader();");
@@ -214,6 +224,24 @@ export function generateTypeScriptComponent(blueprint: ComponentBlueprint): stri
     for (const image of images) {
       lines.push(`    ${image.textureVariableName}.colorSpace = SRGBColorSpace;`);
       lines.push(`    ${image.textureVariableName}.needsUpdate = true;`);
+    }
+  }
+
+  if (externalFonts.length > 0) {
+    lines.push("    const [");
+    for (const font of externalFonts) {
+      lines.push(`      ${font.fontVariableName},`);
+    }
+    lines.push("    ] = await Promise.all([");
+    for (const font of externalFonts) {
+      lines.push(`      fontLoader.loadAsync(${JSON.stringify(fontAssetPathsById[font.font.id])}),`);
+    }
+    lines.push("    ]);");
+  }
+
+  if (inlineFonts.length > 0) {
+    for (const font of inlineFonts) {
+      lines.push(`    const ${font.fontVariableName} = fontLoader.parse(${font.dataVariableName});`);
     }
   }
 

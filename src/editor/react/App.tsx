@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
+import { createExportPackageZip } from "../exportPackage";
 import {
   BrowserFileSystemFileHandle,
   getBlueprintFileName,
@@ -128,6 +129,10 @@ function readStoredBooleanPreference(key: string, fallback: boolean): boolean {
 
 function downloadTextFile(content: string, fileName: string, mimeType: string): void {
   const blob = new Blob([content], { type: mimeType });
+  downloadBlobFile(blob, fileName);
+}
+
+function downloadBlobFile(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -1005,6 +1010,16 @@ export function App() {
     setTransientStatus(`Downloaded ${fileName}.`);
   }, [blueprintJson, blueprintSnapshot.componentName, setTransientStatus, typeScriptExport]);
 
+  const downloadExportPackage = useCallback(async () => {
+    try {
+      const archive = await createExportPackageZip(blueprintSnapshot);
+      downloadBlobFile(archive.blob, archive.fileName);
+      setTransientStatus(`Downloaded ${archive.fileName}.`);
+    } catch {
+      setTransientStatus("Unable to build ZIP package.");
+    }
+  }, [blueprintSnapshot, setTransientStatus]);
+
   const copyExportText = useCallback(async () => {
     const result = await writeTextToClipboard(exportPreview);
     if (result.status === "copied") {
@@ -1440,8 +1455,15 @@ export function App() {
         { id: "file-import-image", label: "Import Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
         { id: "file-import-font", label: "Import Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
         { id: "file-divider-3", separator: true },
-        { id: "file-export-json", label: "Download Blueprint JSON", onSelect: () => downloadExportFile("json") },
-        { id: "file-export-ts", label: "Download TypeScript", onSelect: () => downloadExportFile("typescript") },
+        {
+          id: "file-export",
+          label: "Export",
+          children: [
+            { id: "file-export-ts", label: "TypeScript", onSelect: () => downloadExportFile("typescript") },
+            { id: "file-export-json", label: "Blueprint", onSelect: () => downloadExportFile("json") },
+            { id: "file-export-zip", label: "ZIP file", onSelect: () => void downloadExportPackage() },
+          ],
+        },
         { id: "file-divider-4", separator: true },
         { id: "file-exit", label: "Exit", danger: true, onSelect: handleExitProject },
       ],
@@ -1476,6 +1498,7 @@ export function App() {
   ], [
     createAddMenuActions,
     downloadExportFile,
+    downloadExportPackage,
     handleCopy,
     handleExitProject,
     handleFrameSelection,

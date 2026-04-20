@@ -30,6 +30,12 @@ const fileAccessMocks = vi.hoisted(() => ({
   saveBlueprintToExistingHandle: vi.fn<() => Promise<unknown>>(async () => ({ status: "unsupported" as const })),
   getBlueprintFileName: vi.fn<(componentName: string) => string>((componentName: string) => `${componentName || "3forge-component"}.json`),
 }));
+const exportPackageMocks = vi.hoisted(() => ({
+  createExportPackageZip: vi.fn(async () => ({
+    fileName: "fixture.zip",
+    blob: new Blob(["zip-content"], { type: "application/zip" }),
+  })),
+}));
 
 vi.mock("../fileAccess", async () => {
   const actual = await vi.importActual("../fileAccess");
@@ -38,6 +44,10 @@ vi.mock("../fileAccess", async () => {
     ...fileAccessMocks,
   };
 });
+
+vi.mock("../exportPackage", () => ({
+  createExportPackageZip: exportPackageMocks.createExportPackageZip,
+}));
 
 vi.mock("../recentFileHandles", () => ({
   saveRecentFileHandle: vi.fn(async (fileHandleId: string, handle: unknown) => {
@@ -109,6 +119,8 @@ describe("App", () => {
     recentHandleStore.clear();
     vi.clearAllMocks();
     mockNavigationType("navigate");
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fixture");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
   });
 
   it("shows the welcome screen again on reentry even when a local project exists", () => {
@@ -368,6 +380,31 @@ describe("App", () => {
       expect(fileAccessMocks.saveBlueprintAs).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByText("Saved denied-save-copy.json.")).toBeTruthy();
+  });
+
+  it("shows File > Export submenu entries and triggers ZIP package download", async () => {
+    persistLocalWorkspace("Package Fixture");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    await openFileMenu();
+
+    const fileMenu = document.querySelector(".menu-bar__dropdown .menu-surface");
+    expect(fileMenu).toBeTruthy();
+
+    fireEvent.mouseEnter(within(fileMenu as HTMLElement).getByRole("button", { name: "Export" }));
+
+    await screen.findByRole("button", { name: "TypeScript" });
+    expect(screen.getByRole("button", { name: "Blueprint" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "ZIP file" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "ZIP file" }));
+
+    await waitFor(() => {
+      expect(exportPackageMocks.createExportPackageZip).toHaveBeenCalledTimes(1);
+      expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("keeps the footer visible and removes the timeline dock cleanly when the timeline is hidden", () => {
