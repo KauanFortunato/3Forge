@@ -14,6 +14,7 @@ export const DEFAULT_ANIMATION_EASE: AnimationEasePreset = "easeInOut";
 export const DEFAULT_ANIMATION_CLIP_NAME = "main";
 
 export const ANIMATION_PROPERTIES: Array<{ path: AnimationPropertyPath; label: string }> = [
+  { path: "visible", label: "Visible" },
   { path: "transform.position.x", label: "Position X" },
   { path: "transform.position.y", label: "Position Y" },
   { path: "transform.position.z", label: "Position Z" },
@@ -64,6 +65,26 @@ export function isAnimationEasePreset(value: string): value is AnimationEasePres
 
 export function getAnimationPropertyLabel(path: AnimationPropertyPath): string {
   return ANIMATION_PROPERTIES.find((entry) => entry.path === path)?.label ?? path;
+}
+
+export function isDiscreteAnimationProperty(property: AnimationPropertyPath): boolean {
+  return property === "visible";
+}
+
+export function normalizeAnimationValueForProperty(property: AnimationPropertyPath, value: number): number {
+  if (!Number.isFinite(value)) {
+    return isDiscreteAnimationProperty(property) ? 0 : value;
+  }
+
+  if (isDiscreteAnimationProperty(property)) {
+    return value >= 0.5 ? 1 : 0;
+  }
+
+  return value;
+}
+
+export function animationValueToBoolean(property: AnimationPropertyPath, value: number): boolean {
+  return isDiscreteAnimationProperty(property) ? normalizeAnimationValueForProperty(property, value) >= 0.5 : Boolean(value);
 }
 
 export function mapAnimationEaseToGsap(ease: AnimationEasePreset): string {
@@ -163,6 +184,9 @@ export function getAnimationValue(node: EditorNode, property: AnimationPropertyP
     }
     return undefined;
   }, node);
+  if (typeof value === "boolean") {
+    return value ? 1 : 0;
+  }
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
@@ -181,11 +205,17 @@ export function applyAnimationValue(node: EditorNode, property: AnimationPropert
   }, node);
 
   if (target && typeof target === "object") {
-    (target as Record<string, unknown>)[lastSegment] = value;
+    (target as Record<string, unknown>)[lastSegment] = isDiscreteAnimationProperty(property)
+      ? animationValueToBoolean(property, value)
+      : normalizeAnimationValueForProperty(property, value);
   }
 }
 
-function normalizeTrackKeyframes(rawKeyframes: unknown[], durationFrames: number): AnimationKeyframe[] {
+function normalizeTrackKeyframes(
+  rawKeyframes: unknown[],
+  property: AnimationPropertyPath,
+  durationFrames: number,
+): AnimationKeyframe[] {
   const normalized: AnimationKeyframe[] = [];
   const usedFrames = new Set<number>();
   const usedIds = new Set<string>();
@@ -197,7 +227,12 @@ function normalizeTrackKeyframes(rawKeyframes: unknown[], durationFrames: number
 
     const source = rawKeyframe as Record<string, unknown>;
     const frame = clampFrame(normalizePositiveInteger(source.frame, 0), durationFrames);
-    const value = typeof source.value === "number" && Number.isFinite(source.value) ? source.value : 0;
+    const rawValue = typeof source.value === "boolean"
+      ? (source.value ? 1 : 0)
+      : typeof source.value === "number" && Number.isFinite(source.value)
+        ? source.value
+        : 0;
+    const value = normalizeAnimationValueForProperty(property, rawValue);
     const ease = typeof source.ease === "string" && isAnimationEasePreset(source.ease) ? source.ease : DEFAULT_ANIMATION_EASE;
     if (usedFrames.has(frame)) {
       continue;
@@ -295,7 +330,7 @@ function normalizeAnimationTracks(rawTracks: unknown[], validNodeIds: Set<string
       id: trackId,
       nodeId,
       property,
-      keyframes: normalizeTrackKeyframes(Array.isArray(trackSource.keyframes) ? trackSource.keyframes : [], durationFrames),
+      keyframes: normalizeTrackKeyframes(Array.isArray(trackSource.keyframes) ? trackSource.keyframes : [], property, durationFrames),
     });
   }
 

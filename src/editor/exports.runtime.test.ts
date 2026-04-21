@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import ts from "typescript";
-import { Group } from "three";
+import { Group, Mesh } from "three";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack, createDefaultAnimation } from "./animation";
 import { generateTypeScriptComponent } from "./exports";
@@ -174,6 +174,113 @@ describe("exported component runtime", () => {
 
     instance.dispose();
   });
+
+  it("keeps initial visibility until the first delayed visible keyframe in exported runtime", async () => {
+    const blueprint = createDelayedVisibleAnimationBlueprint();
+    const ExportedComponent = await loadExportedComponent(blueprint);
+    const instance = new ExportedComponent();
+
+    await instance.build();
+
+    const node = findNode(instance.group, "Blink Box");
+    expect(node.visible).toBe(false);
+
+    await instance.seek?.(0, "blink-visibility");
+    expect(node.visible).toBe(false);
+
+    await instance.seek?.(11, "blink-visibility");
+    expect(node.visible).toBe(false);
+
+    await instance.seek?.(12, "blink-visibility");
+    expect(node.visible).toBe(true);
+
+    await instance.seek?.(18, "blink-visibility");
+    expect(node.visible).toBe(true);
+
+    await instance.seek?.(24, "blink-visibility");
+    expect(node.visible).toBe(false);
+
+    await instance.stop?.();
+    expect(node.visible).toBe(false);
+
+    instance.dispose();
+  });
+
+  it("makes a renderable node appear even when its mesh starts hidden", async () => {
+    const blueprint = createDelayedVisibleAnimationBlueprint();
+    const blinkBox = blueprint.nodes.find((node) => node.id === "blink-box-delayed");
+    if (!blinkBox || blinkBox.type === "group") {
+      throw new Error("Expected delayed blink box node.");
+    }
+    blinkBox.material.visible = false;
+
+    const ExportedComponent = await loadExportedComponent(blueprint);
+    const instance = new ExportedComponent();
+
+    await instance.build();
+
+    const node = findNode(instance.group, "Blink Box");
+    const mesh = findMesh(node);
+    expect(node.visible).toBe(false);
+    expect(mesh.visible).toBe(false);
+
+    await instance.seek?.(12, "blink-visibility");
+    expect(node.visible).toBe(true);
+    expect(mesh.visible).toBe(true);
+
+    await instance.seek?.(24, "blink-visibility");
+    expect(node.visible).toBe(false);
+    expect(mesh.visible).toBe(false);
+
+    instance.dispose();
+  });
+
+  it("applies visible frame-0 keyframes once playback time advances from the initial build state", async () => {
+    const blueprint = createVisibleAnimationBlueprint();
+    const ExportedComponent = await loadExportedComponent(blueprint);
+    const instance = new ExportedComponent();
+
+    await instance.build();
+
+    const node = findNode(instance.group, "Blink Box");
+    expect(node.visible).toBe(false);
+
+    await instance.seek?.(11, "blink-visibility");
+    expect(node.visible).toBe(true);
+
+    await instance.seek?.(12, "blink-visibility");
+    expect(node.visible).toBe(false);
+
+    await instance.stop?.();
+    expect(node.visible).toBe(true);
+
+    instance.dispose();
+  });
+
+  it("keeps numeric track values untouched until the first delayed keyframe", async () => {
+    const blueprint = createDelayedNumericAnimationBlueprint();
+    const ExportedComponent = await loadExportedComponent(blueprint);
+    const instance = new ExportedComponent();
+
+    await instance.build();
+
+    const node = findNode(instance.group, "Delayed Move Box");
+    expect(node.position.x).toBeCloseTo(5, 5);
+
+    await instance.seek?.(0, "delayed-move");
+    expect(node.position.x).toBeCloseTo(5, 5);
+
+    await instance.seek?.(5, "delayed-move");
+    expect(node.position.x).toBeCloseTo(5, 5);
+
+    await instance.seek?.(6, "delayed-move");
+    expect(node.position.x).toBeCloseTo(1, 5);
+
+    await instance.seek?.(12, "delayed-move");
+    expect(node.position.x).toBeCloseTo(3, 5);
+
+    instance.dispose();
+  });
 });
 
 async function loadExportedComponent(blueprint: ComponentBlueprint): Promise<new () => ExportedComponentInstance> {
@@ -322,8 +429,110 @@ function createQuickPlaybackBlueprint(): ComponentBlueprint {
   };
 }
 
+function createVisibleAnimationBlueprint(): ComponentBlueprint {
+  const root = createNode("group", null, ROOT_NODE_ID);
+  root.name = "Component Root";
+
+  const blinkBox = createNode("box", ROOT_NODE_ID, "blink-box");
+  blinkBox.name = "Blink Box";
+  blinkBox.visible = false;
+
+  const clip = createAnimationClip("blink-visibility", {
+    fps: 24,
+    durationFrames: 24,
+    tracks: [],
+  });
+
+  const visibleTrack = createAnimationTrack(blinkBox.id, "visible");
+  visibleTrack.keyframes.push(createAnimationKeyframe(0, 1, "linear"));
+  visibleTrack.keyframes.push(createAnimationKeyframe(12, 0, "easeOut"));
+  clip.tracks.push(visibleTrack);
+
+  return {
+    version: 1,
+    componentName: "Visible Animation Sample",
+    fonts: [],
+    nodes: [root, blinkBox],
+    animation: {
+      ...createDefaultAnimation(),
+      activeClipId: clip.id,
+      clips: [clip],
+    },
+  };
+}
+
+function createDelayedVisibleAnimationBlueprint(): ComponentBlueprint {
+  const root = createNode("group", null, ROOT_NODE_ID);
+  root.name = "Component Root";
+
+  const blinkBox = createNode("box", ROOT_NODE_ID, "blink-box-delayed");
+  blinkBox.name = "Blink Box";
+  blinkBox.visible = false;
+
+  const clip = createAnimationClip("blink-visibility", {
+    fps: 24,
+    durationFrames: 24,
+    tracks: [],
+  });
+
+  const visibleTrack = createAnimationTrack(blinkBox.id, "visible");
+  visibleTrack.keyframes.push(createAnimationKeyframe(12, 1, "linear"));
+  visibleTrack.keyframes.push(createAnimationKeyframe(24, 0, "easeOut"));
+  clip.tracks.push(visibleTrack);
+
+  return {
+    version: 1,
+    componentName: "Delayed Visible Animation Sample",
+    fonts: [],
+    nodes: [root, blinkBox],
+    animation: {
+      ...createDefaultAnimation(),
+      activeClipId: clip.id,
+      clips: [clip],
+    },
+  };
+}
+
+function createDelayedNumericAnimationBlueprint(): ComponentBlueprint {
+  const root = createNode("group", null, ROOT_NODE_ID);
+  root.name = "Component Root";
+
+  const delayedBox = createNode("box", ROOT_NODE_ID, "delayed-box");
+  delayedBox.name = "Delayed Move Box";
+  delayedBox.transform.position.x = 5;
+
+  const clip = createAnimationClip("delayed-move", {
+    fps: 24,
+    durationFrames: 18,
+    tracks: [],
+  });
+
+  const positionTrack = createAnimationTrack(delayedBox.id, "transform.position.x");
+  positionTrack.keyframes.push(createAnimationKeyframe(6, 1, "linear"));
+  positionTrack.keyframes.push(createAnimationKeyframe(18, 5, "linear"));
+  clip.tracks.push(positionTrack);
+
+  return {
+    version: 1,
+    componentName: "Delayed Numeric Sample",
+    fonts: [],
+    nodes: [root, delayedBox],
+    animation: {
+      ...createDefaultAnimation(),
+      activeClipId: clip.id,
+      clips: [clip],
+    },
+  };
+}
+
 function findNode(root: Group, name: string): Group {
   const node = root.getObjectByName(name);
   expect(node).toBeInstanceOf(Group);
   return node as Group;
+}
+
+function findMesh(root: Group): Mesh {
+  const mesh = root.children.find((child): child is Mesh => child instanceof Mesh);
+  expect(mesh).toBeInstanceOf(Mesh);
+  return mesh as Mesh;
 }

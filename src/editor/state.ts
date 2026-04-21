@@ -3,6 +3,7 @@ import type { Object3D } from "three";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import {
   DEFAULT_ANIMATION_EASE,
+  normalizeAnimationValueForProperty,
   createAnimationClip,
   createAnimationKeyframe,
   createAnimationTrack,
@@ -1269,7 +1270,7 @@ export class EditorStore extends EventTarget {
     }
     const normalizedFrame = Math.max(0, Math.min(Math.round(frame), clip.durationFrames));
     const nextValue = typeof value === "number" && Number.isFinite(value)
-      ? value
+      ? normalizeAnimationValueForProperty(track.property, value)
       : getAnimationValue(node, track.property);
 
     this.recordHistorySnapshot();
@@ -1311,7 +1312,7 @@ export class EditorStore extends EventTarget {
       ? Math.max(0, Math.min(Math.round(patch.frame), clip.durationFrames))
       : keyframe.frame;
     const nextValue = typeof patch.value === "number" && Number.isFinite(patch.value)
-      ? patch.value
+      ? normalizeAnimationValueForProperty(track.property, patch.value)
       : keyframe.value;
     const nextEase = typeof patch.ease === "string" && isAnimationEasePreset(patch.ease)
       ? patch.ease

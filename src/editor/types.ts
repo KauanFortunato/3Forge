@@ -16,6 +16,7 @@ export type GroupPivotPreset =
   | "front-center"
   | "back-center";
 export type AnimationPropertyPath =
+  | "visible"
   | "transform.position.x"
   | "transform.position.y"
   | "transform.position.z"

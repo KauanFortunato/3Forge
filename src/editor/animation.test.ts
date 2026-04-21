@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { createAnimationKeyframe, createAnimationTrack, createDefaultAnimation, getAnimationValue, getTrackSegments, isAnimationEasePreset, isAnimationPropertyPath, clampFrame, frameToSeconds, normalizeAnimation, secondsToFrame, sortTrackKeyframes } from "./animation";
+import {
+  applyAnimationValue,
+  animationValueToBoolean,
+  clampFrame,
+  createAnimationKeyframe,
+  createAnimationTrack,
+  createDefaultAnimation,
+  getAnimationValue,
+  getTrackSegments,
+  isAnimationEasePreset,
+  isAnimationPropertyPath,
+  normalizeAnimation,
+  normalizeAnimationValueForProperty,
+  secondsToFrame,
+  frameToSeconds,
+  sortTrackKeyframes,
+} from "./animation";
 import { createNode } from "./state";
 
 describe("animation helpers", () => {
@@ -9,6 +25,7 @@ describe("animation helpers", () => {
       clips: [],
     });
     expect(isAnimationPropertyPath("transform.position.x")).toBe(true);
+    expect(isAnimationPropertyPath("visible")).toBe(true);
     expect(isAnimationPropertyPath("material.color")).toBe(false);
     expect(isAnimationEasePreset("easeInOut")).toBe(true);
     expect(isAnimationEasePreset("invalid")).toBe(false);
@@ -60,6 +77,15 @@ describe("animation helpers", () => {
                 ],
               },
               {
+                id: "track-visible",
+                nodeId: node.id,
+                property: "visible",
+                keyframes: [
+                  { id: "visible-a", frame: 0, value: 2, ease: "linear" },
+                  { id: "visible-b", frame: 12, value: 0.4, ease: "easeIn" },
+                ],
+              },
+              {
                 id: "track-bad",
                 nodeId: "missing",
                 property: "material.color",
@@ -81,16 +107,73 @@ describe("animation helpers", () => {
 
     expect(animation.activeClipId).toBe("clip-a");
     expect(animation.clips).toHaveLength(2);
-    expect(animation.clips[0]?.tracks).toHaveLength(1);
+    expect(animation.clips[0]?.tracks).toHaveLength(2);
     expect(animation.clips[0]?.tracks[0]?.keyframes.map((keyframe) => keyframe.frame)).toEqual([1, 20]);
+    expect(animation.clips[0]?.tracks[1]).toMatchObject({
+      property: "visible",
+      keyframes: [
+        { frame: 1, value: 1 },
+        { frame: 12, value: 0 },
+      ],
+    });
     expect(animation.clips[1]?.name).toBe("main 2");
   });
 
-  it("reads animation values from nodes", () => {
+  it("reads visible animation values from nodes as numeric booleans", () => {
+    const node = createNode("box", null, "node-1");
+    node.visible = false;
+
+    expect(getAnimationValue(node, "visible")).toBe(0);
+    expect(animationValueToBoolean("visible", 1)).toBe(true);
+    expect(animationValueToBoolean("visible", 0)).toBe(false);
+    expect(normalizeAnimationValueForProperty("visible", 0.49)).toBe(0);
+    expect(normalizeAnimationValueForProperty("visible", 0.5)).toBe(1);
+  });
+
+  it("normalizes visible keyframes to discrete numeric values", () => {
+    const node = createNode("box", null, "node-1");
+    const animation = normalizeAnimation(
+      {
+        activeClipId: "clip-a",
+        clips: [
+          {
+            id: "clip-a",
+            name: "Main",
+            fps: 24,
+            durationFrames: 48,
+            tracks: [
+              {
+                id: "track-a",
+                nodeId: node.id,
+                property: "visible",
+                keyframes: [
+                  { id: "key-a", frame: 0, value: false, ease: "linear" },
+                  { id: "key-b", frame: 12, value: 0.7, ease: "linear" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      new Set([node.id]),
+    );
+
+    expect(animation.clips[0]?.tracks[0]?.keyframes.map((keyframe) => keyframe.value)).toEqual([0, 1]);
+  });
+
+  it("reads and applies animation values on nodes", () => {
     const node = createNode("box", null, "node-1");
     node.transform.position.x = 1.25;
+    node.visible = false;
 
     expect(getAnimationValue(node, "transform.position.x")).toBe(1.25);
+    expect(getAnimationValue(node, "visible")).toBe(0);
     expect(getAnimationValue(node, "transform.rotation.y")).toBe(0);
+
+    applyAnimationValue(node, "visible", 0.49);
+    expect(node.visible).toBe(false);
+
+    applyAnimationValue(node, "visible", 1);
+    expect(node.visible).toBe(true);
   });
 });
