@@ -33,7 +33,14 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
-import { frameToSeconds, getTrackSegments, mapAnimationEaseToGsap, secondsToFrame } from "./animation";
+import {
+  animationValueToBoolean,
+  frameToSeconds,
+  getTrackSegments,
+  isDiscreteAnimationProperty,
+  mapAnimationEaseToGsap,
+  secondsToFrame,
+} from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { EditorStore } from "./state";
 import type { AnimationPropertyPath, EditorNode, EditorStoreChange, ImageNode, NodeOriginSpec, TextNode } from "./types";
@@ -255,12 +262,19 @@ export class SceneEditor {
       return null;
     }
 
+    if (property === "visible") {
+      return this.getAnimatedVisibilityValue(object);
+    }
+
     const [owner, key] = resolveAnimationTarget(object, toObjectAnimationPath(property));
     if (!owner || !key) {
       return null;
     }
 
     const value = owner[key];
+    if (typeof value === "boolean") {
+      return value ? 1 : 0;
+    }
     return typeof value === "number" && Number.isFinite(value) ? value : null;
   }
 
@@ -993,6 +1007,19 @@ export class SceneEditor {
         continue;
       }
 
+      if (isDiscreteAnimationProperty(track.property)) {
+        for (const keyframe of ordered) {
+          const visible = animationValueToBoolean(track.property, keyframe.value);
+          const at = frameToSeconds(keyframe.frame, clip.fps);
+          timeline.set(target, { visible }, at);
+          const mesh = this.getAnimatedVisibilityMeshTarget(target);
+          if (mesh) {
+            timeline.set(mesh, { visible }, at);
+          }
+        }
+        continue;
+      }
+
       timeline.set(owner, { [property]: ordered[0].value }, frameToSeconds(ordered[0].frame, clip.fps));
 
       for (const segment of getTrackSegments(track)) {
@@ -1028,6 +1055,29 @@ export class SceneEditor {
     for (const listener of this.animationFrameListeners) {
       listener(frame);
     }
+  }
+
+  private getAnimatedVisibilityValue(object: Object3D): number {
+    if (!object.visible) {
+      return 0;
+    }
+
+    if (object.userData?.nodeType !== "group") {
+      const mesh = object.children.find((child): child is Mesh => child instanceof Mesh);
+      if (mesh && !mesh.visible) {
+        return 0;
+      }
+    }
+
+    return 1;
+  }
+
+  private getAnimatedVisibilityMeshTarget(object: Object3D): Mesh | null {
+    if (object.userData?.nodeType === "group") {
+      return null;
+    }
+
+    return object.children.find((child): child is Mesh => child instanceof Mesh) ?? null;
   }
 }
 

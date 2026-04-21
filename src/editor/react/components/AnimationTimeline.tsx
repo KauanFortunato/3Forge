@@ -3,7 +3,10 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   ANIMATION_EASE_OPTIONS,
   ANIMATION_PROPERTIES,
+  animationValueToBoolean,
   getAnimationPropertyLabel,
+  isDiscreteAnimationProperty,
+  normalizeAnimationValueForProperty,
 } from "../../animation";
 import type {
   AnimationClip,
@@ -490,16 +493,30 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 </label>
                 <label className="field-inline">
                   <span>Value</span>
-                  <BufferedInput
-                    className="editor-input editor-input--compact"
-                    type="text"
-                    inputMode="decimal"
-                    value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
-                    onCommit={(value) =>
-                      onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
-                        value: parseValueFromInput(visibleSelectedTrack.property, Number(value)),
-                      })}
-                  />
+                  {isDiscreteAnimationProperty(visibleSelectedTrack.property) ? (
+                    <select
+                      className="editor-select"
+                      value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
+                      onChange={(event) =>
+                        onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
+                          value: parseValueFromInput(visibleSelectedTrack.property, Number(event.target.value)),
+                        })}
+                    >
+                      <option value="1">Visible</option>
+                      <option value="0">Hidden</option>
+                    </select>
+                  ) : (
+                    <BufferedInput
+                      className="editor-input editor-input--compact"
+                      type="text"
+                      inputMode="decimal"
+                      value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
+                      onCommit={(value) =>
+                        onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
+                          value: parseValueFromInput(visibleSelectedTrack.property, Number(value)),
+                        })}
+                    />
+                  )}
                 </label>
                 <label className="field-inline">
                   <span>Ease</span>
@@ -672,6 +689,10 @@ function positionToFrame(clientX: number, laneLeft: number, durationFrames: numb
 }
 
 function displayValueForInput(property: AnimationPropertyPath, value: number): number {
+  if (isDiscreteAnimationProperty(property)) {
+    return animationValueToBoolean(property, value) ? 1 : 0;
+  }
+
   if (property.includes("rotation")) {
     return Number(((value * 180) / Math.PI).toFixed(2));
   }
@@ -680,6 +701,10 @@ function displayValueForInput(property: AnimationPropertyPath, value: number): n
 }
 
 function parseValueFromInput(property: AnimationPropertyPath, value: number): number {
+  if (isDiscreteAnimationProperty(property)) {
+    return normalizeAnimationValueForProperty(property, value);
+  }
+
   if (!Number.isFinite(value)) {
     return property.includes("scale") ? 1 : 0;
   }

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultFontAsset } from "./fonts";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "./exports";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "./animation";
-import { createNode, ROOT_NODE_ID } from "./state";
+import { createNode, ROOT_NODE_ID, toCamelCase } from "./state";
 import { createBlueprintFixture } from "../test/fixtures";
 
 describe("exports", () => {
@@ -126,5 +126,39 @@ describe("exports", () => {
     expect(output).toContain('durationFrames: 90');
     expect(output).toContain('ease: "power2.out"');
     expect(output).toContain('ease: "power2.inOut"');
+  });
+
+  it("emits discrete visible animation tracks against wrapper node visibility", () => {
+    const blueprint = createBlueprintFixture();
+    const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
+
+    expect(panel).toBeTruthy();
+
+    const clip = createAnimationClip("visible", {
+      fps: 24,
+      durationFrames: 24,
+      tracks: [],
+    });
+    const visibleTrack = createAnimationTrack(panel!.id, "visible");
+    panel!.visible = false;
+    visibleTrack.keyframes.push(createAnimationKeyframe(12, 1, "linear"));
+    visibleTrack.keyframes.push(createAnimationKeyframe(24, 0, "easeOut"));
+    clip.tracks.push(visibleTrack);
+    blueprint.animation.clips.push(clip);
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toContain("function resolveAnimatedVisibility(value: number): boolean");
+    expect(output).toContain("function getAnimatedVisibilityMesh(node: Group | Mesh): Mesh | null");
+    expect(output).toContain('if (track.target === "visible") {');
+    expect(output).toContain("firstKeyframeAt: 0.5");
+    expect(output).toContain("timeline.set(node, { visible: resolveAnimatedVisibility(track.initialValue) }, track.firstKeyframeAt);");
+    expect(output).toContain("const mesh = getAnimatedVisibilityMesh(node);");
+    expect(output).toContain("timeline.set(mesh, { visible: resolveAnimatedVisibility(track.initialValue) }, track.firstKeyframeAt);");
+    expect(output).toContain("timeline.set(node, { visible: resolveAnimatedVisibility(segment.value) }, segment.at + segment.duration);");
+    expect(output).toContain("timeline.set(mesh, { visible: resolveAnimatedVisibility(segment.value) }, segment.at + segment.duration);");
+    expect(output).toContain(`${toCamelCase(panel!.name)}.visible = false;`);
+    expect(output).toContain('target: "visible"');
+    expect(output).toContain('key: "value"');
   });
 });

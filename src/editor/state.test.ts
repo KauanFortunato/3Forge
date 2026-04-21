@@ -118,6 +118,15 @@ describe("EditorStore", () => {
                 ],
               },
               {
+                id: "track-visible",
+                nodeId: "dup",
+                property: "visible",
+                keyframes: [
+                  { id: "v1", frame: 0, value: true, ease: "linear" },
+                  { id: "v2", frame: 18, value: 0.2, ease: "easeIn" },
+                ],
+              },
+              {
                 id: "track-bad",
                 nodeId: "missing-node",
                 property: "transform.position.x",
@@ -148,8 +157,15 @@ describe("EditorStore", () => {
     expect(text?.geometry.depth).toBe(0);
     expect(text?.geometry.curveSegments).toBe(1);
     expect(store.animation.activeClipId).toBe("clip-1");
-    expect(store.animation.clips[0]?.tracks).toHaveLength(1);
+    expect(store.animation.clips[0]?.tracks).toHaveLength(2);
     expect(store.animation.clips[0]?.tracks[0]?.keyframes.map((keyframe) => keyframe.frame)).toEqual([1, 12]);
+    expect(store.animation.clips[0]?.tracks[1]).toMatchObject({
+      property: "visible",
+      keyframes: [
+        { frame: 1, value: 1 },
+        { frame: 18, value: 0 },
+      ],
+    });
   });
 
   it("round-trips a valid blueprint through JSON export and import", () => {
@@ -260,6 +276,29 @@ describe("EditorStore", () => {
       width: 2.4,
       height: 1.2,
     });
+  });
+
+  it("captures node visibility as discrete animation keyframes", () => {
+    const store = new EditorStore(createBlueprintFixture());
+    const box = store.blueprint.nodes.find((node) => node.type === "box");
+
+    expect(box).toBeTruthy();
+    if (!box) {
+      throw new Error("Expected box node.");
+    }
+
+    const trackId = store.ensureAnimationTrack(box.id, "visible");
+    store.toggleNodeVisibility(box.id);
+    store.addAnimationKeyframe(trackId, 0);
+    store.toggleNodeVisibility(box.id);
+    store.addAnimationKeyframe(trackId, 12);
+
+    const track = store.getAnimationTrack(trackId);
+    expect(track?.property).toBe("visible");
+    expect(track?.keyframes.map((keyframe) => ({ frame: keyframe.frame, value: keyframe.value }))).toEqual([
+      { frame: 0, value: 0 },
+      { frame: 12, value: 1 },
+    ]);
   });
 
   it("repositions a group pivot to content center without changing world layout", () => {

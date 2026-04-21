@@ -20,8 +20,8 @@ interface CollectedImage {
   textureVariableName: string;
 }
 
-type TimelineTargetKey = "position" | "rotation" | "scale";
-type TimelineAxisKey = "x" | "y" | "z";
+type TimelineTargetKey = "position" | "rotation" | "scale" | "visible";
+type TimelineAxisKey = "x" | "y" | "z" | "value";
 
 interface CollectedAnimationSegment {
   atSeconds: number;
@@ -35,6 +35,7 @@ interface CollectedAnimationTrack {
   target: TimelineTargetKey;
   key: TimelineAxisKey;
   initialValue: number;
+  firstKeyframeAtSeconds: number;
   segments: CollectedAnimationSegment[];
 }
 
@@ -201,6 +202,9 @@ export function generateTypeScriptComponent(
   lines.push("");
   lines.push("    const root = this.group;");
   lines.push(`    root.name = ${JSON.stringify(componentName)};`);
+  if (rootNode) {
+    lines.push(`    root.visible = ${serializeLiteral(rootNode.visible, "boolean")};`);
+  }
   if (rootNode?.type === "group") {
     lines.push("    const rootContent = new Group();");
     lines.push(`    rootContent.position.set(${rootNode.pivotOffset.x}, ${rootNode.pivotOffset.y}, ${rootNode.pivotOffset.z});`);
@@ -560,6 +564,7 @@ function emitCreationLines(
   }
 
   lines.push(`${variableName}.name = ${JSON.stringify(node.name)};`);
+  lines.push(`${variableName}.visible = ${serializeLiteral(node.visible, "boolean")};`);
   lines.push(`${variableName}.position.set(${propertyExpression(node, "transform.position.x", bindingAccessor)}, ${propertyExpression(node, "transform.position.y", bindingAccessor)}, ${propertyExpression(node, "transform.position.z", bindingAccessor)});`);
   lines.push(`${variableName}.rotation.set(${propertyExpression(node, "transform.rotation.x", bindingAccessor)}, ${propertyExpression(node, "transform.rotation.y", bindingAccessor)}, ${propertyExpression(node, "transform.rotation.z", bindingAccessor)});`);
   lines.push(`${variableName}.scale.set(${propertyExpression(node, "transform.scale.x", bindingAccessor)}, ${propertyExpression(node, "transform.scale.y", bindingAccessor)}, ${propertyExpression(node, "transform.scale.z", bindingAccessor)});`);
@@ -661,6 +666,7 @@ function collectAnimationClips(blueprint: ComponentBlueprint, nodes: EditorNode[
         target,
         key,
         initialValue: initialKeyframe.value,
+        firstKeyframeAtSeconds: frameToSeconds(initialKeyframe.frame, clip.fps),
         segments: getTrackSegments(track).map((segment) => ({
           atSeconds: frameToSeconds(segment.from.frame, clip.fps),
           durationSeconds: frameToSeconds(segment.to.frame - segment.from.frame, clip.fps),
@@ -684,6 +690,17 @@ function collectAnimationClips(blueprint: ComponentBlueprint, nodes: EditorNode[
 }
 
 function emitAnimationDefinitions(lines: string[], clips: CollectedAnimationClip[]): void {
+  lines.push("function resolveAnimatedVisibility(value: number): boolean {");
+  lines.push("  return value >= 0.5;");
+  lines.push("}");
+  lines.push("");
+  lines.push("function getAnimatedVisibilityMesh(node: Group | Mesh): Mesh | null {");
+  lines.push("  if (!(node instanceof Group)) {");
+  lines.push("    return null;");
+  lines.push("  }");
+  lines.push("  return node.children.find((child): child is Mesh => child instanceof Mesh) ?? null;");
+  lines.push("}");
+  lines.push("");
   lines.push("interface AnimationSegmentDefinition {");
   lines.push("  at: number;");
   lines.push("  duration: number;");
@@ -692,10 +709,11 @@ function emitAnimationDefinitions(lines: string[], clips: CollectedAnimationClip
   lines.push("}");
   lines.push("");
   lines.push("interface AnimationTrackDefinition {");
-  lines.push("  target: \"position\" | \"rotation\" | \"scale\";");
-  lines.push("  key: \"x\" | \"y\" | \"z\";");
+  lines.push("  target: \"position\" | \"rotation\" | \"scale\" | \"visible\";");
+  lines.push("  key: \"x\" | \"y\" | \"z\" | \"value\";");
   lines.push("  nodeId: string;");
   lines.push("  initialValue: number;");
+  lines.push("  firstKeyframeAt: number;");
   lines.push("  segments: AnimationSegmentDefinition[];");
   lines.push("}");
   lines.push("");
@@ -733,6 +751,7 @@ function emitAnimationDefinitions(lines: string[], clips: CollectedAnimationClip
       lines.push(`        target: ${JSON.stringify(track.target)},`);
       lines.push(`        key: ${JSON.stringify(track.key)},`);
       lines.push(`        initialValue: ${serializeLiteral(track.initialValue, "number")},`);
+      lines.push(`        firstKeyframeAt: ${serializeLiteral(track.firstKeyframeAtSeconds, "number")},`);
       lines.push("        segments: [");
       for (const segment of track.segments) {
         lines.push("          {");
@@ -796,8 +815,22 @@ function emitAnimationMethods(
   lines.push("      if (!node) {");
   lines.push("        continue;");
   lines.push("      }");
+  lines.push("      if (track.target === \"visible\") {");
+  lines.push("        timeline.set(node, { visible: resolveAnimatedVisibility(track.initialValue) }, track.firstKeyframeAt);");
+  lines.push("        const mesh = getAnimatedVisibilityMesh(node);");
+  lines.push("        if (mesh) {");
+  lines.push("          timeline.set(mesh, { visible: resolveAnimatedVisibility(track.initialValue) }, track.firstKeyframeAt);");
+  lines.push("        }");
+  lines.push("        for (const segment of track.segments) {");
+  lines.push("          timeline.set(node, { visible: resolveAnimatedVisibility(segment.value) }, segment.at + segment.duration);");
+  lines.push("          if (mesh) {");
+  lines.push("            timeline.set(mesh, { visible: resolveAnimatedVisibility(segment.value) }, segment.at + segment.duration);");
+  lines.push("          }");
+  lines.push("        }");
+  lines.push("        continue;");
+  lines.push("      }");
   lines.push("      const owner = track.target === \"position\" ? node.position : track.target === \"rotation\" ? node.rotation : node.scale;");
-  lines.push("      timeline.set(owner, { [track.key]: track.initialValue }, 0);");
+  lines.push("      timeline.set(owner, { [track.key]: track.initialValue }, track.firstKeyframeAt);");
   lines.push("      for (const segment of track.segments) {");
   lines.push("        timeline.to(owner, { [track.key]: segment.value, duration: segment.duration, ease: segment.ease, immediateRender: false }, segment.at);");
   lines.push("      }");
@@ -922,7 +955,8 @@ function emitAnimationMethods(
   lines.push("    }");
   lines.push("    this.cancelPendingPlayback();");
   lines.push("    resolved.timeline.reversed(false);");
-  lines.push("    resolved.timeline.pause(0);");
+  lines.push("    resolved.timeline.pause();");
+  lines.push("    resolved.timeline.seek(0, false);");
   lines.push("  }");
   lines.push("");
   lines.push("  public async seek(frame: number, clipName?: string): Promise<void> {");
@@ -933,13 +967,16 @@ function emitAnimationMethods(
   lines.push("    this.cancelPendingPlayback();");
   lines.push("    const normalizedFrame = Math.max(0, Math.min(Math.round(frame), resolved.clip.durationFrames));");
   lines.push("    resolved.timeline.reversed(false);");
-  lines.push("    resolved.timeline.pause(normalizedFrame / Math.max(resolved.clip.fps, 1), false);");
+  lines.push("    resolved.timeline.pause();");
+  lines.push("    resolved.timeline.seek(normalizedFrame / Math.max(resolved.clip.fps, 1), false);");
   lines.push("  }");
   lines.push("");
 }
 
 function toTimelineTargetKey(property: string): TimelineTargetKey {
-  return property.includes("position")
+  return property === "visible"
+    ? "visible"
+    : property.includes("position")
     ? "position"
     : property.includes("rotation")
       ? "rotation"
@@ -947,6 +984,9 @@ function toTimelineTargetKey(property: string): TimelineTargetKey {
 }
 
 function toTimelineAxisKey(property: string): TimelineAxisKey {
+  if (property === "visible") {
+    return "value";
+  }
   const propertyKey = property.split(".").at(-1);
   return propertyKey === "y" || propertyKey === "z" ? propertyKey : "x";
 }
