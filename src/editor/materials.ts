@@ -17,7 +17,7 @@ const MATERIAL_COMMON_PROPERTY_DEFINITIONS: NodePropertyDefinition[] = [
   { group: "Material", path: "material.color", label: "Color", type: "color", input: "color" },
   { group: "Material", path: "material.opacity", label: "Opacity", type: "number", input: "number", step: 0.05, min: 0, max: 1 },
   { group: "Material", path: "material.transparent", label: "Transparent", type: "boolean", input: "checkbox" },
-  { group: "Material", path: "material.visible", label: "Visible", type: "boolean", input: "checkbox" },
+  { group: "Material", path: "material.visible", label: "Material Visible", type: "boolean", input: "checkbox" },
   { group: "Material", path: "material.alphaTest", label: "Alpha Test", type: "number", input: "number", step: 0.01, min: 0, max: 1 },
   { group: "Material", path: "material.depthTest", label: "Depth Test", type: "boolean", input: "checkbox" },
   { group: "Material", path: "material.depthWrite", label: "Depth Write", type: "boolean", input: "checkbox" },
