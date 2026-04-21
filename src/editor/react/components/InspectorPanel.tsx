@@ -138,6 +138,17 @@ export function InspectorPanel(props: InspectorPanelProps) {
                   </select>
                 </label>
 
+                {(groupedDefinitions.get("Object") ?? []).map((definition) => (
+                  <div key={definition.path} className="field-block field-block--wide">
+                    <PropertyRow
+                      node={node}
+                      definition={definition}
+                      onNodePropertyChange={onNodePropertyChange}
+                      onToggleEditable={onToggleEditable}
+                    />
+                  </div>
+                ))}
+
                 {node.type === "group" ? (
                   <div className="field-block field-block--wide">
                     <span className="field-block__label">Pivot From Content</span>
@@ -482,6 +493,7 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
   const currentValue = getDisplayValue(node, definition);
   const isEditable = Boolean(node.editable[definition.path]);
   const stringValue = String(currentValue);
+  const editableLabel = `Editable ${definition.label}`;
 
   return (
     <div className={`inspector-property${isEditable ? " is-editable" : ""}`}>
@@ -492,12 +504,14 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
           <input
             type="checkbox"
             className="editor-checkbox"
+            aria-label={definition.label}
             checked={Boolean(currentValue)}
             onChange={(event) => onNodePropertyChange(node.id, definition, event.target.checked)}
           />
         ) : definition.input === "select" ? (
           <select
             className="editor-select"
+            aria-label={definition.label}
             value={stringValue}
             onChange={(event) => onNodePropertyChange(node.id, definition, event.target.value)}
           >
@@ -512,12 +526,14 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
             <BufferedInput
               className="editor-input editor-input--compact inspector-color-control__hex"
               type="text"
+              aria-label={definition.label}
               value={stringValue}
               onCommit={(value) => onNodePropertyChange(node.id, definition, value)}
             />
             <input
               className="inspector-color-control__swatch"
               type="color"
+              aria-label={`${definition.label} swatch`}
               value={normalizeColorSwatchValue(stringValue)}
               onChange={(event) => onNodePropertyChange(node.id, definition, event.target.value)}
             />
@@ -526,6 +542,7 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
           <BufferedInput
             className="editor-input editor-input--compact"
             type="text"
+            aria-label={definition.label}
             inputMode={definition.input === "text" ? "text" : "decimal"}
             value={stringValue}
             onCommit={(value) => onNodePropertyChange(node.id, definition, value)}
@@ -536,6 +553,7 @@ function PropertyRow({ node, definition, onNodePropertyChange, onToggleEditable 
       <label className={`inspector-property__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
         <input
           type="checkbox"
+          aria-label={editableLabel}
           checked={isEditable}
           onChange={(event) => onToggleEditable(node.id, definition, event.target.checked)}
         />

@@ -278,6 +278,26 @@ describe("EditorStore", () => {
     });
   });
 
+  it("exposes node visibility in the object group and keeps material visibility distinct", () => {
+    const store = new EditorStore(createBlueprintFixture());
+    const box = store.blueprint.nodes.find((node) => node.type === "box");
+    const group = store.getNode(ROOT_NODE_ID);
+
+    expect(box).toBeTruthy();
+    expect(group?.type).toBe("group");
+    if (!box || !group) {
+      throw new Error("Expected fixture nodes.");
+    }
+
+    const boxVisible = getPropertyDefinitions(box).find((definition) => definition.path === "visible");
+    const materialVisible = getPropertyDefinitions(box).find((definition) => definition.path === "material.visible");
+    const groupVisible = getPropertyDefinitions(group).find((definition) => definition.path === "visible");
+
+    expect(boxVisible).toMatchObject({ group: "Object", label: "Visible" });
+    expect(materialVisible).toMatchObject({ group: "Material", label: "Material Visible" });
+    expect(groupVisible).toMatchObject({ group: "Object", label: "Visible" });
+  });
+
   it("captures node visibility as discrete animation keyframes", () => {
     const store = new EditorStore(createBlueprintFixture());
     const box = store.blueprint.nodes.find((node) => node.type === "box");

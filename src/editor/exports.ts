@@ -203,7 +203,7 @@ export function generateTypeScriptComponent(
   lines.push("    const root = this.group;");
   lines.push(`    root.name = ${JSON.stringify(componentName)};`);
   if (rootNode) {
-    lines.push(`    root.visible = ${serializeLiteral(rootNode.visible, "boolean")};`);
+    lines.push(`    root.visible = ${propertyExpression(rootNode, "visible", "this.options")};`);
   }
   if (rootNode?.type === "group") {
     lines.push("    const rootContent = new Group();");

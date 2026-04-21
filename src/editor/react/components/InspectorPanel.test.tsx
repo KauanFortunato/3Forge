@@ -49,6 +49,8 @@ describe("InspectorPanel", () => {
     const comboBoxes = screen.getAllByRole("combobox");
     await user.selectOptions(comboBoxes[0], "group-1");
     await user.selectOptions(comboBoxes[1], "left");
+    await user.click(screen.getByLabelText("Visible"));
+    await user.click(screen.getByLabelText("Editable Visible"));
 
     await user.click(screen.getByTitle("Transform"));
     const positionXInput = container.querySelector(".transform-cell input[type='text']");
@@ -65,6 +67,8 @@ describe("InspectorPanel", () => {
     expect(props.onNodeNameChange).toHaveBeenCalledWith("box-1", "Panel Copy");
     expect(props.onParentChange).toHaveBeenCalledWith("box-1", "group-1");
     expect(props.onNodeOriginChange).toHaveBeenCalledWith("box-1", { x: "left" });
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "visible" }), false);
+    expect(props.onToggleEditable).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "visible" }), true);
     expect(props.onNodePropertyChange).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "transform.position.x" }), "3.5");
     expect(props.onToggleEditable).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "transform.position.x" }), true);
   });
@@ -117,5 +121,25 @@ describe("InspectorPanel", () => {
     await user.click(screen.getByRole("button", { name: "Apply Pivot" }));
 
     expect(props.onGroupPivotPresetApply).toHaveBeenCalledWith("group-1", "bottom-center");
+  });
+
+  it("edits group visibility in the object section", async () => {
+    const user = userEvent.setup();
+    const node = createNode("group", ROOT_NODE_ID, "group-1");
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    await user.click(screen.getByLabelText("Visible"));
+    await user.click(screen.getByLabelText("Editable Visible"));
+
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith("group-1", expect.objectContaining({ path: "visible" }), false);
+    expect(props.onToggleEditable).toHaveBeenCalledWith("group-1", expect.objectContaining({ path: "visible" }), true);
   });
 });

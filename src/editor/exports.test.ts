@@ -161,4 +161,31 @@ describe("exports", () => {
     expect(output).toContain('target: "visible"');
     expect(output).toContain('key: "value"');
   });
+
+  it("uses editable root visibility bindings in exported options and runtime assignment", () => {
+    const blueprint = createBlueprintFixture();
+    const rootNode = blueprint.nodes.find((node) => node.id === ROOT_NODE_ID);
+
+    expect(rootNode).toBeTruthy();
+    if (!rootNode) {
+      throw new Error("Expected root node.");
+    }
+
+    rootNode.visible = false;
+    rootNode.editable = {
+      ...rootNode.editable,
+      visible: {
+        path: "visible",
+        key: "rootVisible",
+        label: "Root Visible",
+        type: "boolean",
+      },
+    };
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toContain("rootVisible?: boolean;");
+    expect(output).toContain("rootVisible: false,");
+    expect(output).toContain("root.visible = this.options.rootVisible;");
+  });
 });

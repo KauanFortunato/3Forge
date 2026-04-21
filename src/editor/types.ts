@@ -1,6 +1,6 @@
 export type EditorNodeType = "group" | "box" | "circle" | "sphere" | "cylinder" | "plane" | "text" | "image";
 export type EditableFieldType = "number" | "color" | "boolean" | "string";
-export type PropertyGroup = "Transform" | "Geometry" | "Material" | "Text";
+export type PropertyGroup = "Object" | "Transform" | "Geometry" | "Material" | "Text";
 export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text" | "select";
 export type NodePropertyPath = string;
 export type MaterialType = "basic" | "standard";

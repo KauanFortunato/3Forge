@@ -59,6 +59,10 @@ const HISTORY_LIMIT = 100;
 const DEGREE_TO_RADIAN = Math.PI / 180;
 const RADIAN_TO_DEGREE = 180 / Math.PI;
 
+const OBJECT_PROPERTY_DEFINITIONS: NodePropertyDefinition[] = [
+  { group: "Object", path: "visible", label: "Visible", type: "boolean", input: "checkbox" },
+];
+
 const BASE_PROPERTY_DEFINITIONS: NodePropertyDefinition[] = [
   { group: "Transform", path: "transform.position.x", label: "Position X", type: "number", input: "number", step: 0.1 },
   { group: "Transform", path: "transform.position.y", label: "Position Y", type: "number", input: "number", step: 0.1 },
@@ -287,10 +291,11 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
 
 export function getPropertyDefinitions(node: EditorNode): NodePropertyDefinition[] {
   if (node.type === "group") {
-    return [...BASE_PROPERTY_DEFINITIONS];
+    return [...OBJECT_PROPERTY_DEFINITIONS, ...BASE_PROPERTY_DEFINITIONS];
   }
 
   return [
+    ...OBJECT_PROPERTY_DEFINITIONS,
     ...BASE_PROPERTY_DEFINITIONS,
     ...GEOMETRY_DEFINITIONS[node.type],
     ...getMaterialPropertyDefinitions(node.material.type),
