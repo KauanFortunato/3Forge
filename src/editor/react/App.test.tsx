@@ -221,6 +221,45 @@ describe("App", () => {
     expect(fakeScene.seekAnimation).toHaveBeenCalledWith(12);
   });
 
+  it("lets all-keyframes mode select and edit keys from other objects", async () => {
+    const blueprint = createDefaultBlueprint();
+    blueprint.componentName = "Timeline Focus";
+    const panelNode = blueprint.nodes.find((node) => node.name === "Hero Panel");
+    const accentNode = blueprint.nodes.find((node) => node.name === "Accent Plate");
+    const panelTrack = createAnimationTrack(panelNode?.id ?? "panel-node", "transform.position.x");
+    panelTrack.keyframes = [
+      createAnimationKeyframe(0, 0),
+      createAnimationKeyframe(12, 1),
+    ];
+    const accentTrack = createAnimationTrack(accentNode?.id ?? "accent-node", "transform.position.y");
+    accentTrack.keyframes = [
+      createAnimationKeyframe(0, 0.55),
+      createAnimationKeyframe(18, 1.2),
+    ];
+    const clip = createAnimationClip("intro", { durationFrames: 48, tracks: [panelTrack, accentTrack] });
+    blueprint.animation = {
+      activeClipId: clip.id,
+      clips: [clip],
+    };
+    persistWorkspace(blueprint, createWorkspaceProjectContext());
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "All keyframes" }));
+
+    const keyframes = document.querySelectorAll(".animation-keyframe");
+    expect(keyframes.length).toBe(4);
+
+    fireEvent.click(keyframes[2] as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(screen.getByText("Accent Plate | Mesh")).toBeTruthy();
+      expect(document.querySelector(".animation-keyframe.is-selected")).toBeTruthy();
+    });
+  });
+
   it("continues from the persisted local project on demand", () => {
     persistLocalWorkspace("Resume Me");
 
@@ -405,6 +444,26 @@ describe("App", () => {
       expect(exportPackageMocks.createExportPackageZip).toHaveBeenCalledTimes(1);
       expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("toggles collapse and expand all from the hierarchy header", () => {
+    persistLocalWorkspace("Hierarchy Toggle");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+
+    expect(within(hierarchyTree).getByText("Hero Panel")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+
+    expect(within(hierarchyTree).queryByText("Hero Panel")).toBeNull();
+    expect(screen.getByRole("button", { name: "Expand all" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+
+    expect(within(hierarchyTree).getByText("Hero Panel")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Collapse all" })).toBeTruthy();
   });
 
   it("keeps the footer visible and removes the timeline dock cleanly when the timeline is hidden", () => {

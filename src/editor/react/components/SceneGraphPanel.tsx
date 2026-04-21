@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, MouseEvent } from "react";
 import type { EditorNode } from "../../types";
 import type { TreeBranch, TreeDropTarget } from "../ui-types";
@@ -9,6 +9,8 @@ interface SceneGraphPanelProps {
   animatedNodeIds: Set<string>;
   selectedNodeId: string;
   selectedNodeIds: string[];
+  collapsedIds: Set<string>;
+  onCollapsedIdsChange: (collapsedIds: Set<string>) => void;
   onSelectNode: (nodeId: string, additive: boolean) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
@@ -16,42 +18,94 @@ interface SceneGraphPanelProps {
 }
 
 export function SceneGraphPanel(props: SceneGraphPanelProps) {
-  const { nodes, animatedNodeIds, selectedNodeId, selectedNodeIds, onSelectNode, onMoveNode, onToggleVisibility, onContextMenu } = props;
+  const {
+    nodes,
+    animatedNodeIds,
+    selectedNodeId,
+    selectedNodeIds,
+    collapsedIds,
+    onCollapsedIdsChange,
+    onSelectNode,
+    onMoveNode,
+    onToggleVisibility,
+    onContextMenu,
+  } = props;
   const branches = useMemo(() => buildTree(nodes), [nodes]);
   const firstBranchId = branches[0]?.node.id ?? null;
   const nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const validNodeIds = useMemo(() => new Set(nodes.map((node) => node.id)), [nodes]);
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const selectedPathIds = useMemo(() => buildSelectedPathSet(nodeMap, selectedNodeIds), [nodeMap, selectedNodeIds]);
   const selectionRevealIds = useMemo(() => buildSelectionRevealSet(selectedNodeIds, selectedPathIds), [selectedNodeIds, selectedPathIds]);
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
+  const selectionRevealKey = useMemo(() => Array.from(selectionRevealIds).sort().join("|"), [selectionRevealIds]);
+  const lastSelectionRevealKeyRef = useRef<string | null>(null);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<TreeDropTarget | null>(null);
 
   useEffect(() => {
-    setCollapsedIds((current) => {
-      const next = new Set(current);
-      for (const id of selectionRevealIds) {
-        next.delete(id);
+    const next = new Set<string>();
+    for (const id of collapsedIds) {
+      if (validNodeIds.has(id)) {
+        next.add(id);
       }
-      return next;
-    });
-  }, [selectionRevealIds]);
+    }
+
+    if (next.size === collapsedIds.size) {
+      let changed = false;
+      for (const id of collapsedIds) {
+        if (!next.has(id)) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) {
+        return;
+      }
+    }
+
+    onCollapsedIdsChange(next);
+  }, [collapsedIds, onCollapsedIdsChange, validNodeIds]);
+
+  useEffect(() => {
+    if (lastSelectionRevealKeyRef.current === selectionRevealKey) {
+      return;
+    }
+    lastSelectionRevealKeyRef.current = selectionRevealKey;
+
+    const next = new Set(collapsedIds);
+    for (const id of selectionRevealIds) {
+      next.delete(id);
+    }
+
+    if (next.size === collapsedIds.size) {
+      let changed = false;
+      for (const id of collapsedIds) {
+        if (!next.has(id)) {
+          changed = true;
+          break;
+        }
+      }
+      if (!changed) {
+        return;
+      }
+    }
+
+    onCollapsedIdsChange(next);
+  }, [collapsedIds, onCollapsedIdsChange, selectionRevealIds, selectionRevealKey]);
+
+  const toggleNode = (nodeId: string) => {
+    const next = new Set(collapsedIds);
+    if (next.has(nodeId)) {
+      next.delete(nodeId);
+    } else {
+      next.add(nodeId);
+    }
+    onCollapsedIdsChange(next);
+  };
 
   const clearDragState = () => {
     setDraggedNodeId(null);
     setDropTarget(null);
-  };
-
-  const toggleNode = (nodeId: string) => {
-    setCollapsedIds((current) => {
-      const next = new Set(current);
-      if (next.has(nodeId)) {
-        next.delete(nodeId);
-      } else {
-        next.add(nodeId);
-      }
-      return next;
-    });
   };
 
   return (

@@ -387,6 +387,7 @@ export function App() {
   const [statusText, setStatusText] = useState("Ready");
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false);
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
+  const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(320);
   const [rightPanelWidth, setRightPanelWidth] = useState(() => readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 420));
@@ -446,6 +447,12 @@ export function App() {
     () => new Set(storeView.animation.clips.flatMap((clip) => clip.tracks.map((track) => track.nodeId))),
     [storeView.animation.clips],
   );
+  const collapsibleHierarchyNodeIds = useMemo(
+    () => storeView.blueprintNodes.filter((node) => node.type === "group").map((node) => node.id),
+    [storeView.blueprintNodes],
+  );
+  const areAllHierarchyGroupsCollapsed = collapsibleHierarchyNodeIds.length > 0
+    && collapsibleHierarchyNodeIds.every((nodeId) => collapsedHierarchyIds.has(nodeId));
   const shouldPersistWorkspace = isStarted || bootState.persistedWorkspace !== null;
 
   const setTransientStatus = useCallback((message: string) => {
@@ -775,6 +782,24 @@ export function App() {
     }
     setTransientStatus("Track removed.");
   }, [selectedTrackId, setTransientStatus, store]);
+
+  const handleSelectAnimationTrack = useCallback((trackId: string | null) => {
+    setSelectedTrackId(trackId);
+    if (!trackId) {
+      setSelectedKeyframeId(null);
+      return;
+    }
+
+    const track = activeClipTracks.find((entry) => entry.id === trackId) ?? store.getAnimationTrack(trackId);
+    if (track && selectedNode?.id !== track.nodeId) {
+      store.selectNode(track.nodeId);
+    }
+  }, [activeClipTracks, selectedNode?.id, store]);
+
+  const handleSelectAnimationKeyframe = useCallback((trackId: string, keyframeId: string | null) => {
+    handleSelectAnimationTrack(trackId);
+    setSelectedKeyframeId(keyframeId);
+  }, [handleSelectAnimationTrack]);
 
   const handleCreateAnimationClip = useCallback(() => {
     const clipId = store.createAnimationClip();
@@ -1372,6 +1397,16 @@ export function App() {
     }
   }, [setTransientStatus, store]);
 
+  const handleToggleHierarchyCollapse = useCallback(() => {
+    setCollapsedHierarchyIds((current) => {
+      const shouldExpandAll = collapsibleHierarchyNodeIds.length > 0
+        && collapsibleHierarchyNodeIds.every((nodeId) => current.has(nodeId));
+      return shouldExpandAll
+        ? new Set<string>()
+        : new Set(collapsibleHierarchyNodeIds);
+    });
+  }, [collapsibleHierarchyNodeIds]);
+
   const openSceneGraphContextMenu = useCallback((event: MouseEvent, nodeId: string | null) => {
     const shouldUseExistingSelection = !nodeId || selectedNodeIdsSet.has(nodeId);
     if (nodeId && !shouldUseExistingSelection) {
@@ -1676,7 +1711,17 @@ export function App() {
                 <section className="panel-split__top">
                   <div className="panel__header">
                     <p className="panel__eyebrow">Hierarchy</p>
-                    <span className="panel__meta">{storeView.blueprintNodes.length} items</span>
+                    <div className="panel__header-actions">
+                      <span className="panel__meta">{storeView.blueprintNodes.length} items</span>
+                      <button
+                        type="button"
+                        className="tool-button tool-button--label"
+                        onClick={handleToggleHierarchyCollapse}
+                        disabled={collapsibleHierarchyNodeIds.length === 0}
+                      >
+                        {areAllHierarchyGroupsCollapsed ? "Expand all" : "Collapse all"}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="panel__body panel__body--flush">
@@ -1685,6 +1730,8 @@ export function App() {
                       animatedNodeIds={animatedNodeIds}
                       selectedNodeId={storeView.selectedNodeId}
                       selectedNodeIds={storeView.selectedNodeIds}
+                      collapsedIds={collapsedHierarchyIds}
+                      onCollapsedIdsChange={setCollapsedHierarchyIds}
                       onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
                       onMoveNode={handleSceneMove}
                       onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
@@ -1780,11 +1827,8 @@ export function App() {
                   onAddTrack={handleAddAnimationTrack}
                   onRemoveTrack={handleRemoveAnimationTrack}
                   onAddKeyframe={handleAddAnimationKeyframe}
-                  onSelectTrack={(trackId) => setSelectedTrackId(trackId)}
-                  onSelectKeyframe={(trackId, keyframeId) => {
-                    setSelectedTrackId(trackId);
-                    setSelectedKeyframeId(keyframeId);
-                  }}
+                  onSelectTrack={handleSelectAnimationTrack}
+                  onSelectKeyframe={handleSelectAnimationKeyframe}
                   onUpdateKeyframe={handleUpdateAnimationKeyframe}
                   onRemoveKeyframe={handleRemoveAnimationKeyframe}
                   onBeginKeyframeDrag={() => store.beginHistoryTransaction()}

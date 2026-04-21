@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { EditorStore, ROOT_NODE_ID, createNode } from "../../state";
 import { SceneGraphPanel } from "./SceneGraphPanel";
@@ -27,17 +28,36 @@ describe("SceneGraphPanel", () => {
   it("reveals a pasted group immediately even when the parent group was collapsed", () => {
     const store = createHierarchyStore();
     const groupSubtree = store.getSubtreeNodes("group-1");
+    const handleSelectNode = vi.fn();
+
+    function ControlledPanel(props: {
+      nodes: ReturnType<typeof createHierarchyStore>["blueprint"]["nodes"];
+      selectedNodeId: string;
+      selectedNodeIds: string[];
+    }) {
+      const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+
+      return (
+        <SceneGraphPanel
+          nodes={props.nodes}
+          animatedNodeIds={new Set()}
+          selectedNodeId={props.selectedNodeId}
+          selectedNodeIds={props.selectedNodeIds}
+          collapsedIds={collapsedIds}
+          onCollapsedIdsChange={setCollapsedIds}
+          onSelectNode={handleSelectNode}
+          onMoveNode={vi.fn()}
+          onToggleVisibility={vi.fn()}
+          onContextMenu={vi.fn()}
+        />
+      );
+    }
 
     const { rerender } = render(
-      <SceneGraphPanel
+      <ControlledPanel
         nodes={store.blueprint.nodes}
-        animatedNodeIds={new Set()}
         selectedNodeId="group-1"
         selectedNodeIds={["group-1"]}
-        onSelectNode={vi.fn()}
-        onMoveNode={vi.fn()}
-        onToggleVisibility={vi.fn()}
-        onContextMenu={vi.fn()}
       />,
     );
 
@@ -48,15 +68,10 @@ describe("SceneGraphPanel", () => {
     store.pasteNodeSubtrees([groupSubtree], "group-1");
 
     rerender(
-      <SceneGraphPanel
+      <ControlledPanel
         nodes={store.blueprint.nodes}
-        animatedNodeIds={new Set()}
         selectedNodeId={store.selectedNodeId}
         selectedNodeIds={store.selectedNodeIds}
-        onSelectNode={vi.fn()}
-        onMoveNode={vi.fn()}
-        onToggleVisibility={vi.fn()}
-        onContextMenu={vi.fn()}
       />,
     );
 
@@ -74,6 +89,8 @@ describe("SceneGraphPanel", () => {
         animatedNodeIds={new Set()}
         selectedNodeId=""
         selectedNodeIds={[]}
+        collapsedIds={new Set()}
+        onCollapsedIdsChange={vi.fn()}
         onSelectNode={handleSelectNode}
         onMoveNode={vi.fn()}
         onToggleVisibility={vi.fn()}
@@ -87,5 +104,46 @@ describe("SceneGraphPanel", () => {
     fireEvent.keyDown(tree, { key: "ArrowDown" });
 
     expect(handleSelectNode).toHaveBeenCalledWith(ROOT_NODE_ID, false);
+  });
+
+  it("honors externally controlled collapse state changes", () => {
+    const store = createHierarchyStore();
+
+    function Harness() {
+      const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+
+      return (
+        <>
+          <button type="button" onClick={() => setCollapsedIds(new Set(["group-1"]))}>
+            Collapse all
+          </button>
+          <button type="button" onClick={() => setCollapsedIds(new Set())}>
+            Expand all
+          </button>
+          <SceneGraphPanel
+            nodes={store.blueprint.nodes}
+            animatedNodeIds={new Set()}
+            selectedNodeId=""
+            selectedNodeIds={[]}
+            collapsedIds={collapsedIds}
+            onCollapsedIdsChange={setCollapsedIds}
+            onSelectNode={vi.fn()}
+            onMoveNode={vi.fn()}
+            onToggleVisibility={vi.fn()}
+            onContextMenu={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<Harness />);
+
+    expect(screen.getByText("Plane Child")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+    expect(screen.queryByText("Plane Child")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    expect(screen.getByText("Plane Child")).toBeTruthy();
   });
 });

@@ -19,9 +19,10 @@ import type {
 } from "../../types";
 import { BufferedInput } from "./BufferedInput";
 
-const FRAME_WIDTH = 14;
-const ACTIONS_WIDTH = 126;
-const ACTIONS_GAP = 12;
+const FRAME_WIDTH = 13;
+const ACTIONS_WIDTH = 104;
+const ACTIONS_GAP = 8;
+const TIMELINE_INSET = 1;
 
 interface AnimationTimelineProps {
   animation: ComponentAnimation;
@@ -60,6 +61,8 @@ interface ScrubState {
   laneLeft: number;
 }
 
+type TimelineViewMode = "selected" | "all";
+
 export function AnimationTimeline(props: AnimationTimelineProps) {
   const {
     animation,
@@ -89,6 +92,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   } = props;
 
   const [propertyToAdd, setPropertyToAdd] = useState<AnimationPropertyPath>("transform.position.x");
+  const [viewMode, setViewMode] = useState<TimelineViewMode>("selected");
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [scrubState, setScrubState] = useState<ScrubState | null>(null);
   const leftBodyRef = useRef<HTMLDivElement | null>(null);
@@ -103,25 +107,25 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     () => getResolvedClipTracks(animation, activeClip?.id ?? ""),
     [activeClip?.id, animation],
   );
-  const groupedTracks = useMemo(() => groupTracksByNode(resolvedTracks, nodes), [nodes, resolvedTracks]);
-  const selectedTrack = resolvedTracks.find((track) => track.id === selectedTrackId) ?? null;
-  const selectedKeyframe = selectedTrack?.keyframes.find((keyframe) => keyframe.id === selectedKeyframeId) ?? null;
-  const selectedNodeLabel = selectedNode ? `${selectedNode.name} · ${selectedNode.type}` : "No node selected";
   const takenProperties = new Set(
     selectedNode ? resolvedTracks.filter((track) => track.nodeId === selectedNode.id).map((track) => track.property) : [],
   );
   const availableProperties = ANIMATION_PROPERTIES.filter((entry) => !takenProperties.has(entry.path));
-  const timelineWidth = Math.max(activeClip?.durationFrames ?? 1, 1) * FRAME_WIDTH;
-  const visibleTracks = useMemo(
-    () => (selectedNode ? resolvedTracks.filter((track) => track.nodeId === selectedNode.id) : []),
-    [resolvedTracks, selectedNode],
-  );
+  const timelineWidth = Math.max(activeClip?.durationFrames ?? 1, 1) * FRAME_WIDTH + (TIMELINE_INSET * 2);
+  const visibleTracks = useMemo(() => {
+    if (viewMode === "all") {
+      return resolvedTracks;
+    }
+
+    return selectedNode ? resolvedTracks.filter((track) => track.nodeId === selectedNode.id) : [];
+  }, [resolvedTracks, selectedNode, viewMode]);
   const visibleGroupedTracks = useMemo(() => groupTracksByNode(visibleTracks, nodes), [nodes, visibleTracks]);
   const visibleTrackCount = visibleTracks.length;
   const visibleSelectedTrack = visibleTracks.find((track) => track.id === selectedTrackId) ?? null;
   const visibleSelectedKeyframe = visibleSelectedTrack?.keyframes.find((keyframe) => keyframe.id === selectedKeyframeId) ?? null;
-  const selectedObjectLabel = selectedNode ? `${selectedNode.name} | ${selectedNode.type}` : "No object selected";
-
+  const visibleTrackSummary = viewMode === "all"
+    ? `${visibleTrackCount} channels`
+    : (selectedNode ? `${visibleTrackCount} channels` : "Select an object");
   useEffect(() => {
     if (availableProperties.length > 0 && !availableProperties.some((entry) => entry.path === propertyToAdd)) {
       setPropertyToAdd(availableProperties[0].path);
@@ -234,7 +238,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
       rulerScroll.removeEventListener("scroll", handleRulerScroll);
       rightBody.removeEventListener("scroll", handleRightScroll);
     };
-  }, [visibleGroupedTracks.length]);
+  }, [viewMode, visibleGroupedTracks.length]);
 
   useEffect(() => {
     const leftBody = leftBodyRef.current;
@@ -245,149 +249,199 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
 
     leftBody.scrollTop = 0;
     rightBody.scrollTop = 0;
-  }, [selectedNode?.id]);
+  }, [activeClip?.id, viewMode]);
 
   return (
     <section className="animation-panel">
       <div className="animation-panel__header">
-        <div className="animation-toolbar animation-toolbar--left">
-          <div className="button-row">
-            <select
-              className="editor-select animation-toolbar__select"
-              value={activeClip?.id ?? ""}
-              onChange={(event) => onSelectClip(event.target.value)}
-            >
-              {animation.clips.map((clip) => (
-                <option key={clip.id} value={clip.id}>{clip.name}</option>
-              ))}
-            </select>
-            <button type="button" className="tool-button tool-button--icon" onClick={onCreateClip}>
-              <span>New Clip</span>
-            </button>
-            <button type="button" className={`tool-button tool-button--icon${isPlaying ? " is-active" : ""}`} onClick={onPlayToggle}>
-              <span>{isPlaying ? "Pause" : "Play"}</span>
-            </button>
-            <button type="button" className="tool-button tool-button--icon" onClick={onStop}>
-              <span>Stop</span>
-            </button>
-          </div>
-
-          <div className="animation-toolbar__stats">
-            <label className="field-inline">
-              <span>Frame</span>
-              <BufferedInput
-                className="editor-input editor-input--compact"
-                type="text"
-                inputMode="numeric"
-                value={String(currentFrame)}
-                onCommit={(value) => onFrameChange(Number(value))}
-              />
-            </label>
-            <label className="field-inline">
-              <span>FPS</span>
-              <BufferedInput
-                className="editor-input editor-input--compact"
-                type="text"
-                inputMode="numeric"
-                value={String(activeClip?.fps ?? 24)}
-                onCommit={(value) => onAnimationConfigChange({ fps: Number(value) })}
-              />
-            </label>
-            <label className="field-inline">
-              <span>End</span>
-              <BufferedInput
-                className="editor-input editor-input--compact"
-                type="text"
-                inputMode="numeric"
-                value={String(activeClip?.durationFrames ?? 1)}
-                onCommit={(value) => onAnimationConfigChange({ durationFrames: Number(value) })}
-              />
-            </label>
-            {activeClip ? (
-              <label className="field-inline">
-                <span>Name</span>
-                <BufferedInput
-                  className="editor-input editor-input--compact"
-                  type="text"
-                  value={activeClip.name}
-                  onCommit={(value) => onRenameClip(activeClip.id, value)}
-                />
-              </label>
-            ) : null}
-            {activeClip && animation.clips.length > 1 ? (
-              <button type="button" className="tool-button tool-button--icon" onClick={() => onRemoveClip(activeClip.id)}>
-                <span>Delete Clip</span>
+        <div className="animation-panel__toolbar">
+          <div className="animation-toolbar animation-toolbar--left">
+            <div className="animation-toolbar__group animation-toolbar__group--clip">
+              <select
+                className="editor-select animation-toolbar__select"
+                value={activeClip?.id ?? ""}
+                onChange={(event) => onSelectClip(event.target.value)}
+                aria-label="Animation clip"
+              >
+                {animation.clips.map((clip) => (
+                  <option key={clip.id} value={clip.id}>{clip.name}</option>
+                ))}
+              </select>
+              <button type="button" className="tool-button tool-button--icon" onClick={onCreateClip}>
+                <span>New Clip</span>
               </button>
-            ) : null}
-          </div>
-        </div>
+              {activeClip && animation.clips.length > 1 ? (
+                <button type="button" className="tool-button tool-button--icon" onClick={() => onRemoveClip(activeClip.id)}>
+                  <span>Delete Clip</span>
+                </button>
+              ) : null}
+            </div>
 
-        <div className="animation-toolbar animation-toolbar--right">
-          <div className="toolbar-chip animation-toolbar__selection">{selectedObjectLabel}</div>
-          <select
-            className="editor-select animation-toolbar__select"
-            value={propertyToAdd}
-            onChange={(event) => setPropertyToAdd(event.target.value as AnimationPropertyPath)}
-            disabled={!selectedNode || availableProperties.length === 0}
-          >
-            {availableProperties.length > 0 ? (
-              availableProperties.map((entry) => (
-                <option key={entry.path} value={entry.path}>
-                  {entry.label}
-                </option>
-              ))
-            ) : (
-              <option value={propertyToAdd}>No transform channels left</option>
-            )}
-          </select>
-          <button
-            type="button"
-            className="tool-button tool-button--icon animation-toolbar__add"
-            disabled={!selectedNode || availableProperties.length === 0}
-            onClick={() => onAddTrack(propertyToAdd)}
-          >
-            <span>Add Channel</span>
-          </button>
-          <div className="toolbar-chip animation-toolbar__count is-muted">
-            {selectedNode ? `${visibleTrackCount} channels` : "Select an object"}
+            {activeClip ? (
+              <div className="animation-toolbar__group animation-toolbar__group--name">
+                <label className="field-inline animation-toolbar__field animation-toolbar__field--name">
+                  <span>Name</span>
+                  <BufferedInput
+                    className="editor-input editor-input--compact animation-toolbar__name-input"
+                    type="text"
+                    value={activeClip.name}
+                    onCommit={(value) => onRenameClip(activeClip.id, value)}
+                  />
+                </label>
+              </div>
+            ) : null}
+
+            <div className="animation-toolbar__group animation-toolbar__group--transport">
+              <div className="button-row">
+                <button type="button" className={`tool-button tool-button--icon${isPlaying ? " is-active" : ""}`} onClick={onPlayToggle}>
+                  <span>{isPlaying ? "Pause" : "Play"}</span>
+                </button>
+                <button type="button" className="tool-button tool-button--icon" onClick={onStop}>
+                  <span>Stop</span>
+                </button>
+              </div>
+
+              <div className="animation-toolbar__stats">
+                <label className="field-inline animation-toolbar__field">
+                  <span>Frame</span>
+                  <BufferedInput
+                    className="editor-input editor-input--compact"
+                    type="text"
+                    inputMode="numeric"
+                    value={String(currentFrame)}
+                    onCommit={(value) => onFrameChange(Number(value))}
+                  />
+                </label>
+                <label className="field-inline animation-toolbar__field">
+                  <span>FPS</span>
+                  <BufferedInput
+                    className="editor-input editor-input--compact"
+                    type="text"
+                    inputMode="numeric"
+                    value={String(activeClip?.fps ?? 24)}
+                    onCommit={(value) => onAnimationConfigChange({ fps: Number(value) })}
+                  />
+                </label>
+                <label className="field-inline animation-toolbar__field">
+                  <span>End</span>
+                  <BufferedInput
+                    className="editor-input editor-input--compact"
+                    type="text"
+                    inputMode="numeric"
+                    value={String(activeClip?.durationFrames ?? 1)}
+                    onCommit={(value) => onAnimationConfigChange({ durationFrames: Number(value) })}
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="animation-toolbar animation-toolbar--right">
+            <div className="animation-toolbar__group animation-toolbar__group--scope">
+              <div className="segmented-control animation-toolbar__view-toggle" aria-label="Timeline view">
+                <button
+                  type="button"
+                  className={`segmented-control__button${viewMode === "selected" ? " is-active" : ""}`}
+                  aria-pressed={viewMode === "selected"}
+                  onClick={() => setViewMode("selected")}
+                >
+                  Selected object
+                </button>
+                <button
+                  type="button"
+                  className={`segmented-control__button${viewMode === "all" ? " is-active" : ""}`}
+                  aria-pressed={viewMode === "all"}
+                  onClick={() => setViewMode("all")}
+                >
+                  All keyframes
+                </button>
+              </div>
+            </div>
+
+            <div className="animation-toolbar__group animation-toolbar__group--channel">
+              <select
+                className="editor-select animation-toolbar__select"
+                value={propertyToAdd}
+                onChange={(event) => setPropertyToAdd(event.target.value as AnimationPropertyPath)}
+                disabled={!selectedNode || availableProperties.length === 0}
+                aria-label="Channel to add"
+              >
+                {availableProperties.length > 0 ? (
+                  availableProperties.map((entry) => (
+                    <option key={entry.path} value={entry.path}>
+                      {entry.label}
+                    </option>
+                  ))
+                ) : (
+                  <option value={propertyToAdd}>No transform channels left</option>
+                )}
+              </select>
+              <button
+                type="button"
+                className="tool-button tool-button--icon animation-toolbar__add"
+                disabled={!selectedNode || availableProperties.length === 0}
+                onClick={() => onAddTrack(propertyToAdd)}
+              >
+                <span>Add Channel</span>
+              </button>
+              <div className="toolbar-chip animation-toolbar__count is-muted">
+                {visibleTrackSummary}
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       <div className="animation-dope-sheet">
         <div className="animation-dope-sheet__left">
-          <div className="animation-dope-sheet__left-header">Channels</div>
+          <div className="animation-dope-sheet__left-header">
+            <div className="animation-pane-heading">
+              <span className="animation-pane-heading__title">Channels</span>
+            </div>
+            <div className="toolbar-chip animation-pane-heading__chip">{visibleTrackCount}</div>
+          </div>
           <div ref={leftBodyRef} className="animation-dope-sheet__left-body">
-            {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
-              <div key={node.id} className={`animation-node${selectedNode?.id === node.id ? " is-selected" : ""}`}>
-                <div className="animation-node__header">
-                  <div className="animation-node__title">{node.name}</div>
-                  <div className="animation-node__meta">{node.type}</div>
-                </div>
-
-                <div className="animation-node__channels">
-                  {tracks.map((track) => (
-                    <div
-                      key={track.id}
-                      className={`animation-channel${selectedTrackId === track.id ? " is-selected" : ""}`}
-                      onClick={() => onSelectTrack(track.id)}
-                    >
-                      <span className="animation-channel__label">{getAnimationPropertyLabel(track.property)}</span>
-                      <span className="animation-channel__count">{track.keyframes.length}</span>
+            <div className="animation-dope-sheet__left-inner">
+              {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
+                <div key={node.id} className={`animation-node${selectedNode?.id === node.id ? " is-selected" : ""}`}>
+                  <div className="animation-node__header">
+                    <div className="animation-node__header-main">
+                      <div className="animation-node__title">{node.name}</div>
+                      <div className="animation-node__meta">{node.type}</div>
                     </div>
-                  ))}
+                    <div className="animation-node__badge">{tracks.length} ch</div>
+                  </div>
+
+                  <div className="animation-node__channels">
+                    {tracks.map((track) => (
+                      <button
+                        key={track.id}
+                        type="button"
+                        className={`animation-channel${selectedTrackId === track.id ? " is-selected" : ""}`}
+                        onClick={() => onSelectTrack(track.id)}
+                      >
+                        <span className="animation-channel__content">
+                          <span className="animation-channel__label">{getAnimationPropertyLabel(track.property)}</span>
+                          <span className="animation-channel__meta">{getTrackCategoryLabel(track.property)}</span>
+                        </span>
+                        <span className="animation-channel__count">{track.keyframes.length} keys</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )) : (
-              <div className="panel-empty panel-empty--card">
-                <strong className="panel-empty__title">Channels</strong>
-                <span className="panel-empty__body">
-                  {selectedNode
-                    ? "Add channels for the selected object to start animating."
-                    : "Select an object to inspect and animate its channels."}
-                </span>
-              </div>
-            )}
+              )) : (
+                <div className="panel-empty panel-empty--card">
+                  <strong className="panel-empty__title">No channels visible</strong>
+                  <span className="panel-empty__body">
+                    {viewMode === "all"
+                      ? "No animated channels in this clip yet."
+                      : selectedNode
+                        ? "Add channels to the selected object."
+                        : "Select an object to inspect its channels."}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -407,12 +461,12 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                   <div
                     key={frame}
                     className={`animation-ruler__tick${frame % 10 === 0 ? " is-major" : ""}`}
-                    style={{ left: frame * FRAME_WIDTH }}
+                    style={{ left: TIMELINE_INSET + (frame * FRAME_WIDTH) }}
                   >
                     {frame % 10 === 0 ? <span>{frame}</span> : null}
                   </div>
                 ))}
-                <div className="animation-playhead" style={{ left: currentFrame * FRAME_WIDTH }} />
+                <div className="animation-playhead" style={{ left: TIMELINE_INSET + (currentFrame * FRAME_WIDTH) }} />
               </div>
               <div className="animation-ruler-row__actions-spacer" aria-hidden="true" />
             </div>
@@ -421,7 +475,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
           <div ref={rightBodyRef} className="animation-dope-sheet__right-body">
             <div className="animation-dope-sheet__rows">
               {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
-              <div key={node.id} className="animation-row-group">
+              <div key={node.id} className={`animation-row-group${selectedNode?.id === node.id ? " is-selected" : ""}`}>
                 <div className="animation-row-group__spacer" style={{ width: timelineWidth + ACTIONS_GAP + ACTIONS_WIDTH }}>
                   <div
                     className="animation-row-group__spacer-track"
@@ -431,7 +485,11 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                       onFrameChange(positionToFrame(event.clientX, laneLeft, activeClip?.durationFrames ?? 1));
                       setScrubState({ laneLeft });
                     }}
-                  />
+                  >
+                    <div className="animation-row-group__spacer-content">
+                      <span className="animation-row-group__spacer-title">{node.name}</span>
+                    </div>
+                  </div>
                   <div className="animation-row-group__spacer-actions" aria-hidden="true" />
                 </div>
                 {tracks.map((track) => (
@@ -463,11 +521,13 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
               </div>
             )) : (
                 <div className="panel-empty panel-empty--card animation-panel-empty-wide">
-                  <strong className="panel-empty__title">Dope Sheet</strong>
+                  <strong className="panel-empty__title">Timeline is empty</strong>
                   <span className="panel-empty__body">
-                    {selectedNode
-                      ? "Add transform channels for the selected object and then keyframe directly in the dope sheet."
-                      : "Select an object to view and edit its animation channels."}
+                    {viewMode === "all"
+                      ? "Add channels to this clip to see every object and keyframe across the full timeline."
+                      : selectedNode
+                        ? "Add channels, then click Add key on a lane to start animating."
+                        : "Select an object to focus its channels and keyframe them here."}
                   </span>
                 </div>
               )}
@@ -476,48 +536,59 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         </div>
 
         <aside className="animation-dope-sheet__sidebar">
-          <div className="animation-dope-sheet__sidebar-header">Keyframe</div>
+          <div className="animation-dope-sheet__sidebar-header">
+            <div className="animation-pane-heading">
+              <span className="animation-pane-heading__title">Keyframe</span>
+            </div>
+          </div>
           <div className="animation-dope-sheet__sidebar-body">
             {visibleSelectedTrack && visibleSelectedKeyframe ? (
               <div className="animation-keyframe-editor animation-keyframe-editor--panel">
-                <div className="toolbar-chip animation-keyframe-editor__track">{getAnimationPropertyLabel(visibleSelectedTrack.property)}</div>
-                <label className="field-inline">
-                  <span>Frame</span>
-                  <BufferedInput
-                    className="editor-input editor-input--compact"
-                    type="text"
-                    inputMode="numeric"
-                    value={String(visibleSelectedKeyframe.frame)}
-                    onCommit={(value) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: Number(value) })}
-                  />
-                </label>
-                <label className="field-inline">
-                  <span>Value</span>
-                  {isDiscreteAnimationProperty(visibleSelectedTrack.property) ? (
-                    <select
-                      className="editor-select"
-                      value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
-                      onChange={(event) =>
-                        onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
-                          value: parseValueFromInput(visibleSelectedTrack.property, Number(event.target.value)),
-                        })}
-                    >
-                      <option value="1">Visible</option>
-                      <option value="0">Hidden</option>
-                    </select>
-                  ) : (
+                <div className="animation-keyframe-editor__summary">
+                  <strong className="animation-keyframe-editor__title">{getAnimationPropertyLabel(visibleSelectedTrack.property)}</strong>
+                  <span className="animation-keyframe-editor__meta">
+                    {findNodeLabel(nodes, visibleSelectedTrack.nodeId)} · Frame {visibleSelectedKeyframe.frame}
+                  </span>
+                </div>
+                <div className="animation-keyframe-editor__fields">
+                  <label className="field-inline">
+                    <span>Frame</span>
                     <BufferedInput
                       className="editor-input editor-input--compact"
                       type="text"
-                      inputMode="decimal"
-                      value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
-                      onCommit={(value) =>
-                        onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
-                          value: parseValueFromInput(visibleSelectedTrack.property, Number(value)),
-                        })}
+                      inputMode="numeric"
+                      value={String(visibleSelectedKeyframe.frame)}
+                      onCommit={(value) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: Number(value) })}
                     />
-                  )}
-                </label>
+                  </label>
+                  <label className="field-inline">
+                    <span>Value</span>
+                    {isDiscreteAnimationProperty(visibleSelectedTrack.property) ? (
+                      <select
+                        className="editor-select"
+                        value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
+                        onChange={(event) =>
+                          onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
+                            value: parseValueFromInput(visibleSelectedTrack.property, Number(event.target.value)),
+                          })}
+                      >
+                        <option value="1">Visible</option>
+                        <option value="0">Hidden</option>
+                      </select>
+                    ) : (
+                      <BufferedInput
+                        className="editor-input editor-input--compact"
+                        type="text"
+                        inputMode="decimal"
+                        value={String(displayValueForInput(visibleSelectedTrack.property, visibleSelectedKeyframe.value))}
+                        onCommit={(value) =>
+                          onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, {
+                            value: parseValueFromInput(visibleSelectedTrack.property, Number(value)),
+                          })}
+                      />
+                    )}
+                  </label>
+                </div>
                 <label className="field-inline">
                   <span>Ease</span>
                   <select
@@ -542,8 +613,8 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
               </div>
             ) : (
               <div className="panel-empty panel-empty--card animation-panel-empty-side">
-                <strong className="panel-empty__title">Keyframe</strong>
-                <span className="panel-empty__body">Select a keyframe to edit its timing, value and ease.</span>
+                <strong className="panel-empty__title">Keyframe inspector</strong>
+                <span className="panel-empty__body">Select a key diamond in the dope sheet to edit its timing, value and easing.</span>
               </div>
             )}
           </div>
@@ -603,13 +674,13 @@ function TrackLane(props: TrackLaneProps) {
           onScrubStart(laneLeft);
         }}
       >
-        <div className="animation-lane__current-frame" style={{ left: currentFrame * FRAME_WIDTH }} />
+        <div className="animation-lane__current-frame" style={{ left: TIMELINE_INSET + (currentFrame * FRAME_WIDTH) }} />
         {track.keyframes.map((keyframe) => (
           <button
             key={keyframe.id}
             type="button"
             className={`animation-keyframe${selectedKeyframeId === keyframe.id ? " is-selected" : ""}${currentFrame === keyframe.frame ? " is-current" : ""}`}
-            style={{ left: keyframe.frame * FRAME_WIDTH }}
+            style={{ left: TIMELINE_INSET + (keyframe.frame * FRAME_WIDTH) }}
             onClick={(event) => {
               event.stopPropagation();
               onSelectTrack();
@@ -641,7 +712,7 @@ function TrackLane(props: TrackLaneProps) {
           onClick={() => onAddKeyframe()}
           disabled={isReadOnly}
         >
-          <span>+ Key</span>
+          <span>Add key</span>
         </button>
         <button
           type="button"
@@ -684,7 +755,7 @@ function getResolvedClipTracks(animation: ComponentAnimation, clipId: string): A
 }
 
 function positionToFrame(clientX: number, laneLeft: number, durationFrames: number): number {
-  const relative = clientX - laneLeft;
+  const relative = clientX - laneLeft - TIMELINE_INSET;
   return Math.max(0, Math.min(durationFrames, Math.round(relative / FRAME_WIDTH)));
 }
 
@@ -714,4 +785,25 @@ function parseValueFromInput(property: AnimationPropertyPath, value: number): nu
   }
 
   return value;
+}
+
+function getTrackCategoryLabel(property: AnimationPropertyPath): string {
+  if (property.includes("position")) {
+    return "Position";
+  }
+
+  if (property.includes("rotation")) {
+    return "Rotation";
+  }
+
+  if (property.includes("scale")) {
+    return "Scale";
+  }
+
+  return "Transform";
+}
+
+function findNodeLabel(nodes: EditorNode[], nodeId: string): string {
+  const node = nodes.find((entry) => entry.id === nodeId);
+  return node ? node.name : "Object";
 }
