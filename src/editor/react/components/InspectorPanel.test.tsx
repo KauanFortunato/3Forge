@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createDefaultFontAsset } from "../../fonts";
@@ -19,6 +19,7 @@ function createCommonProps() {
     onGroupPivotPresetApply: vi.fn(),
     getEligibleParents: vi.fn(() => [rootGroup, wrapperGroup]),
     onNodePropertyChange: vi.fn(),
+    onNodesPropertyChange: vi.fn(),
     onToggleEditable: vi.fn(),
     onTextFontChange: vi.fn(),
     onImportFont: vi.fn(),
@@ -169,5 +170,261 @@ describe("InspectorPanel", () => {
       materialCard!.querySelectorAll(".inspector-sub-header"),
     ).filter((el) => el.textContent?.trim() === "Shadows");
     expect(shadowSubHeaders).toHaveLength(1);
+  });
+
+  it("buffers swatch color changes until the picker loses focus", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.material.color = "#112233";
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    await user.click(screen.getByTitle("Material"));
+
+    const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
+    const swatchInput = screen.getByLabelText("Color swatch") as HTMLInputElement;
+
+    expect(props.onNodePropertyChange).not.toHaveBeenCalled();
+    expect(colorInput.value).toBe("#112233");
+
+    fireEvent.change(swatchInput, { target: { value: "#123456" } });
+
+    expect(props.onNodePropertyChange).not.toHaveBeenCalled();
+    expect(colorInput.value).toBe("#123456");
+
+    fireEvent.blur(swatchInput);
+
+    expect(props.onNodePropertyChange).toHaveBeenCalledTimes(1);
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "material.color" }), "#123456");
+  });
+
+  it("keeps the hex field on the previous inspector flow", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.material.color = "#445566";
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    await user.click(screen.getByTitle("Material"));
+
+    const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
+    await user.clear(colorInput);
+    await user.type(colorInput, "#ff00ff");
+
+    expect(colorInput.value).toBe("#ff00ff");
+    expect(props.onNodePropertyChange).not.toHaveBeenCalled();
+
+    fireEvent.blur(colorInput);
+
+    expect(props.onNodePropertyChange).toHaveBeenCalledTimes(1);
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "material.color" }), "#ff00ff");
+  });
+
+  it("normalizes confirmed hex input back into the field value", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.material.color = "#112233";
+    const props = createCommonProps();
+
+    const { rerender } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    await user.click(screen.getByTitle("Material"));
+
+    const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
+    await user.clear(colorInput);
+    await user.type(colorInput, "#abc");
+    fireEvent.blur(colorInput);
+
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "material.color" }), "#aabbcc");
+
+    node.material.color = "#aabbcc";
+    rerender(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    expect((screen.getByLabelText("Color") as HTMLInputElement).value).toBe("#aabbcc");
+  });
+
+  it("edits shared material fields across a multi-selection with mixed values", async () => {
+    const user = userEvent.setup();
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const secondNode = createNode("plane", ROOT_NODE_ID, "plane-1");
+    firstNode.material.color = "#112233";
+    secondNode.material.color = "#ffffff";
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[firstNode, secondNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    expect(screen.getByText("2 objects")).toBeTruthy();
+    expect(screen.getByTitle("Material")).toBeTruthy();
+    expect(screen.queryByTitle("Object")).toBeNull();
+
+    const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
+    expect(colorInput.placeholder).toBe("Mixed");
+
+    await user.clear(colorInput);
+    await user.type(colorInput, "#abcdef");
+    fireEvent.blur(colorInput);
+
+    expect(props.onNodesPropertyChange).toHaveBeenCalledTimes(1);
+    expect(props.onNodesPropertyChange).toHaveBeenCalledWith(
+      ["box-1", "plane-1"],
+      expect.objectContaining({ path: "material.color" }),
+      "#abcdef",
+    );
+  });
+
+  it("does not commit swatch changes before the color picker closes", async () => {
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.material.color = "#112233";
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("Material"));
+
+    const swatchInput = screen.getByLabelText("Color swatch");
+
+    fireEvent.focus(swatchInput);
+    fireEvent.change(swatchInput, { target: { value: "#654321" } });
+
+    expect(props.onNodePropertyChange).not.toHaveBeenCalled();
+
+    fireEvent.blur(swatchInput);
+
+    expect(props.onNodePropertyChange).toHaveBeenCalledTimes(1);
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "material.color" }), "#654321");
+  });
+
+  it("explains when a multi-selection includes groups with no shared material fields", () => {
+    const boxNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const groupNode = createNode("group", ROOT_NODE_ID, "group-1");
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[boxNode, groupNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    expect(screen.getByText("Material editing is only available when all selected items expose a shared material field.")).toBeTruthy();
+    expect(screen.queryByTitle("Material")).toBeNull();
+  });
+
+  it("hides material-type-specific controls for heterogeneous material selections", () => {
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const secondNode = createNode("plane", ROOT_NODE_ID, "plane-1");
+    firstNode.material.type = "basic";
+    secondNode.material.type = "standard";
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[firstNode, secondNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    expect(screen.getByText(/Material-specific controls stay hidden while the selection mixes different material types\./)).toBeTruthy();
+    expect(screen.queryByLabelText("Roughness")).toBeNull();
+    expect(screen.getByLabelText("Type")).toBeTruthy();
+  });
+
+  it("does not commit a mixed numeric material field on focus and blur without typing", async () => {
+    const user = userEvent.setup();
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const secondNode = createNode("plane", ROOT_NODE_ID, "plane-1");
+    firstNode.material.opacity = 0.9;
+    secondNode.material.opacity = 0.35;
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[firstNode, secondNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    const opacityInput = screen.getByLabelText("Opacity");
+    expect((opacityInput as HTMLInputElement).placeholder).toBe("Mixed");
+
+    await user.click(opacityInput);
+    await user.tab();
+
+    expect(props.onNodesPropertyChange).not.toHaveBeenCalled();
+  });
+
+  it("commits an explicit numeric value for a mixed material field", async () => {
+    const user = userEvent.setup();
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const secondNode = createNode("plane", ROOT_NODE_ID, "plane-1");
+    firstNode.material.opacity = 0.9;
+    secondNode.material.opacity = 0.35;
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[firstNode, secondNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    const opacityInput = screen.getByLabelText("Opacity");
+    await user.click(opacityInput);
+    await user.type(opacityInput, "0.5");
+    await user.tab();
+
+    expect(props.onNodesPropertyChange).toHaveBeenCalledTimes(1);
+    expect(props.onNodesPropertyChange).toHaveBeenCalledWith(
+      ["box-1", "plane-1"],
+      expect.objectContaining({ path: "material.opacity" }),
+      "0.5",
+    );
   });
 });

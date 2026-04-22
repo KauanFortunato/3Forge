@@ -155,6 +155,7 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       }
 
       if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "t") {
+        event.preventDefault();
         if (handlers.onToggleTimeline) {
           handlers.onToggleTimeline();
         }

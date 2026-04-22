@@ -2076,6 +2076,47 @@ export class EditorStore extends EventTarget {
     this.notify({ reason: "node", source, nodeId });
   }
 
+  updateNodesProperty(
+    nodeIds: string[],
+    definition: NodePropertyDefinition,
+    rawValue: string | number | boolean,
+    source: EditorStoreChange["source"] = "ui",
+  ): number {
+    const uniqueNodeIds = [...new Set(nodeIds)];
+    const updates: Array<{ node: EditorNode; value: unknown }> = [];
+
+    for (const nodeId of uniqueNodeIds) {
+      const node = this.getNode(nodeId);
+      if (!node) {
+        continue;
+      }
+
+      const currentValue = getPropertyValue(node, definition.path);
+      if (currentValue === undefined) {
+        continue;
+      }
+
+      const parsedValue = parseInputValue(definition, rawValue, currentValue);
+      if (Object.is(parsedValue, currentValue)) {
+        continue;
+      }
+
+      updates.push({ node, value: parsedValue });
+    }
+
+    if (updates.length === 0) {
+      return 0;
+    }
+
+    this.recordHistorySnapshot();
+    for (const { node, value } of updates) {
+      setPropertyValue(node, definition.path, value);
+    }
+
+    this.notify({ reason: "node", source, nodeId: updates[0].node.id });
+    return updates.length;
+  }
+
   updateTextNodeFont(nodeId: string, fontId: string, source: EditorStoreChange["source"] = "ui"): void {
     const node = this.getNode(nodeId);
     if (!node || node.type !== "text") {

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "../animation";
@@ -489,6 +490,63 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Timeline Off" })).toBeTruthy();
   });
 
+  it("toggles the timeline dock from keyboard and keeps the preference persisted", () => {
+    persistLocalWorkspace("Timeline Hotkey");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    const { container } = render(<App />);
+    const shellBody = container.querySelector(".app-shell__body");
+
+    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(window.localStorage.getItem("3forge-timeline-visible")).toBe("true");
+
+    fireEvent.keyDown(window, { key: "t" });
+
+    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeFalsy();
+    expect(screen.getByRole("button", { name: "Timeline Off" })).toBeTruthy();
+    expect(window.localStorage.getItem("3forge-timeline-visible")).toBe("false");
+
+    fireEvent.keyDown(window, { key: "t" });
+
+    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Timeline On" })).toBeTruthy();
+    expect(window.localStorage.getItem("3forge-timeline-visible")).toBe("true");
+  });
+
+  it("does not toggle the timeline dock from keyboard while typing in an input", () => {
+    persistLocalWorkspace("Typing Guard");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    const { container } = render(<App />);
+    const shellBody = container.querySelector(".app-shell__body");
+    const componentNameInput = screen.getByDisplayValue("Typing Guard");
+
+    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+
+    componentNameInput.focus();
+    fireEvent.keyDown(componentNameInput, { key: "t" });
+
+    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Timeline On" })).toBeTruthy();
+    expect(window.localStorage.getItem("3forge-timeline-visible")).toBe("true");
+  });
+
+  it("lists the timeline toggle hotkey in the shortcuts dialog", async () => {
+    persistLocalWorkspace("Shortcut Help");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Help" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Shortcuts" }));
+
+    expect(await screen.findByRole("heading", { name: "Shortcuts" })).toBeTruthy();
+    expect(screen.getByText("T")).toBeTruthy();
+    expect(screen.getByText("Toggle timeline")).toBeTruthy();
+  });
+
   it("keeps copy-paste group behaviour working inside the hierarchy", () => {
     persistLocalWorkspace("Copy Paste");
     markWorkspaceSessionActive();
@@ -506,5 +564,36 @@ describe("App", () => {
     fireEvent.keyDown(window, { ctrlKey: true, key: "v" });
 
     expect(within(hierarchyPanel as HTMLElement).getAllByText(/Copy$/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("supports shared material editing from a real multi-selection in the inspector", async () => {
+    const user = userEvent.setup();
+    persistLocalWorkspace("Multi Material");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    const heroRow = within(hierarchyTree).getByText("Hero Panel").closest('[role="treeitem"]') as HTMLElement;
+    const accentRow = within(hierarchyTree).getByText("Accent Plate").closest('[role="treeitem"]') as HTMLElement;
+
+    fireEvent.click(heroRow);
+    fireEvent.click(accentRow, { shiftKey: true });
+
+    expect(screen.getByText("2 objects")).toBeTruthy();
+    expect(screen.getByLabelText("Color").getAttribute("placeholder")).toBe("Mixed");
+
+    const colorInput = screen.getByLabelText("Color");
+    await user.clear(colorInput);
+    await user.type(colorInput, "#224466");
+    fireEvent.blur(colorInput);
+
+    fireEvent.click(heroRow);
+    await user.click(screen.getByTitle("Material"));
+    expect((screen.getByLabelText("Color") as HTMLInputElement).value).toBe("#224466");
+
+    fireEvent.click(accentRow);
+    await user.click(screen.getByTitle("Material"));
+    expect((screen.getByLabelText("Color") as HTMLInputElement).value).toBe("#224466");
   });
 });

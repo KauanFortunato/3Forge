@@ -11,6 +11,7 @@ const SHORTCUTS = [
   ["3", "Rotate"],
   ["4", "Scale"],
   ["F", "Frame selection"],
+  ["T", "Toggle timeline"],
   ["Ctrl + Z", "Undo"],
   ["Ctrl + Y", "Redo"],
   ["Ctrl + C", "Copy selection"],

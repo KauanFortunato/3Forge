@@ -429,6 +429,7 @@ export function App() {
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
   const selectedNodeCount = selectedNodeIds.length;
   const selectedNode = storeView.selectedNode;
+  const selectedNodes = storeView.selectedNodes;
   const inspectorNode = selectedNodeCount > 1 ? undefined : selectedNode;
   const selectedRootIds = useMemo(
     () => store.getSelectionRootIds(selectedNodeIds),
@@ -1473,12 +1474,16 @@ export function App() {
     openSceneGraphContextMenu(event, nodeId);
   }, [openSceneGraphContextMenu]);
 
-  const handleToggleTimelineHotkey = useCallback(() => {
+  const toggleTimelineVisibility = useCallback(() => {
     if (isPhoneLayout) {
       return;
     }
     setIsTimelineVisible((value) => !value);
   }, [isPhoneLayout]);
+
+  const handleToggleTimelineHotkey = useCallback(() => {
+    toggleTimelineVisibility();
+  }, [toggleTimelineVisibility]);
 
   const handleDuplicateHotkey = useCallback(() => {
     handleDuplicate();
@@ -1665,7 +1670,7 @@ export function App() {
           onViewModeChange={(mode) => store.setViewMode(mode)}
           onFrame={handleFrameSelection}
           isTimelineVisible={isTimelineVisible}
-          onToggleTimeline={() => setIsTimelineVisible((value) => !value)}
+          onToggleTimeline={toggleTimelineVisibility}
         />
       ) : (
         <PhoneViewerHeader
@@ -1810,7 +1815,8 @@ export function App() {
                     {rightPanelTab === "inspector" ? (
                       <InspectorPanel
                         node={inspectorNode}
-                        emptyMessage={selectedNodeCount > 1 ? "Inspector indisponível para seleção múltipla." : undefined}
+                        nodes={selectedNodes}
+                        emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
                         fonts={storeView.fonts}
                         onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
                         onParentChange={(nodeId, parentId) => {
@@ -1821,6 +1827,7 @@ export function App() {
                         onGroupPivotPresetApply={handleApplyGroupPivotPreset}
                         getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
                         onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
+                        onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
                         onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
                         onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
                         onImportFont={() => fontInputRef.current?.click()}

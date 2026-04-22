@@ -278,6 +278,47 @@ describe("EditorStore", () => {
     });
   });
 
+  it("updates shared properties for multiple nodes with a single notification and undo step", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const box = store.blueprint.nodes.find((node) => node.name === "Hero Panel");
+    const accent = store.blueprint.nodes.find((node) => node.name === "Accent Plate");
+
+    expect(box).toBeTruthy();
+    expect(accent).toBeTruthy();
+    if (!box || !accent || box.type === "group" || accent.type === "group") {
+      throw new Error("Expected material nodes.");
+    }
+
+    const materialColorDefinition = getPropertyDefinitions(box).find((definition) => definition.path === "material.color");
+    expect(materialColorDefinition).toBeTruthy();
+    if (!materialColorDefinition) {
+      throw new Error("Expected material color definition.");
+    }
+
+    const notifications: string[] = [];
+    store.subscribe((change) => notifications.push(change.reason));
+
+    const updatedCount = store.updateNodesProperty([box.id, accent.id], materialColorDefinition, "#abcdef");
+
+    expect(updatedCount).toBe(2);
+    expect(box.material.color).toBe("#abcdef");
+    expect(accent.material.color).toBe("#abcdef");
+    expect(notifications).toEqual(["node"]);
+    expect(store.canUndo).toBe(true);
+
+    expect(store.undo()).toBe(true);
+    const revertedBox = store.blueprint.nodes.find((node) => node.name === "Hero Panel");
+    const revertedAccent = store.blueprint.nodes.find((node) => node.name === "Accent Plate");
+    expect(revertedBox?.type).not.toBe("group");
+    expect(revertedAccent?.type).not.toBe("group");
+    if (!revertedBox || !revertedAccent || revertedBox.type === "group" || revertedAccent.type === "group") {
+      throw new Error("Expected reverted material nodes.");
+    }
+    expect(revertedBox.material.color).toBe("#7c44de");
+    expect(revertedAccent.material.color).toBe("#ffffff");
+    expect(store.canUndo).toBe(false);
+  });
+
   it("exposes node visibility in the object group and keeps material visibility distinct", () => {
     const store = new EditorStore(createBlueprintFixture());
     const box = store.blueprint.nodes.find((node) => node.type === "box");
