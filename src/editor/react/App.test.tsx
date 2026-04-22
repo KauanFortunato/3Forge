@@ -333,6 +333,56 @@ describe("App", () => {
     expect(getRecentOpenButton(recentPanel as HTMLElement, /gamma\.json/i)).toBeTruthy();
   });
 
+  it("keeps distinct linked file handles for different recent blueprints", async () => {
+    const alphaBlueprint = createDefaultBlueprint();
+    alphaBlueprint.componentName = "Alpha Linked";
+    const betaBlueprint = createDefaultBlueprint();
+    betaBlueprint.componentName = "Beta Linked";
+
+    const alphaHandle = {
+      name: "alpha-linked.json",
+      getFile: vi.fn(async () => new File([JSON.stringify(alphaBlueprint)], "alpha-linked.json", { type: "application/json" })),
+      createWritable: vi.fn(),
+    };
+    const betaHandle = {
+      name: "beta-linked.json",
+      getFile: vi.fn(async () => new File([JSON.stringify(betaBlueprint)], "beta-linked.json", { type: "application/json" })),
+      createWritable: vi.fn(),
+    };
+
+    fileAccessMocks.supportsFileSystemAccess.mockReturnValue(true);
+    fileAccessMocks.openBlueprintWithPicker
+      .mockResolvedValueOnce({
+        handle: alphaHandle,
+        blueprint: alphaBlueprint,
+        fileName: "alpha-linked.json",
+      })
+      .mockResolvedValueOnce({
+        handle: betaHandle,
+        blueprint: betaBlueprint,
+        fileName: "beta-linked.json",
+      });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Open file/i }));
+    await screen.findByDisplayValue("Alpha Linked");
+    await openFileMenu();
+    fireEvent.click(screen.getByText("Exit"));
+
+    fireEvent.click(screen.getByRole("button", { name: /Open file/i }));
+    await screen.findByDisplayValue("Beta Linked");
+    await openFileMenu();
+    fireEvent.click(screen.getByText("Exit"));
+
+    const recentPanel = screen.getByText("Open recent").closest("section");
+    expect(recentPanel).toBeTruthy();
+
+    fireEvent.click(getRecentOpenButton(recentPanel as HTMLElement, /alpha-linked\.json/i));
+    await screen.findByDisplayValue("Alpha Linked");
+    expect(screen.queryByDisplayValue("Beta Linked")).toBeNull();
+  });
+
   it("removes a recent project from the launcher when requested", async () => {
     const { container } = render(<App />);
 

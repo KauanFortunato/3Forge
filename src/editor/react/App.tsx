@@ -1009,13 +1009,18 @@ export function App() {
       recentProjectId = createRecentProjectId(),
       fileName = projectContext.fileName,
       handle = null,
+      fileHandleId: explicitFileHandleId,
     }: {
       recentProjectId?: string;
       fileName?: string | null;
       handle?: BrowserFileSystemFileHandle | null;
+      fileHandleId?: string | null;
     } = {},
   ) => {
-    let fileHandleId = projectContext.fileHandleId;
+    let fileHandleId = typeof explicitFileHandleId !== "undefined"
+      ? explicitFileHandleId
+      : (recentProjectId === projectContext.recentProjectId ? projectContext.fileHandleId : null);
+
     if (handle) {
       fileHandleId ??= createRecentProjectId();
       activeFileHandleRef.current = handle;
