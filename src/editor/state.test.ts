@@ -472,4 +472,314 @@ describe("EditorStore", () => {
     expect(group.pivotOffset).toEqual({ x: 0, y: 0, z: 0 });
     expect(group.transform.position).toEqual({ x: 0, y: 0, z: 0 });
   });
+
+  it("setTrackMuted(true) sets the muted flag and setTrackMuted(false) deletes the property for JSON cleanliness", () => {
+    const store = new EditorStore(createBlueprintFixture());
+    const clip = store.animation.clips[0];
+    expect(clip).toBeTruthy();
+    const track = clip?.tracks[0];
+    expect(track).toBeTruthy();
+    if (!clip || !track) {
+      throw new Error("Expected animation clip and track.");
+    }
+
+    store.setTrackMuted(clip.id, track.id, true);
+    const mutedTrack = store.animation.clips[0]?.tracks.find((candidate) => candidate.id === track.id);
+    expect(mutedTrack?.muted).toBe(true);
+
+    store.setTrackMuted(clip.id, track.id, false);
+    const unmutedTrack = store.animation.clips[0]?.tracks.find((candidate) => candidate.id === track.id);
+    expect(unmutedTrack).toBeTruthy();
+    expect(unmutedTrack?.muted).toBeUndefined();
+    expect(unmutedTrack && "muted" in unmutedTrack).toBe(false);
+  });
+
+  it("persists a muted track's muted field through JSON round-trip", () => {
+    const store = new EditorStore(createBlueprintFixture());
+    const clip = store.animation.clips[0];
+    const track = clip?.tracks[0];
+    if (!clip || !track) {
+      throw new Error("Expected animation clip and track.");
+    }
+    store.setTrackMuted(clip.id, track.id, true);
+
+    const json = exportBlueprintToJson(store.getSnapshot());
+    const reloaded = new EditorStore(JSON.parse(json));
+    const reloadedTrack = reloaded.animation.clips[0]?.tracks.find((candidate) => candidate.id === track.id);
+    expect(reloadedTrack?.muted).toBe(true);
+  });
+
+  it("cascade-deletes tracks from every clip when a node is removed and restores them on undo", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const groupId = store.insertNode("group", ROOT_NODE_ID);
+    const childId = store.insertNode("sphere", groupId);
+    expect(store.getNode(childId)?.parentId).toBe(groupId);
+
+    const firstTrackId = store.ensureAnimationTrack(groupId, "transform.position.x");
+    expect(firstTrackId).toBeTruthy();
+    const childTrackId = store.ensureAnimationTrack(childId, "transform.scale.y");
+    expect(childTrackId).toBeTruthy();
+
+    // Add a second clip and ensure tracks exist there too (createAnimationClip activates it).
+    const secondaryClipId = store.createAnimationClip("secondary");
+    expect(store.animation.activeClipId).toBe(secondaryClipId);
+    const secondaryBoxTrackId = store.ensureAnimationTrack(groupId, "transform.rotation.z");
+    const secondaryChildTrackId = store.ensureAnimationTrack(childId, "transform.position.y");
+    expect(secondaryBoxTrackId).toBeTruthy();
+    expect(secondaryChildTrackId).toBeTruthy();
+
+    const beforeNodeCount = store.blueprint.nodes.length;
+    const beforeClipTrackCounts = store.animation.clips.map((clip) => clip.tracks.length);
+
+    store.deleteNode(groupId);
+
+    // Node and descendant are gone.
+    expect(store.getNode(groupId)).toBeUndefined();
+    expect(store.getNode(childId)).toBeUndefined();
+
+    // Tracks referencing the deleted subtree are removed from every clip.
+    for (const clip of store.animation.clips) {
+      for (const track of clip.tracks) {
+        expect(track.nodeId).not.toBe(groupId);
+        expect(track.nodeId).not.toBe(childId);
+      }
+    }
+
+    // Undo restores nodes AND their tracks in one step.
+    expect(store.undo()).toBe(true);
+    expect(store.blueprint.nodes.length).toBe(beforeNodeCount);
+    expect(store.getNode(groupId)).toBeTruthy();
+    expect(store.getNode(childId)).toBeTruthy();
+    expect(store.animation.clips.map((clip) => clip.tracks.length)).toEqual(beforeClipTrackCounts);
+  });
+
+  it("deleteSelected with multi-select cascades delete of nodes and tracks across clips", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+
+    store.ensureAnimationTrack(boxId, "transform.position.x");
+    store.ensureAnimationTrack(sphereId, "transform.scale.x");
+    store.createAnimationClip("secondary");
+    store.ensureAnimationTrack(boxId, "transform.rotation.z");
+    store.ensureAnimationTrack(sphereId, "transform.position.y");
+
+    store.setSelectedNodes([boxId, sphereId]);
+    store.deleteSelected();
+
+    expect(store.getNode(boxId)).toBeUndefined();
+    expect(store.getNode(sphereId)).toBeUndefined();
+    for (const clip of store.animation.clips) {
+      for (const track of clip.tracks) {
+        expect([boxId, sphereId]).not.toContain(track.nodeId);
+      }
+    }
+  });
+
+  it("duplicateAnimationClip returns a new clip with fresh ids, preserves muted, and does not change the active clip", () => {
+    const store = new EditorStore(createBlueprintFixture());
+    const originalClip = store.animation.clips[0];
+    expect(originalClip).toBeTruthy();
+    if (!originalClip) {
+      throw new Error("Expected animation clip.");
+    }
+    const originalTrack = originalClip.tracks[0];
+    expect(originalTrack).toBeTruthy();
+    if (!originalTrack) {
+      throw new Error("Expected animation track.");
+    }
+
+    // Mark the first track muted so we can assert preservation.
+    store.setTrackMuted(originalClip.id, originalTrack.id, true);
+
+    const beforeActive = store.animation.activeClipId;
+    const duplicateId = store.duplicateAnimationClip(originalClip.id);
+    expect(duplicateId).toBeTruthy();
+    if (!duplicateId) {
+      throw new Error("Duplicate should return an id.");
+    }
+
+    // Active clip should NOT change.
+    expect(store.animation.activeClipId).toBe(beforeActive);
+
+    const duplicatedClip = store.animation.clips.find((clip) => clip.id === duplicateId);
+    expect(duplicatedClip).toBeTruthy();
+    if (!duplicatedClip) {
+      throw new Error("Duplicated clip should exist.");
+    }
+    expect(duplicatedClip.id).not.toBe(originalClip.id);
+    expect(duplicatedClip.name).toBe(`${originalClip.name} (copy)`);
+    expect(duplicatedClip.tracks.length).toBe(originalClip.tracks.length);
+
+    const dupTrack = duplicatedClip.tracks[0];
+    const originalTrackAfter = store.getAnimationClip(originalClip.id)?.tracks[0];
+    expect(dupTrack.id).not.toBe(originalTrackAfter?.id);
+    expect(dupTrack.nodeId).toBe(originalTrackAfter?.nodeId);
+    expect(dupTrack.property).toBe(originalTrackAfter?.property);
+    expect(dupTrack.muted).toBe(true);
+
+    for (let index = 0; index < dupTrack.keyframes.length; index += 1) {
+      const dupKey = dupTrack.keyframes[index];
+      const origKey = originalTrackAfter?.keyframes[index];
+      expect(dupKey.id).not.toBe(origKey?.id);
+      expect(dupKey.frame).toBe(origKey?.frame);
+      expect(dupKey.value).toBe(origKey?.value);
+      expect(dupKey.ease).toBe(origKey?.ease);
+    }
+
+    // Second duplicate yields suffix "(copy) 2".
+    const secondDuplicateId = store.duplicateAnimationClip(originalClip.id);
+    expect(secondDuplicateId).toBeTruthy();
+    const secondDupClip = store.animation.clips.find((clip) => clip.id === secondDuplicateId);
+    expect(secondDupClip?.name).toBe(`${originalClip.name} (copy) 2`);
+  });
+
+  it("duplicateAnimationClip deep-clones so deleting the original leaves the duplicate intact", () => {
+    const store = new EditorStore(createBlueprintFixture());
+    const originalClip = store.animation.clips[0];
+    if (!originalClip) {
+      throw new Error("Expected animation clip.");
+    }
+    const originalTrackCount = originalClip.tracks.length;
+    const originalKeyframeCount = originalClip.tracks.reduce((sum, track) => sum + track.keyframes.length, 0);
+
+    // Need at least 2 clips to be able to remove one (removeAnimationClip refuses to delete the last).
+    const duplicateId = store.duplicateAnimationClip(originalClip.id);
+    expect(duplicateId).toBeTruthy();
+    if (!duplicateId) {
+      throw new Error("Duplicate should return an id.");
+    }
+
+    store.removeAnimationClip(originalClip.id);
+
+    const remaining = store.animation.clips.find((clip) => clip.id === duplicateId);
+    expect(remaining).toBeTruthy();
+    expect(remaining?.tracks.length).toBe(originalTrackCount);
+    expect(remaining?.tracks.reduce((sum, track) => sum + track.keyframes.length, 0)).toBe(originalKeyframeCount);
+  });
+
+  it("removeAnimationKeyframes removes multiple keyframes in a single undoable step", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const trackId = store.ensureAnimationTrack(boxId, "transform.position.x");
+    const k1 = store.addAnimationKeyframe(trackId, 0, 0);
+    const k2 = store.addAnimationKeyframe(trackId, 12, 1);
+    const k3 = store.addAnimationKeyframe(trackId, 24, 2);
+
+    store.removeAnimationKeyframes(trackId, [k1, k3]);
+
+    const track = store.getAnimationTrack(trackId);
+    expect(track?.keyframes.map((keyframe) => keyframe.id)).toEqual([k2]);
+
+    // Single undo restores both removals.
+    expect(store.undo()).toBe(true);
+    const restored = store.getAnimationTrack(trackId);
+    expect(restored?.keyframes.map((keyframe) => keyframe.id).sort()).toEqual([k1, k2, k3].sort());
+  });
+
+  it("removeAnimationKeyframes with empty list is a no-op and does not grow the undo stack", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const trackId = store.ensureAnimationTrack(boxId, "transform.position.x");
+    store.addAnimationKeyframe(trackId, 0, 0);
+
+    const undoBefore = store.canUndo;
+    store.removeAnimationKeyframes(trackId, []);
+    expect(store.canUndo).toBe(undoBefore);
+  });
+
+  it("shiftAnimationKeyframes clamps negative results to 0 and past-duration results to durationFrames", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const trackId = store.ensureAnimationTrack(boxId, "transform.position.x");
+    const clip = store.getActiveAnimationClip();
+    expect(clip).toBeTruthy();
+    if (!clip) {
+      throw new Error("Expected clip.");
+    }
+    const duration = clip.durationFrames;
+
+    const earlyId = store.addAnimationKeyframe(trackId, 5, 0);
+    const lateId = store.addAnimationKeyframe(trackId, duration - 5, 1);
+
+    // Negative shift past 0 → clamp.
+    store.shiftAnimationKeyframes(trackId, [earlyId], -100);
+    let track = store.getAnimationTrack(trackId);
+    expect(track?.keyframes.find((keyframe) => keyframe.id === earlyId)?.frame).toBe(0);
+
+    // Positive shift past durationFrames → clamp.
+    store.shiftAnimationKeyframes(trackId, [lateId], 1000);
+    track = store.getAnimationTrack(trackId);
+    expect(track?.keyframes.find((keyframe) => keyframe.id === lateId)?.frame).toBe(duration);
+  });
+
+  it("shiftAnimationKeyframes collides with a non-shifted keyframe using last-wins semantics", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const trackId = store.ensureAnimationTrack(boxId, "transform.position.x");
+    const staticId = store.addAnimationKeyframe(trackId, 10, 0);
+    const movingId = store.addAnimationKeyframe(trackId, 5, 1);
+
+    // Shift the moving keyframe forward so it lands exactly on the static keyframe's frame.
+    store.shiftAnimationKeyframes(trackId, [movingId], 5);
+
+    const track = store.getAnimationTrack(trackId);
+    expect(track).toBeTruthy();
+    // Only one keyframe should remain at frame 10 — the shifted one wins.
+    const atFrame10 = track?.keyframes.filter((keyframe) => keyframe.frame === 10) ?? [];
+    expect(atFrame10).toHaveLength(1);
+    expect(atFrame10[0].id).toBe(movingId);
+    expect(track?.keyframes.find((keyframe) => keyframe.id === staticId)).toBeUndefined();
+  });
+
+  it("shiftAnimationKeyframes with empty list is a no-op and does not grow the undo stack", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const trackId = store.ensureAnimationTrack(boxId, "transform.position.x");
+    store.addAnimationKeyframe(trackId, 10, 0);
+
+    const undoBefore = store.canUndo;
+    store.shiftAnimationKeyframes(trackId, [], 5);
+    expect(store.canUndo).toBe(undoBefore);
+  });
+
+  it("updateAnimationKeyframes applies ease and value patches to all listed keyframes", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const trackId = store.ensureAnimationTrack(boxId, "transform.position.x");
+    const k1 = store.addAnimationKeyframe(trackId, 0, 0, "linear");
+    const k2 = store.addAnimationKeyframe(trackId, 12, 1, "linear");
+    const k3 = store.addAnimationKeyframe(trackId, 24, 2, "linear");
+
+    store.updateAnimationKeyframes(trackId, [k1, k2, k3], { ease: "easeOut", value: 9 });
+
+    const track = store.getAnimationTrack(trackId);
+    expect(track).toBeTruthy();
+    for (const keyframe of track?.keyframes ?? []) {
+      expect(keyframe.ease).toBe("easeOut");
+      expect(keyframe.value).toBe(9);
+    }
+  });
+
+  it("updateAnimationKeyframes with empty patch is a no-op and does not grow the undo stack", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const trackId = store.ensureAnimationTrack(boxId, "transform.position.x");
+    const keyframeId = store.addAnimationKeyframe(trackId, 0, 0, "linear");
+
+    const undoBefore = store.canUndo;
+    store.updateAnimationKeyframes(trackId, [keyframeId], {});
+    expect(store.canUndo).toBe(undoBefore);
+  });
+
+  it("updateAnimationKeyframes with empty keyframeIds is a no-op and does not grow the undo stack", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const trackId = store.ensureAnimationTrack(boxId, "transform.position.x");
+    store.addAnimationKeyframe(trackId, 0, 0, "linear");
+
+    const undoBefore = store.canUndo;
+    store.updateAnimationKeyframes(trackId, [], { ease: "easeOut" });
+    expect(store.canUndo).toBe(undoBefore);
+  });
 });

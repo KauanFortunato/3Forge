@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   ANIMATION_EASE_OPTIONS,
@@ -6,6 +6,7 @@ import {
   animationValueToBoolean,
   getAnimationPropertyLabel,
   isDiscreteAnimationProperty,
+  isTrackMuted,
   normalizeAnimationValueForProperty,
 } from "../../animation";
 import type {
@@ -49,12 +50,20 @@ interface AnimationTimelineProps {
   onRemoveKeyframe: (trackId: string, keyframeId: string) => void;
   onBeginKeyframeDrag: () => void;
   onEndKeyframeDrag: () => void;
+  onDuplicateClip: (clipId: string) => void;
+  onSetTrackMuted: (clipId: string, trackId: string, muted: boolean) => void;
+  onRemoveKeyframes: (trackId: string, keyframeIds: string[]) => void;
+  onShiftKeyframes: (trackId: string, keyframeIds: string[], frameDelta: number) => void;
 }
 
 interface DragState {
   trackId: string;
   keyframeId: string;
   laneLeft: number;
+  originFrame: number;
+  batchKeyframeIds: string[];
+  batchOriginFrames: Map<string, number>;
+  lastDelta: number;
 }
 
 interface ScrubState {
@@ -89,12 +98,17 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     onRemoveKeyframe,
     onBeginKeyframeDrag,
     onEndKeyframeDrag,
+    onDuplicateClip,
+    onSetTrackMuted,
+    onRemoveKeyframes,
+    onShiftKeyframes,
   } = props;
 
   const [propertyToAdd, setPropertyToAdd] = useState<AnimationPropertyPath>("transform.position.x");
   const [viewMode, setViewMode] = useState<TimelineViewMode>("selected");
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [scrubState, setScrubState] = useState<ScrubState | null>(null);
+  const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<Set<string>>(() => new Set());
   const leftBodyRef = useRef<HTMLDivElement | null>(null);
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const rightBodyRef = useRef<HTMLDivElement | null>(null);
@@ -139,8 +153,18 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
 
     const handlePointerMove = (event: PointerEvent) => {
       const frame = positionToFrame(event.clientX, dragState.laneLeft, activeClip?.durationFrames ?? 1);
-      onUpdateKeyframe(dragState.trackId, dragState.keyframeId, { frame });
-      onFrameChange(frame);
+      if (dragState.batchKeyframeIds.length > 1) {
+        const delta = frame - dragState.originFrame;
+        if (delta !== dragState.lastDelta) {
+          onShiftKeyframes(dragState.trackId, dragState.batchKeyframeIds, delta - dragState.lastDelta);
+          dragState.lastDelta = delta;
+        }
+        const primaryOrigin = dragState.batchOriginFrames.get(dragState.keyframeId) ?? dragState.originFrame;
+        onFrameChange(Math.max(0, Math.min(activeClip?.durationFrames ?? 1, primaryOrigin + delta)));
+      } else {
+        onUpdateKeyframe(dragState.trackId, dragState.keyframeId, { frame });
+        onFrameChange(frame);
+      }
     };
 
     const handlePointerUp = () => {
@@ -154,7 +178,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [activeClip?.durationFrames, dragState, onEndKeyframeDrag, onFrameChange, onUpdateKeyframe]);
+  }, [activeClip?.durationFrames, dragState, onEndKeyframeDrag, onFrameChange, onShiftKeyframes, onUpdateKeyframe]);
 
   useEffect(() => {
     if (!scrubState) {
@@ -251,6 +275,75 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     rightBody.scrollTop = 0;
   }, [activeClip?.id, viewMode]);
 
+  useEffect(() => {
+    setSelectedKeyframeIds((previous) => {
+      if (!selectedKeyframeId) {
+        if (previous.size === 0) {
+          return previous;
+        }
+        return new Set();
+      }
+
+      if (previous.has(selectedKeyframeId)) {
+        return previous;
+      }
+
+      return new Set([selectedKeyframeId]);
+    });
+  }, [selectedKeyframeId]);
+
+  const handleKeyframePick = useCallback((trackId: string, keyframeId: string, additive: boolean) => {
+    if (!additive) {
+      setSelectedKeyframeIds(new Set([keyframeId]));
+      onSelectKeyframe(trackId, keyframeId);
+      return;
+    }
+
+    setSelectedKeyframeIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(keyframeId)) {
+        next.delete(keyframeId);
+      } else {
+        next.add(keyframeId);
+      }
+      const primary = next.has(keyframeId) ? keyframeId : (next.values().next().value ?? null);
+      onSelectKeyframe(trackId, primary);
+      return next;
+    });
+  }, [onSelectKeyframe]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) {
+          return;
+        }
+      }
+
+      if ((event.key !== "Delete" && event.key !== "Backspace") || !selectedTrackId) {
+        return;
+      }
+
+      if (selectedKeyframeIds.size < 2) {
+        return;
+      }
+
+      event.preventDefault();
+      onRemoveKeyframes(selectedTrackId, Array.from(selectedKeyframeIds));
+      setSelectedKeyframeIds(new Set());
+      onSelectKeyframe(selectedTrackId, null);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onRemoveKeyframes, onSelectKeyframe, selectedKeyframeIds, selectedTrackId]);
+
   return (
     <section className="animation-panel">
       <div className="animation-panel__header">
@@ -270,6 +363,15 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
               <button type="button" className="tool-button tool-button--icon" onClick={onCreateClip}>
                 <span>New Clip</span>
               </button>
+              {activeClip ? (
+                <button
+                  type="button"
+                  className="tool-button tool-button--icon"
+                  onClick={() => onDuplicateClip(activeClip.id)}
+                >
+                  <span>Duplicate</span>
+                </button>
+              ) : null}
               {activeClip && animation.clips.length > 1 ? (
                 <button type="button" className="tool-button tool-button--icon" onClick={() => onRemoveClip(activeClip.id)}>
                   <span>Delete Clip</span>
@@ -413,20 +515,45 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                   </div>
 
                   <div className="animation-node__channels">
-                    {tracks.map((track) => (
-                      <button
-                        key={track.id}
-                        type="button"
-                        className={`animation-channel${selectedTrackId === track.id ? " is-selected" : ""}`}
-                        onClick={() => onSelectTrack(track.id)}
-                      >
-                        <span className="animation-channel__content">
-                          <span className="animation-channel__label">{getAnimationPropertyLabel(track.property)}</span>
-                          <span className="animation-channel__meta">{getTrackCategoryLabel(track.property)}</span>
-                        </span>
-                        <span className="animation-channel__count">{track.keyframes.length} keys</span>
-                      </button>
-                    ))}
+                    {tracks.map((track) => {
+                      const muted = isTrackMuted(track);
+                      return (
+                        <div
+                          key={track.id}
+                          role="button"
+                          tabIndex={0}
+                          className={`animation-channel${selectedTrackId === track.id ? " is-selected" : ""}${muted ? " is-muted" : ""}`}
+                          onClick={() => onSelectTrack(track.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              onSelectTrack(track.id);
+                            }
+                          }}
+                        >
+                          <span className="animation-channel__content">
+                            <span className="animation-channel__label">{getAnimationPropertyLabel(track.property)}</span>
+                            <span className="animation-channel__meta">{getTrackCategoryLabel(track.property)}</span>
+                            {activeClip ? (
+                              <button
+                                type="button"
+                                className={`animation-channel__mute${muted ? " is-muted" : ""}`}
+                                aria-pressed={muted}
+                                aria-label={muted ? "Unmute channel" : "Mute channel"}
+                                title={muted ? "Unmute channel" : "Mute channel"}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onSetTrackMuted(activeClip.id, track.id, !muted);
+                                }}
+                              >
+                                <span>M</span>
+                              </button>
+                            ) : null}
+                          </span>
+                          <span className="animation-channel__count">{track.keyframes.length} keys</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )) : (
@@ -492,32 +619,53 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                   </div>
                   <div className="animation-row-group__spacer-actions" aria-hidden="true" />
                 </div>
-                {tracks.map((track) => (
-                  <TrackLane
-                    key={track.id}
-                    track={track}
-                    durationFrames={activeClip?.durationFrames ?? 1}
-                    currentFrame={currentFrame}
-                    timelineWidth={timelineWidth}
-                    isSelected={selectedTrackId === track.id}
-                    selectedKeyframeId={selectedTrackId === track.id ? selectedKeyframeId : null}
-                    onAddKeyframe={() => onAddKeyframe(track.id)}
-                    onRemoveTrack={() => onRemoveTrack(track.id)}
-                    isReadOnly={false}
-                    onSelectTrack={() => onSelectTrack(track.id)}
-                    onSelectKeyframe={(keyframeId) => onSelectKeyframe(track.id, keyframeId)}
-                    onFrameChange={onFrameChange}
-                    onScrubStart={(laneLeft) => setScrubState({ laneLeft })}
-                    onStartKeyframeDrag={(event, keyframeId) => {
-                      onBeginKeyframeDrag();
-                      setDragState({
-                        trackId: track.id,
-                        keyframeId,
-                        laneLeft: event.currentTarget.parentElement?.getBoundingClientRect().left ?? 0,
-                      });
-                    }}
-                  />
-                ))}
+                {tracks.map((track) => {
+                  const trackIsSelected = selectedTrackId === track.id;
+                  const selectedKeyframeIdsForTrack = trackIsSelected ? selectedKeyframeIds : null;
+                  return (
+                    <TrackLane
+                      key={track.id}
+                      track={track}
+                      durationFrames={activeClip?.durationFrames ?? 1}
+                      currentFrame={currentFrame}
+                      timelineWidth={timelineWidth}
+                      isSelected={trackIsSelected}
+                      isMuted={isTrackMuted(track)}
+                      selectedKeyframeIds={selectedKeyframeIdsForTrack}
+                      onAddKeyframe={() => onAddKeyframe(track.id)}
+                      onRemoveTrack={() => onRemoveTrack(track.id)}
+                      isReadOnly={false}
+                      onSelectTrack={() => onSelectTrack(track.id)}
+                      onPickKeyframe={(keyframeId, additive) => handleKeyframePick(track.id, keyframeId, additive)}
+                      onFrameChange={onFrameChange}
+                      onScrubStart={(laneLeft) => setScrubState({ laneLeft })}
+                      onStartKeyframeDrag={(event, keyframeId) => {
+                        onBeginKeyframeDrag();
+                        const laneLeft = event.currentTarget.parentElement?.getBoundingClientRect().left ?? 0;
+                        const batchIds = trackIsSelected && selectedKeyframeIds.has(keyframeId) && selectedKeyframeIds.size > 1
+                          ? Array.from(selectedKeyframeIds)
+                          : [keyframeId];
+                        const originMap = new Map<string, number>();
+                        for (const id of batchIds) {
+                          const match = track.keyframes.find((entry) => entry.id === id);
+                          if (match) {
+                            originMap.set(id, match.frame);
+                          }
+                        }
+                        const primaryOrigin = originMap.get(keyframeId) ?? track.keyframes.find((entry) => entry.id === keyframeId)?.frame ?? 0;
+                        setDragState({
+                          trackId: track.id,
+                          keyframeId,
+                          laneLeft,
+                          originFrame: primaryOrigin,
+                          batchKeyframeIds: batchIds,
+                          batchOriginFrames: originMap,
+                          lastDelta: 0,
+                        });
+                      }}
+                    />
+                  );
+                })}
               </div>
             )) : (
                 <div className="panel-empty panel-empty--card animation-panel-empty-wide">
@@ -558,7 +706,15 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                       type="text"
                       inputMode="numeric"
                       value={String(visibleSelectedKeyframe.frame)}
-                      onCommit={(value) => onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: Number(value) })}
+                      onCommit={(value) => {
+                        const parsed = Number(value);
+                        if (!Number.isFinite(parsed)) {
+                          return;
+                        }
+                        const max = activeClip?.durationFrames ?? 0;
+                        const clamped = Math.max(0, Math.min(max, Math.round(parsed)));
+                        onUpdateKeyframe(visibleSelectedTrack.id, visibleSelectedKeyframe.id, { frame: clamped });
+                      }}
                     />
                   </label>
                   <label className="field-inline">
@@ -630,12 +786,13 @@ interface TrackLaneProps {
   currentFrame: number;
   timelineWidth: number;
   isSelected: boolean;
+  isMuted: boolean;
   isReadOnly: boolean;
-  selectedKeyframeId: string | null;
+  selectedKeyframeIds: Set<string> | null;
   onAddKeyframe: () => void;
   onRemoveTrack: () => void;
   onSelectTrack: () => void;
-  onSelectKeyframe: (keyframeId: string) => void;
+  onPickKeyframe: (keyframeId: string, additive: boolean) => void;
   onFrameChange: (frame: number) => void;
   onScrubStart: (laneLeft: number) => void;
   onStartKeyframeDrag: (event: ReactPointerEvent<HTMLButtonElement>, keyframeId: string) => void;
@@ -648,19 +805,23 @@ function TrackLane(props: TrackLaneProps) {
     currentFrame,
     timelineWidth,
     isSelected,
+    isMuted,
     isReadOnly,
-    selectedKeyframeId,
+    selectedKeyframeIds,
     onAddKeyframe,
     onRemoveTrack,
     onSelectTrack,
-    onSelectKeyframe,
+    onPickKeyframe,
     onFrameChange,
     onScrubStart,
     onStartKeyframeDrag,
   } = props;
 
   return (
-    <div className={`animation-lane${isSelected ? " is-selected" : ""}`} style={{ width: timelineWidth + ACTIONS_GAP + ACTIONS_WIDTH }}>
+    <div
+      className={`animation-lane${isSelected ? " is-selected" : ""}${isMuted ? " is-muted" : ""}`}
+      style={{ width: timelineWidth + ACTIONS_GAP + ACTIONS_WIDTH }}
+    >
       <div
         className="animation-lane__track"
         style={{ width: timelineWidth }}
@@ -675,30 +836,43 @@ function TrackLane(props: TrackLaneProps) {
         }}
       >
         <div className="animation-lane__current-frame" style={{ left: TIMELINE_INSET + (currentFrame * FRAME_WIDTH) }} />
-        {track.keyframes.map((keyframe) => (
-          <button
-            key={keyframe.id}
-            type="button"
-            className={`animation-keyframe${selectedKeyframeId === keyframe.id ? " is-selected" : ""}${currentFrame === keyframe.frame ? " is-current" : ""}`}
-            style={{ left: TIMELINE_INSET + (keyframe.frame * FRAME_WIDTH) }}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSelectTrack();
-              onSelectKeyframe(keyframe.id);
-              onFrameChange(keyframe.frame);
-            }}
-            onPointerDown={(event) => {
-              if (isReadOnly) {
-                return;
-              }
-              event.stopPropagation();
-              onSelectTrack();
-              onSelectKeyframe(keyframe.id);
-              onStartKeyframeDrag(event, keyframe.id);
-            }}
-            title={`${keyframe.frame}f`}
-          />
-        ))}
+        {track.keyframes.map((keyframe) => {
+          const isKeyframeSelected = selectedKeyframeIds?.has(keyframe.id) ?? false;
+          return (
+            <button
+              key={keyframe.id}
+              type="button"
+              className={`animation-keyframe${isKeyframeSelected ? " is-selected" : ""}${currentFrame === keyframe.frame ? " is-current" : ""}`}
+              style={{ left: TIMELINE_INSET + (keyframe.frame * FRAME_WIDTH) }}
+              onClick={(event) => {
+                event.stopPropagation();
+                const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+                onSelectTrack();
+                onPickKeyframe(keyframe.id, additive);
+                if (!additive) {
+                  onFrameChange(keyframe.frame);
+                }
+              }}
+              onPointerDown={(event) => {
+                if (isReadOnly) {
+                  return;
+                }
+                event.stopPropagation();
+                const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+                onSelectTrack();
+                if (additive) {
+                  onPickKeyframe(keyframe.id, true);
+                  return;
+                }
+                if (!(selectedKeyframeIds?.has(keyframe.id) ?? false)) {
+                  onPickKeyframe(keyframe.id, false);
+                }
+                onStartKeyframeDrag(event, keyframe.id);
+              }}
+              title={`${keyframe.frame}f`}
+            />
+          );
+        })}
       </div>
 
       <div className="animation-lane__actions">

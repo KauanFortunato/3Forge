@@ -13,6 +13,10 @@ interface HotkeyHandlers {
   onSave: () => void;
   onSaveAs: () => void;
   onToolChange: (mode: "select" | "translate" | "rotate" | "scale") => void;
+  onToggleTimeline?: () => void;
+  onDuplicate?: () => void;
+  onAddKeyframeAtPlayhead?: () => void;
+  onStopAnimation?: () => void;
 }
 
 export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
@@ -38,6 +42,27 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       if (event.code === "Space") {
         event.preventDefault();
         handlers.onPlayPause();
+        return;
+      }
+
+      if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+        const isInteractiveControl =
+          target instanceof HTMLButtonElement ||
+          target instanceof HTMLAnchorElement ||
+          target?.tagName === "SUMMARY" ||
+          target?.getAttribute?.("role") === "button";
+        if (!isInteractiveControl && handlers.onStopAnimation) {
+          handlers.onStopAnimation();
+          return;
+        }
+      }
+
+      const isDuplicate = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "d";
+      if (isDuplicate) {
+        event.preventDefault();
+        if (handlers.onDuplicate) {
+          handlers.onDuplicate();
+        }
         return;
       }
 
@@ -126,6 +151,21 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       if (event.key.toLowerCase() === "f") {
         event.preventDefault();
         handlers.onFrame();
+        return;
+      }
+
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "t") {
+        if (handlers.onToggleTimeline) {
+          handlers.onToggleTimeline();
+        }
+        return;
+      }
+
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k") {
+        if (handlers.onAddKeyframeAtPlayhead) {
+          handlers.onAddKeyframeAtPlayhead();
+        }
+        return;
       }
     };
 

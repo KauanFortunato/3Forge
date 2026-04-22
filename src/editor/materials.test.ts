@@ -16,6 +16,8 @@ describe("material helpers", () => {
       depthTest: true,
       depthWrite: true,
       wireframe: false,
+      castShadow: true,
+      receiveShadow: true,
     });
   });
 
@@ -52,6 +54,42 @@ describe("material helpers", () => {
       depthWrite: false,
       wireframe: true,
     });
+  });
+
+  it("defaults castShadow and receiveShadow to true when missing from a partial source", () => {
+    const fallback = createMaterialSpec();
+    const normalized = normalizeMaterialSpec({ color: "#abcdef" }, fallback);
+
+    expect(normalized.castShadow).toBe(true);
+    expect(normalized.receiveShadow).toBe(true);
+  });
+
+  it("preserves explicit castShadow and receiveShadow false values through normalization", () => {
+    const fallback = createMaterialSpec();
+    const normalized = normalizeMaterialSpec(
+      { castShadow: false, receiveShadow: false },
+      fallback,
+    );
+
+    expect(normalized.castShadow).toBe(false);
+    expect(normalized.receiveShadow).toBe(false);
+  });
+
+  it("round-trips castShadow and receiveShadow through JSON stringify/parse + normalize", () => {
+    const fallback = createMaterialSpec();
+    const source = createMaterialSpec();
+    source.castShadow = false;
+    source.receiveShadow = true;
+
+    const roundTripped = JSON.parse(JSON.stringify(source));
+    const normalized = normalizeMaterialSpec(roundTripped, fallback);
+
+    expect(normalized.castShadow).toBe(false);
+    expect(normalized.receiveShadow).toBe(true);
+
+    const bothTrue = normalizeMaterialSpec(JSON.parse(JSON.stringify(createMaterialSpec())), fallback);
+    expect(bothTrue.castShadow).toBe(true);
+    expect(bothTrue.receiveShadow).toBe(true);
   });
 
   it("exposes material definitions for each material kind", () => {

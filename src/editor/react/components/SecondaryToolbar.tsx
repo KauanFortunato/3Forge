@@ -8,6 +8,7 @@ import {
   RedoIcon,
   RotateIcon,
   ScaleIcon,
+  TimelineIcon,
   UndoIcon,
   ViewRenderedIcon,
   ViewSolidIcon,
@@ -55,7 +56,7 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     <div className="secondary-toolbar">
       <div className="secondary-toolbar__left">
         <label className="component-name-field">
-          <span className="component-name-field__label">Component</span>
+          <span className="component-name-field__label toolbar-context__label">Component</span>
           <BufferedInput
             className="editor-input editor-input--compact component-name-field__input"
             type="text"
@@ -78,25 +79,27 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       </div>
 
       <div className="secondary-toolbar__right">
-        <div className="toolbar-icon-group">
-          <ToolbarIconButton label="Select (1)" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
+        <div className="toolbar-icon-group toolbar-icon-group--tools">
+          <ToolbarIconButton label="Select (1)" shortcut="1" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
             <CursorIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Move (2)" isActive={currentTool === "translate"} onClick={() => onToolChange("translate")}>
+          <ToolbarIconButton label="Move (2)" shortcut="2" isActive={currentTool === "translate"} onClick={() => onToolChange("translate")}>
             <MoveIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Rotate (3)" isActive={currentTool === "rotate"} onClick={() => onToolChange("rotate")}>
+          <ToolbarIconButton label="Rotate (3)" shortcut="3" isActive={currentTool === "rotate"} onClick={() => onToolChange("rotate")}>
             <RotateIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Scale (4)" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
+          <ToolbarIconButton label="Scale (4)" shortcut="4" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
             <ScaleIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Frame Selection (F)" onClick={onFrame}>
+          <ToolbarIconButton label="Frame Selection (F)" shortcut="F" onClick={onFrame}>
             <FrameIcon />
           </ToolbarIconButton>
         </div>
 
-        <div className="toolbar-icon-group">
+        <span className="toolbar-divider" aria-hidden="true" />
+
+        <div className="toolbar-icon-group toolbar-icon-group--modes">
           <ToolbarIconButton
             label="Solid View"
             isActive={viewMode === "solid"}
@@ -113,18 +116,24 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
           </ToolbarIconButton>
         </div>
 
-        <div className="toolbar-icon-group">
+        <span className="toolbar-divider" aria-hidden="true" />
+
+        <div className="toolbar-icon-group toolbar-icon-group--toggle">
           <button
             type="button"
-            className={`tool-button tool-button--label${isTimelineVisible ? " is-active" : ""}`}
+            className={`icon-button${isTimelineVisible ? " is-active" : ""}`}
             onClick={onToggleTimeline}
             aria-pressed={isTimelineVisible}
+            aria-label={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
+            title={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
           >
-            Timeline {isTimelineVisible ? "On" : "Off"}
+            <TimelineIcon />
           </button>
         </div>
 
-        <div className="toolbar-icon-group">
+        <span className="toolbar-divider" aria-hidden="true" />
+
+        <div className="toolbar-icon-group toolbar-icon-group--history">
           <ToolbarIconButton label="Undo" disabled={!canUndo} onClick={onUndo}>
             <UndoIcon />
           </ToolbarIconButton>
@@ -141,21 +150,23 @@ interface ToolbarIconButtonProps {
   label: string;
   disabled?: boolean;
   isActive?: boolean;
+  shortcut?: string;
   onClick: () => void;
   children: ReactNode;
 }
 
-function ToolbarIconButton({ label, disabled, isActive, onClick, children }: ToolbarIconButtonProps) {
+function ToolbarIconButton({ label, disabled, isActive, shortcut, onClick, children }: ToolbarIconButtonProps) {
   return (
     <button
       type="button"
-      className={`icon-button${isActive ? " is-active" : ""}`}
+      className={`icon-button${isActive ? " is-active" : ""}${shortcut ? " icon-button--with-kbd" : ""}`}
       disabled={disabled}
       onClick={onClick}
       title={label}
       aria-label={label}
     >
       {children}
+      {shortcut ? <kbd className="icon-button__kbd" aria-hidden="true">{shortcut}</kbd> : null}
     </button>
   );
 }

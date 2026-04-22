@@ -16,7 +16,7 @@ import {
 } from "./animation";
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset } from "./fonts";
 import { createTransparentImageAsset, fitImageToMaxSize } from "./images";
-import { createMaterialSpec, getMaterialPropertyDefinitions, normalizeMaterialSpec } from "./materials";
+import { createMaterialSpec, getMaterialPropertyDefinitions, MATERIAL_SHADOW_PROPERTY_DEFINITIONS, normalizeMaterialSpec } from "./materials";
 import { computeGroupContentBounds, getBoundsOriginOffset, transformOffsetByTransform } from "./spatial";
 import type {
   AnimationClip,
@@ -299,6 +299,7 @@ export function getPropertyDefinitions(node: EditorNode): NodePropertyDefinition
     ...BASE_PROPERTY_DEFINITIONS,
     ...GEOMETRY_DEFINITIONS[node.type],
     ...getMaterialPropertyDefinitions(node.material.type),
+    ...MATERIAL_SHADOW_PROPERTY_DEFINITIONS,
   ];
 }
 
@@ -1166,6 +1167,36 @@ export class EditorStore extends EventTarget {
     this.notify({ reason: "animation", source });
   }
 
+  duplicateAnimationClip(clipId: string, source: EditorStoreChange["source"] = "ui"): string | null {
+    const clip = this.getAnimationClip(clipId);
+    if (!clip) {
+      return null;
+    }
+
+    const duplicateName = this.makeUniqueAnimationClipName(`${clip.name} (copy)`);
+    this.recordHistorySnapshot();
+    const duplicated = createAnimationClip(duplicateName, {
+      fps: clip.fps,
+      durationFrames: clip.durationFrames,
+      tracks: clip.tracks.map((track) => {
+        const nextTrack = createAnimationTrack(track.nodeId, track.property);
+        nextTrack.keyframes = sortTrackKeyframes(
+          track.keyframes.map((keyframe) => createAnimationKeyframe(keyframe.frame, keyframe.value, keyframe.ease)),
+        );
+        if (track.muted) {
+          nextTrack.muted = true;
+        }
+        return nextTrack;
+      }),
+    });
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      clips: [...this._blueprint.animation.clips, duplicated],
+    };
+    this.notify({ reason: "animation", source });
+    return duplicated.id;
+  }
+
   private updateAnimationClip(clipId: string, updater: (clip: AnimationClip) => AnimationClip): void {
     this._blueprint.animation = {
       ...this._blueprint.animation,
@@ -1252,6 +1283,35 @@ export class EditorStore extends EventTarget {
     this.updateAnimationClip(clip.id, (entry) => ({
       ...entry,
       tracks: entry.tracks.filter((candidate) => candidate.id !== trackId),
+    }));
+    this.notify({ reason: "animation", source, nodeId: track.nodeId });
+  }
+
+  setTrackMuted(clipId: string, trackId: string, muted: boolean, source: EditorStoreChange["source"] = "ui"): void {
+    const clip = this.getAnimationClip(clipId);
+    const track = clip?.tracks.find((entry) => entry.id === trackId);
+    if (!clip || !track) {
+      return;
+    }
+
+    const currentMuted = track.muted === true;
+    if (currentMuted === muted) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: entry.tracks.map((candidate) => {
+        if (candidate.id !== trackId) {
+          return candidate;
+        }
+        if (muted) {
+          return { ...candidate, muted: true };
+        }
+        const { muted: _omit, ...rest } = candidate;
+        return rest;
+      }),
     }));
     this.notify({ reason: "animation", source, nodeId: track.nodeId });
   }
@@ -1366,6 +1426,159 @@ export class EditorStore extends EventTarget {
         candidate.id === trackId
           ? { ...candidate, keyframes: candidate.keyframes.filter((keyCandidate) => keyCandidate.id !== keyframeId) }
           : candidate),
+    }));
+    this.notify({ reason: "animation", source, nodeId: track.nodeId });
+  }
+
+  removeAnimationKeyframes(trackId: string, keyframeIds: string[], source: EditorStoreChange["source"] = "ui"): void {
+    if (keyframeIds.length === 0) {
+      return;
+    }
+    const track = this.getAnimationTrack(trackId);
+    if (!track) {
+      return;
+    }
+    const targetIds = new Set(keyframeIds);
+    const hasAny = track.keyframes.some((entry) => targetIds.has(entry.id));
+    if (!hasAny) {
+      return;
+    }
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: entry.tracks.map((candidate) =>
+        candidate.id === trackId
+          ? { ...candidate, keyframes: candidate.keyframes.filter((keyCandidate) => !targetIds.has(keyCandidate.id)) }
+          : candidate),
+    }));
+    this.notify({ reason: "animation", source, nodeId: track.nodeId });
+  }
+
+  shiftAnimationKeyframes(
+    trackId: string,
+    keyframeIds: string[],
+    frameDelta: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    if (keyframeIds.length === 0 || !Number.isFinite(frameDelta) || Math.round(frameDelta) === 0) {
+      return;
+    }
+    const track = this.getAnimationTrack(trackId);
+    if (!track) {
+      return;
+    }
+    const targetIds = new Set(keyframeIds);
+    const hasAny = track.keyframes.some((entry) => targetIds.has(entry.id));
+    if (!hasAny) {
+      return;
+    }
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      return;
+    }
+
+    const delta = Math.round(frameDelta);
+    this.recordHistorySnapshot();
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: entry.tracks.map((candidate) => {
+        if (candidate.id !== trackId) {
+          return candidate;
+        }
+
+        const shifted = candidate.keyframes.map((keyCandidate) => targetIds.has(keyCandidate.id)
+          ? { ...keyCandidate, frame: Math.max(0, Math.min(keyCandidate.frame + delta, entry.durationFrames)) }
+          : keyCandidate);
+
+        // Collision policy: shifted keyframes win over stationary ones on the same frame (last-wins);
+        // when multiple shifted keyframes collide, the later one in array order wins.
+        const shiftedIds = new Set(
+          shifted.filter((keyCandidate) => targetIds.has(keyCandidate.id)).map((keyCandidate) => keyCandidate.id),
+        );
+        const framesOfShifted = new Map<number, string>();
+        for (const keyCandidate of shifted) {
+          if (shiftedIds.has(keyCandidate.id)) {
+            framesOfShifted.set(keyCandidate.frame, keyCandidate.id);
+          }
+        }
+
+        const merged = shifted.filter((keyCandidate) => {
+          if (shiftedIds.has(keyCandidate.id)) {
+            return true;
+          }
+          const winnerId = framesOfShifted.get(keyCandidate.frame);
+          return winnerId === undefined;
+        });
+
+        return {
+          ...candidate,
+          keyframes: sortTrackKeyframes(merged),
+        };
+      }),
+    }));
+    this.notify({ reason: "animation", source, nodeId: track.nodeId });
+  }
+
+  updateAnimationKeyframes(
+    trackId: string,
+    keyframeIds: string[],
+    patch: { ease?: AnimationEasePreset; value?: number },
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    if (keyframeIds.length === 0) {
+      return;
+    }
+    const track = this.getAnimationTrack(trackId);
+    if (!track) {
+      return;
+    }
+    const targetIds = new Set(keyframeIds);
+    const hasAny = track.keyframes.some((entry) => targetIds.has(entry.id));
+    if (!hasAny) {
+      return;
+    }
+
+    const nextEase = typeof patch.ease === "string" && isAnimationEasePreset(patch.ease) ? patch.ease : undefined;
+    const hasValue = typeof patch.value === "number" && Number.isFinite(patch.value);
+    if (nextEase === undefined && !hasValue) {
+      return;
+    }
+    const normalizedValue = hasValue ? normalizeAnimationValueForProperty(track.property, patch.value as number) : undefined;
+
+    const clip = this.getActiveAnimationClip();
+    if (!clip) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this.updateAnimationClip(clip.id, (entry) => ({
+      ...entry,
+      tracks: entry.tracks.map((candidate) => {
+        if (candidate.id !== trackId) {
+          return candidate;
+        }
+
+        const nextKeyframes = candidate.keyframes.map((keyCandidate) => {
+          if (!targetIds.has(keyCandidate.id)) {
+            return keyCandidate;
+          }
+          return {
+            ...keyCandidate,
+            ease: nextEase ?? keyCandidate.ease,
+            value: normalizedValue !== undefined ? normalizedValue : keyCandidate.value,
+          };
+        });
+
+        return {
+          ...candidate,
+          keyframes: sortTrackKeyframes(nextKeyframes),
+        };
+      }),
     }));
     this.notify({ reason: "animation", source, nodeId: track.nodeId });
   }

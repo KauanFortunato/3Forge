@@ -393,10 +393,17 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
 
   const basePaths = ["material.type", "material.color", "material.opacity", "material.transparent"];
   const pbrPaths = ["material.emissive", "material.roughness", "material.metalness"];
-  
+  const shadowPaths = ["material.castShadow", "material.receiveShadow"];
+
   const baseProps = definitions.filter((d) => basePaths.includes(definitionPath(d.path)));
   const pbrProps = definitions.filter((d) => pbrPaths.includes(definitionPath(d.path)));
-  const advancedProps = definitions.filter((d) => !basePaths.includes(definitionPath(d.path)) && !pbrPaths.includes(definitionPath(d.path)));
+  const shadowProps = definitions.filter((d) => shadowPaths.includes(definitionPath(d.path)));
+  const advancedProps = definitions.filter(
+    (d) =>
+      !basePaths.includes(definitionPath(d.path))
+      && !pbrPaths.includes(definitionPath(d.path))
+      && !shadowPaths.includes(definitionPath(d.path)),
+  );
 
   function definitionPath(path: string): string {
     return path;
@@ -427,6 +434,15 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
           <>
             <div className="inspector-sub-header"><span>Advanced</span></div>
             {advancedProps.map((def) => (
+              <PropertyRow key={def.path} node={node} definition={def} onNodePropertyChange={onNodePropertyChange} onToggleEditable={onToggleEditable} />
+            ))}
+          </>
+        )}
+
+        {shadowProps.length > 0 && (
+          <>
+            <div className="inspector-sub-header"><span>Shadows</span></div>
+            {shadowProps.map((def) => (
               <PropertyRow key={def.path} node={node} definition={def} onNodePropertyChange={onNodePropertyChange} onToggleEditable={onToggleEditable} />
             ))}
           </>

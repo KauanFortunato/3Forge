@@ -161,6 +161,31 @@ export function sortTrackKeyframes(keyframes: AnimationKeyframe[]): AnimationKey
   });
 }
 
+export function isTrackMuted(track: AnimationTrack): boolean {
+  return track.muted === true;
+}
+
+export function assertKeyframesSorted(track: AnimationTrack): void {
+  if (import.meta.env?.PROD) {
+    return;
+  }
+
+  for (let index = 1; index < track.keyframes.length; index += 1) {
+    const previous = track.keyframes[index - 1];
+    const current = track.keyframes[index];
+    if (current.frame < previous.frame) {
+      throw new Error(
+        `Track ${track.id} keyframes are not sorted: frame ${current.frame} at index ${index} follows frame ${previous.frame} at index ${index - 1}.`,
+      );
+    }
+    if (current.frame === previous.frame && current.id.localeCompare(previous.id) < 0) {
+      throw new Error(
+        `Track ${track.id} keyframes tie-break order broken at frame ${current.frame}: id "${current.id}" follows "${previous.id}".`,
+      );
+    }
+  }
+}
+
 export function getTrackSegments(track: AnimationTrack): Array<{ from: AnimationKeyframe; to: AnimationKeyframe }> {
   const ordered = sortTrackKeyframes(track.keyframes);
   const segments: Array<{ from: AnimationKeyframe; to: AnimationKeyframe }> = [];
@@ -326,12 +351,17 @@ function normalizeAnimationTracks(rawTracks: unknown[], validNodeIds: Set<string
     }
     seenTrackIds.add(trackId);
 
-    tracks.push({
+    const muted = typeof trackSource.muted === "boolean" ? trackSource.muted : undefined;
+    const track: AnimationTrack = {
       id: trackId,
       nodeId,
       property,
       keyframes: normalizeTrackKeyframes(Array.isArray(trackSource.keyframes) ? trackSource.keyframes : [], property, durationFrames),
-    });
+    };
+    if (muted !== undefined) {
+      track.muted = muted;
+    }
+    tracks.push(track);
   }
 
   return tracks;

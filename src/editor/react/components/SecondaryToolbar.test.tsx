@@ -27,7 +27,7 @@ describe("SecondaryToolbar", () => {
     expect(screen.getByText("Hold Shift to snap")).toBeTruthy();
   });
 
-  it("shows the timeline toggle state in the label", () => {
+  it("shows the timeline toggle state via aria-label", () => {
     render(
       <SecondaryToolbar
         componentName="HeroBanner"

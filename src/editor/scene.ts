@@ -38,6 +38,7 @@ import {
   frameToSeconds,
   getTrackSegments,
   isDiscreteAnimationProperty,
+  isTrackMuted,
   mapAnimationEaseToGsap,
   secondsToFrame,
 } from "./animation";
@@ -421,8 +422,11 @@ export class SceneEditor {
 
     this.viewportRoot.traverse((object) => {
       if (object instanceof Mesh) {
-        object.castShadow = isRendered && object.userData.nodeType !== "image";
-        object.receiveShadow = isRendered && object.userData.nodeType !== "image";
+        const nodeId = this.findNodeId(object);
+        const node = nodeId ? this.store.getNode(nodeId) : undefined;
+        const material = node && node.type !== "group" ? node.material : undefined;
+        object.castShadow = isRendered && (material?.castShadow ?? true);
+        object.receiveShadow = isRendered && (material?.receiveShadow ?? true);
       }
     });
   }
@@ -673,8 +677,8 @@ export class SceneEditor {
         break;
     }
 
-    mesh.castShadow = node.type !== "image";
-    mesh.receiveShadow = node.type !== "image";
+    mesh.castShadow = node.material.castShadow;
+    mesh.receiveShadow = node.material.receiveShadow;
     mesh.visible = node.material.visible;
     return mesh;
   }
@@ -991,6 +995,9 @@ export class SceneEditor {
     timeline.to(hold, { progress: 1, duration: Math.max(totalDuration, 0.0001), ease: "none" }, 0);
 
     for (const track of tracks) {
+      if (isTrackMuted(track)) {
+        continue;
+      }
       const target = this.objectMap.get(track.nodeId);
       if (!target) {
         continue;

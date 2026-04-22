@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyAnimationValue,
   animationValueToBoolean,
+  assertKeyframesSorted,
   clampFrame,
   createAnimationKeyframe,
   createAnimationTrack,
@@ -10,6 +11,7 @@ import {
   getTrackSegments,
   isAnimationEasePreset,
   isAnimationPropertyPath,
+  isTrackMuted,
   normalizeAnimation,
   normalizeAnimationValueForProperty,
   secondsToFrame,
@@ -175,5 +177,33 @@ describe("animation helpers", () => {
 
     applyAnimationValue(node, "visible", 1);
     expect(node.visible).toBe(true);
+  });
+
+  it("isTrackMuted returns false for undefined and true only for literal true", () => {
+    const track = createAnimationTrack("node-1", "transform.position.x");
+    expect(isTrackMuted(track)).toBe(false);
+
+    track.muted = true;
+    expect(isTrackMuted(track)).toBe(true);
+
+    track.muted = false;
+    expect(isTrackMuted(track)).toBe(false);
+  });
+
+  it("assertKeyframesSorted is a no-op on a sorted track and throws on out-of-order keyframes", () => {
+    const sortedTrack = createAnimationTrack("node-1", "transform.position.x");
+    sortedTrack.keyframes = [
+      createAnimationKeyframe(0, 0),
+      createAnimationKeyframe(12, 1),
+      createAnimationKeyframe(24, 2),
+    ];
+    expect(() => assertKeyframesSorted(sortedTrack)).not.toThrow();
+
+    const outOfOrderTrack = createAnimationTrack("node-1", "transform.position.x");
+    outOfOrderTrack.keyframes = [
+      createAnimationKeyframe(24, 2),
+      createAnimationKeyframe(0, 0),
+    ];
+    expect(() => assertKeyframesSorted(outOfOrderTrack)).toThrow(/not sorted/);
   });
 });

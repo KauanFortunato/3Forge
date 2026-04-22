@@ -257,6 +257,43 @@ describe("exported component runtime", () => {
     instance.dispose();
   });
 
+  it("applies castShadow/receiveShadow to generated meshes based on MaterialSpec values", async () => {
+    const root = createNode("group", null, ROOT_NODE_ID);
+    root.name = "Component Root";
+
+    const litBox = createNode("box", ROOT_NODE_ID, "lit-box");
+    litBox.name = "Lit Box";
+    litBox.material.castShadow = true;
+    litBox.material.receiveShadow = true;
+
+    const noShadowBox = createNode("box", ROOT_NODE_ID, "no-shadow-box");
+    noShadowBox.name = "No Shadow Box";
+    noShadowBox.material.castShadow = false;
+    noShadowBox.material.receiveShadow = false;
+
+    const blueprint: ComponentBlueprint = {
+      version: 1,
+      componentName: "Shadow Sample",
+      fonts: [],
+      nodes: [root, litBox, noShadowBox],
+      animation: createDefaultAnimation(),
+    };
+
+    const ExportedComponent = await loadExportedComponent(blueprint);
+    const instance = new ExportedComponent();
+    await instance.build();
+
+    const litMesh = findMesh(findNode(instance.group, "Lit Box"));
+    expect(litMesh.castShadow).toBe(true);
+    expect(litMesh.receiveShadow).toBe(true);
+
+    const noShadowMesh = findMesh(findNode(instance.group, "No Shadow Box"));
+    expect(noShadowMesh.castShadow).toBe(false);
+    expect(noShadowMesh.receiveShadow).toBe(false);
+
+    instance.dispose();
+  });
+
   it("keeps numeric track values untouched until the first delayed keyframe", async () => {
     const blueprint = createDelayedNumericAnimationBlueprint();
     const ExportedComponent = await loadExportedComponent(blueprint);

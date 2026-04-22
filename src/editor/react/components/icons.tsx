@@ -352,6 +352,17 @@ export function ClosedEyeIcon(props: IconProps) {
   );
 }
 
+export function TimelineIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <line x1="3" y1="10" x2="17" y2="10" />
+      <line x1="3" y1="6" x2="17" y2="6" opacity="0.45" />
+      <line x1="3" y1="14" x2="17" y2="14" opacity="0.45" />
+      <rect x="10.5" y="4" width="2" height="12" rx="0.5" fill="currentColor" stroke="none" />
+    </BaseIcon>
+  );
+}
+
 export function PlusIcon(props: IconProps) {
   return (
     <BootstrapIcon {...props}>

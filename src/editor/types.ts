@@ -59,6 +59,8 @@ export interface MaterialSpec {
   depthTest: boolean;
   depthWrite: boolean;
   wireframe: boolean;
+  castShadow: boolean;
+  receiveShadow: boolean;
 }
 
 export interface FontAsset {
@@ -94,6 +96,7 @@ export interface AnimationTrack {
   id: string;
   nodeId: string;
   property: AnimationPropertyPath;
+  muted?: boolean;
   keyframes: AnimationKeyframe[];
 }
 

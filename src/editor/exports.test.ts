@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultFontAsset } from "./fonts";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "./exports";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "./animation";
-import { createNode, ROOT_NODE_ID, toCamelCase } from "./state";
+import { createDefaultBlueprint, createNode, ROOT_NODE_ID, toCamelCase } from "./state";
 import { createBlueprintFixture } from "../test/fixtures";
 
 describe("exports", () => {
@@ -187,5 +187,107 @@ describe("exports", () => {
     expect(output).toContain("rootVisible?: boolean;");
     expect(output).toContain("rootVisible: false,");
     expect(output).toContain("root.visible = this.options.rootVisible;");
+  });
+
+  it("emits true literals for default castShadow and receiveShadow on mesh nodes", () => {
+    const blueprint = createDefaultBlueprint();
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toMatch(/Mesh\.castShadow = true;/);
+    expect(output).toMatch(/Mesh\.receiveShadow = true;/);
+    expect(output).not.toMatch(/Mesh\.castShadow = false;/);
+    expect(output).not.toMatch(/Mesh\.receiveShadow = false;/);
+  });
+
+  it("emits false literals for castShadow when material overrides it", () => {
+    const blueprint = createDefaultBlueprint();
+    const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
+    expect(panel).toBeTruthy();
+    if (!panel || panel.type === "group") {
+      throw new Error("Expected box node.");
+    }
+    panel.material.castShadow = false;
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toContain("Mesh.castShadow = false;");
+    expect(output).toContain("Mesh.receiveShadow = true;");
+  });
+
+  it("emits castShadow/receiveShadow true for default image nodes (no longer hardcoded false)", () => {
+    const blueprint = createBlueprintFixture();
+    const imageNode = blueprint.nodes.find((node) => node.type === "image");
+    expect(imageNode).toBeTruthy();
+    if (!imageNode || imageNode.type !== "image") {
+      throw new Error("Expected image node.");
+    }
+    // MaterialSpec default is true/true; lock in NEW behavior (was hardcoded false before)
+    expect(imageNode.material.castShadow).toBe(true);
+    expect(imageNode.material.receiveShadow).toBe(true);
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    // At least one mesh (the image) should cast & receive shadows
+    expect(output).toMatch(/heroImageMesh\.castShadow = true;/);
+    expect(output).toMatch(/heroImageMesh\.receiveShadow = true;/);
+  });
+
+  it("uses editable material.castShadow and material.receiveShadow bindings in exported options and runtime assignment", () => {
+    const blueprint = createBlueprintFixture();
+    const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
+
+    expect(panel).toBeTruthy();
+    if (!panel || panel.type === "group") {
+      throw new Error("Expected box node.");
+    }
+
+    panel.editable = {
+      ...panel.editable,
+      "material.castShadow": {
+        path: "material.castShadow",
+        key: "castsShadow",
+        label: "Casts Shadow",
+        type: "boolean",
+      },
+      "material.receiveShadow": {
+        path: "material.receiveShadow",
+        key: "receivesShadow",
+        label: "Receives Shadow",
+        type: "boolean",
+      },
+    };
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toContain("castsShadow?: boolean;");
+    expect(output).toContain("receivesShadow?: boolean;");
+    expect(output).toMatch(/\.castShadow = this\.options\.castsShadow;/);
+    expect(output).toMatch(/\.receiveShadow = this\.options\.receivesShadow;/);
+  });
+
+  it("excludes muted tracks from generated animation definitions", () => {
+    const blueprint = createBlueprintFixture();
+    const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
+    expect(panel).toBeTruthy();
+    if (!panel) {
+      throw new Error("Expected panel node.");
+    }
+
+    const clip = blueprint.animation.clips[0];
+    expect(clip).toBeTruthy();
+
+    const mutedTrack = createAnimationTrack(panel.id, "transform.rotation.z");
+    mutedTrack.keyframes.push(createAnimationKeyframe(0, 0, "linear"));
+    mutedTrack.keyframes.push(createAnimationKeyframe(24, 7.77, "linear"));
+    mutedTrack.muted = true;
+    clip.tracks.push(mutedTrack);
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    // Muted keyframe value must not appear anywhere in the timeline construction code.
+    expect(output).not.toContain("7.77");
+    // Muted-track property axis (rotation.z) should not appear as a target in the definitions.
+    const rotationTargetCount = (output.match(/target: "rotation"/g) ?? []).length;
+    expect(rotationTargetCount).toBe(0);
   });
 });

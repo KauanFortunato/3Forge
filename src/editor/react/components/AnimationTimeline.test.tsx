@@ -58,6 +58,10 @@ describe("AnimationTimeline", () => {
         onSelectKeyframe={vi.fn()}
         onUpdateKeyframe={vi.fn()}
         onRemoveKeyframe={vi.fn()}
+        onDuplicateClip={vi.fn()}
+        onSetTrackMuted={vi.fn()}
+        onRemoveKeyframes={vi.fn()}
+        onShiftKeyframes={vi.fn()}
         onBeginKeyframeDrag={vi.fn()}
         onEndKeyframeDrag={vi.fn()}
       />,
@@ -133,6 +137,10 @@ describe("AnimationTimeline", () => {
       onSelectKeyframe: vi.fn(),
       onUpdateKeyframe: vi.fn(),
       onRemoveKeyframe: vi.fn(),
+      onDuplicateClip: vi.fn(),
+      onSetTrackMuted: vi.fn(),
+      onRemoveKeyframes: vi.fn(),
+      onShiftKeyframes: vi.fn(),
       onBeginKeyframeDrag: vi.fn(),
       onEndKeyframeDrag: vi.fn(),
     };
@@ -162,5 +170,77 @@ describe("AnimationTimeline", () => {
 
     expect(channelRegion.scrollTop).toBe(132);
     expect(dopeSheetRegion.scrollTop).toBe(132);
+  });
+
+  it("renders the mute button inside .animation-channel__content alongside label and meta", () => {
+    const root = createNode("group", null, ROOT_NODE_ID);
+    root.name = "Component Root";
+
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    firstNode.name = "Hero Panel";
+
+    const firstTrack = createAnimationTrack(firstNode.id, "transform.position.x");
+    firstTrack.keyframes.push(createAnimationKeyframe(0, 0));
+    firstTrack.keyframes.push(createAnimationKeyframe(12, 1));
+
+    const clip = createAnimationClip("main", {
+      durationFrames: 48,
+      tracks: [firstTrack],
+    });
+
+    const animation: ComponentAnimation = {
+      activeClipId: clip.id,
+      clips: [clip],
+    };
+
+    render(
+      <AnimationTimeline
+        animation={animation}
+        nodes={[root, firstNode]}
+        selectedNode={firstNode}
+        currentFrame={0}
+        isPlaying={false}
+        selectedTrackId={null}
+        selectedKeyframeId={null}
+        onPlayToggle={vi.fn()}
+        onStop={vi.fn()}
+        onFrameChange={vi.fn()}
+        onAnimationConfigChange={vi.fn()}
+        onCreateClip={vi.fn()}
+        onSelectClip={vi.fn()}
+        onRenameClip={vi.fn()}
+        onRemoveClip={vi.fn()}
+        onAddTrack={vi.fn()}
+        onRemoveTrack={vi.fn()}
+        onAddKeyframe={vi.fn()}
+        onSelectTrack={vi.fn()}
+        onSelectKeyframe={vi.fn()}
+        onUpdateKeyframe={vi.fn()}
+        onRemoveKeyframe={vi.fn()}
+        onDuplicateClip={vi.fn()}
+        onSetTrackMuted={vi.fn()}
+        onRemoveKeyframes={vi.fn()}
+        onShiftKeyframes={vi.fn()}
+        onBeginKeyframeDrag={vi.fn()}
+        onEndKeyframeDrag={vi.fn()}
+      />,
+    );
+
+    const muteButton = screen.getByRole("button", { name: /mute channel/i });
+    expect(muteButton).toBeTruthy();
+
+    // Its parent element should be .animation-channel__content
+    const parent = muteButton.parentElement as HTMLElement | null;
+    expect(parent).toBeTruthy();
+    expect(parent!.classList.contains("animation-channel__content")).toBe(true);
+
+    // The content span should also contain the label and meta alongside the button
+    expect(parent!.querySelector(".animation-channel__label")).toBeTruthy();
+    expect(parent!.querySelector(".animation-channel__meta")).toBeTruthy();
+
+    // The button should NOT be a direct child of the animation-channel row
+    const channelRow = muteButton.closest(".animation-channel") as HTMLElement | null;
+    expect(channelRow).toBeTruthy();
+    expect(muteButton.parentElement).not.toBe(channelRow);
   });
 });

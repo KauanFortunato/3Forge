@@ -142,4 +142,32 @@ describe("InspectorPanel", () => {
     expect(props.onNodePropertyChange).toHaveBeenCalledWith("group-1", expect.objectContaining({ path: "visible" }), false);
     expect(props.onToggleEditable).toHaveBeenCalledWith("group-1", expect.objectContaining({ path: "visible" }), true);
   });
+
+  it("renders castShadow/receiveShadow controls only inside the Shadows sub-section (no duplicate)", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    await user.click(screen.getByTitle("Material"));
+
+    // Exactly one input labeled "Cast Shadow" and one "Receive Shadow"
+    expect(screen.getAllByLabelText("Cast Shadow")).toHaveLength(1);
+    expect(screen.getAllByLabelText("Receive Shadow")).toHaveLength(1);
+
+    // The Shadows sub-header should render exactly once within the material card
+    const materialCard = container.querySelector(".inspector-card") as HTMLElement | null;
+    expect(materialCard).toBeTruthy();
+    const shadowSubHeaders = Array.from(
+      materialCard!.querySelectorAll(".inspector-sub-header"),
+    ).filter((el) => el.textContent?.trim() === "Shadows");
+    expect(shadowSubHeaders).toHaveLength(1);
+  });
 });

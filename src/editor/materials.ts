@@ -24,6 +24,11 @@ const MATERIAL_COMMON_PROPERTY_DEFINITIONS: NodePropertyDefinition[] = [
   { group: "Material", path: "material.wireframe", label: "Wireframe", type: "boolean", input: "checkbox" },
 ];
 
+export const MATERIAL_SHADOW_PROPERTY_DEFINITIONS: NodePropertyDefinition[] = [
+  { group: "Material", path: "material.castShadow", label: "Cast Shadow", type: "boolean", input: "checkbox" },
+  { group: "Material", path: "material.receiveShadow", label: "Receive Shadow", type: "boolean", input: "checkbox" },
+];
+
 const MATERIAL_TYPE_DEFINITIONS: Record<MaterialType, NodePropertyDefinition[]> = {
   basic: [],
   standard: [
@@ -58,6 +63,8 @@ export function createMaterialSpec(
     depthTest: true,
     depthWrite: true,
     wireframe: false,
+    castShadow: true,
+    receiveShadow: true,
   };
 }
 
@@ -90,6 +97,8 @@ export function normalizeMaterialSpec(value: unknown, fallback: MaterialSpec): M
     depthTest: typeof source.depthTest === "boolean" ? source.depthTest : fallback.depthTest,
     depthWrite: typeof source.depthWrite === "boolean" ? source.depthWrite : fallback.depthWrite,
     wireframe: typeof source.wireframe === "boolean" ? source.wireframe : fallback.wireframe,
+    castShadow: typeof source.castShadow === "boolean" ? source.castShadow : true,
+    receiveShadow: typeof source.receiveShadow === "boolean" ? source.receiveShadow : true,
   };
 }
 

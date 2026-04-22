@@ -492,6 +492,52 @@ button {
   transform: none;
 }
 
+.toolbar-divider {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border-soft);
+  flex: 0 0 auto;
+}
+
+.icon-button--with-kbd {
+  position: relative;
+}
+
+.icon-button__kbd {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 10px;
+  padding: 0 3px;
+  font-family: inherit;
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  opacity: 0.68;
+  pointer-events: none;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.icon-button--with-kbd:hover .icon-button__kbd {
+  opacity: 0.9;
+}
+
+.icon-button--with-kbd.is-active .icon-button__kbd {
+  color: white;
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.28);
+  opacity: 0.9;
+}
+
 .workspace-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 8px 420px;
@@ -2022,7 +2068,8 @@ input[type=number] {
 .scene-row:focus-visible,
 .scene-row__action-btn:focus-visible,
 .inspector-section-tab:focus-visible,
-.menu-surface__item:focus-visible {
+.menu-surface__item:focus-visible,
+.animation-channel__mute:focus-visible {
   outline: none;
   box-shadow: 0 0 0 1px rgba(18, 19, 22, 0.9), 0 0 0 3px var(--focus-ring);
 }
@@ -2640,8 +2687,22 @@ input[type=number] {
 
 .animation-channel__content {
   display: grid;
-  gap: 1px;
+  grid-template-columns: max-content auto;
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: center;
   min-width: max-content;
+}
+
+.animation-channel__content .animation-channel__label,
+.animation-channel__content .animation-channel__meta {
+  grid-column: 1;
+}
+
+.animation-channel__content .animation-channel__mute {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
 }
 
 .animation-channel__label {
@@ -2668,6 +2729,53 @@ input[type=number] {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* Muted track state — subordinate, never violet. */
+.animation-channel__mute {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.animation-channel__mute:hover {
+  color: var(--text-soft);
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.animation-channel__mute.is-muted {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.animation-channel.is-muted .animation-channel__label,
+.animation-channel.is-muted .animation-channel__meta,
+.animation-channel.is-muted .animation-channel__count {
+  opacity: 0.55;
+}
+
+.animation-lane.is-muted .animation-keyframe {
+  filter: saturate(0.25);
+  opacity: 0.55;
+}
+
+.animation-lane.is-muted .animation-keyframe.is-selected {
+  opacity: 0.85;
 }
 
 .animation-keyframe-editor {

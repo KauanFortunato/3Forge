@@ -831,6 +831,38 @@ export function App() {
     setTransientStatus("Clip removed.");
   }, [setTransientStatus, store]);
 
+  const handleDuplicateAnimationClip = useCallback((clipId: string) => {
+    const newClipId = store.duplicateAnimationClip(clipId);
+    if (!newClipId) {
+      return;
+    }
+    const newClip = store.getAnimationClip(newClipId);
+    setTransientStatus(newClip ? `Duplicated clip "${newClip.name}".` : "Clip duplicated.");
+  }, [setTransientStatus, store]);
+
+  const handleSetAnimationTrackMuted = useCallback((clipId: string, trackId: string, muted: boolean) => {
+    store.setTrackMuted(clipId, trackId, muted);
+    sceneRef.current?.seekAnimation(currentFrame);
+  }, [currentFrame, store]);
+
+  const handleRemoveAnimationKeyframes = useCallback((trackId: string, keyframeIds: string[]) => {
+    if (keyframeIds.length === 0) {
+      return;
+    }
+    store.removeAnimationKeyframes(trackId, keyframeIds);
+    setSelectedKeyframeId(null);
+    sceneRef.current?.seekAnimation(currentFrame);
+    setTransientStatus(`Removed ${keyframeIds.length} keyframes.`);
+  }, [currentFrame, setTransientStatus, store]);
+
+  const handleShiftAnimationKeyframes = useCallback((trackId: string, keyframeIds: string[], frameDelta: number) => {
+    if (keyframeIds.length === 0 || frameDelta === 0) {
+      return;
+    }
+    store.shiftAnimationKeyframes(trackId, keyframeIds, frameDelta);
+    sceneRef.current?.seekAnimation(currentFrame);
+  }, [currentFrame, store]);
+
   const handleCopy = useCallback(() => {
     const targetRootIds = selectedRootIds.filter((nodeId) => nodeId !== ROOT_NODE_ID);
     if (targetRootIds.length === 0) {
@@ -1441,6 +1473,24 @@ export function App() {
     openSceneGraphContextMenu(event, nodeId);
   }, [openSceneGraphContextMenu]);
 
+  const handleToggleTimelineHotkey = useCallback(() => {
+    if (isPhoneLayout) {
+      return;
+    }
+    setIsTimelineVisible((value) => !value);
+  }, [isPhoneLayout]);
+
+  const handleDuplicateHotkey = useCallback(() => {
+    handleDuplicate();
+  }, [handleDuplicate]);
+
+  const handleAddKeyframeAtPlayheadHotkey = useCallback(() => {
+    if (!showEditingTimeline || !selectedTrackId) {
+      return;
+    }
+    handleAddAnimationKeyframe(selectedTrackId);
+  }, [handleAddAnimationKeyframe, selectedTrackId, showEditingTimeline]);
+
   useGlobalHotkeys({
     onUndo: () => {
       if (store.undo()) {
@@ -1462,6 +1512,10 @@ export function App() {
     onOpen: () => { void handleOpenFile(); },
     onSave: () => { void handleSaveProject(); },
     onSaveAs: () => { void handleSaveAsProject(); },
+    onToggleTimeline: handleToggleTimelineHotkey,
+    onDuplicate: handleDuplicateHotkey,
+    onAddKeyframeAtPlayhead: handleAddKeyframeAtPlayheadHotkey,
+    onStopAnimation: handleAnimationStop,
   });
 
   const menus = useMemo(() => [
@@ -1831,6 +1885,10 @@ export function App() {
                   onSelectKeyframe={handleSelectAnimationKeyframe}
                   onUpdateKeyframe={handleUpdateAnimationKeyframe}
                   onRemoveKeyframe={handleRemoveAnimationKeyframe}
+                  onDuplicateClip={handleDuplicateAnimationClip}
+                  onSetTrackMuted={handleSetAnimationTrackMuted}
+                  onRemoveKeyframes={handleRemoveAnimationKeyframes}
+                  onShiftKeyframes={handleShiftAnimationKeyframes}
                   onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
                   onEndKeyframeDrag={() => {
                     store.commitHistoryTransaction("ui");

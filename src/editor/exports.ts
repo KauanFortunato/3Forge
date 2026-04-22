@@ -1,4 +1,4 @@
-import { frameToSeconds, getTrackSegments, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
+import { frameToSeconds, getTrackSegments, isTrackMuted, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
 import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageNode } from "./types";
 import { ROOT_NODE_ID, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
@@ -555,8 +555,8 @@ function emitCreationLines(
       lines.push(line);
     }
     lines.push(`const ${meshVariable} = new Mesh(${geometryVariable}, ${materialVariable});`);
-    lines.push(`${meshVariable}.castShadow = ${node.type === "image" ? "false" : "true"};`);
-    lines.push(`${meshVariable}.receiveShadow = ${node.type === "image" ? "false" : "true"};`);
+    lines.push(`${meshVariable}.castShadow = ${propertyExpression(node, "material.castShadow", bindingAccessor)};`);
+    lines.push(`${meshVariable}.receiveShadow = ${propertyExpression(node, "material.receiveShadow", bindingAccessor)};`);
     lines.push(`${meshVariable}.visible = ${propertyExpression(node, "material.visible", bindingAccessor)};`);
     lines.push(`applyNodeOrigin(${meshVariable}, ${geometryVariable}, ${JSON.stringify(node.origin)});`);
     lines.push(`const ${variableName} = new Group();`);
@@ -649,6 +649,9 @@ function collectAnimationClips(blueprint: ComponentBlueprint, nodes: EditorNode[
   return blueprint.animation.clips.flatMap((clip) => {
     const tracks = clip.tracks.flatMap((track) => {
       if (!validNodeIds.has(track.nodeId) || track.keyframes.length === 0) {
+        return [];
+      }
+      if (isTrackMuted(track)) {
         return [];
       }
 
