@@ -631,6 +631,7 @@ describe("App", () => {
     fireEvent.click(accentRow, { shiftKey: true });
 
     expect(screen.getByText("2 objects")).toBeTruthy();
+    await user.click(screen.getByTitle("Material"));
     expect(screen.getByLabelText("Color").getAttribute("placeholder")).toBe("Mixed");
 
     const colorInput = screen.getByLabelText("Color");
@@ -645,5 +646,211 @@ describe("App", () => {
     fireEvent.click(accentRow);
     await user.click(screen.getByTitle("Material"));
     expect((screen.getByLabelText("Color") as HTMLInputElement).value).toBe("#224466");
+  });
+
+  it("copies properties from the primary selection via Ctrl+Shift+C and pastes them onto another node with Ctrl+Shift+V", async () => {
+    persistLocalWorkspace("Props Clipboard");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    const heroRow = within(hierarchyTree).getByText("Hero Panel").closest('[role="treeitem"]') as HTMLElement;
+    const accentRow = within(hierarchyTree).getByText("Accent Plate").closest('[role="treeitem"]') as HTMLElement;
+
+    fireEvent.click(heroRow);
+    fireEvent.keyDown(window, { ctrlKey: true, shiftKey: true, key: "C" });
+
+    fireEvent.click(accentRow);
+    fireEvent.keyDown(window, { ctrlKey: true, shiftKey: true, key: "V" });
+
+    // Expect a toast acknowledging the paste.
+    const toast = await screen.findByRole("status");
+    expect(toast.textContent ?? "").toMatch(/applied/);
+
+    // Open the Material tab and confirm Accent Plate's color matches Hero Panel's violet.
+    fireEvent.click(accentRow);
+    fireEvent.click(screen.getByTitle("Material"));
+
+    await waitFor(() => {
+      const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
+      expect(colorInput.value.toLowerCase()).toBe("#7c44de");
+    });
+  });
+
+  it("shows Copy Properties / Paste Properties / Paste Special in the hierarchy context menu", async () => {
+    persistLocalWorkspace("Props Menu");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    const heroRow = within(hierarchyTree).getByText("Hero Panel").closest('[role="treeitem"]') as HTMLElement;
+
+    fireEvent.click(heroRow);
+    fireEvent.contextMenu(heroRow);
+
+    const menu = await waitFor(() => {
+      const node = document.body.querySelector(".context-menu");
+      if (!node) {
+        throw new Error("context menu not rendered");
+      }
+      return node as HTMLElement;
+    });
+    expect(within(menu).getByRole("button", { name: /Copy Properties/i })).toBeTruthy();
+    expect(within(menu).getByRole("button", { name: /Paste Properties/i })).toBeTruthy();
+    expect(within(menu).getByRole("button", { name: /Paste Special/i })).toBeTruthy();
+  });
+
+  it("opens the Paste Special submenu with ArrowRight and closes it with ArrowLeft", async () => {
+    persistLocalWorkspace("Props Submenu Nav");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    const heroRow = within(hierarchyTree).getByText("Hero Panel").closest('[role="treeitem"]') as HTMLElement;
+    const accentRow = within(hierarchyTree).getByText("Accent Plate").closest('[role="treeitem"]') as HTMLElement;
+
+    // Capture properties so Paste Special becomes enabled.
+    fireEvent.click(heroRow);
+    fireEvent.keyDown(window, { ctrlKey: true, shiftKey: true, key: "C" });
+
+    fireEvent.click(accentRow);
+    fireEvent.contextMenu(accentRow);
+
+    const menu = await waitFor(() => {
+      const node = document.body.querySelector(".context-menu");
+      if (!node) {
+        throw new Error("context menu not rendered");
+      }
+      return node as HTMLElement;
+    });
+    const pasteSpecialButton = within(menu).getByRole("button", { name: /Paste Special/i });
+    pasteSpecialButton.focus();
+
+    // ArrowRight opens the submenu.
+    fireEvent.keyDown(pasteSpecialButton, { key: "ArrowRight" });
+
+    await waitFor(() => {
+      expect(menu.querySelector(".menu-surface__submenu")).toBeTruthy();
+    });
+    expect(within(menu).getByRole("button", { name: /All compatible/i })).toBeTruthy();
+
+    // ArrowLeft inside the submenu closes it.
+    const allCompatibleButton = within(menu).getByRole("button", { name: /All compatible/i });
+    allCompatibleButton.focus();
+    fireEvent.keyDown(allCompatibleButton, { key: "ArrowLeft" });
+
+    await waitFor(() => {
+      expect(menu.querySelector(".menu-surface__submenu")).toBeFalsy();
+    });
+
+    // Escape dismisses the whole context menu.
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(document.body.querySelector(".context-menu")).toBeFalsy();
+    });
+  });
+
+  it("activates a Paste Special scope via keyboard (Enter on a focused submenu item)", async () => {
+    persistLocalWorkspace("Props Submenu Activate");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    const heroRow = within(hierarchyTree).getByText("Hero Panel").closest('[role="treeitem"]') as HTMLElement;
+    const accentRow = within(hierarchyTree).getByText("Accent Plate").closest('[role="treeitem"]') as HTMLElement;
+
+    // Capture hero properties first.
+    fireEvent.click(heroRow);
+    fireEvent.keyDown(window, { ctrlKey: true, shiftKey: true, key: "C" });
+
+    fireEvent.click(accentRow);
+    fireEvent.contextMenu(accentRow);
+
+    const menu = await waitFor(() => {
+      const node = document.body.querySelector(".context-menu");
+      if (!node) {
+        throw new Error("context menu not rendered");
+      }
+      return node as HTMLElement;
+    });
+
+    const pasteSpecialButton = within(menu).getByRole("button", { name: /Paste Special/i });
+    pasteSpecialButton.focus();
+    fireEvent.keyDown(pasteSpecialButton, { key: "ArrowRight" });
+
+    await waitFor(() => {
+      expect(menu.querySelector(".menu-surface__submenu")).toBeTruthy();
+    });
+
+    // Focus the "Material" submenu item and press Enter; the button handles
+    // Enter as a native click, which routes the "material" scope through
+    // handlePasteProperties.
+    const materialItem = within(menu).getByRole("button", { name: /^Material$/i });
+    materialItem.focus();
+    fireEvent.click(materialItem);
+
+    const toast = await screen.findByRole("status");
+    expect(toast.textContent ?? "").toMatch(/applied/);
+
+    // Accent Plate's material color should now match Hero Panel's violet.
+    fireEvent.click(accentRow);
+    fireEvent.click(screen.getByTitle("Material"));
+
+    await waitFor(() => {
+      const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
+      expect(colorInput.value.toLowerCase()).toBe("#7c44de");
+    });
+  });
+
+  it("disables Paste Special > Geometry when copying box geometry onto a text target (no alias)", async () => {
+    persistLocalWorkspace("Props Disabled Scope");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    const heroRow = within(hierarchyTree).getByText("Hero Panel").closest('[role="treeitem"]') as HTMLElement;
+    const headlineRow = within(hierarchyTree).getByText("Headline").closest('[role="treeitem"]') as HTMLElement;
+
+    // Copy box geometry (width/height/depth) from Hero Panel.
+    fireEvent.click(heroRow);
+    fireEvent.keyDown(window, { ctrlKey: true, shiftKey: true, key: "C" });
+
+    // Headline is a text node; box geometry has no compatible alias into text
+    // geometry, so the Geometry scope must be disabled in the submenu. This
+    // is how the UI communicates the "No compatible properties" state for a
+    // specific scope before the user even attempts the paste.
+    fireEvent.click(headlineRow);
+    fireEvent.contextMenu(headlineRow);
+
+    const menu = await waitFor(() => {
+      const node = document.body.querySelector(".context-menu");
+      if (!node) {
+        throw new Error("context menu not rendered");
+      }
+      return node as HTMLElement;
+    });
+
+    const pasteSpecialButton = within(menu).getByRole("button", { name: /Paste Special/i });
+    pasteSpecialButton.focus();
+    fireEvent.keyDown(pasteSpecialButton, { key: "ArrowRight" });
+
+    await waitFor(() => {
+      expect(menu.querySelector(".menu-surface__submenu")).toBeTruthy();
+    });
+
+    const geometryItem = within(menu).getByRole("button", { name: /^Geometry$/i });
+    expect((geometryItem as HTMLButtonElement).disabled).toBe(true);
+
+    // Material scope should remain enabled — material.color et al. are
+    // common paths that apply to every non-group node type.
+    const materialItem = within(menu).getByRole("button", { name: /^Material$/i });
+    expect((materialItem as HTMLButtonElement).disabled).toBe(false);
   });
 });
