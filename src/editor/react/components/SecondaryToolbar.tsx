@@ -4,19 +4,39 @@ import type { ViewMode } from "../../types";
 import {
   BoxIcon,
   CursorIcon,
+  ExportIcon,
+  FastForwardIcon,
   FrameIcon,
   HelpIcon,
   MoveIcon,
+  PauseIcon,
+  PlayIcon,
   RedoIcon,
+  RewindIcon,
   RotateIcon,
   SaveIcon,
   ScaleIcon,
+  SkipBackIcon,
+  SkipForwardIcon,
+  StopIcon,
   TimelineIcon,
   UndoIcon,
   ViewRenderedIcon,
   ViewSolidIcon,
 } from "./icons";
 import { BufferedInput } from "./BufferedInput";
+
+export interface PlaybackToolbarProps {
+  isPlaying: boolean;
+  currentFrame: number;
+  durationFrames: number;
+  onPlayToggle: () => void;
+  onStop: () => void;
+  onRewind: () => void;
+  onFastForward: () => void;
+  onSkipBack: () => void;
+  onSkipForward: () => void;
+}
 
 interface SecondaryToolbarProps {
   componentName: string;
@@ -27,6 +47,7 @@ interface SecondaryToolbarProps {
   currentTool: ToolMode;
   viewMode: ViewMode;
   isTimelineVisible: boolean;
+  playback?: PlaybackToolbarProps | null;
   onComponentNameChange: (value: string) => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -35,6 +56,7 @@ interface SecondaryToolbarProps {
   onFrame: () => void;
   onToggleTimeline: () => void;
   onSave?: () => void;
+  onExport?: () => void;
   onShortcuts?: () => void;
 }
 
@@ -48,6 +70,7 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     currentTool,
     viewMode,
     isTimelineVisible,
+    playback,
     onComponentNameChange,
     onUndo,
     onRedo,
@@ -56,6 +79,7 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     onFrame,
     onToggleTimeline,
     onSave,
+    onExport,
     onShortcuts,
   } = props;
 
@@ -97,15 +121,21 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       </div>
 
       <div className="toolbar__center">
-        <span className="toolbar__context">
-          <span className="toolbar__context-label">Selection</span>
-          <span className="toolbar__context-value">{selectedLabel}</span>
-        </span>
-        <span className="toolbar__context">
-          <span className="toolbar__context-label">Scene</span>
-          <span className="toolbar__context-value">{nodeCount} nodes</span>
-        </span>
-        {currentTool === "translate" ? <span className="toolbar__chip">Hold Shift to snap</span> : null}
+        {playback ? (
+          <PlaybarGroup {...playback} />
+        ) : (
+          <>
+            <span className="toolbar__context">
+              <span className="toolbar__context-label">Selection</span>
+              <span className="toolbar__context-value">{selectedLabel}</span>
+            </span>
+            <span className="toolbar__context">
+              <span className="toolbar__context-label">Scene</span>
+              <span className="toolbar__context-value">{nodeCount} nodes</span>
+            </span>
+            {currentTool === "translate" ? <span className="toolbar__chip">Hold Shift to snap</span> : null}
+          </>
+        )}
       </div>
 
       <div className="toolbar__right">
@@ -158,6 +188,19 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
           </button>
         ) : null}
 
+        {onExport ? (
+          <button
+            type="button"
+            className="tbtn is-ghost"
+            onClick={onExport}
+            aria-label="Export"
+            title="Export"
+          >
+            <ExportIcon />
+            <span>Export</span>
+          </button>
+        ) : null}
+
         {onSave ? (
           <button
             type="button"
@@ -171,6 +214,86 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
           </button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function PlaybarGroup(props: PlaybackToolbarProps) {
+  const {
+    isPlaying,
+    currentFrame,
+    durationFrames,
+    onPlayToggle,
+    onStop,
+    onRewind,
+    onFastForward,
+    onSkipBack,
+    onSkipForward,
+  } = props;
+
+  return (
+    <div className="playbar" role="group" aria-label="Playback controls">
+      <button
+        type="button"
+        className="playbar__btn"
+        onClick={onSkipBack}
+        aria-label="Skip to start"
+        title="Skip to start"
+      >
+        <SkipBackIcon width={12} height={12} />
+      </button>
+      <button
+        type="button"
+        className="playbar__btn"
+        onClick={onRewind}
+        aria-label="Rewind"
+        title="Rewind"
+      >
+        <RewindIcon width={12} height={12} />
+      </button>
+      <button
+        type="button"
+        className={`playbar__btn playbar__btn--primary${isPlaying ? " is-active" : ""}`}
+        onClick={onPlayToggle}
+        aria-label={isPlaying ? "Pause" : "Play"}
+        aria-pressed={isPlaying}
+        title={isPlaying ? "Pause" : "Play"}
+      >
+        {isPlaying ? <PauseIcon width={12} height={12} /> : <PlayIcon width={12} height={12} />}
+      </button>
+      <button
+        type="button"
+        className="playbar__btn"
+        onClick={onStop}
+        aria-label="Stop"
+        title="Stop"
+      >
+        <StopIcon width={12} height={12} />
+      </button>
+      <button
+        type="button"
+        className="playbar__btn"
+        onClick={onFastForward}
+        aria-label="Fast forward"
+        title="Fast forward"
+      >
+        <FastForwardIcon width={12} height={12} />
+      </button>
+      <button
+        type="button"
+        className="playbar__btn"
+        onClick={onSkipForward}
+        aria-label="Skip to end"
+        title="Skip to end"
+      >
+        <SkipForwardIcon width={12} height={12} />
+      </button>
+      <span className="playbar__sep" aria-hidden="true" />
+      <span className="playbar__counter" aria-label="Current frame">
+        <strong>{String(currentFrame).padStart(3, "0")}</strong>
+        <span className="playbar__counter-sep">/</span>
+        <span>{String(durationFrames).padStart(3, "0")}</span>
+      </span>
     </div>
   );
 }

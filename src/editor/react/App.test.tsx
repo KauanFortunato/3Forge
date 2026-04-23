@@ -262,7 +262,7 @@ describe("App", () => {
     fireEvent.click(keyframes[2] as HTMLButtonElement);
 
     await waitFor(() => {
-      expect(screen.getByText("Accent Plate | Mesh")).toBeTruthy();
+      expect(screen.getByDisplayValue("Accent Plate")).toBeTruthy();
       expect(document.querySelector(".tl-kf.is-selected")).toBeTruthy();
     });
   });
@@ -639,7 +639,10 @@ describe("App", () => {
     fireEvent.click(accentRow, { shiftKey: true });
 
     expect(screen.getByText("2 objects")).toBeTruthy();
-    await user.click(screen.getByTitle("Material"));
+    // Inspector now renders all applicable sections as an accordion open by
+    // default, so we no longer need to click a "Material" tab to reveal the
+    // Color field — just confirm the section header is present.
+    expect(screen.getByTitle("Material")).toBeTruthy();
     expect(screen.getByLabelText("Color").getAttribute("placeholder")).toBe("Mixed");
 
     const colorInput = screen.getByLabelText("Color");
@@ -648,11 +651,9 @@ describe("App", () => {
     fireEvent.blur(colorInput);
 
     fireEvent.click(heroRow);
-    await user.click(screen.getByTitle("Material"));
     expect((screen.getByLabelText("Color") as HTMLInputElement).value).toBe("#224466");
 
     fireEvent.click(accentRow);
-    await user.click(screen.getByTitle("Material"));
     expect((screen.getByLabelText("Color") as HTMLInputElement).value).toBe("#224466");
   });
 
@@ -677,9 +678,9 @@ describe("App", () => {
     const toast = await screen.findByRole("status");
     expect(toast.textContent ?? "").toMatch(/applied/);
 
-    // Open the Material tab and confirm Accent Plate's color matches Hero Panel's violet.
+    // Inspector renders Material accordion open by default — confirm color
+    // reflects Hero Panel's violet without needing a tab click.
     fireEvent.click(accentRow);
-    fireEvent.click(screen.getByTitle("Material"));
 
     await waitFor(() => {
       const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
@@ -808,7 +809,6 @@ describe("App", () => {
 
     // Accent Plate's material color should now match Hero Panel's violet.
     fireEvent.click(accentRow);
-    fireEvent.click(screen.getByTitle("Material"));
 
     await waitFor(() => {
       const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
@@ -860,5 +860,57 @@ describe("App", () => {
     // common paths that apply to every non-group node type.
     const materialItem = within(menu).getByRole("button", { name: /^Material$/i });
     expect((materialItem as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("shows the playbar transport in the toolbar when a clip is active and plays on click", () => {
+    const blueprint = createDefaultBlueprint();
+    blueprint.componentName = "Playbar Fixture";
+    const panelNode = blueprint.nodes.find((node) => node.name === "Hero Panel");
+    const track = createAnimationTrack(panelNode?.id ?? "panel-node", "transform.position.x");
+    track.keyframes = [createAnimationKeyframe(0, 0), createAnimationKeyframe(24, 1)];
+    const clip = createAnimationClip("intro", { durationFrames: 48, tracks: [track] });
+    blueprint.animation = { activeClipId: clip.id, clips: [clip] };
+    persistWorkspace(blueprint, createWorkspaceProjectContext());
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+
+    const toolbar = document.querySelector(".toolbar") as HTMLElement | null;
+    expect(toolbar).toBeTruthy();
+    const playbar = toolbar?.querySelector(".playbar");
+    expect(playbar).toBeTruthy();
+
+    fireEvent.click(within(playbar as HTMLElement).getByRole("button", { name: "Play" }));
+    expect(fakeScene.playAnimation).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the toolbar playbar when there is no active animation clip", () => {
+    persistLocalWorkspace("No Clip Fixture");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+
+    const toolbar = document.querySelector(".toolbar") as HTMLElement | null;
+    expect(toolbar).toBeTruthy();
+    expect(toolbar?.querySelector(".playbar")).toBeNull();
+  });
+
+  it("triggers the export package download when the toolbar Export button is clicked", async () => {
+    persistLocalWorkspace("Export Toolbar");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+
+    const toolbar = document.querySelector(".toolbar") as HTMLElement | null;
+    expect(toolbar).toBeTruthy();
+    const exportButton = within(toolbar as HTMLElement).getByRole("button", { name: "Export" });
+    fireEvent.click(exportButton);
+
+    await waitFor(() => {
+      expect(exportPackageMocks.createExportPackageZip).toHaveBeenCalledTimes(1);
+    });
   });
 });

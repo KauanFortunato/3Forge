@@ -53,7 +53,6 @@ describe("InspectorPanel", () => {
     await user.click(screen.getByLabelText("Visible"));
     await user.click(screen.getByLabelText("Editable Visible"));
 
-    await user.click(screen.getByTitle("Transform"));
     const positionXInput = container.querySelector(".vec__cell input[type='text']");
     const editableToggle = container.querySelector(".vec__cell input[type='checkbox']");
 
@@ -96,8 +95,7 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Text"));
-    const fontSelect = screen.getByRole("combobox");
+    const fontSelect = screen.getByRole("combobox", { name: "Active Font" });
     await user.selectOptions(fontSelect, "fixture-font");
     await user.click(screen.getByRole("button", { name: "Import font" }));
 
@@ -144,8 +142,7 @@ describe("InspectorPanel", () => {
     expect(props.onToggleEditable).toHaveBeenCalledWith("group-1", expect.objectContaining({ path: "visible" }), true);
   });
 
-  it("renders castShadow/receiveShadow controls only inside the Shadows sub-section (no duplicate)", async () => {
-    const user = userEvent.setup();
+  it("renders castShadow/receiveShadow controls only inside the Shadows sub-section (no duplicate)", () => {
     const node = createNode("box", ROOT_NODE_ID, "box-1");
     const props = createCommonProps();
 
@@ -157,7 +154,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Material"));
 
     // Exactly one input labeled "Cast Shadow" and one "Receive Shadow"
     expect(screen.getAllByLabelText("Cast Shadow")).toHaveLength(1);
@@ -175,8 +171,7 @@ describe("InspectorPanel", () => {
     expect(shadowSubHeaders).toHaveLength(1);
   });
 
-  it("buffers swatch color changes until the picker loses focus", async () => {
-    const user = userEvent.setup();
+  it("buffers swatch color changes until the picker loses focus", () => {
     const node = createNode("box", ROOT_NODE_ID, "box-1");
     node.material.color = "#112233";
     const props = createCommonProps();
@@ -189,7 +184,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Material"));
 
     const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
     const swatchInput = screen.getByLabelText("Color swatch") as HTMLInputElement;
@@ -222,7 +216,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Material"));
 
     const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
     await user.clear(colorInput);
@@ -251,7 +244,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Material"));
 
     const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
     await user.clear(colorInput);
@@ -294,7 +286,6 @@ describe("InspectorPanel", () => {
     expect(screen.getByTitle("Object")).toBeTruthy();
     expect(screen.getByTitle("Transform")).toBeTruthy();
 
-    await user.click(screen.getByTitle("Material"));
 
     const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
     expect(colorInput.placeholder).toBe("Mixed");
@@ -324,7 +315,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTitle("Material"));
 
     const swatchInput = screen.getByLabelText("Color swatch");
 
@@ -359,8 +349,7 @@ describe("InspectorPanel", () => {
     expect(screen.queryByTitle("Geometry")).toBeNull();
   });
 
-  it("hides material-type-specific controls for heterogeneous material selections", async () => {
-    const user = userEvent.setup();
+  it("hides material-type-specific controls for heterogeneous material selections", () => {
     const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
     const secondNode = createNode("plane", ROOT_NODE_ID, "plane-1");
     firstNode.material.type = "basic";
@@ -376,7 +365,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Material"));
 
     expect(screen.getByText(/Material-specific controls stay hidden while the selection mixes different material types\./)).toBeTruthy();
     expect(screen.queryByLabelText("Roughness")).toBeNull();
@@ -400,7 +388,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Material"));
 
     const opacityInput = screen.getByLabelText("Opacity");
     expect((opacityInput as HTMLInputElement).placeholder).toBe("Mixed");
@@ -428,7 +415,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Material"));
 
     const opacityInput = screen.getByLabelText("Opacity");
     await user.click(opacityInput);
@@ -462,7 +448,6 @@ describe("InspectorPanel", () => {
     expect(screen.getByText("2 objects")).toBeTruthy();
     expect(screen.getByTitle("Transform")).toBeTruthy();
 
-    await user.click(screen.getByTitle("Transform"));
 
     const transformInputs = container.querySelectorAll(".vec__cell input[type='text']");
     expect(transformInputs.length).toBe(9);
@@ -497,7 +482,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.click(screen.getByTitle("Material"));
 
     expect(screen.getByLabelText("Roughness")).toBeTruthy();
     expect(screen.getByLabelText("Metalness")).toBeTruthy();
@@ -513,8 +497,7 @@ describe("InspectorPanel", () => {
     );
   });
 
-  it("hides Geometry for cross-type selections while keeping Material and Transform", async () => {
-    const user = userEvent.setup();
+  it("hides Geometry for cross-type selections while keeping Material and Transform", () => {
     const boxNode = createNode("box", ROOT_NODE_ID, "box-1");
     const sphereNode = createNode("sphere", ROOT_NODE_ID, "sphere-1");
     const props = createCommonProps();
@@ -532,7 +515,6 @@ describe("InspectorPanel", () => {
     expect(screen.getByTitle("Material")).toBeTruthy();
     expect(screen.queryByTitle("Geometry")).toBeNull();
 
-    await user.click(screen.getByTitle("Material"));
     expect(screen.getByLabelText("Color")).toBeTruthy();
   });
 
@@ -552,7 +534,6 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTitle("Transform"));
 
     const cells = Array.from(container.querySelectorAll(".vec__cell input[type='text']")) as HTMLInputElement[];
     const positionX = cells[0];
@@ -562,5 +543,198 @@ describe("InspectorPanel", () => {
     expect(positionX.value).toBe("0");
     expect(positionY.placeholder).toBe("Mixed");
     expect(positionY.value).toBe("");
+  });
+
+  it("toggles a section open/closed when its header is clicked and swaps the chevron", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    const transformSection = Array.from(container.querySelectorAll(".sec")).find((el) => (
+      el.querySelector(".sec__hd-title")?.textContent?.trim() === "Transform"
+    )) as HTMLElement;
+    expect(transformSection).toBeTruthy();
+
+    // Starts open: no is-collapsed class, chevron-down path.
+    expect(transformSection.classList.contains("is-collapsed")).toBe(false);
+    const header = transformSection.querySelector(".sec__hd") as HTMLButtonElement;
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    const openChev = transformSection.querySelector(".sec__hd-chev svg path") as SVGPathElement;
+    const openD = openChev.getAttribute("d") ?? "";
+    expect(openD.startsWith("m3.4")).toBe(true);
+
+    await user.click(header);
+
+    expect(transformSection.classList.contains("is-collapsed")).toBe(true);
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    const closedChev = transformSection.querySelector(".sec__hd-chev svg path") as SVGPathElement;
+    const closedD = closedChev.getAttribute("d") ?? "";
+    expect(closedD.startsWith("m5.2")).toBe(true);
+
+    await user.click(header);
+    expect(transformSection.classList.contains("is-collapsed")).toBe(false);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("collapses sections independently", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    const sections = Array.from(container.querySelectorAll(".sec")) as HTMLElement[];
+    const transform = sections.find((el) => el.querySelector(".sec__hd-title")?.textContent?.trim() === "Transform") as HTMLElement;
+    const material = sections.find((el) => el.querySelector(".sec__hd-title")?.textContent?.trim() === "Material") as HTMLElement;
+    expect(transform).toBeTruthy();
+    expect(material).toBeTruthy();
+
+    await user.click(transform.querySelector(".sec__hd") as HTMLButtonElement);
+
+    expect(transform.classList.contains("is-collapsed")).toBe(true);
+    expect(material.classList.contains("is-collapsed")).toBe(false);
+  });
+
+  it("keeps collapsed section bodies in the DOM so tests can still resolve their inputs", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    // Color input is part of Material (initially open).
+    expect(screen.getByLabelText("Color")).toBeTruthy();
+
+    // Collapse the Material section and verify the Color input stays in the DOM.
+    await user.click(screen.getByTitle("Material"));
+    expect(screen.getByLabelText("Color")).toBeTruthy();
+  });
+
+  it("scrubs a numeric material property when the drag handle is dragged", () => {
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.material.opacity = 0.5;
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    const opacityInput = screen.getByLabelText("Opacity") as HTMLInputElement;
+    const dragHandle = screen.getByLabelText("Scrub Opacity") as HTMLButtonElement;
+    expect(opacityInput.value).toBe("0.5");
+
+    fireEvent.pointerDown(dragHandle, { button: 0, clientX: 100, pointerId: 1 });
+    fireEvent.pointerMove(dragHandle, { clientX: 110, pointerId: 1 });
+    fireEvent.pointerUp(dragHandle, { clientX: 110, pointerId: 1 });
+
+    // opacity definition step is 0.05 → 10px * 0.05 = 0.5 → 0.5 + 0.5 = 1
+    expect(props.onNodePropertyChange).toHaveBeenCalledTimes(1);
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith(
+      "box-1",
+      expect.objectContaining({ path: "material.opacity" }),
+      expect.stringMatching(/^1(\.0+)?$/),
+    );
+  });
+
+  it("scrubs a Transform axis when its drag handle is dragged", () => {
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.transform.position.x = 0;
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    const dragHandle = screen.getByLabelText("Scrub Position X") as HTMLButtonElement;
+
+    fireEvent.pointerDown(dragHandle, { button: 0, clientX: 200, pointerId: 2 });
+    fireEvent.pointerMove(dragHandle, { clientX: 212, pointerId: 2 });
+    fireEvent.pointerUp(dragHandle, { clientX: 212, pointerId: 2 });
+
+    // position step 0.1 × 12px = 1.2
+    expect(props.onNodePropertyChange).toHaveBeenCalledTimes(1);
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith(
+      "box-1",
+      expect.objectContaining({ path: "transform.position.x" }),
+      "1.2",
+    );
+  });
+
+  it("still lets the user type into a numeric input alongside drag-to-scrub", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.material.opacity = 0.5;
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    const opacityInput = screen.getByLabelText("Opacity") as HTMLInputElement;
+    await user.clear(opacityInput);
+    await user.type(opacityInput, "0.25");
+    await user.tab();
+
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith(
+      "box-1",
+      expect.objectContaining({ path: "material.opacity" }),
+      "0.25",
+    );
+  });
+
+  it("cancels a drag-scrub on pointer cancel and restores the original value", () => {
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.material.opacity = 0.5;
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    const opacityInput = screen.getByLabelText("Opacity") as HTMLInputElement;
+    const dragHandle = screen.getByLabelText("Scrub Opacity") as HTMLButtonElement;
+
+    fireEvent.pointerDown(dragHandle, { button: 0, clientX: 100, pointerId: 3 });
+    fireEvent.pointerMove(dragHandle, { clientX: 180, pointerId: 3 });
+    fireEvent.pointerCancel(dragHandle, { clientX: 180, pointerId: 3 });
+
+    expect(props.onNodePropertyChange).not.toHaveBeenCalled();
+    expect(opacityInput.value).toBe("0.5");
   });
 });

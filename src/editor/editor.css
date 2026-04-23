@@ -411,6 +411,73 @@ input, button, select, textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.playbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 24px;
+  padding: 0 4px;
+  background: var(--c-bg-2);
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+.playbar__btn {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  color: var(--c-text-med);
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 0;
+}
+.playbar__btn:hover {
+  color: var(--c-text);
+  background: var(--c-bg-4);
+}
+.playbar__btn:focus-visible {
+  outline: 1px solid var(--c-accent);
+  outline-offset: -1px;
+}
+.playbar__btn.is-active {
+  background: var(--c-accent);
+  color: #fff;
+}
+.playbar__btn.is-active:hover {
+  background: var(--c-accent);
+}
+.playbar__btn--primary {
+  width: 22px;
+  height: 22px;
+}
+.playbar__sep {
+  width: 1px;
+  height: 14px;
+  background: var(--c-border-strong);
+  margin: 0 4px;
+}
+.playbar__counter {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px 0 2px;
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  color: var(--c-text-med);
+  min-width: 58px;
+  justify-content: center;
+}
+.playbar__counter strong {
+  color: var(--c-text);
+  font-weight: 600;
+}
+.playbar__counter-sep {
+  color: var(--c-text-faint);
+}
+
 .toolbar__chip {
   display: inline-flex;
   align-items: center;
@@ -625,28 +692,80 @@ input, button, select, textarea {
 /* =============================================================
    Scene Graph
    ============================================================= */
+.sg-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.sg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg-1);
+  flex-shrink: 0;
+}
 .sg-search {
   flex: 1;
-  display: flex; align-items: center; gap: 5px;
-  height: 22px; padding: 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 var(--sp-3);
   background: var(--c-bg-3);
   border: 1px solid var(--c-border);
   border-radius: var(--r-sm);
   color: var(--c-text-dim);
   font-size: var(--fs-sm);
-  margin: var(--sp-2) var(--sp-3);
+  transition: border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
-.sg-search input {
-  flex: 1; min-width: 0;
-  color: var(--c-text); font-size: var(--fs-sm);
-  background: transparent; border: 0; outline: 0;
+.sg-search:hover {
+  border-color: var(--c-border-strong);
 }
-.sg-search input::placeholder { color: var(--c-text-faint); }
+.sg-search:focus-within {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 2px var(--c-accent-bg);
+  color: var(--c-text);
+}
+.sg-search.is-active {
+  color: var(--c-text);
+}
+.sg-search__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  flex-shrink: 0;
+}
+.sg-search__input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  font-family: inherit;
+}
+.sg-search__input::placeholder { color: var(--c-text-faint); }
 
 .sg-tree {
   display: block;
   padding: 2px 0 var(--sp-4);
   outline: none;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.sg-tree__empty {
+  padding: var(--sp-5) var(--sp-3);
+  color: var(--c-text-dim);
+  font-size: var(--fs-sm);
+  text-align: center;
 }
 
 .sg-row {
@@ -793,44 +912,6 @@ input, button, select, textarea {
   margin-top: 2px;
 }
 
-.insp-tabs {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  padding: var(--sp-2) var(--sp-3);
-  border-bottom: 1px solid var(--c-border);
-  background: var(--c-bg-1);
-  flex-wrap: wrap;
-}
-.insp-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 8px;
-  font-size: var(--fs-sm);
-  color: var(--c-text-dim);
-  cursor: pointer;
-  border-radius: var(--r-sm);
-  background: transparent;
-  border: 0;
-}
-.insp-tab:hover {
-  color: var(--c-text);
-  background: var(--c-bg-3);
-}
-.insp-tab.is-active {
-  background: var(--c-bg-3);
-  color: var(--c-text);
-}
-.insp-tab__icon {
-  display: grid;
-  place-items: center;
-  width: 12px;
-  height: 12px;
-  color: inherit;
-}
-
 /* Section */
 .sec { border-bottom: 1px solid var(--c-border); }
 .sec__hd {
@@ -854,8 +935,22 @@ input, button, select, textarea {
   place-items: center;
   width: 10px;
   height: 10px;
+  flex: 0 0 auto;
 }
+.sec__hd-icon {
+  color: var(--c-text-dim);
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+.sec__hd:hover .sec__hd-icon { color: var(--c-text-med); }
 .sec__hd-title { flex: 1; text-align: left; }
+.sec__hd:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--c-accent);
+}
 .sec__hd-meta {
   margin-left: auto;
   font-family: var(--f-mono);
@@ -935,7 +1030,6 @@ input, button, select, textarea {
   cursor: ew-resize;
 }
 .vec__cell:hover { background: var(--c-bg-4); }
-.vec__cell.is-focused { background: var(--c-bg-4); box-shadow: inset 0 0 0 1px var(--c-accent); }
 .vec__cell.is-editable { box-shadow: inset 0 0 0 1px var(--c-accent); }
 .vec__axis {
   font-family: var(--f-mono);
@@ -984,6 +1078,7 @@ input, button, select, textarea {
   color: var(--c-text);
   cursor: ew-resize;
   width: 100%;
+  position: relative;
 }
 .text { cursor: text; font-family: var(--f-ui); }
 .num:hover, .sel:hover, .text:hover { background: var(--c-bg-4); }
@@ -995,10 +1090,86 @@ input, button, select, textarea {
   outline: 0;
   font: inherit;
 }
-.num input { text-align: right; }
+.num input { text-align: right; padding-right: 10px; }
 .text input { text-align: left; }
 .num input::placeholder,
 .text input::placeholder { color: var(--c-text-faint); }
+.num input:focus-visible { outline: none; }
+.num:focus-within {
+  border-color: var(--c-accent);
+  background: var(--c-bg-4);
+}
+
+/* Drag-to-scrub handle on single-value numeric inputs */
+.num__drag {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 10px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: ew-resize;
+  color: var(--c-text-faint);
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+  touch-action: none;
+}
+.num:hover .num__drag,
+.num:focus-within .num__drag,
+.num__drag.is-active,
+.num__drag:focus-visible {
+  opacity: 1;
+}
+.num__drag:hover { color: var(--c-accent); }
+.num__drag.is-active { color: var(--c-accent); }
+.num__drag:focus-visible {
+  outline: none;
+  color: var(--c-accent);
+}
+.num__drag-grip {
+  display: block;
+  width: 2px;
+  height: 10px;
+  border-left: 1px solid currentColor;
+  border-right: 1px solid currentColor;
+  opacity: 0.85;
+}
+
+/* Drag handle variant for vec cells (thinner, inline) */
+.vec__drag {
+  width: 8px;
+  height: 12px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: ew-resize;
+  color: var(--c-text-faint);
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+  touch-action: none;
+  flex: 0 0 auto;
+}
+.vec__cell:hover .vec__drag,
+.vec__drag.is-active,
+.vec__drag:focus-visible {
+  opacity: 1;
+}
+.vec__drag:hover,
+.vec__drag.is-active,
+.vec__drag:focus-visible {
+  color: var(--c-accent);
+  outline: none;
+}
+.vec__drag .num__drag-grip {
+  width: 2px;
+  height: 8px;
+}
 
 .sel {
   justify-content: space-between;
@@ -1188,7 +1359,7 @@ input, button, select, textarea {
 .tl__ruler-inner {
   position: relative;
   height: 100%;
-  width: var(--tl-width, 100%);
+  width: 100%;
 }
 .tl__ruler-line {
   position: absolute;
@@ -1295,7 +1466,8 @@ input, button, select, textarea {
 
 .tl__lanes {
   position: relative;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   background:
     repeating-linear-gradient(
       to bottom,
@@ -1305,7 +1477,7 @@ input, button, select, textarea {
 }
 .tl__lanes-inner {
   position: relative;
-  min-width: 100%;
+  width: 100%;
 }
 .tl__playhead {
   position: absolute;
@@ -1581,12 +1753,12 @@ input, button, select, textarea {
   border-color: var(--c-border-strong);
   background: var(--c-bg-3);
 }
-.landing-action--primary {
+.landing-action.is-primary {
   background: var(--c-accent);
   color: var(--c-accent-fg);
   border-color: var(--c-accent);
 }
-.landing-action--primary:hover {
+.landing-action.is-primary:hover {
   filter: brightness(1.08);
   background: var(--c-accent);
   color: var(--c-accent-fg);
@@ -1600,7 +1772,7 @@ input, button, select, textarea {
   flex: 0 0 auto;
   color: var(--c-text);
 }
-.landing-action--primary .landing-action__ico {
+.landing-action.is-primary .landing-action__ico {
   background: rgba(14, 15, 17, 0.12);
   color: var(--c-accent-fg);
 }
@@ -1613,7 +1785,7 @@ input, button, select, textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.landing-action--primary .landing-action__sub { color: rgba(14, 15, 17, 0.65); }
+.landing-action.is-primary .landing-action__sub { color: rgba(14, 15, 17, 0.65); }
 
 .landing-recent {
   display: grid;

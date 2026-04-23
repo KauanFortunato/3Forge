@@ -5,7 +5,6 @@ import { getSharedPropertyDefinitions } from "../../sharedProperties";
 import type { SharedPropertyResult } from "../../sharedProperties";
 import type { EditorNode, FontAsset, GroupPivotPreset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
 import {
-  BoxIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   CircleFilledIcon,
@@ -20,8 +19,7 @@ import {
   TransformIcon,
 } from "./icons";
 import { BufferedInput } from "./BufferedInput";
-
-type InspectorSectionId = "object" | "transform" | "geometry" | "material" | "text" | "image";
+import { NumberDragInput } from "./NumberDragInput";
 
 interface InspectorPanelProps {
   node: EditorNode | undefined;
@@ -41,10 +39,10 @@ interface InspectorPanelProps {
   onReplaceImage: (nodeId: string) => void;
 }
 
-interface InspectorSection {
-  id: InspectorSectionId;
-  label: string;
-  icon: ReactNode;
+const NUMERIC_INPUT_TYPES = new Set<NodePropertyDefinition["input"]>(["number", "degrees"]);
+
+function isNumericDefinition(definition: NodePropertyDefinition): boolean {
+  return NUMERIC_INPUT_TYPES.has(definition.input);
 }
 
 export function InspectorPanel(props: InspectorPanelProps) {
@@ -95,23 +93,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
   const sharedMaterialDefinitions = sharedMaterial.definitions;
   const hasMixedMaterialTypes = sharedMaterial.mixedPaths.has("material.type");
   const hasGroupSelection = isMultiSelection && selectionNodes.some((entry) => entry.type === "group");
-  const sections = useMemo(
-    () => getSectionsForSelection(primaryNode, selectionNodes, {
-      object: sharedObject,
-      transform: sharedTransform,
-      geometry: sharedGeometry,
-      material: sharedMaterial,
-    }),
-    [primaryNode, selectionNodes, sharedObject, sharedTransform, sharedGeometry, sharedMaterial],
-  );
-  const [activeSection, setActiveSection] = useState<InspectorSectionId>("object");
   const [groupPivotPreset, setGroupPivotPreset] = useState<GroupPivotPreset>("center");
-
-  useEffect(() => {
-    if (!sections.some((section) => section.id === activeSection)) {
-      setActiveSection(sections[0]?.id ?? "object");
-    }
-  }, [activeSection, sections]);
 
   useEffect(() => {
     setGroupPivotPreset("center");
@@ -127,6 +109,20 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
   const groupedDefinitions = primaryNode ? groupDefinitions(getPropertyDefinitions(primaryNode)) : new Map<string, NodePropertyDefinition[]>();
   const iconForNode = primaryNode?.type === "group" ? <GroupIcon width={14} height={14} /> : <MeshIcon width={14} height={14} />;
+
+  const sections = getSectionsForSelection(primaryNode, selectionNodes, {
+    object: sharedObject,
+    transform: sharedTransform,
+    geometry: sharedGeometry,
+    material: sharedMaterial,
+  });
+
+  const showObject = sections.some((section) => section === "object");
+  const showTransform = sections.some((section) => section === "transform");
+  const showGeometry = sections.some((section) => section === "geometry");
+  const showMaterial = sections.some((section) => section === "material");
+  const showText = sections.some((section) => section === "text");
+  const showImage = sections.some((section) => section === "image");
 
   return (
     <div>
@@ -147,24 +143,12 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </span>
       </div>
 
-      <div className="insp-tabs">
-        {sections.map((section) => (
-          <button
-            key={section.id}
-            type="button"
-            className={`insp-tab${activeSection === section.id ? " is-active" : ""}`}
-            title={section.label}
-            aria-label={section.label}
-            onClick={() => setActiveSection(section.id)}
-          >
-            <span className="insp-tab__icon">{section.icon}</span>
-            <span>{section.label}</span>
-          </button>
-        ))}
-      </div>
-
-      {activeSection === "object" && isMultiSelection ? (
-        <Sec title="Object" meta={renderExcludedNote(sharedObject, selectionNodes)}>
+      {showObject && isMultiSelection ? (
+        <Sec
+          title="Object"
+          icon={<ObjectDataIcon width={12} height={12} />}
+          meta={renderExcludedNote(sharedObject, selectionNodes)}
+        >
           {sharedObject.definitions.map((definition) => (
             <PropertyRow
               key={definition.path}
@@ -180,8 +164,8 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </Sec>
       ) : null}
 
-      {activeSection === "object" && primaryNode ? (
-        <Sec title="Object">
+      {showObject && primaryNode ? (
+        <Sec title="Object" icon={<ObjectDataIcon width={12} height={12} />}>
           <div className="row">
             <span className="row__lbl">Name</span>
             <span className="text">
@@ -311,8 +295,12 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </Sec>
       ) : null}
 
-      {activeSection === "transform" ? (
-        <Sec title="Transform" meta={isMultiSelection ? renderExcludedNote(sharedTransform, selectionNodes) : null}>
+      {showTransform ? (
+        <Sec
+          title="Transform"
+          icon={<TransformIcon width={12} height={12} />}
+          meta={isMultiSelection ? renderExcludedNote(sharedTransform, selectionNodes) : null}
+        >
           <TransformAxisGroup
             title="Position"
             nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
@@ -345,8 +333,12 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </Sec>
       ) : null}
 
-      {activeSection === "geometry" && isMultiSelection ? (
-        <Sec title="Geometry" meta={renderExcludedNote(sharedGeometry, selectionNodes)}>
+      {showGeometry && isMultiSelection ? (
+        <Sec
+          title="Geometry"
+          icon={<GeometryIcon width={12} height={12} />}
+          meta={renderExcludedNote(sharedGeometry, selectionNodes)}
+        >
           {sharedGeometry.definitions.map((definition) => (
             <PropertyRow
               key={definition.path}
@@ -362,9 +354,10 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </Sec>
       ) : null}
 
-      {activeSection === "geometry" && primaryNode ? (
+      {showGeometry && primaryNode ? (
         <DefinitionSection
           title="Geometry"
+          icon={<GeometryIcon width={12} height={12} />}
           node={primaryNode}
           definitions={groupedDefinitions.get("Geometry") ?? []}
           onNodePropertyChange={onNodePropertyChange}
@@ -372,7 +365,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
         />
       ) : null}
 
-      {activeSection === "material" ? (
+      {showMaterial ? (
         <MaterialDefinitionSection
           nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedMaterial.includedNodeIds) : primaryNode ? [primaryNode] : []}
           selectionCount={isMultiSelection ? selectionNodes.length : 1}
@@ -388,9 +381,9 @@ export function InspectorPanel(props: InspectorPanelProps) {
         />
       ) : null}
 
-      {activeSection === "text" && primaryNode ? (
+      {showText && primaryNode ? (
         <>
-          <Sec title="Font">
+          <Sec title="Font" icon={<TextPropertyIcon width={12} height={12} />}>
             <div className="row">
               <span className="row__lbl">Font</span>
               <span className="sel">
@@ -416,6 +409,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
           <DefinitionSection
             title="Text"
+            icon={<TextPropertyIcon width={12} height={12} />}
             node={primaryNode}
             definitions={groupedDefinitions.get("Text") ?? []}
             onNodePropertyChange={onNodePropertyChange}
@@ -424,28 +418,18 @@ export function InspectorPanel(props: InspectorPanelProps) {
         </>
       ) : null}
 
-      {activeSection === "image" && primaryNode?.type === "image" ? (
-        <>
-          <Sec title="Image">
-            <div className="insp-image-preview">
-              <img src={primaryNode.image.src} alt={primaryNode.image.name} />
-            </div>
-            <p className="row__hint" style={{ marginTop: "var(--sp-3)" }}>
-              {primaryNode.image.name} | {primaryNode.image.width} x {primaryNode.image.height} px
-            </p>
-            <button type="button" className="tbtn is-ghost tbtn--block" onClick={() => onReplaceImage(primaryNode.id)}>
-              Replace image
-            </button>
-          </Sec>
-
-          <DefinitionSection
-            title="Geometry"
-            node={primaryNode}
-            definitions={groupedDefinitions.get("Geometry") ?? []}
-            onNodePropertyChange={onNodePropertyChange}
-            onToggleEditable={onToggleEditable}
-          />
-        </>
+      {showImage && primaryNode?.type === "image" ? (
+        <Sec title="Image" icon={<ImagePropertyIcon width={12} height={12} />}>
+          <div className="insp-image-preview">
+            <img src={primaryNode.image.src} alt={primaryNode.image.name} />
+          </div>
+          <p className="row__hint" style={{ marginTop: "var(--sp-3)" }}>
+            {primaryNode.image.name} | {primaryNode.image.width} x {primaryNode.image.height} px
+          </p>
+          <button type="button" className="tbtn is-ghost tbtn--block" onClick={() => onReplaceImage(primaryNode.id)}>
+            Replace image
+          </button>
+        </Sec>
       ) : null}
 
       {sections.length === 0 ? (
@@ -463,22 +447,27 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
 interface SecProps {
   title: string;
+  icon?: ReactNode;
   meta?: ReactNode;
+  defaultOpen?: boolean;
   children: ReactNode;
 }
 
-function Sec({ title, meta, children }: SecProps) {
-  const [collapsed, setCollapsed] = useState(false);
+function Sec({ title, icon, meta, defaultOpen = true, children }: SecProps) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className={`sec${collapsed ? " is-collapsed" : ""}`}>
+    <div className={`sec${open ? "" : " is-collapsed"}`}>
       <button
         type="button"
         className="sec__hd"
-        onClick={() => setCollapsed((value) => !value)}
+        title={title}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
       >
         <span className="sec__hd-chev">
-          {collapsed ? <ChevronRightIcon width={8} height={8} /> : <ChevronDownIcon width={8} height={8} />}
+          {open ? <ChevronDownIcon width={8} height={8} /> : <ChevronRightIcon width={8} height={8} />}
         </span>
+        {icon ? <span className="sec__hd-icon" aria-hidden="true">{icon}</span> : null}
         <span className="sec__hd-title">{title}</span>
         {meta ? <span className="sec__hd-meta">{meta}</span> : null}
       </button>
@@ -489,6 +478,7 @@ function Sec({ title, meta, children }: SecProps) {
 
 interface DefinitionSectionProps {
   title: string;
+  icon?: ReactNode;
   node: EditorNode;
   definitions: NodePropertyDefinition[];
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
@@ -496,10 +486,10 @@ interface DefinitionSectionProps {
 }
 
 function DefinitionSection(props: DefinitionSectionProps) {
-  const { title, node, definitions, onNodePropertyChange, onToggleEditable } = props;
+  const { title, icon, node, definitions, onNodePropertyChange, onToggleEditable } = props;
 
   return (
-    <Sec title={title}>
+    <Sec title={title} icon={icon}>
       {definitions.map((definition) => (
         <PropertyRow
           key={definition.path}
@@ -558,7 +548,11 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
   );
 
   return (
-    <Sec title="Material" meta={isMultiSelection && excludedNote ? excludedNote : null}>
+    <Sec
+      title="Material"
+      icon={<MaterialIcon width={12} height={12} />}
+      meta={isMultiSelection && excludedNote ? excludedNote : null}
+    >
       {isMultiSelection ? (
         <p className="row__hint" style={{ marginBottom: "var(--sp-3)" }}>
           {`Applying changes to ${selectionCount} selected objects.`}
@@ -690,7 +684,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
               data-axis={axis}
             >
               <span className="vec__axis">{axisLetter}</span>
-              <BufferedInput
+              <NumberDragInput
                 className="vec__val"
                 type="text"
                 inputMode="decimal"
@@ -698,6 +692,9 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                 placeholder={isMixed ? "Mixed" : undefined}
                 onCommit={commit}
                 aria-label={`${title} ${axisLetter}`}
+                dragClassName="vec__drag"
+                step={definition.step ?? (definition.input === "degrees" ? 1 : 0.1)}
+                precision={definition.input === "degrees" ? 2 : 3}
               />
               {isMultiSelection ? null : (
                 <label className={`vec__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
@@ -811,6 +808,21 @@ function PropertyRow({
         mixedFallbackValue={hasMixedValue ? String(currentValue) : undefined}
         onCommit={commitValue}
       />
+    );
+  } else if (isNumericDefinition(definition)) {
+    control = (
+      <span className="num">
+        <NumberDragInput
+          type="text"
+          aria-label={definition.label}
+          inputMode="decimal"
+          value={hasMixedValue ? "" : stringValue}
+          placeholder={hasMixedValue ? "Mixed" : undefined}
+          onCommit={(value) => commitValue(value)}
+          step={definition.step ?? (definition.input === "degrees" ? 1 : 0.1)}
+          precision={definition.input === "degrees" ? 2 : 3}
+        />
+      </span>
     );
   } else {
     control = (
@@ -930,45 +942,23 @@ interface SharedScopeBundle {
   material: SharedPropertyResult;
 }
 
+type InspectorSectionId = "object" | "transform" | "geometry" | "material" | "text" | "image";
+
 function getSectionsForSelection(
   node: EditorNode | undefined,
   selectionNodes: EditorNode[],
   shared: SharedScopeBundle,
-): InspectorSection[] {
+): InspectorSectionId[] {
   if (selectionNodes.length === 0) {
     return [];
   }
 
   if (selectionNodes.length > 1) {
-    const sections: InspectorSection[] = [];
-    if (shared.object.definitions.length > 0) {
-      sections.push({
-        id: "object",
-        label: "Object",
-        icon: <ObjectDataIcon width={14} height={14} />,
-      });
-    }
-    if (shared.transform.definitions.length > 0) {
-      sections.push({
-        id: "transform",
-        label: "Transform",
-        icon: <TransformIcon width={14} height={14} />,
-      });
-    }
-    if (shared.geometry.definitions.length > 0) {
-      sections.push({
-        id: "geometry",
-        label: "Geometry",
-        icon: <GeometryIcon width={14} height={14} />,
-      });
-    }
-    if (shared.material.definitions.length > 0) {
-      sections.push({
-        id: "material",
-        label: "Material",
-        icon: <MaterialIcon width={14} height={14} />,
-      });
-    }
+    const sections: InspectorSectionId[] = [];
+    if (shared.object.definitions.length > 0) sections.push("object");
+    if (shared.transform.definitions.length > 0) sections.push("transform");
+    if (shared.geometry.definitions.length > 0) sections.push("geometry");
+    if (shared.material.definitions.length > 0) sections.push("material");
     return sections;
   }
 
@@ -976,46 +966,19 @@ function getSectionsForSelection(
     return [];
   }
 
-  const sections: InspectorSection[] = [
-    {
-      id: "object",
-      label: "Object",
-      icon: <ObjectDataIcon width={14} height={14} />,
-    },
-    {
-      id: "transform",
-      label: "Transform",
-      icon: <TransformIcon width={14} height={14} />,
-    },
-  ];
+  const sections: InspectorSectionId[] = ["object", "transform"];
 
   if (node.type !== "group") {
-    sections.push({
-      id: "geometry",
-      label: "Geometry",
-      icon: <GeometryIcon width={14} height={14} />,
-    });
-    sections.push({
-      id: "material",
-      label: "Material",
-      icon: <MaterialIcon width={14} height={14} />,
-    });
+    sections.push("geometry");
+    sections.push("material");
   }
 
   if (node.type === "text") {
-    sections.push({
-      id: "text",
-      label: "Text",
-      icon: <TextPropertyIcon width={14} height={14} />,
-    });
+    sections.push("text");
   }
 
   if (node.type === "image") {
-    sections.push({
-      id: "image",
-      label: "Image",
-      icon: <ImagePropertyIcon width={14} height={14} />,
-    });
+    sections.push("image");
   }
 
   return sections;

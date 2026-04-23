@@ -239,7 +239,7 @@ function LandingPage({
           </div>
 
           {persistedWorkspace ? (
-            <button type="button" className="landing-action landing-action--primary" onClick={onContinue}>
+            <button type="button" className="landing-action is-primary" onClick={onContinue}>
               <span className="landing-action__ico"><FrameIcon width={14} height={14} /></span>
               <span className="landing-action__body">
                 <span className="landing-action__title">Continue where you left off</span>
@@ -698,6 +698,34 @@ export function App() {
     setIsAnimationPlaying(false);
     setTransientStatus("Animation stopped.");
   }, [setTransientStatus]);
+
+  const handleAnimationSkipBack = useCallback(() => {
+    sceneRef.current?.seekAnimation(0);
+    setCurrentFrame(0);
+  }, []);
+
+  const handleAnimationSkipForward = useCallback(() => {
+    const endFrame = store.getActiveAnimationClip()?.durationFrames ?? 0;
+    sceneRef.current?.seekAnimation(endFrame);
+    setCurrentFrame(endFrame);
+  }, [store]);
+
+  const handleAnimationRewind = useCallback(() => {
+    setCurrentFrame((previous) => {
+      const next = Math.max(0, previous - 10);
+      sceneRef.current?.seekAnimation(next);
+      return next;
+    });
+  }, []);
+
+  const handleAnimationFastForward = useCallback(() => {
+    const endFrame = store.getActiveAnimationClip()?.durationFrames ?? 0;
+    setCurrentFrame((previous) => {
+      const next = Math.min(endFrame, previous + 10);
+      sceneRef.current?.seekAnimation(next);
+      return next;
+    });
+  }, [store]);
 
   const handleAddAnimationTrack = useCallback((property: AnimationPropertyPath) => {
     if (!selectedNode) {
@@ -1840,6 +1868,17 @@ export function App() {
           canRedo={storeView.canRedo}
           currentTool={currentTool}
           viewMode={storeView.viewMode}
+          playback={activeClip ? {
+            isPlaying: isAnimationPlaying,
+            currentFrame,
+            durationFrames: activeClip.durationFrames,
+            onPlayToggle: handleAnimationPlayToggle,
+            onStop: handleAnimationStop,
+            onRewind: handleAnimationRewind,
+            onFastForward: handleAnimationFastForward,
+            onSkipBack: handleAnimationSkipBack,
+            onSkipForward: handleAnimationSkipForward,
+          } : null}
           onComponentNameChange={(value) => store.updateComponentName(value)}
           onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}
           onRedo={() => { if (store.redo()) setTransientStatus("Redo."); }}
@@ -1849,6 +1888,7 @@ export function App() {
           isTimelineVisible={isTimelineVisible}
           onToggleTimeline={toggleTimelineVisibility}
           onSave={() => { void handleSaveProject(); }}
+          onExport={() => { void downloadExportPackage(); }}
           onShortcuts={() => setIsShortcutDialogOpen(true)}
         />
       ) : (
@@ -1974,11 +2014,8 @@ export function App() {
                     nodes={storeView.blueprintNodes}
                     selectedNode={selectedNode}
                     currentFrame={currentFrame}
-                    isPlaying={isAnimationPlaying}
                     selectedTrackId={selectedTrackId}
                     selectedKeyframeId={selectedKeyframeId}
-                    onPlayToggle={handleAnimationPlayToggle}
-                    onStop={handleAnimationStop}
                     onFrameChange={handleTimelineFrameChange}
                     onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
                     onCreateClip={handleCreateAnimationClip}

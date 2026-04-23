@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   ANIMATION_EASE_OPTIONS,
   ANIMATION_PROPERTIES,
@@ -19,21 +19,21 @@ import type {
   EditorNode,
 } from "../../types";
 import { BufferedInput } from "./BufferedInput";
-import { ChevronDownIcon, PlusIcon, TimelineIcon, TrashIcon } from "./icons";
+import { ChevronDownIcon, CopyIcon, PlusIcon, TimelineIcon, TrashIcon } from "./icons";
 
-const FRAME_WIDTH = 13;
-const TIMELINE_INSET = 1;
+function framePercent(frame: number, durationFrames: number): string {
+  const safeDuration = Math.max(durationFrames, 1);
+  const clamped = Math.max(0, Math.min(frame, safeDuration));
+  return `${(clamped / safeDuration) * 100}%`;
+}
 
 interface AnimationTimelineProps {
   animation: ComponentAnimation;
   nodes: EditorNode[];
   selectedNode: EditorNode | undefined;
   currentFrame: number;
-  isPlaying: boolean;
   selectedTrackId: string | null;
   selectedKeyframeId: string | null;
-  onPlayToggle: () => void;
-  onStop: () => void;
   onFrameChange: (frame: number) => void;
   onAnimationConfigChange: (patch: Partial<Pick<AnimationClip, "fps" | "durationFrames">>) => void;
   onCreateClip: () => void;
@@ -59,6 +59,7 @@ interface DragState {
   trackId: string;
   keyframeId: string;
   laneLeft: number;
+  laneWidth: number;
   originFrame: number;
   batchKeyframeIds: string[];
   batchOriginFrames: Map<string, number>;
@@ -67,6 +68,7 @@ interface DragState {
 
 interface ScrubState {
   laneLeft: number;
+  laneWidth: number;
 }
 
 type TimelineViewMode = "selected" | "all";
@@ -77,11 +79,8 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     nodes,
     selectedNode,
     currentFrame,
-    isPlaying,
     selectedTrackId,
     selectedKeyframeId,
-    onPlayToggle,
-    onStop,
     onFrameChange,
     onAnimationConfigChange,
     onCreateClip,
@@ -109,7 +108,6 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   const [scrubState, setScrubState] = useState<ScrubState | null>(null);
   const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<Set<string>>(() => new Set());
   const tracksScrollRef = useRef<HTMLDivElement | null>(null);
-  const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const lanesScrollRef = useRef<HTMLDivElement | null>(null);
 
   const activeClip = useMemo(
@@ -124,7 +122,6 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     selectedNode ? resolvedTracks.filter((track) => track.nodeId === selectedNode.id).map((track) => track.property) : [],
   );
   const availableProperties = ANIMATION_PROPERTIES.filter((entry) => !takenProperties.has(entry.path));
-  const timelineWidth = Math.max(activeClip?.durationFrames ?? 1, 1) * FRAME_WIDTH + (TIMELINE_INSET * 2);
   const visibleTracks = useMemo(() => {
     if (viewMode === "all") {
       return resolvedTracks;
@@ -148,7 +145,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      const frame = positionToFrame(event.clientX, dragState.laneLeft, activeClip?.durationFrames ?? 1);
+      const frame = positionToFrame(event.clientX, dragState.laneLeft, dragState.laneWidth, activeClip?.durationFrames ?? 1);
       if (dragState.batchKeyframeIds.length > 1) {
         const delta = frame - dragState.originFrame;
         if (delta !== dragState.lastDelta) {
@@ -182,7 +179,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      onFrameChange(positionToFrame(event.clientX, scrubState.laneLeft, activeClip?.durationFrames ?? 1));
+      onFrameChange(positionToFrame(event.clientX, scrubState.laneLeft, scrubState.laneWidth, activeClip?.durationFrames ?? 1));
     };
 
     const handlePointerUp = () => {
@@ -199,16 +196,13 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
 
   useEffect(() => {
     const leftBody = tracksScrollRef.current;
-    const rulerScroll = rulerScrollRef.current;
     const rightBody = lanesScrollRef.current;
-    if (!leftBody || !rulerScroll || !rightBody) {
+    if (!leftBody || !rightBody) {
       return;
     }
 
     let syncingLeftTop = false;
     let syncingRightTop = false;
-    let syncingRulerLeft = false;
-    let syncingRightLeft = false;
 
     const handleLeftScroll = () => {
       if (syncingLeftTop) {
@@ -220,42 +214,23 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
       rightBody.scrollTop = leftBody.scrollTop;
     };
 
-    const handleRulerScroll = () => {
-      if (syncingRulerLeft) {
-        syncingRulerLeft = false;
-        return;
-      }
-
-      syncingRightLeft = true;
-      rightBody.scrollLeft = rulerScroll.scrollLeft;
-    };
-
     const handleRightScroll = () => {
       if (syncingRightTop) {
         syncingRightTop = false;
-      } else {
-        syncingLeftTop = true;
-        leftBody.scrollTop = rightBody.scrollTop;
+        return;
       }
 
-      if (syncingRightLeft) {
-        syncingRightLeft = false;
-      } else {
-        syncingRulerLeft = true;
-        rulerScroll.scrollLeft = rightBody.scrollLeft;
-      }
+      syncingLeftTop = true;
+      leftBody.scrollTop = rightBody.scrollTop;
     };
 
     leftBody.addEventListener("scroll", handleLeftScroll);
-    rulerScroll.addEventListener("scroll", handleRulerScroll);
     rightBody.addEventListener("scroll", handleRightScroll);
 
     leftBody.scrollTop = rightBody.scrollTop;
-    rulerScroll.scrollLeft = rightBody.scrollLeft;
 
     return () => {
       leftBody.removeEventListener("scroll", handleLeftScroll);
-      rulerScroll.removeEventListener("scroll", handleRulerScroll);
       rightBody.removeEventListener("scroll", handleRightScroll);
     };
   }, [viewMode, visibleGroupedTracks.length]);
@@ -341,10 +316,10 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   }, [onRemoveKeyframes, onSelectKeyframe, selectedKeyframeIds, selectedTrackId]);
 
   const durationFrames = activeClip?.durationFrames ?? 1;
-  const rulerStyle: CSSProperties = { "--tl-width": `${timelineWidth}px` } as CSSProperties;
 
   const rulerTicks: Array<{ frame: number; isMajor: boolean }> = [];
-  for (let frame = 0; frame <= durationFrames; frame += 1) {
+  const rulerStep = durationFrames >= 60 ? 5 : 1;
+  for (let frame = 0; frame <= durationFrames; frame += rulerStep) {
     rulerTicks.push({ frame, isMajor: frame % 10 === 0 });
   }
 
@@ -433,20 +408,6 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
             />
           </span>
 
-          <button
-            type="button"
-            className={`ibtn${isPlaying ? " is-active" : ""}`}
-            onClick={onPlayToggle}
-            aria-label={isPlaying ? "Pause" : "Play"}
-            title={isPlaying ? "Pause" : "Play"}
-          >
-            <span style={{ fontSize: 10, lineHeight: 1 }}>{isPlaying ? "||" : "▶"}</span>
-          </button>
-
-          <button type="button" className="ibtn" onClick={onStop} aria-label="Stop" title="Stop">
-            <span style={{ fontSize: 10, lineHeight: 1 }}>■</span>
-          </button>
-
           {activeClip ? (
             <button
               type="button"
@@ -455,7 +416,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
               aria-label="Duplicate clip"
               title="Duplicate clip"
             >
-              <span style={{ fontSize: 10, lineHeight: 1 }}>++</span>
+              <CopyIcon width={12} height={12} />
             </button>
           ) : null}
 
@@ -484,28 +445,29 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         </div>
       </div>
 
-      <div className="tl__ruler" ref={rulerScrollRef}>
+      <div className="tl__ruler">
         <div
           className="tl__ruler-inner"
-          style={rulerStyle}
           onPointerDown={(event) => {
-            const laneLeft = event.currentTarget.getBoundingClientRect().left;
-            onFrameChange(positionToFrame(event.clientX, laneLeft, durationFrames));
-            setScrubState({ laneLeft });
+            const rect = event.currentTarget.getBoundingClientRect();
+            const laneLeft = rect.left;
+            const laneWidth = rect.width;
+            onFrameChange(positionToFrame(event.clientX, laneLeft, laneWidth, durationFrames));
+            setScrubState({ laneLeft, laneWidth });
           }}
         >
           {rulerTicks.map(({ frame, isMajor }) => (
             <div
               key={frame}
               className={`tl__ruler-tick${isMajor ? " is-major" : " is-minor"}`}
-              style={{ left: TIMELINE_INSET + frame * FRAME_WIDTH }}
+              style={{ left: framePercent(frame, durationFrames) }}
             />
           ))}
           {rulerTicks.filter((tick) => tick.isMajor).map(({ frame }) => (
             <div
               key={`lbl-${frame}`}
               className="tl__ruler-line"
-              style={{ left: TIMELINE_INSET + frame * FRAME_WIDTH }}
+              style={{ left: framePercent(frame, durationFrames) }}
             >
               {frame}
             </div>
@@ -633,7 +595,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         </div>
 
         <div className="tl__lanes" ref={lanesScrollRef}>
-          <div className="tl__lanes-inner" style={{ width: timelineWidth }}>
+          <div className="tl__lanes-inner">
             {/* Spacer lane matching the property-selector track */}
             <div className="tl-lane" />
 
@@ -649,17 +611,19 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                       track={track}
                       durationFrames={durationFrames}
                       currentFrame={currentFrame}
-                      timelineWidth={timelineWidth}
                       isSelected={trackIsSelected}
                       isMuted={isTrackMuted(track)}
                       selectedKeyframeIds={selectedKeyframeIdsForTrack}
                       onSelectTrack={() => onSelectTrack(track.id)}
                       onPickKeyframe={(keyframeId, additive) => handleKeyframePick(track.id, keyframeId, additive)}
                       onFrameChange={onFrameChange}
-                      onScrubStart={(laneLeft) => setScrubState({ laneLeft })}
+                      onScrubStart={(laneLeft, laneWidth) => setScrubState({ laneLeft, laneWidth })}
                       onStartKeyframeDrag={(event, keyframeId) => {
                         onBeginKeyframeDrag();
-                        const laneLeft = event.currentTarget.parentElement?.getBoundingClientRect().left ?? 0;
+                        const laneElement = event.currentTarget.parentElement;
+                        const rect = laneElement?.getBoundingClientRect();
+                        const laneLeft = rect?.left ?? 0;
+                        const laneWidth = rect?.width ?? 0;
                         const batchIds = trackIsSelected && selectedKeyframeIds.has(keyframeId) && selectedKeyframeIds.size > 1
                           ? Array.from(selectedKeyframeIds)
                           : [keyframeId];
@@ -675,6 +639,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                           trackId: track.id,
                           keyframeId,
                           laneLeft,
+                          laneWidth,
                           originFrame: primaryOrigin,
                           batchKeyframeIds: batchIds,
                           batchOriginFrames: originMap,
@@ -689,7 +654,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
 
             <div
               className="tl__playhead"
-              style={{ left: TIMELINE_INSET + currentFrame * FRAME_WIDTH }}
+              style={{ left: framePercent(currentFrame, durationFrames) }}
             />
           </div>
         </div>
@@ -806,14 +771,13 @@ interface TrackLaneProps {
   track: AnimationTrack;
   durationFrames: number;
   currentFrame: number;
-  timelineWidth: number;
   isSelected: boolean;
   isMuted: boolean;
   selectedKeyframeIds: Set<string> | null;
   onSelectTrack: () => void;
   onPickKeyframe: (keyframeId: string, additive: boolean) => void;
   onFrameChange: (frame: number) => void;
-  onScrubStart: (laneLeft: number) => void;
+  onScrubStart: (laneLeft: number, laneWidth: number) => void;
   onStartKeyframeDrag: (event: ReactPointerEvent<HTMLButtonElement>, keyframeId: string) => void;
 }
 
@@ -822,7 +786,6 @@ function TrackLane(props: TrackLaneProps) {
     track,
     durationFrames,
     currentFrame,
-    timelineWidth,
     isSelected,
     isMuted,
     selectedKeyframeIds,
@@ -836,15 +799,16 @@ function TrackLane(props: TrackLaneProps) {
   return (
     <div
       className={`tl-lane${isSelected ? " is-selected" : ""}${isMuted ? " is-muted" : ""}`}
-      style={{ width: timelineWidth }}
       onPointerDown={(event) => {
         if (event.target !== event.currentTarget) {
           return;
         }
-        const laneLeft = event.currentTarget.getBoundingClientRect().left;
+        const rect = event.currentTarget.getBoundingClientRect();
+        const laneLeft = rect.left;
+        const laneWidth = rect.width;
         onSelectTrack();
-        onFrameChange(positionToFrame(event.clientX, laneLeft, durationFrames));
-        onScrubStart(laneLeft);
+        onFrameChange(positionToFrame(event.clientX, laneLeft, laneWidth, durationFrames));
+        onScrubStart(laneLeft, laneWidth);
       }}
     >
       {track.keyframes.map((keyframe) => {
@@ -854,7 +818,7 @@ function TrackLane(props: TrackLaneProps) {
             key={keyframe.id}
             type="button"
             className={`tl-kf${isKeyframeSelected ? " is-selected" : ""}${currentFrame === keyframe.frame ? " is-current" : ""}`}
-            style={{ left: TIMELINE_INSET + keyframe.frame * FRAME_WIDTH }}
+            style={{ left: framePercent(keyframe.frame, durationFrames) }}
             onClick={(event) => {
               event.stopPropagation();
               const additive = event.shiftKey || event.ctrlKey || event.metaKey;
@@ -909,9 +873,16 @@ function getResolvedClipTracks(animation: ComponentAnimation, clipId: string): A
   return clip?.tracks ?? [];
 }
 
-function positionToFrame(clientX: number, laneLeft: number, durationFrames: number): number {
-  const relative = clientX - laneLeft - TIMELINE_INSET;
-  return Math.max(0, Math.min(durationFrames, Math.round(relative / FRAME_WIDTH)));
+function positionToFrame(
+  clientX: number,
+  laneLeft: number,
+  laneWidth: number,
+  durationFrames: number,
+): number {
+  const safeWidth = Math.max(laneWidth, 1);
+  const safeDuration = Math.max(durationFrames, 1);
+  const ratio = (clientX - laneLeft) / safeWidth;
+  return Math.max(0, Math.min(safeDuration, Math.round(ratio * safeDuration)));
 }
 
 function displayValueForInput(property: AnimationPropertyPath, value: number): number {

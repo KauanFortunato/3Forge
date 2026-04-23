@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import type { EditorNode } from "../../types";
 import type { TreeBranch, TreeDropTarget } from "../ui-types";
-import { ChevronDownIcon, ChevronRightIcon, ClosedEyeIcon, EyeIcon, GroupIcon, MeshIcon } from "./icons";
+import { ChevronDownIcon, ChevronRightIcon, ClosedEyeIcon, EyeIcon, GroupIcon, MeshIcon, SearchIcon } from "./icons";
 
 interface SceneGraphPanelProps {
   nodes: EditorNode[];
@@ -41,6 +41,13 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
   const lastSelectionRevealKeyRef = useRef<string | null>(null);
   const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<TreeDropTarget | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const trimmedQuery = searchQuery.trim();
+  const hasActiveQuery = trimmedQuery.length > 0;
+  const visibleNodeIds = useMemo(
+    () => (hasActiveQuery ? buildQueryMatchSet(branches, trimmedQuery) : null),
+    [branches, hasActiveQuery, trimmedQuery],
+  );
 
   useEffect(() => {
     const next = new Set<string>();
@@ -108,54 +115,89 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
     setDropTarget(null);
   };
 
-  const rows: BranchRow[] = useMemo(() => flattenBranches(branches, collapsedIds, 0, null), [branches, collapsedIds]);
+  const allRows: BranchRow[] = useMemo(() => flattenBranches(branches, collapsedIds, 0, null), [branches, collapsedIds]);
+  const rows: BranchRow[] = useMemo(() => {
+    if (!visibleNodeIds) {
+      return allRows;
+    }
+    return allRows.filter((row) => visibleNodeIds.has(row.branch.node.id));
+  }, [allRows, visibleNodeIds]);
+  const showEmptyState = hasActiveQuery && rows.length === 0;
 
   return (
-    <div
-      className="sg-tree"
-      role="tree"
-      aria-label="Scene hierarchy"
-      tabIndex={selectedNodeIds.length === 0 ? 0 : -1}
-      onKeyDown={(event) => {
-        if (selectedNodeIds.length > 0 || !firstBranchId) {
-          return;
-        }
+    <div className="sg-panel">
+      <div className="sg-toolbar">
+        <div className={`sg-search${hasActiveQuery ? " is-active" : ""}`}>
+          <span className="sg-search__icon" aria-hidden="true">
+            <SearchIcon width={11} height={11} />
+          </span>
+          <input
+            type="text"
+            className="sg-search__input"
+            placeholder="Search nodes…"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && searchQuery.length > 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                setSearchQuery("");
+              }
+            }}
+            aria-label="Search nodes"
+          />
+        </div>
+      </div>
+      {showEmptyState ? (
+        <div className="sg-tree__empty" role="status">No nodes match</div>
+      ) : (
+        <div
+          className="sg-tree"
+          role="tree"
+          aria-label="Scene hierarchy"
+          tabIndex={selectedNodeIds.length === 0 ? 0 : -1}
+          onKeyDown={(event) => {
+            if (selectedNodeIds.length > 0 || !firstBranchId) {
+              return;
+            }
 
-        if (event.key === "Enter" || event.key === " " || event.key === "ArrowDown" || event.key === "ArrowUp") {
-          event.preventDefault();
-          onSelectNode(firstBranchId, false);
-        }
-      }}
-      onContextMenu={(event) => {
-        if (event.target === event.currentTarget) {
-          event.preventDefault();
-          onContextMenu(event, null);
-        }
-      }}
-    >
-      {rows.map((row) => (
-        <SceneGraphRow
-          key={row.branch.node.id}
-          row={row}
-          selectedNodeId={selectedNodeId}
-          selectedNodeIds={selectedNodeIdsSet}
-          selectedPathIds={selectedPathIds}
-          collapsedIds={collapsedIds}
-          draggedNodeId={draggedNodeId}
-          dropTarget={dropTarget}
-          animatedNodeIds={animatedNodeIds}
-          onToggleNode={toggleNode}
-          onSelectNode={onSelectNode}
-          onMoveNode={onMoveNode}
-          onToggleVisibility={onToggleVisibility}
-          onContextMenu={onContextMenu}
-          onDragStateChange={(nextDragged, nextDropTarget) => {
-            setDraggedNodeId(nextDragged);
-            setDropTarget(nextDropTarget);
+            if (event.key === "Enter" || event.key === " " || event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              onSelectNode(firstBranchId, false);
+            }
           }}
-          onClearDragState={clearDragState}
-        />
-      ))}
+          onContextMenu={(event) => {
+            if (event.target === event.currentTarget) {
+              event.preventDefault();
+              onContextMenu(event, null);
+            }
+          }}
+        >
+          {rows.map((row) => (
+            <SceneGraphRow
+              key={row.branch.node.id}
+              row={row}
+              selectedNodeId={selectedNodeId}
+              selectedNodeIds={selectedNodeIdsSet}
+              selectedPathIds={selectedPathIds}
+              collapsedIds={collapsedIds}
+              draggedNodeId={draggedNodeId}
+              dropTarget={dropTarget}
+              animatedNodeIds={animatedNodeIds}
+              onToggleNode={toggleNode}
+              onSelectNode={onSelectNode}
+              onMoveNode={onMoveNode}
+              onToggleVisibility={onToggleVisibility}
+              onContextMenu={onContextMenu}
+              onDragStateChange={(nextDragged, nextDropTarget) => {
+                setDraggedNodeId(nextDragged);
+                setDropTarget(nextDropTarget);
+              }}
+              onClearDragState={clearDragState}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -389,6 +431,39 @@ function buildSelectedPathSet(nodeMap: Map<string, EditorNode>, selectedNodeIds:
   }
 
   return selectedPathIds;
+}
+
+function buildQueryMatchSet(branches: TreeBranch[], query: string): Set<string> {
+  const needle = query.toLowerCase();
+  const result = new Set<string>();
+
+  const visit = (branch: TreeBranch, ancestors: string[]): boolean => {
+    let subtreeMatches = false;
+    for (const child of branch.children) {
+      if (visit(child, [...ancestors, branch.node.id])) {
+        subtreeMatches = true;
+      }
+    }
+
+    const selfMatches = branch.node.name.toLowerCase().includes(needle);
+    if (selfMatches || subtreeMatches) {
+      result.add(branch.node.id);
+      if (selfMatches) {
+        for (const ancestorId of ancestors) {
+          result.add(ancestorId);
+        }
+      }
+      return true;
+    }
+
+    return false;
+  };
+
+  for (const branch of branches) {
+    visit(branch, []);
+  }
+
+  return result;
 }
 
 function buildSelectionRevealSet(selectedNodeIds: string[], selectedPathIds: Set<string>): Set<string> {

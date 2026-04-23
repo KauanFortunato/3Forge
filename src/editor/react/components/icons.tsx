@@ -415,3 +415,151 @@ export function HelpIcon(props: IconProps) {
     </Ico>
   );
 }
+
+export function SearchIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <circle cx="6.2" cy="6.2" r="4" />
+      <path d="m12.2 12.2 -3-3" />
+    </Ico>
+  );
+}
+
+export function PlayIcon(props: IconProps) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M4 2.6v8.8l7-4.4z" />
+    </svg>
+  );
+}
+
+export function PauseIcon(props: IconProps) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      stroke="none"
+      aria-hidden="true"
+      {...props}
+    >
+      <rect x="3.6" y="2.6" width="2.4" height="8.8" rx="0.4" />
+      <rect x="8" y="2.6" width="2.4" height="8.8" rx="0.4" />
+    </svg>
+  );
+}
+
+export function StopIcon(props: IconProps) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      stroke="none"
+      aria-hidden="true"
+      {...props}
+    >
+      <rect x="3.4" y="3.4" width="7.2" height="7.2" rx="0.6" />
+    </svg>
+  );
+}
+
+export function SkipBackIcon(props: IconProps) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M11.2 11.4 5.4 7l5.8-4.4z" />
+      <path d="M3 11V3" fill="none" />
+    </svg>
+  );
+}
+
+export function SkipForwardIcon(props: IconProps) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M2.8 2.6 8.6 7l-5.8 4.4z" />
+      <path d="M11 3v8" fill="none" />
+    </svg>
+  );
+}
+
+export function RewindIcon(props: IconProps) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M6.6 11.2 1.6 7l5-4.2z" />
+      <path d="M12.4 11.2 7.4 7l5-4.2z" />
+    </svg>
+  );
+}
+
+export function FastForwardIcon(props: IconProps) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="1"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M1.6 2.8 6.6 7 1.6 11.2z" />
+      <path d="M7.4 2.8 12.4 7 7.4 11.2z" />
+    </svg>
+  );
+}
+
+export function ExportIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M7 1.8v7.8" />
+      <path d="m4.4 4.4 2.6-2.6 2.6 2.6" />
+      <path d="M2.2 9.4v1.8a1.2 1.2 0 0 0 1.2 1.2h7.2a1.2 1.2 0 0 0 1.2-1.2V9.4" />
+    </Ico>
+  );
+}
