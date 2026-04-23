@@ -2,13 +2,15 @@ import type { SVGProps } from "react";
 
 type IconProps = SVGProps<SVGSVGElement>;
 
-function BaseIcon(props: IconProps) {
+function Ico(props: IconProps) {
   return (
     <svg
-      viewBox="0 0 20 20"
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.2"
+      strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
@@ -17,356 +19,399 @@ function BaseIcon(props: IconProps) {
   );
 }
 
-function BootstrapIcon(props: IconProps) {
-  const { children, ...rest } = props;
+export function LogoGlyph(props: IconProps) {
+  // Brand mark — the sole filled icon (3F hexagon).
   return (
     <svg
-      viewBox="0 0 16 16"
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
       fill="currentColor"
       stroke="none"
       aria-hidden="true"
-      {...rest}
+      {...props}
     >
-      <g transform="translate(1.2, 1.2) scale(0.85)">
-        {children}
-      </g>
-    </svg>
-  );
-}
-
-export function LogoGlyph(props: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
-      <path d="M12 2 4 6.5v11L12 22l8-4.5v-11L12 2Z" fill="currentColor" opacity="0.15" />
-      <path d="M12 3.8 5.6 7.3v9.4L12 20.2l6.4-3.5V7.3L12 3.8Z" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M12 3.8v16.4M5.6 7.3 12 11l6.4-3.7" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M3 2h5.2L11 4.8V12H3V2Zm1.7 2.9v5.8h4.6V6L7.6 4.3H5.6l-.9.6Zm1.8 1.2h1.2v1.2H6.5V6.1Zm0 1.8h1.2V9.1H6.5V7.9Z" />
     </svg>
   );
 }
 
 export function UndoIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path fillRule="evenodd" d="M8 3a5 5 0 1 1-4.546 2.914.5.5 0 0 0-.908-.417A6 6 0 1 0 8 2z" />
-      <path d="M8 4.466V.534a.25.25 0 0 0-.41-.192L5.23 2.308a.25.25 0 0 0 0 .384l2.36 1.966A.25.25 0 0 0 8 4.466" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M2.4 6.2h6.2a3 3 0 0 1 0 6H5.2" />
+      <path d="m4.6 4 -2.2 2.2 2.2 2.2" />
+    </Ico>
   );
 }
 
 export function RedoIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path fillRule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2z" />
-      <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M11.6 6.2H5.4a3 3 0 0 0 0 6h3.4" />
+      <path d="m9.4 4 2.2 2.2-2.2 2.2" />
+    </Ico>
   );
 }
 
 export function CursorIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M14.082 2.182a.5.5 0 0 1 .103.557L8.528 15.467a.5.5 0 0 1-.917-.007L5.57 10.694.803 8.652a.5.5 0 0 1-.006-.916l12.728-5.657a.5.5 0 0 1 .556.103zM2.25 8.184l3.897 1.67a.5.5 0 0 1 .262.263l1.67 3.897L12.743 3.52z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="m2.4 2.4 4.2 9.9 1.5-4.3 4.3-1.5z" />
+    </Ico>
   );
 }
 
 export function MoveIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path fillRule="evenodd" d="M7.646.146a.5.5 0 0 1 .708 0l2 2a.5.5 0 0 1-.708.708L8.5 1.707V5.5a.5.5 0 0 1-1 0V1.707L6.354 2.854a.5.5 0 1 1-.708-.708zM8 10a.5.5 0 0 1 .5.5v3.793l1.146-1.147a.5.5 0 0 1 .708.708l-2 2a.5.5 0 0 1-.708 0l-2-2a.5.5 0 0 1 .708-.708L7.5 14.293V10.5A.5.5 0 0 1 8 10M.146 8.354a.5.5 0 0 1 0-.708l2-2a.5.5 0 1 1 .708.708L1.707 7.5H5.5a.5.5 0 0 1 0 1H1.707l1.147 1.146a.5.5 0 0 1-.708.708zM10 8a.5.5 0 0 1 .5-.5h3.793l-1.147-1.146a.5.5 0 0 1 .708-.708l2 2a.5.5 0 0 1 0 .708l-2 2a.5.5 0 0 1-.708-.708L14.293 8.5H10.5A.5.5 0 0 1 10 8" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M7 1.2v11.6M1.2 7h11.6" />
+      <path d="m3.2 5 -1.8 2 1.8 2" />
+      <path d="m10.8 5 1.8 2-1.8 2" />
+      <path d="M5 3.2 7 1.4l2 1.8" />
+      <path d="M5 10.8 7 12.6l2-1.8" />
+    </Ico>
   );
 }
 
 export function RotateIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41m-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9" />
-      <path fillRule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5 5 0 0 0 8 3M3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M12.3 7a5.3 5.3 0 1 1-5.3-5.3" />
+      <path d="M12.3 1.8v3.5H8.8" />
+    </Ico>
   );
 }
 
 export function ScaleIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <path d="M4 16 16 4" />
-      <path d="M4 8V4h4" />
-      <path d="M12 16h4v-4" />
-      <circle cx="4" cy="16" r="1.5" />
-      <circle cx="16" cy="4" r="1.5" />
-    </BaseIcon>
+    <Ico {...props}>
+      <path d="M8 2.4h3.6V6" />
+      <path d="M6 11.6H2.4V8" />
+      <path d="m11.6 2.4 -4.1 4.1" />
+      <path d="m2.4 11.6 4.1-4.1" />
+    </Ico>
   );
 }
 
 export function FrameIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <path d="M4 8V4h4M12 4h4v4M16 12v4h-4M8 16H4v-4" />
-      <rect x="7" y="7" width="6" height="6" rx="1" />
-    </BaseIcon>
+    <Ico {...props}>
+      <path d="M2.4 4.8V2.4h2.4" />
+      <path d="M9.2 2.4h2.4v2.4" />
+      <path d="M11.6 9.2v2.4H9.2" />
+      <path d="M4.8 11.6H2.4V9.2" />
+      <circle cx="7" cy="7" r="1.5" />
+    </Ico>
   );
 }
 
 export function ChevronRightIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <path d="m8 5 5 5-5 5" />
-    </BaseIcon>
+    <Ico {...props}>
+      <path d="m5.2 3.4 3.6 3.6-3.6 3.6" />
+    </Ico>
   );
 }
 
 export function ChevronDownIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <path d="m5 8 5 5 5-5" />
-    </BaseIcon>
+    <Ico {...props}>
+      <path d="m3.4 5.2 3.6 3.6 3.6-3.6" />
+    </Ico>
   );
 }
 
 export function StarIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M2.866 14.85c-.078.444.36.791.746.593l4.39-2.256 4.389 2.256c.386.198.824-.149.746-.592l-.83-4.73 3.522-3.356c.33-.314.16-.888-.282-.95l-4.898-.696L8.465.792a.513.513 0 0 0-.927 0L5.354 5.12l-4.898.696c-.441.062-.612.636-.283.95l3.523 3.356-.83 4.73zm4.905-2.767-3.686 1.894.694-3.957a.565.565 0 0 0-.163-.505L1.71 6.745l4.052-.576a.525.525 0 0 0 .393-.288L8 2.223l1.847 3.658a.525.525 0 0 0 .393.288l4.052.575-2.906 2.77a.565.565 0 0 0-.163.506l.694 3.957-3.686-1.894a.503.503 0 0 0-.461 0z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="m7 1.6 1.66 3.37 3.72.54-2.69 2.62.63 3.71L7 10.08 3.68 11.84l.63-3.71L1.62 5.5l3.72-.54z" />
+    </Ico>
   );
 }
 
 export function CircleIcon(props: IconProps) {
   return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true" {...props}>
-      <circle cx="8" cy="8" r="6" />
-    </svg>
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="4" />
+    </Ico>
   );
 }
 
 export function CircleFilledIcon(props: IconProps) {
   return (
-    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" {...props}>
-      <circle cx="8" cy="8" r="4" />
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 14 14"
+      fill="currentColor"
+      aria-hidden="true"
+      {...props}
+    >
+      <circle cx="7" cy="7" r="4" />
     </svg>
   );
 }
 
 export function FileIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M14 4.5V14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2h5.5zm-3 0A1.5 1.5 0 0 1 9.5 3V1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M8.2 1.4H4a1.2 1.2 0 0 0-1.2 1.2v8.8A1.2 1.2 0 0 0 4 12.6h6a1.2 1.2 0 0 0 1.2-1.2V4.4z" />
+      <path d="M8.2 1.4v3h3" />
+    </Ico>
   );
 }
 
 export function ShortcutIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path fillRule="evenodd" d="M6.364 13.5a.5.5 0 0 0 .5.5H13.5a1.5 1.5 0 0 0 1.5-1.5v-10A1.5 1.5 0 0 0 13.5 1h-10A1.5 1.5 0 0 0 2 2.5v6.636a.5.5 0 1 0 1 0V2.5a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H6.864a.5.5 0 0 0-.5.5" />
-      <path fillRule="evenodd" d="M11 5.5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0 0 1h3.793l-8.147 8.146a.5.5 0 0 0 .708.708L10 6.707V10.5a.5.5 0 0 0 1 0z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <rect x="1.2" y="3.6" width="11.6" height="6.8" rx="1.2" />
+      <path d="M3.6 5.8h.01M5.6 5.8h.01M7.6 5.8h.01M9.6 5.8h.01M3.6 8.2h.01M9.6 8.2h.01M4.8 8.2h3.6" />
+    </Ico>
   );
 }
 
 export function InfoIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <circle cx="10" cy="10" r="7" />
-      <path d="M10 9.2v4.1" />
-      <path d="M10 6.4h.01" />
-    </BaseIcon>
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="5.3" />
+      <path d="M7 9.4V6.6M7 4.6h.01" />
+    </Ico>
   );
 }
 
 export function CopyIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <rect x="7" y="7" width="9" height="10" rx="1.5" />
-      <path d="M5 13H4a1 1 0 0 1-1-1V4.5A1.5 1.5 0 0 1 4.5 3H11a1 1 0 0 1 1 1v1" />
-    </BaseIcon>
+    <Ico {...props}>
+      <rect x="5" y="5" width="7.8" height="7.8" rx="1.2" />
+      <path d="M3 8.4h-.6A1.2 1.2 0 0 1 1.2 7.2V2.4A1.2 1.2 0 0 1 2.4 1.2h4.8a1.2 1.2 0 0 1 1.2 1.2V3" />
+    </Ico>
   );
 }
 
 export function DownloadIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5" />
-      <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M7 1.8v7.2" />
+      <path d="m4.6 6.6 2.4 2.4 2.4-2.4" />
+      <path d="M11.8 12.2H2.2" />
+    </Ico>
   );
 }
 
 export function TrashIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <path d="M4 6h12" />
-      <path d="M7 6V4.6A1.6 1.6 0 0 1 8.6 3h2.8A1.6 1.6 0 0 1 13 4.6V6" />
-      <path d="M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6" />
-      <path d="M8.5 9.2v4.2M11.5 9.2v4.2" />
-    </BaseIcon>
+    <Ico {...props}>
+      <path d="M1.8 3.6h10.4" />
+      <path d="M11.2 3.6v8.2a1.2 1.2 0 0 1-1.2 1.2H4a1.2 1.2 0 0 1-1.2-1.2V3.6" />
+      <path d="M4.8 3.6V2.4a1.2 1.2 0 0 1 1.2-1.2h2a1.2 1.2 0 0 1 1.2 1.2v1.2" />
+    </Ico>
   );
 }
 
 export function GroupIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <path d="M3 5.5h5.5v4H3z" />
-      <path d="M11.5 5.5H17v4h-5.5z" />
-      <path d="M7.2 12H12.8v4.5H7.2z" />
-      <path d="M5.8 9.5v1.4m8.4-1.4v1.4M10 10.9V12" />
-    </BaseIcon>
+    <Ico {...props}>
+      <path d="m7 1.4 5.8 2.9L7 7.2 1.2 4.3z" />
+      <path d="m1.2 9.7 5.8 2.9 5.8-2.9" />
+      <path d="m1.2 7 5.8 2.9L12.8 7" />
+    </Ico>
   );
 }
 
 export function MeshIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <path d="M8.186 1.113a.5.5 0 0 0-.372 0L1.846 3.5 8 5.961 14.154 3.5zM15 4.239l-6.5 2.6v7.922l6.5-2.6V4.24zM7.5 14.762V6.838L1 4.239v7.923zM7.443.184a1.5 1.5 0 0 1 1.114 0l7.129 2.852A.5.5 0 0 1 16 3.5v8.662a1 1 0 0 1-.629.928l-7.185 2.874a.5.5 0 0 1-.372 0L.63 13.09a1 1 0 0 1-.63-.928V3.5a.5.5 0 0 1 .314-.464z" />
-    </BaseIcon>
+    <Ico {...props}>
+      <path d="M12.2 9.4V4.6a1.2 1.2 0 0 0-.6-1.04l-4.2-2.4a1.2 1.2 0 0 0-1.2 0l-4.2 2.4A1.2 1.2 0 0 0 1.4 4.6v4.8a1.2 1.2 0 0 0 .6 1.04l4.2 2.4a1.2 1.2 0 0 0 1.2 0l4.2-2.4a1.2 1.2 0 0 0 .6-1.04z" />
+      <path d="m1.56 4.18 5.44 3.16 5.44-3.16" />
+      <path d="M7 13.24V7.34" />
+    </Ico>
   );
 }
 
 export function TransformIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path fillRule="evenodd" d="M7.646.146a.5.5 0 0 1 .708 0l2 2a.5.5 0 0 1-.708.708L8.5 1.707V5.5a.5.5 0 0 1-1 0V1.707L6.354 2.854a.5.5 0 1 1-.708-.708zM8 10a.5.5 0 0 1 .5.5v3.793l1.146-1.147a.5.5 0 0 1 .708.708l-2 2a.5.5 0 0 1-.708 0l-2-2a.5.5 0 0 1 .708-.708L7.5 14.293V10.5A.5.5 0 0 1 8 10M.146 8.354a.5.5 0 0 1 0-.708l2-2a.5.5 0 1 1 .708.708L1.707 7.5H5.5a.5.5 0 0 1 0 1H1.707l1.147 1.146a.5.5 0 0 1-.708.708zM10 8a.5.5 0 0 1 .5-.5h3.793l-1.147-1.146a.5.5 0 0 1 .708-.708l2 2a.5.5 0 0 1 0 .708l-2 2a.5.5 0 0 1-.708-.708L14.293 8.5H10.5A.5.5 0 0 1 10 8" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M7 1.2v11.6M1.2 7h11.6" />
+      <path d="m3.2 5 -1.8 2 1.8 2" />
+      <path d="m10.8 5 1.8 2-1.8 2" />
+      <path d="M5 3.2 7 1.4l2 1.8" />
+      <path d="M5 10.8 7 12.6l2-1.8" />
+    </Ico>
   );
 }
 
 export function GeometryIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M5 2V0H0v5h2v6H0v5h5v-2h6v2h5v-5h-2V5h2V0h-5v2zm6 1v2h2v6h-2v2H5v-2H3V5h2V3zm1-2h3v3h-3zm3 11v3h-3v-3zM4 15H1v-3h3zM1 4V1h3v3z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M12.2 9.4V4.6a1.2 1.2 0 0 0-.6-1.04l-4.2-2.4a1.2 1.2 0 0 0-1.2 0l-4.2 2.4A1.2 1.2 0 0 0 1.4 4.6v4.8a1.2 1.2 0 0 0 .6 1.04l4.2 2.4a1.2 1.2 0 0 0 1.2 0l4.2-2.4a1.2 1.2 0 0 0 .6-1.04z" />
+      <path d="m1.56 4.18 5.44 3.16 5.44-3.16" />
+      <path d="M7 13.24V7.34" />
+    </Ico>
   );
 }
 
 export function MaterialIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path fillRule="evenodd" d="M7.21.8C7.69.295 8 0 8 0q.164.544.371 1.038c.812 1.946 2.073 3.35 3.197 4.6C12.878 7.096 14 8.345 14 10a6 6 0 0 1-12 0C2 6.668 5.58 2.517 7.21.8m.413 1.021A31 31 0 0 0 5.794 3.99c-.726.95-1.436 2.008-1.96 3.07C3.304 8.133 3 9.138 3 10c0 0 2.5 1.5 5 .5s5-.5 5-.5c0-1.201-.796-2.157-2.181-3.7l-.03-.032C9.75 5.11 8.5 3.72 7.623 1.82z" />
-      <path fillRule="evenodd" d="M4.553 7.776c.82-1.641 1.717-2.753 2.093-3.13l.708.708c-.29.29-1.128 1.311-1.907 2.87z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <circle cx="8" cy="3.8" r="0.3" fill="currentColor" />
+      <circle cx="10.3" cy="6.1" r="0.3" fill="currentColor" />
+      <circle cx="5" cy="4.4" r="0.3" fill="currentColor" />
+      <circle cx="3.8" cy="7.3" r="0.3" fill="currentColor" />
+      <path d="M7 1.2a5.8 5.8 0 1 0 0 11.6 1.45 1.45 0 0 0 1.45-1.45 1.45 1.45 0 0 1 1.45-1.45h.87a2.03 2.03 0 0 0 2.03-2.03A5.8 5.8 0 0 0 7 1.2Z" />
+    </Ico>
   );
 }
 
 export function TextPropertyIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M12.258 3h-8.51l-.083 2.46h.479c.26-1.544.758-1.783 2.693-1.845l.424-.013v7.827c0 .663-.144.82-1.3.923v.52h4.082v-.52c-1.162-.103-1.306-.26-1.306-.923V3.602l.431.013c1.934.062 2.434.301 2.693 1.846h.479z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M2.4 3.4V2.4h9.2v1" />
+      <path d="M5.2 11.6h3.6" />
+      <path d="M7 2.4v9.2" />
+    </Ico>
   );
 }
 
 export function ImagePropertyIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <rect x="3" y="4" width="14" height="12" rx="1.6" />
-      <circle cx="7.3" cy="8" r="1.1" />
-      <path d="m5 14 3.2-3.2 2.4 2.4 2.3-2.3L15 14" />
-    </BaseIcon>
+    <Ico {...props}>
+      <rect x="1.8" y="1.8" width="10.4" height="10.4" rx="1.2" />
+      <circle cx="5.2" cy="5.2" r="1.1" />
+      <path d="m12.2 8.6 -2.9-2.9-6.3 6.5" />
+    </Ico>
   );
 }
 
 export function ObjectDataIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M5 10.5a.5.5 0 0 1 .5-.5h2a.5.5 0 0 1 0 1h-2a.5.5 0 0 1-.5-.5m0-2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m0-2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m0-2a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5" />
-      <path d="M3 0h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2v-1h1v1a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v1H1V2a2 2 0 0 1 2-2" />
-      <path d="M1 5v-.5a.5.5 0 0 1 1 0V5h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 3v-.5a.5.5 0 0 1 1 0V8h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1zm0 3v-.5a.5.5 0 0 1 1 0v.5h.5a.5.5 0 0 1 0 1h-2a.5.5 0 0 1 0-1z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="1.6" />
+      <path d="M11.1 8.6a.96.96 0 0 0 .19 1.06l.04.04a1.16 1.16 0 1 1-1.65 1.65l-.04-.04a.96.96 0 0 0-1.06-.19.96.96 0 0 0-.58.88v.11a1.16 1.16 0 0 1-2.32 0v-.06a.96.96 0 0 0-.63-.88.96.96 0 0 0-1.06.19l-.04.04a1.16 1.16 0 1 1-1.65-1.65l.04-.04a.96.96 0 0 0 .19-1.06.96.96 0 0 0-.88-.58h-.06a1.16 1.16 0 1 1 0-2.32h.06a.96.96 0 0 0 .88-.58.96.96 0 0 0-.19-1.06l-.04-.04a1.16 1.16 0 1 1 1.65-1.65l.04.04a.96.96 0 0 0 1.06.19h.05a.96.96 0 0 0 .58-.88v-.06a1.16 1.16 0 1 1 2.32 0v.06a.96.96 0 0 0 .58.88.96.96 0 0 0 1.06-.19l.04-.04a1.16 1.16 0 1 1 1.65 1.65l-.04.04a.96.96 0 0 0-.19 1.06v.05a.96.96 0 0 0 .88.58h.11a1.16 1.16 0 1 1 0 2.32h-.06a.96.96 0 0 0-.88.58z" />
+    </Ico>
   );
 }
 
 export function ViewSolidIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="5" />
+    </Ico>
   );
 }
 
 export function ViewRenderedIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M8 15A7 7 0 1 0 8 1zm0 1A8 8 0 1 1 8 0a8 8 0 0 1 0 16" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="5" />
+      <path d="M7 2a5 5 0 0 1 0 10z" fill="currentColor" stroke="none" />
+    </Ico>
   );
 }
 
 export function BoxIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M8.186 1.113a.5.5 0 0 0-.372 0L1.846 3.5 8 5.961 14.154 3.5zM15 4.239l-6.5 2.6v7.922l6.5-2.6V4.24zM7.5 14.762V6.838L1 4.239v7.923zM7.443.184a1.5 1.5 0 0 1 1.114 0l7.129 2.852A.5.5 0 0 1 16 3.5v8.662a1 1 0 0 1-.629.928l-7.185 2.874a.5.5 0 0 1-.372 0L.63 13.09a1 1 0 0 1-.63-.928V3.5a.5.5 0 0 1 .314-.464z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M12.2 9.4V4.6a1.2 1.2 0 0 0-.6-1.04l-4.2-2.4a1.2 1.2 0 0 0-1.2 0l-4.2 2.4A1.2 1.2 0 0 0 1.4 4.6v4.8a1.2 1.2 0 0 0 .6 1.04l4.2 2.4a1.2 1.2 0 0 0 1.2 0l4.2-2.4a1.2 1.2 0 0 0 .6-1.04z" />
+      <path d="m1.56 4.18 5.44 3.16 5.44-3.16" />
+      <path d="M7 13.24V7.34" />
+    </Ico>
   );
 }
 
 export function SphereIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="5.3" />
+      <path d="M1.7 7h10.6" />
+      <path d="M7 1.7a7.6 7.6 0 0 1 0 10.6" />
+      <path d="M7 1.7a7.6 7.6 0 0 0 0 10.6" />
+    </Ico>
   );
 }
 
 export function CylinderIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <ellipse cx="7" cy="3" rx="4.6" ry="1.5" />
+      <path d="M2.4 3v8a4.6 1.5 0 0 0 9.2 0V3" />
+    </Ico>
   );
 }
 
 export function PlaneIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M1.6 10.6h10.8" />
+      <path d="m2.8 10.6 1.8-5.2h4.8l1.8 5.2" />
+    </Ico>
   );
 }
 
 export function ImageIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M6.002 5.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0" />
-      <path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2zm13 1a.5.5 0 0 1 .5.5v6l-3.775-1.947a.5.5 0 0 0-.577.093l-3.71 3.71-2.66-1.772a.5.5 0 0 0-.63.062L1.002 12v.54L1 12.5v-9a.5.5 0 0 1 .5-.5z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <rect x="1.8" y="1.8" width="10.4" height="10.4" rx="1.2" />
+      <circle cx="5.2" cy="5.2" r="1.1" />
+      <path d="m12.2 8.6 -2.9-2.9-6.3 6.5" />
+    </Ico>
   );
 }
 
 export function EyeIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z" />
-      <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M1.2 7s2-4 5.8-4 5.8 4 5.8 4-2 4-5.8 4S1.2 7 1.2 7Z" />
+      <circle cx="7" cy="7" r="1.75" />
+    </Ico>
   );
 }
 
 export function ClosedEyeIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M13.359 11.238C15.06 9.72 16 8 16 8s-3-5.5-8-5.5a7 7 0 0 0-2.79.588l.77.771A6 6 0 0 1 8 3.5c2.12 0 3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755q-.247.248-.517.486z" />
-      <path d="M11.297 9.176a3.5 3.5 0 0 0-4.474-4.474l.823.823a2.5 2.5 0 0 1 2.829 2.829zm-2.943 1.299.822.822a3.5 3.5 0 0 1-4.474-4.474l.823.823a2.5 2.5 0 0 0 2.829 2.829" />
-      <path d="M3.35 5.47q-.27.24-.518.487A13 13 0 0 0 1.172 8l.195.288c.335.48.83 1.12 1.465 1.755C4.121 11.332 5.881 12.5 8 12.5c.716 0 1.39-.133 2.02-.36l.77.772A7 7 0 0 1 8 13.5C3 13.5 0 8 0 8s.939-1.721 2.641-3.238l.708.709zm10.296 8.884-12-12 .708-.708 12 12z" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="m1.8 1.8 10.4 10.4" />
+      <path d="M6.1 3.1A6.2 6.2 0 0 1 7 3c3.8 0 5.8 4 5.8 4a11.7 11.7 0 0 1-1.75 2.33" />
+      <path d="M3.8 3.8A11.5 11.5 0 0 0 1.2 7s2 4 5.8 4a5.8 5.8 0 0 0 3.1-.93" />
+      <path d="M5.25 5.25a1.75 1.75 0 0 0 2.92 2.92" />
+    </Ico>
   );
 }
 
 export function TimelineIcon(props: IconProps) {
   return (
-    <BaseIcon {...props}>
-      <line x1="3" y1="10" x2="17" y2="10" />
-      <line x1="3" y1="6" x2="17" y2="6" opacity="0.45" />
-      <line x1="3" y1="14" x2="17" y2="14" opacity="0.45" />
-      <rect x="10.5" y="4" width="2" height="12" rx="0.5" fill="currentColor" stroke="none" />
-    </BaseIcon>
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="5.3" />
+      <path d="M7 4.1V7l1.75 1.15" />
+    </Ico>
   );
 }
 
 export function PlusIcon(props: IconProps) {
   return (
-    <BootstrapIcon {...props}>
-      <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4" />
-    </BootstrapIcon>
+    <Ico {...props}>
+      <path d="M2.4 7h9.2" />
+      <path d="M7 2.4v9.2" />
+    </Ico>
+  );
+}
+
+export function SaveIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M11.1 12.2H2.9a1.2 1.2 0 0 1-1.2-1.2V3a1.2 1.2 0 0 1 1.2-1.2H9.4l2.9 2.9V11a1.2 1.2 0 0 1-1.2 1.2z" />
+      <path d="M9.9 12.2V7.5H4.1v4.7" />
+      <path d="M4.1 1.8v2.9h4.7" />
+    </Ico>
+  );
+}
+
+export function HelpIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="5.3" />
+      <path d="M5.5 5.5a1.5 1.5 0 1 1 2.1 1.4c-.5.2-.85.55-.85 1.1v.25" />
+      <path d="M7 10.4h.01" />
+    </Ico>
   );
 }
