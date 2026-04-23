@@ -67,24 +67,19 @@ describe("AnimationTimeline", () => {
       />,
     );
 
-    const channelRegion = document.querySelector(".animation-dope-sheet__left-body") as HTMLElement | null;
-    const dopeSheetRegion = document.querySelector(".animation-dope-sheet__right-body") as HTMLElement | null;
+    const channelRegion = document.querySelector(".tl__tracks") as HTMLElement | null;
+    const dopeSheetRegion = document.querySelector(".tl__lanes") as HTMLElement | null;
 
     expect(channelRegion).toBeTruthy();
     expect(dopeSheetRegion).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "Animation clip" })).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "Channel to add" })).toBeTruthy();
     expect(within(channelRegion as HTMLElement).getByText("Hero Panel")).toBeTruthy();
     expect(within(channelRegion as HTMLElement).queryByText("Accent Plate")).toBeNull();
-    expect(within(dopeSheetRegion as HTMLElement).getByText("Hero Panel")).toBeTruthy();
-    expect(within(dopeSheetRegion as HTMLElement).queryByText("Accent Plate")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "All keyframes" }));
 
     expect(within(channelRegion as HTMLElement).getByText("Hero Panel")).toBeTruthy();
     expect(within(channelRegion as HTMLElement).getByText("Accent Plate")).toBeTruthy();
-    expect(within(dopeSheetRegion as HTMLElement).getByText("Hero Panel")).toBeTruthy();
-    expect(within(dopeSheetRegion as HTMLElement).getByText("Accent Plate")).toBeTruthy();
   });
 
   it("preserves timeline scroll position when selection changes", () => {
@@ -154,8 +149,8 @@ describe("AnimationTimeline", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "All keyframes" }));
 
-    const channelRegion = document.querySelector(".animation-dope-sheet__left-body") as HTMLElement;
-    const dopeSheetRegion = document.querySelector(".animation-dope-sheet__right-body") as HTMLElement;
+    const channelRegion = document.querySelector(".tl__tracks") as HTMLElement;
+    const dopeSheetRegion = document.querySelector(".tl__lanes") as HTMLElement;
 
     channelRegion.scrollTop = 132;
     dopeSheetRegion.scrollTop = 132;
@@ -172,7 +167,7 @@ describe("AnimationTimeline", () => {
     expect(dopeSheetRegion.scrollTop).toBe(132);
   });
 
-  it("renders the mute button inside .animation-channel__content alongside label and meta", () => {
+  it("exposes a mute button next to each channel track", () => {
     const root = createNode("group", null, ROOT_NODE_ID);
     root.name = "Component Root";
 
@@ -229,18 +224,9 @@ describe("AnimationTimeline", () => {
     const muteButton = screen.getByRole("button", { name: /mute channel/i });
     expect(muteButton).toBeTruthy();
 
-    // Its parent element should be .animation-channel__content
-    const parent = muteButton.parentElement as HTMLElement | null;
-    expect(parent).toBeTruthy();
-    expect(parent!.classList.contains("animation-channel__content")).toBe(true);
-
-    // The content span should also contain the label and meta alongside the button
-    expect(parent!.querySelector(".animation-channel__label")).toBeTruthy();
-    expect(parent!.querySelector(".animation-channel__meta")).toBeTruthy();
-
-    // The button should NOT be a direct child of the animation-channel row
-    const channelRow = muteButton.closest(".animation-channel") as HTMLElement | null;
-    expect(channelRow).toBeTruthy();
-    expect(muteButton.parentElement).not.toBe(channelRow);
+    // Mute button sits inside the track row's actions cluster.
+    const trackRow = muteButton.closest(".tl-track") as HTMLElement | null;
+    expect(trackRow).toBeTruthy();
+    expect(muteButton.parentElement?.classList.contains("tl-track__actions")).toBe(true);
   });
 });
