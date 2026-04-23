@@ -23,6 +23,7 @@ export function useEditorStoreSnapshot(store: EditorStore): EditorStoreView {
       canUndo: store.canUndo,
       canRedo: store.canRedo,
       viewMode: store.viewMode,
+      propertyClipboard: store.propertyClipboard,
     }),
     [store, revision],
   );

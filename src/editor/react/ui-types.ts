@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { PropertyClipboard } from "../propertyClipboard";
 import type {
   AnimationTrack,
   ComponentAnimation,
@@ -27,6 +28,7 @@ export interface EditorStoreView {
   canUndo: boolean;
   canRedo: boolean;
   viewMode: ViewMode;
+  propertyClipboard: PropertyClipboard | null;
 }
 
 export interface TreeBranch {

@@ -24,6 +24,7 @@ import {
 } from "../state";
 import type { AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset } from "../types";
 import type { ComponentBlueprint } from "../types";
+import type { PropertyApplyReport, PropertyClipboardScope } from "../propertyClipboard";
 import {
   buildRecentProjectLabel,
   clearWorkspaceSessionActive,
@@ -385,6 +386,7 @@ export function App() {
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [statusText, setStatusText] = useState("Ready");
+  const [toast, setToast] = useState<{ message: string; tone: "info" | "warning" } | null>(null);
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false);
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
@@ -402,6 +404,7 @@ export function App() {
   const clipboardRef = useRef<NodeClipboard | null>(null);
   const pendingImageImportRef = useRef<PendingImageImport | null>(null);
   const statusTimerRef = useRef<number | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const animationFrameUnsubscribeRef = useRef<(() => void) | null>(null);
   const activeFileHandleRef = useRef<BrowserFileSystemFileHandle | null>(null);
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
@@ -467,6 +470,18 @@ export function App() {
       setStatusText("Ready");
       statusTimerRef.current = null;
     }, 2200);
+  }, []);
+
+  const showToast = useCallback((message: string, tone: "info" | "warning" = "info") => {
+    setToast({ message, tone });
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 2500);
   }, []);
 
   useEffect(() => {
@@ -548,6 +563,9 @@ export function App() {
     return () => {
       if (statusTimerRef.current) {
         window.clearTimeout(statusTimerRef.current);
+      }
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
       }
       animationFrameUnsubscribeRef.current?.();
     };
@@ -905,6 +923,49 @@ export function App() {
 
     setTransientStatus(`Pasted ${newRootIds.length} objects.`);
   }, [resolveContextInsertTarget, resolveSelectionInsertTarget, setTransientStatus, store]);
+
+  const handleCopyProperties = useCallback(() => {
+    const primary = store.selectedNode;
+    if (!primary || primary.id === ROOT_NODE_ID) {
+      return;
+    }
+
+    const captured = store.capturePropertiesFromSelection();
+    if (captured) {
+      setTransientStatus(`Copied properties from "${primary.name}".`);
+    }
+  }, [setTransientStatus, store]);
+
+  const formatApplyReport = useCallback((report: PropertyApplyReport) => {
+    const applied = report.applied;
+    const incompatible = report.skippedIncompatible;
+
+    if (applied > 0 && incompatible === 0) {
+      return { message: `${applied} properties applied`, tone: "info" as const };
+    }
+    if (applied > 0 && incompatible > 0) {
+      return { message: `${applied} applied · ${incompatible} incompatible`, tone: "info" as const };
+    }
+    if (applied === 0 && incompatible > 0) {
+      return { message: "No compatible properties", tone: "warning" as const };
+    }
+    return null;
+  }, []);
+
+  const handlePasteProperties = useCallback((
+    scope: PropertyClipboardScope = "all",
+    targetNodeIds?: string[],
+  ) => {
+    if (!store.propertyClipboard) {
+      return;
+    }
+
+    const report = store.applyPropertiesToSelection(scope, targetNodeIds);
+    const toastPayload = formatApplyReport(report);
+    if (toastPayload) {
+      showToast(toastPayload.message, toastPayload.tone);
+    }
+  }, [formatApplyReport, showToast, store]);
 
   const handleDelete = useCallback((nodeId?: string | null) => {
     const targetRootIds = resolveContextSelectionRootIds(nodeId ?? null);
@@ -1429,6 +1490,15 @@ export function App() {
   }, [resizeMode]);
 
   const handleSceneMove = useCallback((nodeId: string, target: TreeDropTarget) => {
+    const isDraggingMultiSelection = store.selectedNodeIds.length > 1
+      && store.selectedNodeIds.includes(nodeId);
+    if (isDraggingMultiSelection) {
+      if (store.moveSelectedNodes(target.parentId, target.index)) {
+        const count = store.getSelectionRootIds().filter((id) => id !== ROOT_NODE_ID).length;
+        setTransientStatus(`Moved ${count} nodes.`);
+      }
+      return;
+    }
     if (store.moveNode(nodeId, target.parentId, target.index)) {
       const node = store.getNode(nodeId);
       setTransientStatus(node ? `Moved "${node.name}".` : "Moved node.");
@@ -1457,6 +1527,13 @@ export function App() {
       : (nodeId ? store.getSelectionRootIds([nodeId]) : []);
     const canGroupSelection = canGroupNodeIds(contextRootIds);
     const contextTargetId = contextRootIds.length === 1 ? contextRootIds[0] : nodeId;
+    const propertyTargetIds = contextRootIds.filter((id) => id !== ROOT_NODE_ID);
+    const primaryForCopy = contextTargetId ? store.getNode(contextTargetId) : null;
+    const canCopyProperties = Boolean(primaryForCopy) && contextTargetId !== ROOT_NODE_ID;
+    const hasClipboard = Boolean(store.propertyClipboard);
+    const canPasteAny = hasClipboard
+      && propertyTargetIds.length > 0
+      && store.canPasteProperties("all", propertyTargetIds);
     const addActions = createAddMenuActions(() => resolveContextInsertTarget(nodeId));
     const items: MenuAction[] = [
       { id: "ctx-new", label: "New", icon: <MeshIcon width={14} height={14} />, children: addActions },
@@ -1465,13 +1542,74 @@ export function App() {
         ? { id: "ctx-group-selection", label: "Group Selected", icon: <GroupIcon width={14} height={14} />, onSelect: () => handleGroupSelection(nodeId) }
         : { id: "ctx-group-selection", label: "Group Selected", icon: <GroupIcon width={14} height={14} />, disabled: true },
       { id: "ctx-divider-1", separator: true },
+      {
+        id: "ctx-copy-properties",
+        label: "Copy Properties",
+        icon: <CopyIcon width={14} height={14} />,
+        shortcut: "Ctrl+Shift+C",
+        disabled: !canCopyProperties,
+        onSelect: () => {
+          if (contextTargetId && contextTargetId !== ROOT_NODE_ID) {
+            store.selectNode(contextTargetId);
+          }
+          handleCopyProperties();
+        },
+      },
+      {
+        id: "ctx-paste-properties",
+        label: "Paste Properties",
+        icon: <FileIcon width={14} height={14} />,
+        shortcut: "Ctrl+Shift+V",
+        disabled: !canPasteAny,
+        onSelect: () => handlePasteProperties("all", propertyTargetIds),
+      },
+      canPasteAny
+        ? {
+          id: "ctx-paste-special",
+          label: "Paste Special",
+          icon: <FileIcon width={14} height={14} />,
+          children: [
+            {
+              id: "ctx-paste-special-all",
+              label: "All compatible",
+              disabled: !store.canPasteProperties("all", propertyTargetIds),
+              onSelect: () => handlePasteProperties("all", propertyTargetIds),
+            },
+            {
+              id: "ctx-paste-special-material",
+              label: "Material",
+              disabled: !store.canPasteProperties("material", propertyTargetIds),
+              onSelect: () => handlePasteProperties("material", propertyTargetIds),
+            },
+            {
+              id: "ctx-paste-special-transform",
+              label: "Transform",
+              disabled: !store.canPasteProperties("transform", propertyTargetIds),
+              onSelect: () => handlePasteProperties("transform", propertyTargetIds),
+            },
+            {
+              id: "ctx-paste-special-geometry",
+              label: "Geometry",
+              disabled: !store.canPasteProperties("geometry", propertyTargetIds),
+              onSelect: () => handlePasteProperties("geometry", propertyTargetIds),
+            },
+            {
+              id: "ctx-paste-special-shadow",
+              label: "Shadow",
+              disabled: !store.canPasteProperties("shadow", propertyTargetIds),
+              onSelect: () => handlePasteProperties("shadow", propertyTargetIds),
+            },
+          ],
+        }
+        : { id: "ctx-paste-special", label: "Paste Special", icon: <FileIcon width={14} height={14} />, disabled: true },
+      { id: "ctx-divider-2", separator: true },
       { id: "ctx-duplicate", label: "Duplicate", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C / Ctrl+V", disabled: !contextTargetId || contextTargetId === ROOT_NODE_ID || contextRootIds.length > 1, onSelect: () => handleDuplicate(contextTargetId) },
       { id: "ctx-frame", label: "Frame", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: contextRootIds.length === 0 && !targetNode, onSelect: () => { if (nodeId && !shouldUseExistingSelection) store.selectNode(nodeId); handleFrameSelection(); } },
       { id: "ctx-delete", label: contextRootIds.length > 1 ? "Delete Selected" : "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: contextRootIds.length === 0 || (contextRootIds.length === 1 && contextRootIds[0] === ROOT_NODE_ID), onSelect: () => handleDelete(nodeId ?? undefined) },
     ];
 
     setContextMenu({ x: event.clientX, y: event.clientY, items });
-  }, [canGroupNodeIds, createAddMenuActions, handleDelete, handleDuplicate, handleFrameSelection, handleGroupSelection, handlePaste, resolveContextInsertTarget, selectedNodeIdsSet, selectedRootIds, store]);
+  }, [canGroupNodeIds, createAddMenuActions, handleCopyProperties, handleDelete, handleDuplicate, handleFrameSelection, handleGroupSelection, handlePaste, handlePasteProperties, resolveContextInsertTarget, selectedNodeIdsSet, selectedRootIds, store, storeView]);
 
   const openViewportContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1501,6 +1639,18 @@ export function App() {
     handleAddAnimationKeyframe(selectedTrackId);
   }, [handleAddAnimationKeyframe, selectedTrackId, showEditingTimeline]);
 
+  const handleSelectAllHotkey = useCallback(() => {
+    store.selectAll();
+    const count = store.selectedNodeIds.filter((id) => id !== ROOT_NODE_ID).length;
+    if (count > 0) {
+      setTransientStatus(`Selected ${count} nodes.`);
+    }
+  }, [setTransientStatus, store]);
+
+  const handleEscapeSelectionHotkey = useCallback(() => {
+    store.clearSelection();
+  }, [store]);
+
   useGlobalHotkeys({
     onUndo: () => {
       if (store.undo()) {
@@ -1514,6 +1664,8 @@ export function App() {
     },
     onCopy: handleCopy,
     onPaste: () => handlePaste(),
+    onCopyProperties: handleCopyProperties,
+    onPasteProperties: () => handlePasteProperties("all"),
     onDelete: handleDeleteSelection,
     onFrame: handleFrameSelection,
     onPlayPause: handleAnimationPlayToggle,
@@ -1526,6 +1678,8 @@ export function App() {
     onDuplicate: handleDuplicateHotkey,
     onAddKeyframeAtPlayhead: handleAddKeyframeAtPlayheadHotkey,
     onStopAnimation: handleAnimationStop,
+    onSelectAll: handleSelectAllHotkey,
+    onEscapeSelection: handleEscapeSelectionHotkey,
   });
 
   const menus = useMemo(() => [
@@ -1576,6 +1730,61 @@ export function App() {
         { id: "edit-divider-1", separator: true },
         { id: "edit-copy", label: "Copy", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C", disabled: selectedRootIds.length === 0 || (selectedRootIds.length === 1 && selectedRootIds[0] === ROOT_NODE_ID), onSelect: handleCopy },
         { id: "edit-paste", label: "Paste", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste() },
+        {
+          id: "edit-copy-properties",
+          label: "Copy Properties",
+          icon: <CopyIcon width={14} height={14} />,
+          shortcut: "Ctrl+Shift+C",
+          disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID,
+          onSelect: handleCopyProperties,
+        },
+        {
+          id: "edit-paste-properties",
+          label: "Paste Properties",
+          icon: <FileIcon width={14} height={14} />,
+          shortcut: "Ctrl+Shift+V",
+          disabled: !storeView.propertyClipboard || !store.canPasteProperties("all"),
+          onSelect: () => handlePasteProperties("all"),
+        },
+        storeView.propertyClipboard && store.canPasteProperties("all")
+          ? {
+            id: "edit-paste-special",
+            label: "Paste Special",
+            icon: <FileIcon width={14} height={14} />,
+            children: [
+              {
+                id: "edit-paste-special-all",
+                label: "All compatible",
+                disabled: !store.canPasteProperties("all"),
+                onSelect: () => handlePasteProperties("all"),
+              },
+              {
+                id: "edit-paste-special-material",
+                label: "Material",
+                disabled: !store.canPasteProperties("material"),
+                onSelect: () => handlePasteProperties("material"),
+              },
+              {
+                id: "edit-paste-special-transform",
+                label: "Transform",
+                disabled: !store.canPasteProperties("transform"),
+                onSelect: () => handlePasteProperties("transform"),
+              },
+              {
+                id: "edit-paste-special-geometry",
+                label: "Geometry",
+                disabled: !store.canPasteProperties("geometry"),
+                onSelect: () => handlePasteProperties("geometry"),
+              },
+              {
+                id: "edit-paste-special-shadow",
+                label: "Shadow",
+                disabled: !store.canPasteProperties("shadow"),
+                onSelect: () => handlePasteProperties("shadow"),
+              },
+            ],
+          }
+          : { id: "edit-paste-special", label: "Paste Special", icon: <FileIcon width={14} height={14} />, disabled: true },
         { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: (!selectedTrackId || !selectedKeyframeId) && (selectedRootIds.length === 0 || (selectedRootIds.length === 1 && selectedRootIds[0] === ROOT_NODE_ID)), onSelect: handleDeleteSelection },
         { id: "edit-divider-2", separator: true },
         { id: "edit-frame", label: "Frame Selection", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: selectedRootIds.length === 0, onSelect: handleFrameSelection },
@@ -1599,23 +1808,27 @@ export function App() {
     downloadExportFile,
     downloadExportPackage,
     handleCopy,
+    handleCopyProperties,
     handleExitProject,
     handleFrameSelection,
     handleNewBlueprint,
     handleOpenFile,
     handleOpenRecent,
     handlePaste,
+    handlePasteProperties,
     handleSaveAsProject,
     handleSaveProject,
     requestImageImport,
     recentProjects,
     resolveSelectionInsertTarget,
     selectedKeyframeId,
+    selectedNode,
     selectedRootIds,
     selectedTrackId,
     store,
     storeView.canRedo,
     storeView.canUndo,
+    storeView.propertyClipboard,
   ]);
 
   if (!isStarted) {
@@ -1992,6 +2205,15 @@ export function App() {
       />
 
       <ContextMenu state={contextMenu} onClose={() => setContextMenu(null)} />
+      {toast ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`toast${toast.tone === "warning" ? " toast--warning" : ""}`}
+        >
+          {toast.message}
+        </div>
+      ) : null}
       <ShortcutDialog isOpen={isShortcutDialogOpen} onClose={() => setIsShortcutDialogOpen(false)} />
 
       <Modal title="About 3Forge" isOpen={isAboutDialogOpen} onClose={() => setIsAboutDialogOpen(false)}>

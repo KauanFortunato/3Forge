@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
+import { getSharedPropertyDefinitions } from "../../sharedProperties";
+import type { SharedPropertyResult } from "../../sharedProperties";
 import type { EditorNode, FontAsset, GroupPivotPreset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
 import {
   CircleFilledIcon,
@@ -67,20 +69,35 @@ export function InspectorPanel(props: InspectorPanelProps) {
   }, [node, nodes]);
   const isMultiSelection = selectionNodes.length > 1;
   const primaryNode = isMultiSelection ? undefined : selectionNodes[0];
-  const sharedMaterialDefinitions = useMemo(
-    () => getSharedMaterialDefinitions(selectionNodes),
+
+  const sharedObject = useMemo(
+    () => getSharedPropertyDefinitions(selectionNodes, "object"),
     [selectionNodes],
   );
+  const sharedTransform = useMemo(
+    () => getSharedPropertyDefinitions(selectionNodes, "transform"),
+    [selectionNodes],
+  );
+  const sharedGeometry = useMemo(
+    () => getSharedPropertyDefinitions(selectionNodes, "geometry"),
+    [selectionNodes],
+  );
+  const sharedMaterial = useMemo(
+    () => getSharedPropertyDefinitions(selectionNodes, ["material", "shadow"]),
+    [selectionNodes],
+  );
+
+  const sharedMaterialDefinitions = sharedMaterial.definitions;
+  const hasMixedMaterialTypes = sharedMaterial.mixedPaths.has("material.type");
   const hasGroupSelection = isMultiSelection && selectionNodes.some((entry) => entry.type === "group");
-  const hasMixedMaterialTypes = isMultiSelection
-    && new Set(
-      selectionNodes
-        .filter((entry): entry is Exclude<EditorNode, { type: "group" }> => entry.type !== "group")
-        .map((entry) => entry.material.type),
-    ).size > 1;
   const sections = useMemo(
-    () => getSectionsForSelection(primaryNode, selectionNodes, sharedMaterialDefinitions),
-    [primaryNode, selectionNodes, sharedMaterialDefinitions],
+    () => getSectionsForSelection(primaryNode, selectionNodes, {
+      object: sharedObject,
+      transform: sharedTransform,
+      geometry: sharedGeometry,
+      material: sharedMaterial,
+    }),
+    [primaryNode, selectionNodes, sharedObject, sharedTransform, sharedGeometry, sharedMaterial],
   );
   const [activeSection, setActiveSection] = useState<InspectorSectionId>("object");
   const [groupPivotPreset, setGroupPivotPreset] = useState<GroupPivotPreset>("center");
@@ -127,11 +144,46 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
         <div className="inspector-section-body">
           <div className="inspector-node-strip">
-            <span className="inspector-node-strip__title">{isMultiSelection ? `${selectionNodes.length} objects` : primaryNode?.name}</span>
+            <div className="inspector-node-strip__titles">
+              <span className="inspector-node-strip__title">{isMultiSelection ? `${selectionNodes.length} objects` : primaryNode?.name}</span>
+              {isMultiSelection ? (
+                <SharedScopeSubline
+                  object={sharedObject}
+                  transform={sharedTransform}
+                  geometry={sharedGeometry}
+                  material={sharedMaterial}
+                />
+              ) : null}
+            </div>
             <span className="inspector-node-strip__meta">
               {isMultiSelection ? "Multi-selection" : primaryNode?.type === "group" ? "Group" : "Mesh"}
             </span>
           </div>
+
+          {activeSection === "object" && isMultiSelection ? (
+            <section className="inspector-card">
+              <div className="inspector-card__header">
+                <h4>Object</h4>
+                {renderExcludedNote(sharedObject, selectionNodes)}
+              </div>
+
+              <div className="inspector-simple-grid">
+                {sharedObject.definitions.map((definition) => (
+                  <div key={definition.path} className="field-block field-block--wide">
+                    <PropertyRow
+                      nodes={filterNodesByIds(selectionNodes, sharedObject.includedNodeIds)}
+                      definition={definition}
+                      mixedPaths={sharedObject.mixedPaths}
+                      onNodePropertyChange={onNodePropertyChange}
+                      onNodesPropertyChange={onNodesPropertyChange}
+                      onToggleEditable={onToggleEditable}
+                      allowEditableToggle={false}
+                    />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           {activeSection === "object" && primaryNode ? (
             <section className="inspector-card">
@@ -257,35 +309,66 @@ export function InspectorPanel(props: InspectorPanelProps) {
             </section>
           ) : null}
 
-          {activeSection === "transform" && primaryNode ? (
+          {activeSection === "transform" ? (
             <section className="inspector-card">
               <div className="inspector-card__header">
                 <h4>Transform</h4>
+                {isMultiSelection ? renderExcludedNote(sharedTransform, selectionNodes) : null}
               </div>
 
               <TransformAxisGroup
                 title="Position"
-                node={primaryNode}
-                definitions={groupedDefinitions.get("Transform")?.filter((definition) => definition.path.startsWith("transform.position")) ?? []}
+                nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
+                definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.position"))}
+                mixedPaths={sharedTransform.mixedPaths}
                 onNodePropertyChange={onNodePropertyChange}
+                onNodesPropertyChange={onNodesPropertyChange}
                 onToggleEditable={onToggleEditable}
               />
 
               <TransformAxisGroup
                 title="Rotation"
-                node={primaryNode}
-                definitions={groupedDefinitions.get("Transform")?.filter((definition) => definition.path.startsWith("transform.rotation")) ?? []}
+                nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
+                definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.rotation"))}
+                mixedPaths={sharedTransform.mixedPaths}
                 onNodePropertyChange={onNodePropertyChange}
+                onNodesPropertyChange={onNodesPropertyChange}
                 onToggleEditable={onToggleEditable}
               />
 
               <TransformAxisGroup
                 title="Scale"
-                node={primaryNode}
-                definitions={groupedDefinitions.get("Transform")?.filter((definition) => definition.path.startsWith("transform.scale")) ?? []}
+                nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
+                definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.scale"))}
+                mixedPaths={sharedTransform.mixedPaths}
                 onNodePropertyChange={onNodePropertyChange}
+                onNodesPropertyChange={onNodesPropertyChange}
                 onToggleEditable={onToggleEditable}
               />
+            </section>
+          ) : null}
+
+          {activeSection === "geometry" && isMultiSelection ? (
+            <section className="inspector-card">
+              <div className="inspector-card__header">
+                <h4>Geometry</h4>
+                {renderExcludedNote(sharedGeometry, selectionNodes)}
+              </div>
+
+              <div className="inspector-properties">
+                {sharedGeometry.definitions.map((definition) => (
+                  <PropertyRow
+                    key={definition.path}
+                    nodes={filterNodesByIds(selectionNodes, sharedGeometry.includedNodeIds)}
+                    definition={definition}
+                    mixedPaths={sharedGeometry.mixedPaths}
+                    onNodePropertyChange={onNodePropertyChange}
+                    onNodesPropertyChange={onNodesPropertyChange}
+                    onToggleEditable={onToggleEditable}
+                    allowEditableToggle={false}
+                  />
+                ))}
+              </div>
             </section>
           ) : null}
 
@@ -301,8 +384,11 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
           {activeSection === "material" ? (
             <MaterialDefinitionSection
-              nodes={isMultiSelection ? selectionNodes : primaryNode ? [primaryNode] : []}
+              nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedMaterial.includedNodeIds) : primaryNode ? [primaryNode] : []}
+              selectionCount={isMultiSelection ? selectionNodes.length : 1}
               definitions={isMultiSelection ? sharedMaterialDefinitions : groupedDefinitions.get("Material") ?? []}
+              mixedPaths={isMultiSelection ? sharedMaterial.mixedPaths : undefined}
+              excludedNote={isMultiSelection ? buildExcludedNote(sharedMaterial, selectionNodes) : undefined}
               onNodePropertyChange={onNodePropertyChange}
               onNodesPropertyChange={onNodesPropertyChange}
               onToggleEditable={onToggleEditable}
@@ -428,7 +514,10 @@ function DefinitionSection(props: DefinitionSectionProps) {
 
 interface MaterialDefinitionSectionProps {
   nodes: EditorNode[];
+  selectionCount: number;
   definitions: NodePropertyDefinition[];
+  mixedPaths?: Set<string>;
+  excludedNote?: string;
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
@@ -440,7 +529,10 @@ interface MaterialDefinitionSectionProps {
 function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
   const {
     nodes,
+    selectionCount,
     definitions,
+    mixedPaths,
+    excludedNote,
     onNodePropertyChange,
     onNodesPropertyChange,
     onToggleEditable,
@@ -448,7 +540,7 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
     hasGroupSelection = false,
     hasMixedMaterialTypes = false,
   } = props;
-  const isMultiSelection = nodes.length > 1;
+  const isMultiSelection = selectionCount > 1;
 
   const basePaths = ["material.type", "material.color", "material.opacity", "material.transparent"];
   const pbrPaths = ["material.emissive", "material.roughness", "material.metalness"];
@@ -468,11 +560,14 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
     <section className="inspector-card">
       <div className="inspector-card__header">
         <h4>Material</h4>
+        {isMultiSelection && excludedNote ? (
+          <span className="inspector-card__note">{excludedNote}</span>
+        ) : null}
       </div>
 
       {isMultiSelection ? (
         <p className="field-help">
-          {`Applying changes to ${nodes.length} selected objects.`}
+          {`Applying changes to ${selectionCount} selected objects.`}
           {hasGroupSelection ? " Group items are excluded because they do not expose material controls." : ""}
           {hasMixedMaterialTypes ? " Material-specific controls stay hidden while the selection mixes different material types." : ""}
         </p>
@@ -489,6 +584,7 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
             key={definition.path}
             nodes={nodes}
             definition={definition}
+            mixedPaths={mixedPaths}
             onNodePropertyChange={onNodePropertyChange}
             onNodesPropertyChange={onNodesPropertyChange}
             onToggleEditable={onToggleEditable}
@@ -504,6 +600,7 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
                 key={definition.path}
                 nodes={nodes}
                 definition={definition}
+                mixedPaths={mixedPaths}
                 onNodePropertyChange={onNodePropertyChange}
                 onNodesPropertyChange={onNodesPropertyChange}
                 onToggleEditable={onToggleEditable}
@@ -521,6 +618,7 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
                 key={definition.path}
                 nodes={nodes}
                 definition={definition}
+                mixedPaths={mixedPaths}
                 onNodePropertyChange={onNodePropertyChange}
                 onNodesPropertyChange={onNodesPropertyChange}
                 onToggleEditable={onToggleEditable}
@@ -538,6 +636,7 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
                 key={definition.path}
                 nodes={nodes}
                 definition={definition}
+                mixedPaths={mixedPaths}
                 onNodePropertyChange={onNodePropertyChange}
                 onNodesPropertyChange={onNodesPropertyChange}
                 onToggleEditable={onToggleEditable}
@@ -553,14 +652,22 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
 
 interface TransformAxisGroupProps {
   title: string;
-  node: EditorNode;
+  nodes: EditorNode[];
   definitions: NodePropertyDefinition[];
+  mixedPaths?: Set<string>;
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
+  onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
 }
 
 function TransformAxisGroup(props: TransformAxisGroupProps) {
-  const { title, node, definitions, onNodePropertyChange, onToggleEditable } = props;
+  const { title, nodes, definitions, mixedPaths, onNodePropertyChange, onNodesPropertyChange, onToggleEditable } = props;
+  const isMultiSelection = nodes.length > 1;
+  const primaryNode = nodes[0];
+
+  if (!primaryNode) {
+    return null;
+  }
 
   return (
     <div className="transform-group">
@@ -568,8 +675,20 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
       <div className="transform-grid">
         {definitions.map((definition) => {
           const axis = definition.path.split(".").at(-1)?.toUpperCase() ?? "?";
-          const currentValue = getDisplayValue(node, definition);
-          const isEditable = Boolean(node.editable[definition.path]);
+          const isMixed = mixedPaths?.has(definition.path) ?? false;
+          const displayValue = isMixed ? "" : String(getDisplayValue(primaryNode, definition));
+          const isEditable = !isMultiSelection && Boolean(primaryNode.editable[definition.path]);
+
+          const commit = (value: string) => {
+            if (isMixed && value.trim() === "") {
+              return;
+            }
+            if (isMultiSelection) {
+              onNodesPropertyChange?.(nodes.map((entry) => entry.id), definition, value);
+              return;
+            }
+            onNodePropertyChange(primaryNode.id, definition, value);
+          };
 
           return (
             <div key={definition.path} className={`transform-cell${isEditable ? " is-editable" : ""}`}>
@@ -578,17 +697,22 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                 className="editor-input editor-input--compact"
                 type="text"
                 inputMode="decimal"
-                value={String(currentValue)}
-                onCommit={(value) => onNodePropertyChange(node.id, definition, value)}
+                value={displayValue}
+                placeholder={isMixed ? "Mixed" : undefined}
+                onCommit={commit}
               />
-              <label className={`transform-cell__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
-                <input
-                  type="checkbox"
-                  checked={isEditable}
-                  onChange={(event) => onToggleEditable(node.id, definition, event.target.checked)}
-                />
-                {isEditable ? <CircleFilledIcon width={10} height={10} /> : <CircleIcon width={10} height={10} />}
-              </label>
+              {isMultiSelection ? (
+                <span className="transform-cell__editable" aria-hidden="true" />
+              ) : (
+                <label className={`transform-cell__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
+                  <input
+                    type="checkbox"
+                    checked={isEditable}
+                    onChange={(event) => onToggleEditable(primaryNode.id, definition, event.target.checked)}
+                  />
+                  {isEditable ? <CircleFilledIcon width={10} height={10} /> : <CircleIcon width={10} height={10} />}
+                </label>
+              )}
             </div>
           );
         })}
@@ -600,6 +724,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
 interface PropertyRowProps {
   nodes: EditorNode[];
   definition: NodePropertyDefinition;
+  mixedPaths?: Set<string>;
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
@@ -609,6 +734,7 @@ interface PropertyRowProps {
 function PropertyRow({
   nodes,
   definition,
+  mixedPaths,
   onNodePropertyChange,
   onNodesPropertyChange,
   onToggleEditable,
@@ -617,7 +743,8 @@ function PropertyRow({
   const isMultiSelection = nodes.length > 1;
   const currentValues = nodes.map((node) => getDisplayValue(node, definition));
   const currentValue = currentValues[0];
-  const hasMixedValue = currentValues.some((value) => !Object.is(value, currentValue));
+  const hasMixedValue = mixedPaths?.has(definition.path)
+    ?? currentValues.some((value) => !Object.is(value, currentValue));
   const isEditable = nodes.length === 1 && Boolean(nodes[0]?.editable[definition.path]);
   const stringValue = String(currentValue);
   const editableLabel = `Editable ${definition.label}`;
@@ -784,23 +911,53 @@ function normalizeCommittedColorValue(value: string): string | null {
   return null;
 }
 
+interface SharedScopeBundle {
+  object: SharedPropertyResult;
+  transform: SharedPropertyResult;
+  geometry: SharedPropertyResult;
+  material: SharedPropertyResult;
+}
+
 function getSectionsForSelection(
   node: EditorNode | undefined,
   selectionNodes: EditorNode[],
-  sharedMaterialDefinitions: NodePropertyDefinition[],
+  shared: SharedScopeBundle,
 ): InspectorSection[] {
   if (selectionNodes.length === 0) {
     return [];
   }
 
   if (selectionNodes.length > 1) {
-    return sharedMaterialDefinitions.length > 0
-      ? [{
-          id: "material",
-          label: "Material",
-          icon: <MaterialIcon width={16} height={16} />,
-        }]
-      : [];
+    const sections: InspectorSection[] = [];
+    if (shared.object.definitions.length > 0) {
+      sections.push({
+        id: "object",
+        label: "Object",
+        icon: <ObjectDataIcon width={16} height={16} />,
+      });
+    }
+    if (shared.transform.definitions.length > 0) {
+      sections.push({
+        id: "transform",
+        label: "Transform",
+        icon: <TransformIcon width={16} height={16} />,
+      });
+    }
+    if (shared.geometry.definitions.length > 0) {
+      sections.push({
+        id: "geometry",
+        label: "Geometry",
+        icon: <GeometryIcon width={16} height={16} />,
+      });
+    }
+    if (shared.material.definitions.length > 0) {
+      sections.push({
+        id: "material",
+        label: "Material",
+        icon: <MaterialIcon width={16} height={16} />,
+      });
+    }
+    return sections;
   }
 
   if (!node) {
@@ -852,18 +1009,73 @@ function getSectionsForSelection(
   return sections;
 }
 
-function getSharedMaterialDefinitions(nodes: EditorNode[]): NodePropertyDefinition[] {
-  const materialDefinitionLists = nodes.map((node) => getPropertyDefinitions(node).filter((definition) => definition.group === "Material"));
-  if (materialDefinitionLists.some((definitions) => definitions.length === 0)) {
-    return [];
+function filterNodesByIds(nodes: EditorNode[], ids: string[]): EditorNode[] {
+  if (ids.length === nodes.length) {
+    return nodes;
+  }
+  const allowed = new Set(ids);
+  return nodes.filter((node) => allowed.has(node.id));
+}
+
+function describeExcludedNodes(result: SharedPropertyResult, selectionNodes: EditorNode[]): string | null {
+  if (result.excludedNodeIds.length === 0) {
+    return null;
+  }
+  const lookup = new Map(selectionNodes.map((node) => [node.id, node]));
+  const excluded = result.excludedNodeIds.map((id) => lookup.get(id)).filter((node): node is EditorNode => Boolean(node));
+  const groups = excluded.filter((node) => node.type === "group").length;
+  const others = excluded.length - groups;
+
+  if (groups > 0 && others === 0) {
+    return `excluding ${groups} ${groups === 1 ? "group" : "groups"}`;
+  }
+  if (groups === 0 && others > 0) {
+    return `excluding ${others} ${others === 1 ? "object" : "objects"}`;
+  }
+  return `excluding ${excluded.length} ${excluded.length === 1 ? "item" : "items"}`;
+}
+
+function buildExcludedNote(result: SharedPropertyResult, selectionNodes: EditorNode[]): string | undefined {
+  return describeExcludedNodes(result, selectionNodes) ?? undefined;
+}
+
+function renderExcludedNote(result: SharedPropertyResult, selectionNodes: EditorNode[]): ReactNode {
+  const note = describeExcludedNodes(result, selectionNodes);
+  if (!note) {
+    return null;
+  }
+  return <span className="inspector-card__note">{note}</span>;
+}
+
+interface SharedScopeSublineProps {
+  object: SharedPropertyResult;
+  transform: SharedPropertyResult;
+  geometry: SharedPropertyResult;
+  material: SharedPropertyResult;
+}
+
+function SharedScopeSubline({ object, transform, geometry, material }: SharedScopeSublineProps) {
+  const present: string[] = [];
+  const hidden: string[] = [];
+
+  const record = (label: string, hasShared: boolean) => {
+    if (hasShared) {
+      present.push(label);
+    } else {
+      hidden.push(label);
+    }
+  };
+
+  record("object", object.definitions.length > 0);
+  record("transform", transform.definitions.length > 0);
+  record("geometry", geometry.definitions.length > 0);
+  record("material", material.definitions.length > 0);
+
+  if (hidden.length === 0 || present.length === 0) {
+    return null;
   }
 
-  const sharedPaths = materialDefinitionLists.slice(1).reduce((paths, definitions) => {
-    const currentPaths = new Set(definitions.map((definition) => definition.path));
-    return new Set([...paths].filter((path) => currentPaths.has(path)));
-  }, new Set(materialDefinitionLists[0]?.map((definition) => definition.path) ?? []));
-
-  return (materialDefinitionLists[0] ?? []).filter((definition) => sharedPaths.has(definition.path));
+  return <span className="inspector-node-strip__subline">{present.join(" · ")}</span>;
 }
 
 function groupDefinitions(definitions: NodePropertyDefinition[]): Map<string, NodePropertyDefinition[]> {

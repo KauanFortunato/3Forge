@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import type { ContextMenuState, MenuAction } from "../ui-types";
 import { ChevronRightIcon } from "./icons";
@@ -7,10 +8,55 @@ interface MenuListProps {
   items: MenuAction[];
   onClose: () => void;
   className?: string;
+  onRequestClose?: () => void;
 }
 
-export function MenuList({ items, onClose, className }: MenuListProps) {
+export function MenuList({ items, onClose, className, onRequestClose }: MenuListProps) {
   const [submenuIndex, setSubmenuIndex] = useState<number | null>(null);
+  const [submenuPlacement, setSubmenuPlacement] = useState<"right" | "left">("right");
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const submenuWrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Flip submenu to the left when it would overflow the viewport edge.
+  useLayoutEffect(() => {
+    if (submenuIndex === null) {
+      return;
+    }
+    const wrap = submenuWrapRef.current;
+    const parentButton = buttonRefs.current[submenuIndex];
+    if (!wrap || !parentButton) {
+      return;
+    }
+    const rect = wrap.getBoundingClientRect();
+    const viewportWidth = typeof window !== "undefined" ? window.innerWidth : rect.right;
+    if (rect.right > viewportWidth - 4) {
+      setSubmenuPlacement("left");
+    } else {
+      setSubmenuPlacement("right");
+    }
+  }, [submenuIndex, items]);
+
+  const handleItemKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    index: number,
+    item: MenuAction,
+    hasChildren: boolean,
+  ) => {
+    if (event.key === "ArrowRight" && hasChildren && !item.disabled) {
+      event.preventDefault();
+      event.stopPropagation();
+      setSubmenuIndex(index);
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (onRequestClose) {
+        onRequestClose();
+      }
+      return;
+    }
+  };
 
   return (
     <div className={`menu-surface ${className ?? ""}`.trim()}>
@@ -30,8 +76,12 @@ export function MenuList({ items, onClose, className }: MenuListProps) {
           >
             <button
               type="button"
+              ref={(node) => {
+                buttonRefs.current[index] = node;
+              }}
               className={`menu-surface__item${item.danger ? " is-danger" : ""}`}
               disabled={item.disabled}
+              onKeyDown={(event) => handleItemKeyDown(event, index, item, hasChildren)}
               onClick={() => {
                 if (hasChildren) {
                   setSubmenuIndex((current) => (current === index ? null : index));
@@ -53,8 +103,15 @@ export function MenuList({ items, onClose, className }: MenuListProps) {
             </button>
 
             {isOpen && item.children ? (
-              <div className="menu-surface__submenu">
-                <MenuList items={item.children} onClose={onClose} />
+              <div
+                ref={submenuWrapRef}
+                className={`menu-surface__submenu menu-surface__submenu--${submenuPlacement}`}
+              >
+                <MenuList
+                  items={item.children}
+                  onClose={onClose}
+                  onRequestClose={() => setSubmenuIndex(null)}
+                />
               </div>
             ) : null}
           </div>

@@ -848,6 +848,14 @@ button {
   box-shadow: inset 0 0 0 1px rgba(124, 68, 222, 0.16);
 }
 
+.scene-row.is-primary {
+  box-shadow: inset 3px 0 0 var(--accent), inset 0 0 0 1px rgba(124, 68, 222, 0.28);
+}
+
+.scene-row.is-primary .scene-row__name {
+  color: #fff;
+}
+
 .scene-row.is-dragging {
   opacity: 0.45;
 }
@@ -1109,6 +1117,12 @@ button {
   background: rgba(26, 28, 32, 0.56);
 }
 
+.inspector-node-strip__titles {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .inspector-node-strip__title {
   min-width: 0;
   overflow: hidden;
@@ -1118,11 +1132,28 @@ button {
   font-weight: 700;
 }
 
+.inspector-node-strip__subline {
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .inspector-node-strip__meta {
   font-size: 0.68rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-soft);
+}
+
+.inspector-card__note {
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .inspector-card {
@@ -1613,8 +1644,15 @@ input[type=number] {
 .menu-surface__submenu {
   position: absolute;
   top: -6px;
-  left: calc(100% + 4px);
   z-index: 70;
+}
+
+.menu-surface__submenu--right {
+  left: calc(100% + 4px);
+}
+
+.menu-surface__submenu--left {
+  right: calc(100% + 4px);
 }
 
 .context-menu {
@@ -2042,6 +2080,45 @@ input[type=number] {
 
 .statusbar--phone .statusbar__right {
   flex: 0 0 auto;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 44px;
+  z-index: 110;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #1f2126 0%, #16171a 100%);
+  color: var(--text-soft);
+  font-size: 0.76rem;
+  letter-spacing: 0.01em;
+  transform: translateX(-50%);
+  box-shadow: var(--shadow-sm);
+  animation: toast-enter 140ms ease-out;
+  pointer-events: none;
+  user-select: none;
+}
+
+.toast--warning {
+  color: #e9d6a6;
+  border-color: rgba(233, 214, 166, 0.28);
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .animation-panel {
