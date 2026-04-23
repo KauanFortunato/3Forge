@@ -151,7 +151,7 @@ input, button, select, textarea {
 
 .app__body {
   display: grid;
-  grid-template-columns: var(--left-w, 260px) 1px minmax(0, 1fr) 1px var(--right-w, 320px);
+  grid-template-columns: var(--left-w, 260px) 1px minmax(0, 1fr) 1px var(--right-w, 340px);
   min-height: 0;
   overflow: hidden;
   background: var(--c-bg-1);
@@ -184,8 +184,17 @@ input, button, select, textarea {
   cursor: col-resize;
   position: relative;
 }
-.app__sep:hover { background: var(--c-accent); }
-.app__sep--row { cursor: row-resize; }
+.app__sep::after {
+  content: "";
+  position: absolute;
+  inset: 0 -2px;
+}
+.app__sep:hover,
+.app__sep.is-active { background: var(--c-accent); }
+.app__sep--row {
+  cursor: row-resize;
+}
+.app__sep--row::after { inset: -2px 0; }
 
 .app__hidden-input {
   position: absolute;
@@ -373,22 +382,31 @@ input, button, select, textarea {
   height: var(--h-toolbar);
   background: var(--c-bg-1);
   border-bottom: 1px solid var(--c-border);
-  padding: 0 var(--sp-4);
-  gap: var(--sp-5);
+  padding: 0 var(--sp-3);
+  gap: var(--sp-3);
 }
 .toolbar__left,
 .toolbar__center,
 .toolbar__right {
   display: flex; align-items: center; gap: var(--sp-2);
   min-width: 0;
+  flex-wrap: nowrap;
 }
+.toolbar__left { flex: 0 0 auto; }
 .toolbar__center {
   justify-content: center;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
   color: var(--c-text-dim);
   font-size: var(--fs-sm);
+  overflow: hidden;
 }
-.toolbar__right { justify-content: flex-end; }
+.toolbar__center > * { min-width: 0; }
+.toolbar__right {
+  justify-content: flex-end;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+.toolbar__right > * { flex: 0 0 auto; }
 
 .toolbar__context {
   display: inline-flex;
@@ -958,22 +976,22 @@ input, button, select, textarea {
   color: var(--c-text-dim);
   font-weight: 400;
 }
-.sec__bd { padding: var(--sp-3) var(--sp-3) var(--sp-4); }
+.sec__bd { padding: var(--sp-3) var(--sp-3) var(--sp-4); min-width: 0; }
 .sec.is-collapsed .sec__bd { display: none; }
 .sec.is-collapsed .sec__hd { border-bottom: 0; }
 
 /* Row */
 .row {
   display: grid;
-  grid-template-columns: 70px 1fr auto;
+  grid-template-columns: 78px minmax(0, 1fr) 18px;
   align-items: center;
   gap: var(--sp-3);
   min-height: var(--h-control);
-  margin-bottom: 3px;
+  margin-bottom: 4px;
   width: 100%;
 }
 .row--wide {
-  grid-template-columns: 70px 1fr;
+  grid-template-columns: 78px minmax(0, 1fr);
 }
 .row--stacked {
   grid-template-columns: 1fr;
@@ -983,6 +1001,10 @@ input, button, select, textarea {
   font-size: var(--fs-sm);
   color: var(--c-text-dim);
   text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .row__lbl.is-anim { color: var(--c-warn); }
 .row__editable {
@@ -1206,21 +1228,24 @@ input, button, select, textarea {
   border-radius: var(--r-sm);
   padding: 2px 4px 2px 2px;
   width: 100%;
+  min-width: 0;
   position: relative;
 }
 .swatch {
-  width: 20px; height: 20px;
+  width: 18px; height: 18px;
   border-radius: 2px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   cursor: pointer;
   appearance: none;
   padding: 0;
   background: currentColor;
+  flex: 0 0 auto;
 }
 .swatch::-webkit-color-swatch-wrapper { padding: 0; border: 0; }
 .swatch::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .swatch-hex {
   flex: 1;
+  min-width: 0;
   font-family: var(--f-mono);
   font-size: var(--fs-sm);
   color: var(--c-text);
@@ -1314,7 +1339,9 @@ input, button, select, textarea {
   display: flex; align-items: center;
   gap: var(--sp-2);
   z-index: 2;
+  pointer-events: none;
 }
+.vp-hud > * { pointer-events: auto; }
 .vp-hud.vp-hud--tl { top: var(--sp-3); left: var(--sp-3); }
 .vp-hud.vp-hud--tr { top: var(--sp-3); right: var(--sp-3); }
 .vp-hud.vp-hud--bl { bottom: var(--sp-3); left: var(--sp-3); }
@@ -1381,10 +1408,11 @@ input, button, select, textarea {
 
 .tl__body {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 200px 1fr;
   min-height: 0;
   overflow: hidden;
 }
+.tl__tracks { min-width: 180px; }
 .tl__tracks {
   border-right: 1px solid var(--c-border);
   overflow: auto;
@@ -1399,7 +1427,7 @@ input, button, select, textarea {
   height: 22px;
   padding: 0 var(--sp-3);
   border-bottom: 1px solid var(--c-border-soft);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
   color: var(--c-text-med);
   cursor: pointer;
   background: transparent;
@@ -2073,8 +2101,9 @@ input, button, select, textarea {
    Fields (runtime) cards
    ============================================================= */
 .sec--field {
-  padding: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg-1);
 }
 .sec--field .sec__hd {
   background: transparent;

@@ -63,6 +63,8 @@ import {
   TextPropertyIcon,
   UndoIcon,
   RedoIcon,
+  ViewSolidIcon,
+  ViewRenderedIcon,
 } from "./components/icons";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MenuBar } from "./components/MenuBar";
@@ -350,7 +352,7 @@ export function App() {
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(320);
-  const [rightPanelWidth, setRightPanelWidth] = useState(() => readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 420));
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => Math.max(320, Math.min(readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 340), 620)));
   const [timelineHeight, setTimelineHeight] = useState(() => readStoredNumberPreference(TIMELINE_HEIGHT_KEY, 300));
   const [isTimelineVisible, setIsTimelineVisible] = useState(() => readStoredBooleanPreference(TIMELINE_VISIBLE_KEY, true));
   const [resizeMode, setResizeMode] = useState<"hierarchy" | "sidebar" | "timeline" | null>(null);
@@ -1451,7 +1453,7 @@ export function App() {
 
         const rect = body.getBoundingClientRect();
         const newWidth = rect.right - event.clientX;
-        setRightPanelWidth(Math.max(280, Math.min(newWidth, 620)));
+        setRightPanelWidth(Math.max(320, Math.min(newWidth, 620)));
         return;
       }
 
@@ -1999,6 +2001,30 @@ export function App() {
                   <div className="hud-group hud-group--lbl">
                     <span>{currentTool}</span>
                     <strong>{storeView.blueprintNodes.length} items</strong>
+                  </div>
+                </div>
+                <div className="vp-hud vp-hud--tr">
+                  <div className="hud-group" role="group" aria-label="Viewport shading">
+                    <button
+                      type="button"
+                      className={`ibtn${storeView.viewMode === "solid" ? " is-active" : ""}`}
+                      onClick={() => store.setViewMode("solid")}
+                      aria-pressed={storeView.viewMode === "solid"}
+                      aria-label="Solid View"
+                      title="Solid View"
+                    >
+                      <ViewSolidIcon width={12} height={12} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`ibtn${storeView.viewMode === "rendered" ? " is-active" : ""}`}
+                      onClick={() => store.setViewMode("rendered")}
+                      aria-pressed={storeView.viewMode === "rendered"}
+                      aria-label="Rendered View"
+                      title="Rendered View"
+                    >
+                      <ViewRenderedIcon width={12} height={12} />
+                    </button>
                   </div>
                 </div>
               </div>
