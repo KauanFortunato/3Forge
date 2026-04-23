@@ -8,6 +8,7 @@ dist-export-runner
 .agents
 .serena
 .codex
+.claude
 graphify-out
 skills-lock.json
 /documents
