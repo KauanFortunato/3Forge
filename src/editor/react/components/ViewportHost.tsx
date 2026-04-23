@@ -93,7 +93,7 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
   return (
     <div
       ref={containerRef}
-      className="viewport-canvas"
+      className="vp"
       tabIndex={0}
       onPointerDown={(event) => {
         const activeElement = document.activeElement;

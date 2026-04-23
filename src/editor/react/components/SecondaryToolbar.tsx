@@ -2,11 +2,14 @@ import type { ReactNode } from "react";
 import type { ToolMode } from "../ui-types";
 import type { ViewMode } from "../../types";
 import {
+  BoxIcon,
   CursorIcon,
   FrameIcon,
+  HelpIcon,
   MoveIcon,
   RedoIcon,
   RotateIcon,
+  SaveIcon,
   ScaleIcon,
   TimelineIcon,
   UndoIcon,
@@ -31,6 +34,8 @@ interface SecondaryToolbarProps {
   onViewModeChange: (mode: ViewMode) => void;
   onFrame: () => void;
   onToggleTimeline: () => void;
+  onSave?: () => void;
+  onShortcuts?: () => void;
 }
 
 export function SecondaryToolbar(props: SecondaryToolbarProps) {
@@ -50,56 +55,61 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     onViewModeChange,
     onFrame,
     onToggleTimeline,
+    onSave,
+    onShortcuts,
   } = props;
 
   return (
-    <div className="secondary-toolbar">
-      <div className="secondary-toolbar__left">
-        <label className="component-name-field">
-          <span className="component-name-field__label toolbar-context__label">Component</span>
-          <BufferedInput
-            className="editor-input editor-input--compact component-name-field__input"
-            type="text"
-            value={componentName}
-            onCommit={onComponentNameChange}
-          />
-        </label>
-      </div>
-
-      <div className="secondary-toolbar__center">
-        <div className="toolbar-context">
-          <span className="toolbar-context__label">Selection</span>
-          <span className="toolbar-context__value">{selectedLabel}</span>
+    <div className="toolbar">
+      <div className="toolbar__left">
+        <div className="proj-chip">
+          <div className="proj-chip__icon" aria-hidden="true">
+            <BoxIcon width={11} height={11} />
+          </div>
+          <div className="proj-chip__meta">
+            <span className="proj-chip__label">Component</span>
+            <BufferedInput
+              className="proj-chip__name"
+              type="text"
+              value={componentName}
+              onCommit={onComponentNameChange}
+            />
+          </div>
         </div>
-        <div className="toolbar-context toolbar-context--compact">
-          <span className="toolbar-context__label">Scene</span>
-          <span className="toolbar-context__value">{nodeCount} nodes</span>
-        </div>
-        {currentTool === "translate" ? <div className="toolbar-chip toolbar-chip--hint">Hold Shift to snap</div> : null}
-      </div>
 
-      <div className="secondary-toolbar__right">
-        <div className="toolbar-icon-group toolbar-icon-group--tools">
-          <ToolbarIconButton label="Select (1)" shortcut="1" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
+        <div className="tgroup tgroup--tools">
+          <ToolbarIconButton label="Select" shortcut="Q" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
             <CursorIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Move (2)" shortcut="2" isActive={currentTool === "translate"} onClick={() => onToolChange("translate")}>
+          <ToolbarIconButton label="Move" shortcut="W" isActive={currentTool === "translate"} onClick={() => onToolChange("translate")}>
             <MoveIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Rotate (3)" shortcut="3" isActive={currentTool === "rotate"} onClick={() => onToolChange("rotate")}>
+          <ToolbarIconButton label="Rotate" shortcut="E" isActive={currentTool === "rotate"} onClick={() => onToolChange("rotate")}>
             <RotateIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Scale (4)" shortcut="4" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
+          <ToolbarIconButton label="Scale" shortcut="R" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
             <ScaleIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Frame Selection (F)" shortcut="F" onClick={onFrame}>
+          <ToolbarIconButton label="Frame" shortcut="F" onClick={onFrame}>
             <FrameIcon />
           </ToolbarIconButton>
         </div>
+      </div>
 
-        <span className="toolbar-divider" aria-hidden="true" />
+      <div className="toolbar__center">
+        <span className="toolbar__context">
+          <span className="toolbar__context-label">Selection</span>
+          <span className="toolbar__context-value">{selectedLabel}</span>
+        </span>
+        <span className="toolbar__context">
+          <span className="toolbar__context-label">Scene</span>
+          <span className="toolbar__context-value">{nodeCount} nodes</span>
+        </span>
+        {currentTool === "translate" ? <span className="toolbar__chip">Hold Shift to snap</span> : null}
+      </div>
 
-        <div className="toolbar-icon-group toolbar-icon-group--modes">
+      <div className="toolbar__right">
+        <div className="tgroup tgroup--view">
           <ToolbarIconButton
             label="Solid View"
             isActive={viewMode === "solid"}
@@ -116,24 +126,18 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
           </ToolbarIconButton>
         </div>
 
-        <span className="toolbar-divider" aria-hidden="true" />
+        <button
+          type="button"
+          className={`ibtn${isTimelineVisible ? " is-active" : ""}`}
+          onClick={onToggleTimeline}
+          aria-pressed={isTimelineVisible}
+          aria-label={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
+          title={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
+        >
+          <TimelineIcon />
+        </button>
 
-        <div className="toolbar-icon-group toolbar-icon-group--toggle">
-          <button
-            type="button"
-            className={`icon-button${isTimelineVisible ? " is-active" : ""}`}
-            onClick={onToggleTimeline}
-            aria-pressed={isTimelineVisible}
-            aria-label={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
-            title={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
-          >
-            <TimelineIcon />
-          </button>
-        </div>
-
-        <span className="toolbar-divider" aria-hidden="true" />
-
-        <div className="toolbar-icon-group toolbar-icon-group--history">
+        <div className="tgroup tgroup--history">
           <ToolbarIconButton label="Undo" disabled={!canUndo} onClick={onUndo}>
             <UndoIcon />
           </ToolbarIconButton>
@@ -141,6 +145,31 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
             <RedoIcon />
           </ToolbarIconButton>
         </div>
+
+        {onShortcuts ? (
+          <button
+            type="button"
+            className="ibtn"
+            onClick={onShortcuts}
+            aria-label="Shortcuts (F1)"
+            title="Shortcuts (F1)"
+          >
+            <HelpIcon />
+          </button>
+        ) : null}
+
+        {onSave ? (
+          <button
+            type="button"
+            className="tbtn is-primary"
+            onClick={onSave}
+            aria-label="Save (Ctrl+S)"
+            title="Save (Ctrl+S)"
+          >
+            <SaveIcon />
+            <span>Save</span>
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -159,14 +188,14 @@ function ToolbarIconButton({ label, disabled, isActive, shortcut, onClick, child
   return (
     <button
       type="button"
-      className={`icon-button${isActive ? " is-active" : ""}${shortcut ? " icon-button--with-kbd" : ""}`}
+      className={`ibtn${isActive ? " is-active" : ""}`}
       disabled={disabled}
       onClick={onClick}
-      title={label}
+      title={shortcut ? `${label} (${shortcut})` : label}
       aria-label={label}
+      data-kbd={shortcut}
     >
       {children}
-      {shortcut ? <kbd className="icon-button__kbd" aria-hidden="true">{shortcut}</kbd> : null}
     </button>
   );
 }

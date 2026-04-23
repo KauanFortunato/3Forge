@@ -30,15 +30,15 @@ export function Modal({ title, isOpen, onClose, children }: ModalProps) {
   }
 
   return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal-card" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="modal-card__header">
-          <h2>{title}</h2>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Fechar">
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div className="modal" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal__hd">
+          <h2 className="modal__title">{title}</h2>
+          <button type="button" className="modal__close" onClick={onClose} aria-label="Fechar">
             X
           </button>
         </div>
-        <div className="modal-card__body">{children}</div>
+        <div className="modal__bd">{children}</div>
       </div>
     </div>,
     document.body,

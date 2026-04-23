@@ -6,10 +6,10 @@ interface ShortcutDialogProps {
 }
 
 const SHORTCUTS = [
-  ["1", "Select"],
-  ["2", "Move"],
-  ["3", "Rotate"],
-  ["4", "Scale"],
+  ["Q", "Select"],
+  ["W", "Move"],
+  ["E", "Rotate"],
+  ["R", "Scale"],
   ["F", "Frame selection"],
   ["T", "Toggle timeline"],
   ["Ctrl + Z", "Undo"],
@@ -24,11 +24,12 @@ const SHORTCUTS = [
 export function ShortcutDialog({ isOpen, onClose }: ShortcutDialogProps) {
   return (
     <Modal title="Shortcuts" isOpen={isOpen} onClose={onClose}>
-      <div className="shortcut-list">
+      <div>
         {SHORTCUTS.map(([key, description]) => (
-          <div key={key} className="shortcut-item">
-            <span>{key}</span>
+          <div key={key} className="row">
+            <span className="row__lbl"><span className="kbd">{key}</span></span>
             <span>{description}</span>
+            <span aria-hidden="true" />
           </div>
         ))}
       </div>

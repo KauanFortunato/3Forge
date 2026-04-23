@@ -82,7 +82,7 @@ function mockNavigationType(type: "navigate" | "reload") {
 function getRecentOpenButton(container: HTMLElement, pattern: RegExp): HTMLButtonElement {
   const buttons = within(container).getAllByRole("button");
   const match = buttons.find((button) => (
-    button.classList.contains("landing-recent__open")
+    button.classList.contains("landing-recent")
       && pattern.test(button.textContent ?? "")
   ));
   if (!match) {
@@ -109,7 +109,13 @@ function persistLocalWorkspace(componentName = "Fixture") {
 
 async function openFileMenu() {
   fireEvent.click(screen.getByRole("button", { name: "File" }));
-  await screen.findByText("Save");
+  await screen.findByText("Save As");
+}
+
+function fileMenuItem(label: string) {
+  const dropdown = document.querySelector(".menu-popover") as HTMLElement | null;
+  if (!dropdown) throw new Error("File menu dropdown not found");
+  return within(dropdown).getByText(label);
 }
 
 describe("App", () => {
@@ -144,9 +150,9 @@ describe("App", () => {
     expect(screen.getByText("Phone mode is focused on loading projects and playing timelines. Use tablet or desktop for full editing.")).toBeTruthy();
     expect(screen.getByText("Recent projects")).toBeTruthy();
     expect(screen.queryByText("Full editor")).toBeNull();
-    expect(container.querySelector(".app-shell--landing")).toBeTruthy();
-    expect(container.querySelector(".landing-page__logo-image")).toBeTruthy();
-    expect(container.querySelector(".landing-page__quick-actions")).toBeTruthy();
+    expect(container.querySelector(".landing-overlay--phone")).toBeTruthy();
+    expect(container.querySelector(".landing-hero__brand-mark")).toBeTruthy();
+    expect(container.querySelector(".landing-action")).toBeTruthy();
   });
 
   it("skips the welcome screen on reload when the workspace session is still active", () => {
@@ -250,14 +256,14 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "All keyframes" }));
 
-    const keyframes = document.querySelectorAll(".animation-keyframe");
+    const keyframes = document.querySelectorAll(".tl-kf");
     expect(keyframes.length).toBe(4);
 
     fireEvent.click(keyframes[2] as HTMLButtonElement);
 
     await waitFor(() => {
       expect(screen.getByText("Accent Plate | Mesh")).toBeTruthy();
-      expect(document.querySelector(".animation-keyframe.is-selected")).toBeTruthy();
+      expect(document.querySelector(".tl-kf.is-selected")).toBeTruthy();
     });
   });
 
@@ -428,7 +434,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /Open file/i }));
     await screen.findByDisplayValue("Linked File");
     await openFileMenu();
-    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(fileMenuItem("Save"));
 
     await waitFor(() => {
       expect(fileAccessMocks.saveBlueprintToExistingHandle).toHaveBeenCalledTimes(1);
@@ -464,7 +470,7 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: /Open file/i }));
     await screen.findByDisplayValue("Denied Save");
     await openFileMenu();
-    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(fileMenuItem("Save"));
 
     await waitFor(() => {
       expect(fileAccessMocks.saveBlueprintAs).toHaveBeenCalledTimes(1);
@@ -480,7 +486,7 @@ describe("App", () => {
     render(<App />);
     await openFileMenu();
 
-    const fileMenu = document.querySelector(".menu-bar__dropdown .menu-surface");
+    const fileMenu = document.querySelector(".menu-popover");
     expect(fileMenu).toBeTruthy();
 
     fireEvent.mouseEnter(within(fileMenu as HTMLElement).getByRole("button", { name: "Export" }));
@@ -523,20 +529,22 @@ describe("App", () => {
     mockNavigationType("reload");
 
     const { container } = render(<App />);
-    const appShell = container.querySelector(".app-shell");
-    const shellBody = container.querySelector(".app-shell__body");
+    const appShell = container.querySelector(".app");
+    const shellBody = container.querySelector(".app__body");
     const footer = container.querySelector("footer.statusbar");
 
     expect(appShell?.children[2]).toBe(shellBody ?? null);
     expect(appShell?.children[3]).toBe(footer ?? null);
-    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(shellBody?.querySelector(".app__col--center.has-timeline")).toBeTruthy();
+    expect(shellBody?.querySelector(".tl")).toBeTruthy();
     expect(screen.getByText("local workspace saved")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Timeline On" }));
 
     expect(appShell?.children[2]).toBe(shellBody ?? null);
     expect(appShell?.children[3]).toBe(footer ?? null);
-    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeFalsy();
+    expect(shellBody?.querySelector(".app__col--center.has-timeline")).toBeFalsy();
+    expect(shellBody?.querySelector(".tl")).toBeFalsy();
     expect(screen.getByRole("button", { name: "Timeline Off" })).toBeTruthy();
   });
 
@@ -546,20 +554,20 @@ describe("App", () => {
     mockNavigationType("reload");
 
     const { container } = render(<App />);
-    const shellBody = container.querySelector(".app-shell__body");
+    const shellBody = container.querySelector(".app__body");
 
-    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(shellBody?.querySelector(".tl")).toBeTruthy();
     expect(window.localStorage.getItem("3forge-timeline-visible")).toBe("true");
 
     fireEvent.keyDown(window, { key: "t" });
 
-    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeFalsy();
+    expect(shellBody?.querySelector(".tl")).toBeFalsy();
     expect(screen.getByRole("button", { name: "Timeline Off" })).toBeTruthy();
     expect(window.localStorage.getItem("3forge-timeline-visible")).toBe("false");
 
     fireEvent.keyDown(window, { key: "t" });
 
-    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(shellBody?.querySelector(".tl")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Timeline On" })).toBeTruthy();
     expect(window.localStorage.getItem("3forge-timeline-visible")).toBe("true");
   });
@@ -570,15 +578,15 @@ describe("App", () => {
     mockNavigationType("reload");
 
     const { container } = render(<App />);
-    const shellBody = container.querySelector(".app-shell__body");
+    const shellBody = container.querySelector(".app__body");
     const componentNameInput = screen.getByDisplayValue("Typing Guard");
 
-    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(shellBody?.querySelector(".tl")).toBeTruthy();
 
     componentNameInput.focus();
     fireEvent.keyDown(componentNameInput, { key: "t" });
 
-    expect(shellBody?.querySelector(".app-shell__timeline-dock")).toBeTruthy();
+    expect(shellBody?.querySelector(".tl")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Timeline On" })).toBeTruthy();
     expect(window.localStorage.getItem("3forge-timeline-visible")).toBe("true");
   });
@@ -608,7 +616,7 @@ describe("App", () => {
 
     const componentInput = screen.getByDisplayValue("Copy Paste");
     expect(componentInput).toBeTruthy();
-    const sceneRows = container.querySelectorAll(".scene-row");
+    const sceneRows = container.querySelectorAll(".sg-row");
     fireEvent.click(sceneRows[1] as HTMLElement);
     fireEvent.keyDown(window, { ctrlKey: true, key: "c" });
     fireEvent.keyDown(window, { ctrlKey: true, key: "v" });
@@ -692,7 +700,7 @@ describe("App", () => {
     fireEvent.contextMenu(heroRow);
 
     const menu = await waitFor(() => {
-      const node = document.body.querySelector(".context-menu");
+      const node = document.body.querySelector(".menu-popover--floating");
       if (!node) {
         throw new Error("context menu not rendered");
       }
@@ -721,7 +729,7 @@ describe("App", () => {
     fireEvent.contextMenu(accentRow);
 
     const menu = await waitFor(() => {
-      const node = document.body.querySelector(".context-menu");
+      const node = document.body.querySelector(".menu-popover--floating");
       if (!node) {
         throw new Error("context menu not rendered");
       }
@@ -734,7 +742,7 @@ describe("App", () => {
     fireEvent.keyDown(pasteSpecialButton, { key: "ArrowRight" });
 
     await waitFor(() => {
-      expect(menu.querySelector(".menu-surface__submenu")).toBeTruthy();
+      expect(menu.querySelector(".menu-popover__submenu")).toBeTruthy();
     });
     expect(within(menu).getByRole("button", { name: /All compatible/i })).toBeTruthy();
 
@@ -744,14 +752,14 @@ describe("App", () => {
     fireEvent.keyDown(allCompatibleButton, { key: "ArrowLeft" });
 
     await waitFor(() => {
-      expect(menu.querySelector(".menu-surface__submenu")).toBeFalsy();
+      expect(menu.querySelector(".menu-popover__submenu")).toBeFalsy();
     });
 
     // Escape dismisses the whole context menu.
     fireEvent.keyDown(window, { key: "Escape" });
 
     await waitFor(() => {
-      expect(document.body.querySelector(".context-menu")).toBeFalsy();
+      expect(document.body.querySelector(".menu-popover--floating")).toBeFalsy();
     });
   });
 
@@ -773,7 +781,7 @@ describe("App", () => {
     fireEvent.contextMenu(accentRow);
 
     const menu = await waitFor(() => {
-      const node = document.body.querySelector(".context-menu");
+      const node = document.body.querySelector(".menu-popover--floating");
       if (!node) {
         throw new Error("context menu not rendered");
       }
@@ -785,7 +793,7 @@ describe("App", () => {
     fireEvent.keyDown(pasteSpecialButton, { key: "ArrowRight" });
 
     await waitFor(() => {
-      expect(menu.querySelector(".menu-surface__submenu")).toBeTruthy();
+      expect(menu.querySelector(".menu-popover__submenu")).toBeTruthy();
     });
 
     // Focus the "Material" submenu item and press Enter; the button handles
@@ -830,7 +838,7 @@ describe("App", () => {
     fireEvent.contextMenu(headlineRow);
 
     const menu = await waitFor(() => {
-      const node = document.body.querySelector(".context-menu");
+      const node = document.body.querySelector(".menu-popover--floating");
       if (!node) {
         throw new Error("context menu not rendered");
       }
@@ -842,7 +850,7 @@ describe("App", () => {
     fireEvent.keyDown(pasteSpecialButton, { key: "ArrowRight" });
 
     await waitFor(() => {
-      expect(menu.querySelector(".menu-surface__submenu")).toBeTruthy();
+      expect(menu.querySelector(".menu-popover__submenu")).toBeTruthy();
     });
 
     const geometryItem = within(menu).getByRole("button", { name: /^Geometry$/i });

@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { MenuAction } from "../ui-types";
 import { MenuList } from "./ContextMenu";
 
-const APP_LOGO_SRC = "/assets/web/logo.svg";
-
 interface TopMenu {
   id: string;
   label: string;
@@ -12,9 +10,10 @@ interface TopMenu {
 
 interface MenuBarProps {
   menus: TopMenu[];
+  appVersion?: string;
 }
 
-export function MenuBar({ menus }: MenuBarProps) {
+export function MenuBar({ menus, appVersion }: MenuBarProps) {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -40,18 +39,20 @@ export function MenuBar({ menus }: MenuBarProps) {
   }, []);
 
   return (
-    <div ref={rootRef} className="menu-bar">
-      <div className="menu-bar__brand" aria-label="3Forge">
-        <img src={APP_LOGO_SRC} alt="" className="menu-bar__brand-image" />
+    <div ref={rootRef} className="menubar">
+      <div className="menubar__brand" aria-label="3Forge">
+        <div className="menubar__brand-mark" aria-hidden="true">3F</div>
+        <span>3Forge</span>
       </div>
+      <div className="menubar__sep" aria-hidden="true" />
 
-      <div className="menu-bar__menus">
+      <div className="menubar__menus">
         {menus.map((menu) => {
           const isOpen = openMenuId === menu.id;
           return (
             <div
               key={menu.id}
-              className="menu-bar__menu"
+              className="menubar__menu"
               onMouseEnter={() => {
                 if (openMenuId) {
                   setOpenMenuId(menu.id);
@@ -60,14 +61,14 @@ export function MenuBar({ menus }: MenuBarProps) {
             >
               <button
                 type="button"
-                className={`menu-bar__button${isOpen ? " is-open" : ""}`}
+                className={`menubar__item${isOpen ? " is-active" : ""}`}
                 onClick={() => setOpenMenuId((current) => (current === menu.id ? null : menu.id))}
               >
                 {menu.label}
               </button>
 
               {isOpen ? (
-                <div className="menu-bar__dropdown">
+                <div className="menu-popover">
                   <MenuList items={menu.items} onClose={() => setOpenMenuId(null)} />
                 </div>
               ) : null}
@@ -75,6 +76,18 @@ export function MenuBar({ menus }: MenuBarProps) {
           );
         })}
       </div>
+
+      <div className="menubar__spacer" />
+
+      {appVersion ? (
+        <div className="menubar__right">
+          <span className="menubar__chip">
+            <span className="menubar__dot" aria-hidden="true" />
+            auto-save
+          </span>
+          <span className="menubar__chip">{appVersion}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

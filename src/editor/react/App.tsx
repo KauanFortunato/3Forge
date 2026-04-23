@@ -73,7 +73,7 @@ import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { ViewportHost } from "./components/ViewportHost";
 
-const APP_LOGO_SRC = "/assets/web/logo.svg";
+const APP_VERSION = "v0.1.0";
 
 interface NodeClipboard {
   sourceNodeIds: string[];
@@ -204,157 +204,115 @@ function LandingPage({
     ? getProjectSourceLabel(persistedWorkspace.context.source, persistedWorkspace.context.canOverwriteFile)
     : null;
 
+  const heroTitle = isPhoneLayout ? "3Forge" : "3Forge Editor";
+  const heroSubtitle = isPhoneLayout
+    ? "Phone mode is focused on loading projects and playing timelines. Use tablet or desktop for full editing."
+    : isTabletLayout
+      ? "Resume quickly, open files and keep editing in a compact workspace."
+      : "Design, prototype, and export high-performance 3D components for your applications.";
+
   return (
-    <div className={`landing-page landing-page--${layoutMode}`}>
-      <div className="landing-page__content">
-        <div className="landing-page__logo">
-          <img src={APP_LOGO_SRC} alt="3Forge" className="landing-page__logo-image" />
+    <div className={`landing-overlay landing-overlay--${layoutMode}`}>
+      <section className="landing-hero">
+        <div className="landing-hero__grid" aria-hidden="true" />
+        <div className="landing-hero__brand">
+          <div className="landing-hero__brand-mark" aria-hidden="true">3F</div>
+          <span>3Forge</span>
         </div>
-        <h1 className="landing-page__title">{isPhoneLayout ? "3Forge" : "3Forge Editor"}</h1>
-        <p className="landing-page__subtitle">
-          {isPhoneLayout
-            ? "Open projects, review scenes and play animations on this device."
-            : isTabletLayout
-              ? "Resume quickly, open files and keep editing in a compact workspace."
-              : "Design, prototype, and export high-performance 3D components for your applications."}
-        </p>
+        <div className="landing-hero__body">
+          <p className="landing-hero__eyebrow">Open workspace</p>
+          <h1 className="landing-hero__title">{heroTitle}</h1>
+          <p className="landing-hero__sub">{heroSubtitle}</p>
+          <ul className="landing-hero__feats">
+            <li>Inspector & runtime fields</li>
+            <li>Keyframed dope-sheet</li>
+            <li>TypeScript & JSON export</li>
+            <li>ZIP packaging</li>
+          </ul>
+        </div>
+      </section>
 
-        {!isPhoneLayout ? (
-          <div className="landing-page__summary">
-            <div className="landing-summary-card">
-              <span className="landing-summary-card__label">Mode</span>
-              <strong className="landing-summary-card__value">{isTabletLayout ? "Compact editor" : "Full editor"}</strong>
-            </div>
-            <div className="landing-summary-card">
-              <span className="landing-summary-card__label">Local session</span>
-              <strong className="landing-summary-card__value">{persistedWorkspace ? "Available" : "Empty"}</strong>
-            </div>
-            <div className="landing-summary-card">
-              <span className="landing-summary-card__label">Recents</span>
-              <strong className="landing-summary-card__value">{recentProjects.length}</strong>
-            </div>
+      <aside className="landing-side">
+        <div className="landing-side__section">
+          <div className="landing-side__hd">
+            <span>Começar</span>
           </div>
-        ) : null}
 
-        <div className="landing-page__grid">
-          <section className="landing-page__panel landing-page__panel--primary">
-            <div className="landing-page__panel-header">
-              <p className="landing-page__eyebrow">Workspace</p>
-              <h2 className="landing-page__panel-title">
-                {isPhoneLayout
-                  ? "Open or resume a project on this device."
-                  : isTabletLayout
-                    ? "Resume fast or start another project."
-                    : "Start from a local project or a file."}
-              </h2>
-            </div>
+          {persistedWorkspace ? (
+            <button type="button" className="landing-action landing-action--primary" onClick={onContinue}>
+              <span className="landing-action__ico"><FrameIcon width={14} height={14} /></span>
+              <span className="landing-action__body">
+                <span className="landing-action__title">Continue where you left off</span>
+                <span className="landing-action__sub">{`${localProjectSourceLabel} · ${localProjectLabel}`}</span>
+              </span>
+            </button>
+          ) : null}
 
-            {isPhoneLayout ? (
-              <p className="landing-page__panel-copy">
-                Phone mode is focused on loading projects and playing timelines. Use tablet or desktop for full editing.
-              </p>
-            ) : null}
+          <button type="button" className="landing-action" onClick={onStartNew}>
+            <span className="landing-action__ico"><PlusIcon width={14} height={14} /></span>
+            <span className="landing-action__body">
+              <span className="landing-action__title">New project</span>
+              <span className="landing-action__sub">Start from a clean slate</span>
+            </span>
+          </button>
 
-            <div className="landing-page__actions">
-              {persistedWorkspace ? (
-                <button type="button" className="landing-btn landing-btn--primary" onClick={onContinue}>
-                  <FrameIcon width={20} height={20} />
-                  <div className="landing-btn__text">
-                    <span className="landing-btn__label">Continue where you left off</span>
-                    <span className="landing-btn__desc">{`${localProjectSourceLabel} · ${localProjectLabel}`}</span>
-                  </div>
-                </button>
-              ) : null}
+          <button type="button" className="landing-action" onClick={onOpenFile}>
+            <span className="landing-action__ico"><DownloadIcon width={14} height={14} /></span>
+            <span className="landing-action__body">
+              <span className="landing-action__title">Open file</span>
+              <span className="landing-action__sub">Load a blueprint from your machine</span>
+            </span>
+          </button>
+        </div>
 
-              {isPhoneLayout ? (
-                <div className="landing-page__quick-actions">
-                  <button type="button" className="landing-btn landing-btn--secondary landing-btn--compact" onClick={onOpenFile}>
-                    <DownloadIcon width={18} height={18} />
-                    <div className="landing-btn__text">
-                      <span className="landing-btn__label">Open file</span>
-                      <span className="landing-btn__desc">Load a blueprint</span>
-                    </div>
+        <section className="landing-side__section">
+          <div className="landing-side__hd">
+            <span>{isPhoneLayout ? "Recent projects" : "Open recent"}</span>
+          </div>
+
+          {recentProjects.length > 0 ? (
+            <div>
+              {recentProjects.map((entry) => (
+                <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <button
+                    type="button"
+                    className="landing-recent"
+                    onClick={() => onOpenRecent(entry.id)}
+                  >
+                    <span>
+                      <span className="landing-recent__name">{entry.label}</span>
+                      <span className="landing-recent__meta">
+                        <span>{entry.source === "file-handle" ? "Linked file" : "Local snapshot"}</span>
+                        <span>·</span>
+                        <span>{entry.componentName}</span>
+                      </span>
+                    </span>
+                    <span className="landing-recent__time">{formatRecentProjectTime(entry.updatedAt)}</span>
                   </button>
-
-                  <button type="button" className="landing-btn landing-btn--secondary landing-btn--compact" onClick={onStartNew}>
-                    <PlusIcon width={18} height={18} />
-                    <div className="landing-btn__text">
-                      <span className="landing-btn__label">New project</span>
-                      <span className="landing-btn__desc">Start clean</span>
-                    </div>
+                  <button
+                    type="button"
+                    className="landing-recent__remove"
+                    aria-label={`Remove ${entry.label} from recents`}
+                    onClick={() => onRemoveRecent(entry.id)}
+                  >
+                    <span aria-hidden="true">x</span>
                   </button>
                 </div>
-              ) : (
-                <>
-                  <button type="button" className="landing-btn landing-btn--secondary" onClick={onOpenFile}>
-                    <DownloadIcon width={20} height={20} />
-                    <div className="landing-btn__text">
-                      <span className="landing-btn__label">Open file</span>
-                      <span className="landing-btn__desc">Load a blueprint from your machine</span>
-                    </div>
-                  </button>
-
-                  <button type="button" className="landing-btn landing-btn--secondary" onClick={onStartNew}>
-                    <PlusIcon width={20} height={20} />
-                    <div className="landing-btn__text">
-                      <span className="landing-btn__label">New project</span>
-                      <span className="landing-btn__desc">Start from a clean slate</span>
-                    </div>
-                  </button>
-                </>
-              )}
+              ))}
             </div>
-          </section>
-
-          <section className="landing-page__panel landing-page__panel--recent">
-            <div className="landing-page__panel-header">
-              <p className="landing-page__eyebrow">Recents</p>
-              <h2 className="landing-page__panel-title">{isPhoneLayout ? "Recent projects" : "Open recent"}</h2>
+          ) : (
+            <div className="landing-empty">
+              Projects you opened or imported recently appear here and can be reopened later.
             </div>
+          )}
+        </section>
 
-            {recentProjects.length > 0 ? (
-              <div className="landing-page__recent-list">
-                {recentProjects.map((entry) => (
-                  <div key={entry.id} className="landing-recent">
-                    <button
-                      type="button"
-                      className="landing-recent__remove"
-                      aria-label={`Remove ${entry.label} from recents`}
-                      onClick={() => onRemoveRecent(entry.id)}
-                    >
-                      <span aria-hidden="true">x</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="landing-recent__open"
-                      onClick={() => onOpenRecent(entry.id)}
-                    >
-                      <span className="landing-recent__title">{entry.label}</span>
-                      <span className="landing-recent__meta">
-                        {entry.source === "file-handle" ? "Linked file" : "Local snapshot"}
-                        {" · "}
-                        {entry.componentName}
-                        {" · "}
-                        {formatRecentProjectTime(entry.updatedAt)}
-                      </span>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="landing-page__empty">
-                Projects you opened or imported recently appear here and can be reopened later.
-              </div>
-            )}
-          </section>
-        </div>
-
-        <div className="landing-page__footer">
+        <div className="landing-side__footer">
           {isPhoneLayout
             ? "Reload keeps your current session. Leaving the app returns here without deleting local work."
             : "Reload keeps your current session in place. Reopening the app brings you back to this launcher without deleting local work."}
         </div>
-      </div>
+      </aside>
     </div>
   );
 }
@@ -419,14 +377,15 @@ export function App() {
   const isCompactLayout = layoutMode !== "desktop";
   const effectiveToolMode = isPhoneLayout ? "select" : currentTool;
   const showEditingTimeline = isTimelineVisible && !isPhoneLayout;
-  const shellBodyClassName = `app-shell__body${showEditingTimeline ? " has-timeline" : ""}${isPhoneLayout ? " app-shell__body--phone" : ""}`;
-  const rightPanelStyle = useMemo(
-    () => ({ "--hierarchy-panel-height": `${hierarchyHeight}px` }) as CSSProperties,
-    [hierarchyHeight],
-  );
-  const timelineDockStyle = useMemo(
-    () => ({ gridTemplateRows: `8px ${timelineHeight}px` }) as CSSProperties,
-    [timelineHeight],
+  const shellBodyClassName = `app__body${isPhoneLayout ? " app__body--phone" : ""}`;
+  const centerColClassName = `app__col app__col--center${showEditingTimeline ? " has-timeline" : ""}`;
+  const shellStyle = useMemo(
+    () => ({
+      "--right-w": `${rightPanelWidth}px`,
+      "--tl-h": `${timelineHeight}px`,
+      "--hierarchy-h": `${hierarchyHeight}px`,
+    }) as CSSProperties,
+    [rightPanelWidth, timelineHeight, hierarchyHeight],
   );
   const selectedNodeIds = storeView.selectedNodeIds;
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
@@ -1449,7 +1408,7 @@ export function App() {
 
     const handlePointerMove = (event: PointerEvent) => {
       if (resizeMode === "hierarchy") {
-        const panel = document.querySelector(".panel--split");
+        const panel = document.querySelector(".app__col--right");
         if (!panel) return;
 
         const rect = panel.getBoundingClientRect();
@@ -1459,20 +1418,20 @@ export function App() {
       }
 
       if (resizeMode === "sidebar") {
-        const workspace = document.querySelector(".workspace-shell");
-        if (!workspace) return;
+        const body = document.querySelector(".app__body");
+        if (!body) return;
 
-        const rect = workspace.getBoundingClientRect();
+        const rect = body.getBoundingClientRect();
         const newWidth = rect.right - event.clientX;
         setRightPanelWidth(Math.max(280, Math.min(newWidth, 620)));
         return;
       }
 
-      const shell = document.querySelector(".app-shell");
-      if (!shell) return;
+      const centerCol = document.querySelector(".app__col--center");
+      if (!centerCol) return;
 
-      const rect = shell.getBoundingClientRect();
-      const newHeight = rect.bottom - 28 - event.clientY;
+      const rect = centerCol.getBoundingClientRect();
+      const newHeight = rect.bottom - event.clientY;
       setTimelineHeight(Math.max(190, Math.min(newHeight, 520)));
     };
 
@@ -1833,7 +1792,7 @@ export function App() {
 
   if (!isStarted) {
     return (
-      <div className={`app-shell app-shell--landing app-shell--${layoutMode}`}>
+      <>
         <LandingPage
           layoutMode={layoutMode}
           persistedWorkspace={persistedWorkspace}
@@ -1846,7 +1805,7 @@ export function App() {
         />
         <input
           ref={jsonInputRef}
-          className="hidden-input"
+          className="app__hidden-input"
           type="file"
           accept=".json"
           onChange={async (event) => {
@@ -1860,13 +1819,13 @@ export function App() {
             }
           }}
         />
-      </div>
+      </>
     );
   }
 
   return (
-    <div className={`app-shell app-shell--${layoutMode}`} data-status-tick={statusTick}>
-      {!isPhoneLayout ? <MenuBar menus={menus} /> : null}
+    <div className={`app app--${layoutMode}`} data-status-tick={statusTick} style={shellStyle}>
+      {!isPhoneLayout ? <MenuBar menus={menus} appVersion={APP_VERSION} /> : null}
 
       {!isPhoneLayout ? (
         <SecondaryToolbar
@@ -1889,6 +1848,8 @@ export function App() {
           onFrame={handleFrameSelection}
           isTimelineVisible={isTimelineVisible}
           onToggleTimeline={toggleTimelineVisibility}
+          onSave={() => { void handleSaveProject(); }}
+          onShortcuts={() => setIsShortcutDialogOpen(true)}
         />
       ) : (
         <PhoneViewerHeader
@@ -1903,34 +1864,22 @@ export function App() {
 
       <div className={shellBodyClassName}>
         {isPhoneLayout ? (
-          <div className="phone-viewer-shell">
-            <main className="viewport-panel viewport-panel--phone">
-              <div className="viewport-panel__header viewport-panel__header--compact">
-                <span className="viewport-panel__title">Viewport</span>
-                <div className="viewport-panel__badges">
-                  <span className="badge">{storeView.viewMode}</span>
-                  <span className="badge">{storeView.blueprintNodes.length} items</span>
-                </div>
-              </div>
-
-              <div className="viewport-panel__body">
-                <ViewportHost
-                  store={store}
-                  onSceneReady={(scene) => {
-                    animationFrameUnsubscribeRef.current?.();
-                    sceneRef.current = scene;
-                    scene?.setTransformMode(effectiveToolMode);
-                    if (scene) {
-                      scene.seekAnimation(currentFrame);
-                      animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
-                    } else {
-                      animationFrameUnsubscribeRef.current = null;
-                    }
-                  }}
-                  onContextMenu={(event) => event.preventDefault()}
-                />
-              </div>
-            </main>
+          <div className="phone-shell">
+            <ViewportHost
+              store={store}
+              onSceneReady={(scene) => {
+                animationFrameUnsubscribeRef.current?.();
+                sceneRef.current = scene;
+                scene?.setTransformMode(effectiveToolMode);
+                if (scene) {
+                  scene.seekAnimation(currentFrame);
+                  animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
+                } else {
+                  animationFrameUnsubscribeRef.current = null;
+                }
+              }}
+              onContextMenu={(event) => event.preventDefault()}
+            />
 
             <PhonePlaybackBar
               clips={storeView.animation.clips}
@@ -1945,196 +1894,226 @@ export function App() {
           </div>
         ) : (
           <>
-            <div
-              className={`workspace-shell workspace-shell--${layoutMode}`}
-              style={{ gridTemplateColumns: isCompactLayout ? "1fr" : `minmax(0, 1fr) 8px ${rightPanelWidth}px` }}
-            >
-              <main className="viewport-panel">
-                <div className="viewport-panel__header viewport-panel__header--compact">
-                  <span className="viewport-panel__title">Viewport</span>
-                  <div className="viewport-panel__badges">
-                    <span className="badge">{currentTool}</span>
-                    <span className="badge">{storeView.blueprintNodes.length} items</span>
+            {/* Left column — Scene Graph */}
+            <aside className="app__col app__col--left">
+              <section className="panel">
+                <div className="panel__hd">
+                  <span className="panel__hd-icon"><GroupIcon width={12} height={12} /></span>
+                  <span className="panel__hd-title">Hierarchy</span>
+                  <span className="panel__hd-meta">{storeView.blueprintNodes.length} items</span>
+                  <div className="panel__hd-spacer" />
+                  <div className="panel__hd-actions">
+                    <button
+                      type="button"
+                      className="tbtn is-ghost"
+                      onClick={handleToggleHierarchyCollapse}
+                      disabled={collapsibleHierarchyNodeIds.length === 0}
+                    >
+                      {areAllHierarchyGroupsCollapsed ? "Expand all" : "Collapse all"}
+                    </button>
                   </div>
                 </div>
 
-                <div className="viewport-panel__body">
-                  <ViewportHost
-                    store={store}
-                    onSceneReady={(scene) => {
-                      animationFrameUnsubscribeRef.current?.();
-                      sceneRef.current = scene;
-                      scene?.setTransformMode(effectiveToolMode);
-                      if (scene) {
-                        scene.seekAnimation(currentFrame);
-                        animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
-                      } else {
-                        animationFrameUnsubscribeRef.current = null;
-                      }
-                    }}
-                    onContextMenu={openViewportContextMenu}
+                <div className="panel__bd panel__bd--flush">
+                  <SceneGraphPanel
+                    nodes={storeView.blueprintNodes}
+                    animatedNodeIds={animatedNodeIds}
+                    selectedNodeId={storeView.selectedNodeId}
+                    selectedNodeIds={storeView.selectedNodeIds}
+                    collapsedIds={collapsedHierarchyIds}
+                    onCollapsedIdsChange={setCollapsedHierarchyIds}
+                    onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
+                    onMoveNode={handleSceneMove}
+                    onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
+                    onContextMenu={openSceneGraphContextMenu}
                   />
                 </div>
-              </main>
+              </section>
+            </aside>
 
-              {!isCompactLayout ? (
-                <div
-                  className={`panel-splitter panel-splitter--vertical${resizeMode === "sidebar" ? " is-active" : ""}`}
-                  onPointerDown={startSidebarResizing}
+            <div
+              className={`app__sep${resizeMode === "sidebar" ? " is-active" : ""}`}
+              onPointerDown={startSidebarResizing}
+              data-role="left-separator"
+            />
+
+            {/* Center column — Viewport + timeline */}
+            <div className={centerColClassName}>
+              <div style={{ position: "relative", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+                <ViewportHost
+                  store={store}
+                  onSceneReady={(scene) => {
+                    animationFrameUnsubscribeRef.current?.();
+                    sceneRef.current = scene;
+                    scene?.setTransformMode(effectiveToolMode);
+                    if (scene) {
+                      scene.seekAnimation(currentFrame);
+                      animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
+                    } else {
+                      animationFrameUnsubscribeRef.current = null;
+                    }
+                  }}
+                  onContextMenu={openViewportContextMenu}
                 />
+                <div className="vp-hud vp-hud--tl">
+                  <div className="hud-group hud-group--lbl">
+                    <span>{currentTool}</span>
+                    <strong>{storeView.blueprintNodes.length} items</strong>
+                  </div>
+                </div>
+              </div>
+
+              {showEditingTimeline ? (
+                <>
+                  <div
+                    className={`app__sep app__sep--row${resizeMode === "timeline" ? " is-active" : ""}`}
+                    onPointerDown={startTimelineResizing}
+                  />
+                  <AnimationTimeline
+                    animation={storeView.animation}
+                    nodes={storeView.blueprintNodes}
+                    selectedNode={selectedNode}
+                    currentFrame={currentFrame}
+                    isPlaying={isAnimationPlaying}
+                    selectedTrackId={selectedTrackId}
+                    selectedKeyframeId={selectedKeyframeId}
+                    onPlayToggle={handleAnimationPlayToggle}
+                    onStop={handleAnimationStop}
+                    onFrameChange={handleTimelineFrameChange}
+                    onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
+                    onCreateClip={handleCreateAnimationClip}
+                    onSelectClip={handleSelectAnimationClip}
+                    onRenameClip={handleRenameAnimationClip}
+                    onRemoveClip={handleRemoveAnimationClip}
+                    onAddTrack={handleAddAnimationTrack}
+                    onRemoveTrack={handleRemoveAnimationTrack}
+                    onAddKeyframe={handleAddAnimationKeyframe}
+                    onSelectTrack={handleSelectAnimationTrack}
+                    onSelectKeyframe={handleSelectAnimationKeyframe}
+                    onUpdateKeyframe={handleUpdateAnimationKeyframe}
+                    onRemoveKeyframe={handleRemoveAnimationKeyframe}
+                    onDuplicateClip={handleDuplicateAnimationClip}
+                    onSetTrackMuted={handleSetAnimationTrackMuted}
+                    onRemoveKeyframes={handleRemoveAnimationKeyframes}
+                    onShiftKeyframes={handleShiftAnimationKeyframes}
+                    onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
+                    onEndKeyframeDrag={() => {
+                      store.commitHistoryTransaction("ui");
+                      sceneRef.current?.seekAnimation(currentFrame);
+                    }}
+                  />
+                </>
               ) : null}
-
-              <aside className="panel panel--right panel--split" style={rightPanelStyle}>
-                <section className="panel-split__top">
-                  <div className="panel__header">
-                    <p className="panel__eyebrow">Hierarchy</p>
-                    <div className="panel__header-actions">
-                      <span className="panel__meta">{storeView.blueprintNodes.length} items</span>
-                      <button
-                        type="button"
-                        className="tool-button tool-button--label"
-                        onClick={handleToggleHierarchyCollapse}
-                        disabled={collapsibleHierarchyNodeIds.length === 0}
-                      >
-                        {areAllHierarchyGroupsCollapsed ? "Expand all" : "Collapse all"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="panel__body panel__body--flush">
-                    <SceneGraphPanel
-                      nodes={storeView.blueprintNodes}
-                      animatedNodeIds={animatedNodeIds}
-                      selectedNodeId={storeView.selectedNodeId}
-                      selectedNodeIds={storeView.selectedNodeIds}
-                      collapsedIds={collapsedHierarchyIds}
-                      onCollapsedIdsChange={setCollapsedHierarchyIds}
-                      onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
-                      onMoveNode={handleSceneMove}
-                      onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
-                      onContextMenu={openSceneGraphContextMenu}
-                    />
-                  </div>
-                </section>
-
-                <div
-                  className={`panel-splitter panel-splitter--horizontal${resizeMode === "hierarchy" ? " is-active" : ""}`}
-                  onPointerDown={startHierarchyResizing}
-                />
-
-                <section className="panel-split__bottom">
-                  <div className="panel-tabs">
-                    <button type="button" className={`panel-tab${rightPanelTab === "inspector" ? " is-active" : ""}`} onClick={() => setRightPanelTab("inspector")}>Inspector</button>
-                    <button type="button" className={`panel-tab${rightPanelTab === "fields" ? " is-active" : ""}`} onClick={() => setRightPanelTab("fields")}>Fields</button>
-                    <button type="button" className={`panel-tab${rightPanelTab === "export" ? " is-active" : ""}`} onClick={() => setRightPanelTab("export")}>Export</button>
-                  </div>
-
-                  <div className="panel__body">
-                    {rightPanelTab === "inspector" ? (
-                      <InspectorPanel
-                        node={inspectorNode}
-                        nodes={selectedNodes}
-                        emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
-                        fonts={storeView.fonts}
-                        onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
-                        onParentChange={(nodeId, parentId) => {
-                          const eligibleChildren = store.getNodeChildren(parentId);
-                          store.moveNode(nodeId, parentId, eligibleChildren.length);
-                        }}
-                        onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
-                        onGroupPivotPresetApply={handleApplyGroupPivotPreset}
-                        getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
-                        onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
-                        onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
-                        onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
-                        onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
-                        onImportFont={() => fontInputRef.current?.click()}
-                        onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
-                      />
-                    ) : null}
-
-                    {rightPanelTab === "fields" ? (
-                      <FieldsPanel
-                        entries={storeView.editableFields}
-                        onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
-                        onRemoveEditable={(nodeId, path) => {
-                          const node = store.getNode(nodeId);
-                          const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
-                          if (definition) {
-                            store.toggleEditableProperty(nodeId, definition, false);
-                          }
-                        }}
-                      />
-                    ) : null}
-
-                    {rightPanelTab === "export" ? (
-                      <ExportPanel
-                        exportMode={exportMode}
-                        preview={exportPreview}
-                        onExportModeChange={setExportMode}
-                        onCopy={copyExportText}
-                        onDownload={() => downloadExportFile(exportMode)}
-                      />
-                    ) : null}
-                  </div>
-                </section>
-              </aside>
             </div>
 
-            {showEditingTimeline ? (
-              <div className="app-shell__timeline-dock" style={timelineDockStyle}>
-                <div
-                  className={`panel-splitter panel-splitter--horizontal panel-splitter--timeline${resizeMode === "timeline" ? " is-active" : ""}`}
-                  onPointerDown={startTimelineResizing}
-                />
-                <AnimationTimeline
-                  animation={storeView.animation}
-                  nodes={storeView.blueprintNodes}
-                  selectedNode={selectedNode}
-                  currentFrame={currentFrame}
-                  isPlaying={isAnimationPlaying}
-                  selectedTrackId={selectedTrackId}
-                  selectedKeyframeId={selectedKeyframeId}
-                  onPlayToggle={handleAnimationPlayToggle}
-                  onStop={handleAnimationStop}
-                  onFrameChange={handleTimelineFrameChange}
-                  onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
-                  onCreateClip={handleCreateAnimationClip}
-                  onSelectClip={handleSelectAnimationClip}
-                  onRenameClip={handleRenameAnimationClip}
-                  onRemoveClip={handleRemoveAnimationClip}
-                  onAddTrack={handleAddAnimationTrack}
-                  onRemoveTrack={handleRemoveAnimationTrack}
-                  onAddKeyframe={handleAddAnimationKeyframe}
-                  onSelectTrack={handleSelectAnimationTrack}
-                  onSelectKeyframe={handleSelectAnimationKeyframe}
-                  onUpdateKeyframe={handleUpdateAnimationKeyframe}
-                  onRemoveKeyframe={handleRemoveAnimationKeyframe}
-                  onDuplicateClip={handleDuplicateAnimationClip}
-                  onSetTrackMuted={handleSetAnimationTrackMuted}
-                  onRemoveKeyframes={handleRemoveAnimationKeyframes}
-                  onShiftKeyframes={handleShiftAnimationKeyframes}
-                  onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
-                  onEndKeyframeDrag={() => {
-                    store.commitHistoryTransaction("ui");
-                    sceneRef.current?.seekAnimation(currentFrame);
-                  }}
-                />
+            <div
+              className={`app__sep${resizeMode === "sidebar" ? " is-active" : ""}`}
+              onPointerDown={startSidebarResizing}
+              data-role="right-separator"
+            />
+
+            {/* Right column — Inspector/Fields/Export */}
+            <aside className="app__col app__col--right">
+              <div className="panel__hd">
+                <div className="ptabs" role="tablist" aria-label="Right panel tabs">
+                  <button
+                    type="button"
+                    className={`ptab${rightPanelTab === "inspector" ? " is-active" : ""}`}
+                    onClick={() => setRightPanelTab("inspector")}
+                    role="tab"
+                    aria-selected={rightPanelTab === "inspector"}
+                  >
+                    Inspector
+                  </button>
+                  <button
+                    type="button"
+                    className={`ptab${rightPanelTab === "fields" ? " is-active" : ""}`}
+                    onClick={() => setRightPanelTab("fields")}
+                    role="tab"
+                    aria-selected={rightPanelTab === "fields"}
+                  >
+                    Fields
+                  </button>
+                  <button
+                    type="button"
+                    className={`ptab${rightPanelTab === "export" ? " is-active" : ""}`}
+                    onClick={() => setRightPanelTab("export")}
+                    role="tab"
+                    aria-selected={rightPanelTab === "export"}
+                  >
+                    Export
+                  </button>
+                </div>
+                <div className="panel__hd-spacer" />
               </div>
-            ) : null}
+
+              <div className="panel__bd">
+                {rightPanelTab === "inspector" ? (
+                  <InspectorPanel
+                    node={inspectorNode}
+                    nodes={selectedNodes}
+                    emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
+                    fonts={storeView.fonts}
+                    onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
+                    onParentChange={(nodeId, parentId) => {
+                      const eligibleChildren = store.getNodeChildren(parentId);
+                      store.moveNode(nodeId, parentId, eligibleChildren.length);
+                    }}
+                    onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
+                    onGroupPivotPresetApply={handleApplyGroupPivotPreset}
+                    getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
+                    onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
+                    onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
+                    onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
+                    onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
+                    onImportFont={() => fontInputRef.current?.click()}
+                    onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
+                  />
+                ) : null}
+
+                {rightPanelTab === "fields" ? (
+                  <FieldsPanel
+                    entries={storeView.editableFields}
+                    onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
+                    onRemoveEditable={(nodeId, path) => {
+                      const node = store.getNode(nodeId);
+                      const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
+                      if (definition) {
+                        store.toggleEditableProperty(nodeId, definition, false);
+                      }
+                    }}
+                  />
+                ) : null}
+
+                {rightPanelTab === "export" ? (
+                  <ExportPanel
+                    exportMode={exportMode}
+                    preview={exportPreview}
+                    onExportModeChange={setExportMode}
+                    onCopy={copyExportText}
+                    onDownload={() => downloadExportFile(exportMode)}
+                  />
+                ) : null}
+              </div>
+            </aside>
           </>
         )}
       </div>
 
-      <footer className={`statusbar${isPhoneLayout ? " statusbar--phone" : ""}`}>
-        <span className="statusbar__message">{statusText}</span>
+      <footer className="statusbar">
+        <div className="statusbar__left">
+          <span className="statusbar__dot" aria-hidden="true" />
+          <span>{statusText}</span>
+        </div>
         <div className="statusbar__right">
           {isPhoneLayout ? (
             <span className="statusbar__chip">{`${getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)} · ${storeView.blueprintNodes.length} nodes`}</span>
           ) : (
             <>
               <span className="statusbar__chip">local workspace saved</span>
+              <span className="statusbar__sep">·</span>
               <span className="statusbar__chip">{getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)}</span>
+              <span className="statusbar__sep">·</span>
               <span className="statusbar__chip">{storeView.blueprintNodes.length} nodes</span>
             </>
           )}
@@ -2143,7 +2122,7 @@ export function App() {
 
       <input
         ref={jsonInputRef}
-        className="hidden-input"
+        className="app__hidden-input"
         type="file"
         accept=".json"
         onChange={async (event) => {
@@ -2163,7 +2142,7 @@ export function App() {
 
       <input
         ref={imageInputRef}
-        className="hidden-input"
+        className="app__hidden-input"
         type="file"
         accept=".png,.jpg,.jpeg,.webp,.svg"
         onChange={async (event) => {
@@ -2186,7 +2165,7 @@ export function App() {
 
       <input
         ref={fontInputRef}
-        className="hidden-input"
+        className="app__hidden-input"
         type="file"
         accept=".json,.typeface.json,.ttf,.otf"
         onChange={async (event) => {
@@ -2209,7 +2188,7 @@ export function App() {
         <div
           role="status"
           aria-live="polite"
-          className={`toast${toast.tone === "warning" ? " toast--warning" : ""}`}
+          className={`toast${toast.tone === "warning" ? " is-warning" : ""}`}
         >
           {toast.message}
         </div>
@@ -2217,10 +2196,8 @@ export function App() {
       <ShortcutDialog isOpen={isShortcutDialogOpen} onClose={() => setIsShortcutDialogOpen(false)} />
 
       <Modal title="About 3Forge" isOpen={isAboutDialogOpen} onClose={() => setIsAboutDialogOpen(false)}>
-        <div className="about-copy">
-          <p>3Forge is a standalone 3D component editor focused on building reusable Three.js pieces with runtime-editable fields.</p>
-          <p>The viewport, history, export pipeline, fonts, images, and scene state stay in the editor core. React now handles the software-like shell, menus, panels, and scene graph workflow.</p>
-        </div>
+        <p>3Forge is a standalone 3D component editor focused on building reusable Three.js pieces with runtime-editable fields.</p>
+        <p>The viewport, history, export pipeline, fonts, images, and scene state stay in the editor core. React now handles the software-like shell, menus, panels, and scene graph workflow.</p>
       </Modal>
     </div>
   );

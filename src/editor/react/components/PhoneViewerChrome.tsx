@@ -20,48 +20,48 @@ export function PhoneViewerHeader({
   onExit,
 }: PhoneViewerHeaderProps) {
   return (
-    <section className="phone-viewer-header">
-      <div className="phone-viewer-header__meta">
-        <p className="phone-viewer-header__eyebrow">Phone viewer</p>
-        <h1 className="phone-viewer-header__title">{projectName}</h1>
-        <p className="phone-viewer-header__subtitle">{sourceLabel}</p>
+    <section className="phone-header">
+      <div className="phone-header__meta">
+        <p className="phone-header__eyebrow">Phone viewer</p>
+        <h1 className="phone-header__title">{projectName}</h1>
+        <p className="phone-header__subtitle">{sourceLabel}</p>
       </div>
 
-      <div className="phone-viewer-header__actions">
+      <div className="phone-header__actions">
         <button
           type="button"
-          className="icon-button"
+          className="ibtn"
           onClick={onFrame}
           aria-label="Frame selection"
           title="Frame selection"
         >
-          <FrameIcon />
+          <FrameIcon width={13} height={13} />
         </button>
 
-        <div className="toolbar-icon-group phone-viewer-header__view-toggle">
+        <div className="tgroup">
           <button
             type="button"
-            className={`icon-button${viewMode === "solid" ? " is-active" : ""}`}
+            className={`ibtn${viewMode === "solid" ? " is-active" : ""}`}
             onClick={() => onViewModeChange("solid")}
             aria-label="Solid view"
             title="Solid view"
           >
-            <ViewSolidIcon />
+            <ViewSolidIcon width={13} height={13} />
           </button>
           <button
             type="button"
-            className={`icon-button${viewMode === "rendered" ? " is-active" : ""}`}
+            className={`ibtn${viewMode === "rendered" ? " is-active" : ""}`}
             onClick={() => onViewModeChange("rendered")}
             aria-label="Rendered view"
             title="Rendered view"
           >
-            <ViewRenderedIcon />
+            <ViewRenderedIcon width={13} height={13} />
           </button>
         </div>
 
         <button
           type="button"
-          className="tool-button tool-button--label"
+          className="tbtn is-ghost"
           onClick={onExit}
           aria-label="Exit project"
         >
@@ -98,7 +98,7 @@ export function PhonePlaybackBar({
 
   if (!activeClip) {
     return (
-      <section className="phone-playback phone-playback--empty">
+      <section className="phone-playback">
         <div className="phone-playback__meta">
           <p className="phone-playback__eyebrow">Animation</p>
           <p className="phone-playback__empty">
@@ -119,7 +119,7 @@ export function PhonePlaybackBar({
         <div className="phone-playback__meta">
           <p className="phone-playback__eyebrow">Animation</p>
           <select
-            className="editor-input editor-input--compact phone-playback__clip-select"
+            className="phone-playback__clip"
             value={activeClip.id}
             onChange={(event) => onSelectClip(event.currentTarget.value)}
             aria-label="Animation clip"
@@ -133,7 +133,7 @@ export function PhonePlaybackBar({
         <div className="phone-playback__controls">
           <button
             type="button"
-            className={`tool-button tool-button--label${isPlaying ? " is-active" : ""}`}
+            className={`tbtn is-ghost${isPlaying ? " is-primary" : ""}`}
             onClick={onPlayToggle}
             aria-label={isPlaying ? "Pause animation" : "Play animation"}
           >
@@ -141,7 +141,7 @@ export function PhonePlaybackBar({
           </button>
           <button
             type="button"
-            className="tool-button tool-button--label"
+            className="tbtn is-ghost"
             onClick={onStop}
             aria-label="Stop animation"
           >
