@@ -47,7 +47,7 @@ import { EditorStore } from "./state";
 import type { AnimationPropertyPath, EditorNode, EditorStoreChange, ImageNode, NodeOriginSpec, TextNode } from "./types";
 
 type GizmoMode = "translate" | "rotate" | "scale";
-type ToolMode = "select" | GizmoMode;
+export type ToolMode = "select" | GizmoMode;
 
 const DRAG_SNAP_THRESHOLD = 0.18;
 
@@ -791,7 +791,7 @@ export class SceneEditor {
       .filter((object): object is Object3D => Boolean(object));
     const primaryObject = this.objectMap.get(this.store.selectedNodeId);
 
-    if (selectedObjects.length === 1 && primaryObject && this.currentMode !== "select") {
+    if (shouldAttachTransformGizmo(this.currentMode, selectedObjects.length, Boolean(primaryObject)) && primaryObject) {
       this.transformControls.attach(primaryObject);
       this.transformHelper.visible = true;
     } else {
@@ -1130,4 +1130,24 @@ function resolveOriginOffset(
     default:
       return -((min + max) * 0.5);
   }
+}
+
+/**
+ * Returns true when the transform gizmo should attach to the primary selection.
+ * The gizmo only appears in non-select tool modes, and requires the primary selected
+ * object to be present in the scene. Multi-selection is supported — the gizmo still
+ * attaches to the primary (last-selected) object.
+ */
+export function shouldAttachTransformGizmo(
+  currentMode: ToolMode,
+  selectionCount: number,
+  hasPrimaryObject: boolean,
+): boolean {
+  if (currentMode === "select") {
+    return false;
+  }
+  if (selectionCount === 0) {
+    return false;
+  }
+  return hasPrimaryObject;
 }

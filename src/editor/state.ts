@@ -17,6 +17,13 @@ import {
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset } from "./fonts";
 import { createTransparentImageAsset, fitImageToMaxSize } from "./images";
 import { createMaterialSpec, getMaterialPropertyDefinitions, MATERIAL_SHADOW_PROPERTY_DEFINITIONS, normalizeMaterialSpec } from "./materials";
+import {
+  capturePropertiesFromNode,
+  resolveApplicableEntries,
+  type PropertyApplyReport,
+  type PropertyClipboard,
+  type PropertyClipboardScope,
+} from "./propertyClipboard";
 import { computeGroupContentBounds, getBoundsOriginOffset, transformOffsetByTransform } from "./spatial";
 import type {
   AnimationClip,
@@ -852,6 +859,7 @@ export class EditorStore extends EventTarget {
   private _activeHistorySnapshot: EditorStoreSnapshot | null = null;
   private _activeHistoryDirty = false;
   private _revision = 0;
+  private _propertyClipboard: PropertyClipboard | null = null;
 
   constructor(initialBlueprint?: unknown) {
     super();
@@ -1647,6 +1655,74 @@ export class EditorStore extends EventTarget {
     this.setSelectedNodes(nextNodeIds, source, nodeId);
   }
 
+  selectAll(source: EditorStoreChange["source"] = "ui"): void {
+    const selectableIds = this._blueprint.nodes
+      .filter((node) => node.id !== ROOT_NODE_ID)
+      .map((node) => node.id);
+
+    if (selectableIds.length === 0) {
+      this.setSelectedNodes([ROOT_NODE_ID], source, ROOT_NODE_ID);
+      return;
+    }
+
+    const primaryId = selectableIds.includes(this._selectedNodeId)
+      ? this._selectedNodeId
+      : selectableIds[0];
+    this.setSelectedNodes(selectableIds, source, primaryId);
+  }
+
+  clearSelection(source: EditorStoreChange["source"] = "ui"): void {
+    this.setSelectedNodes([ROOT_NODE_ID], source, ROOT_NODE_ID);
+  }
+
+  moveSelectedNodes(
+    parentId: string | null,
+    siblingIndex: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const rootIds = this.getSelectionRootIds();
+    const movableIds = rootIds.filter((nodeId) => nodeId !== ROOT_NODE_ID);
+    if (movableIds.length === 0) {
+      return false;
+    }
+
+    if (movableIds.length === 1) {
+      return this.moveNode(movableIds[0], parentId, siblingIndex, source);
+    }
+
+    const targetParentId = parentId ?? ROOT_NODE_ID;
+    const parent = this.getNode(targetParentId);
+    if (!parent || parent.type !== "group") {
+      return false;
+    }
+
+    for (const nodeId of movableIds) {
+      const descendants = new Set(this.getDescendantIds(nodeId));
+      if (descendants.has(targetParentId) || targetParentId === nodeId) {
+        return false;
+      }
+    }
+
+    this.beginHistoryTransaction();
+    let anyMoved = false;
+    let insertionIndex = siblingIndex;
+    for (const nodeId of movableIds) {
+      if (this.moveNode(nodeId, targetParentId, insertionIndex, source)) {
+        anyMoved = true;
+      }
+      insertionIndex += 1;
+    }
+
+    if (anyMoved) {
+      this.setSelectedNodes(movableIds, source, movableIds.at(-1));
+      this.commitHistoryTransaction(source);
+      return true;
+    }
+
+    this.commitHistoryTransaction(source);
+    return false;
+  }
+
   addNode(type: EditorNodeType, source: EditorStoreChange["source"] = "ui"): string {
     const selected = this.selectedNode;
     const parentId = selected?.type === "group"
@@ -2117,6 +2193,283 @@ export class EditorStore extends EventTarget {
     return updates.length;
   }
 
+  get propertyClipboard(): PropertyClipboard | null {
+    return this._propertyClipboard;
+  }
+
+  /**
+   * Captures the primary selection into the in-memory property clipboard.
+   * No-op if there is no primary node. Returns the captured clipboard or
+   * null.
+   */
+  capturePropertiesFromSelection(source: EditorStoreChange["source"] = "ui"): PropertyClipboard | null {
+    const primary = this.selectedNode;
+    if (!primary) {
+      return null;
+    }
+
+    const clipboard = capturePropertiesFromNode(primary);
+    this._propertyClipboard = clipboard;
+    this.notify({ reason: "propertyClipboard", source, nodeId: primary.id });
+    return clipboard;
+  }
+
+  /**
+   * Applies the current property clipboard to `targetNodeIds` (defaults to
+   * current selection). All writes go through `updateNodeProperty` and are
+   * wrapped in a single history transaction so one Paste Special = one
+   * undo step.
+   *
+   * `material.type` entries are applied FIRST so that any subsequent PBR
+   * entries land on a target whose material already matches the source.
+   */
+  applyPropertiesToSelection(
+    scope: PropertyClipboardScope,
+    targetNodeIds?: string[],
+    source: EditorStoreChange["source"] = "ui",
+  ): PropertyApplyReport {
+    const clipboard = this._propertyClipboard;
+    const resolvedIds = [...new Set(targetNodeIds ?? this._selectedNodeIds)];
+
+    const report: PropertyApplyReport = {
+      applied: 0,
+      skippedIncompatible: 0,
+      skippedNoChange: 0,
+      perPath: {},
+      perNode: {},
+      targetNodeIds: resolvedIds,
+    };
+
+    if (!clipboard) {
+      return report;
+    }
+
+    const targets: EditorNode[] = [];
+    for (const nodeId of resolvedIds) {
+      const node = this.getNode(nodeId);
+      if (node) {
+        targets.push(node);
+      }
+    }
+
+    if (targets.length === 0) {
+      return report;
+    }
+
+    interface PlannedWrite {
+      node: EditorNode;
+      definition: NodePropertyDefinition | null;
+      value: unknown;
+      sourcePath: string;
+      targetPath: string;
+      isMaterialType: boolean;
+    }
+
+    const planByTarget = new Map<string, PlannedWrite[]>();
+
+    // Per-target, count incompatibilities for entries the user requested (within scope).
+    for (const target of targets) {
+      const resolved = resolveApplicableEntries(clipboard, target, scope);
+      const applicableSourcePaths = new Set(resolved.map((r) => r.entry.path));
+
+      // Count entries that were filtered to this scope but aren't applicable.
+      const scopedEntries = clipboard.entries.filter((entry) => {
+        if (scope === "all") {
+          return true;
+        }
+        return entry.scope === scope;
+      });
+
+      for (const entry of scopedEntries) {
+        if (!applicableSourcePaths.has(entry.path)) {
+          this.recordReportBucket(report, entry.path, target.id, "incompatible");
+        }
+      }
+
+      // Determine the target's projected material type post-apply so that
+      // PBR entries (which depend on material.type) are not rejected at
+      // plan time for a target that will be promoted by this same apply.
+      const materialTypeEntry = resolved.find((item) => item.targetPath === "material.type");
+      const projectedMaterialType = materialTypeEntry
+        ? projectTargetMaterialType(target, materialTypeEntry.entry.value)
+        : target.type === "group"
+          ? null
+          : target.material.type;
+
+      const definitions = getPropertyDefinitions(target);
+      const writes: PlannedWrite[] = [];
+
+      for (const item of resolved) {
+        const definition = definitions.find((def) => def.path === item.targetPath);
+        if (!definition) {
+          // Target does not expose this path under its CURRENT state. If it
+          // is a PBR path and the projected material type after applying
+          // `material.type` will be `standard`, defer definition lookup to
+          // write time (by then material.type has already landed). Otherwise
+          // it is a genuine incompatibility.
+          if (
+            MATERIAL_PBR_DEPENDENT_PATHS.has(item.targetPath) &&
+            projectedMaterialType === "standard" &&
+            target.type !== "group"
+          ) {
+            writes.push({
+              node: target,
+              definition: null,
+              value: item.entry.value,
+              sourcePath: item.entry.path,
+              targetPath: item.targetPath,
+              isMaterialType: false,
+            });
+            continue;
+          }
+          this.recordReportBucket(report, item.entry.path, target.id, "incompatible");
+          continue;
+        }
+
+        writes.push({
+          node: target,
+          definition,
+          value: item.entry.value,
+          sourcePath: item.entry.path,
+          targetPath: item.targetPath,
+          isMaterialType: item.targetPath === "material.type",
+        });
+      }
+
+      planByTarget.set(target.id, writes);
+    }
+
+    // Material type changes must be applied first so subsequent PBR writes
+    // see the post-change definitions.
+    const orderedPlans: PlannedWrite[] = [];
+    for (const target of targets) {
+      const writes = planByTarget.get(target.id) ?? [];
+      for (const write of writes) {
+        if (write.isMaterialType) {
+          orderedPlans.push(write);
+        }
+      }
+    }
+    for (const target of targets) {
+      const writes = planByTarget.get(target.id) ?? [];
+      for (const write of writes) {
+        if (!write.isMaterialType) {
+          orderedPlans.push(write);
+        }
+      }
+    }
+
+    if (orderedPlans.length === 0 && report.skippedIncompatible === 0) {
+      // Nothing to do at all — don't emit a history transaction.
+      return report;
+    }
+
+    this.beginHistoryTransaction();
+    let anyWritten = false;
+
+    for (const write of orderedPlans) {
+      const before = getPropertyValue(write.node, write.targetPath);
+      // Re-resolve the definition for material-dependent paths post
+      // material.type change; the node object was mutated in place.
+      const definitions = getPropertyDefinitions(write.node);
+      const liveDefinition = definitions.find((def) => def.path === write.targetPath);
+      if (!liveDefinition) {
+        this.recordReportBucket(report, write.sourcePath, write.node.id, "incompatible");
+        continue;
+      }
+
+      const rawValue = this.coerceRawValue(write.value);
+      const parsedValue = parseInputValue(liveDefinition, rawValue, before);
+
+      if (deepEqualValue(parsedValue, before)) {
+        this.recordReportBucket(report, write.sourcePath, write.node.id, "noChange");
+        continue;
+      }
+
+      // Write through the validated rail; parseInputValue already ran, but
+      // updateNodeProperty will re-run it to keep the invariant in one place.
+      this.updateNodeProperty(write.node.id, liveDefinition, rawValue, source);
+      // Verify the value actually changed — guard against updateNodeProperty
+      // short-circuiting on a parsed-equal scenario.
+      const after = getPropertyValue(write.node, write.targetPath);
+      if (deepEqualValue(after, before)) {
+        this.recordReportBucket(report, write.sourcePath, write.node.id, "noChange");
+        continue;
+      }
+
+      anyWritten = true;
+      this.recordReportBucket(report, write.sourcePath, write.node.id, "applied");
+    }
+
+    if (anyWritten) {
+      this.commitHistoryTransaction(source);
+    } else {
+      // Roll back the transaction — nothing useful happened.
+      this._activeHistorySnapshot = null;
+      this._activeHistoryDirty = false;
+    }
+
+    return report;
+  }
+
+  /**
+   * True iff the clipboard exists AND at least one entry can be applied to
+   * the given targets under `scope`.
+   */
+  canPasteProperties(scope: PropertyClipboardScope, targetNodeIds?: string[]): boolean {
+    const clipboard = this._propertyClipboard;
+    if (!clipboard) {
+      return false;
+    }
+
+    const resolvedIds = targetNodeIds ?? this._selectedNodeIds;
+    for (const nodeId of resolvedIds) {
+      const node = this.getNode(nodeId);
+      if (!node) {
+        continue;
+      }
+      if (resolveApplicableEntries(clipboard, node, scope).length > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private recordReportBucket(
+    report: PropertyApplyReport,
+    path: string,
+    nodeId: string,
+    kind: "applied" | "incompatible" | "noChange",
+  ): void {
+    if (!report.perPath[path]) {
+      report.perPath[path] = { applied: 0, incompatible: 0, noChange: 0 };
+    }
+    if (!report.perNode[nodeId]) {
+      report.perNode[nodeId] = { applied: 0, incompatible: 0, noChange: 0 };
+    }
+
+    if (kind === "applied") {
+      report.applied += 1;
+      report.perPath[path].applied += 1;
+      report.perNode[nodeId].applied += 1;
+    } else if (kind === "incompatible") {
+      report.skippedIncompatible += 1;
+      report.perPath[path].incompatible += 1;
+      report.perNode[nodeId].incompatible += 1;
+    } else {
+      report.skippedNoChange += 1;
+      report.perPath[path].noChange += 1;
+      report.perNode[nodeId].noChange += 1;
+    }
+  }
+
+  private coerceRawValue(value: unknown): string | number | boolean {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return value;
+    }
+    return String(value ?? "");
+  }
+
   updateTextNodeFont(nodeId: string, fontId: string, source: EditorStoreChange["source"] = "ui"): void {
     const node = this.getNode(nodeId);
     if (!node || node.type !== "text") {
@@ -2402,6 +2755,85 @@ function isVec3Equal(
     Math.abs(current.y - next.y) < epsilon &&
     Math.abs(current.z - next.z) < epsilon
   );
+}
+
+/**
+ * PBR paths whose applicability depends on the resolved material type of
+ * the target. When a `material.type` entry is in the plan for a target,
+ * these paths must be re-evaluated against the projected post-apply type
+ * rather than the target's current type (see `applyPropertiesToSelection`).
+ */
+const MATERIAL_PBR_DEPENDENT_PATHS: ReadonlySet<string> = new Set<string>([
+  "material.emissive",
+  "material.roughness",
+  "material.metalness",
+]);
+
+/**
+ * Returns the material type the target will have after applying the given
+ * clipboard entry value for `material.type`. Non-group nodes only. Falls
+ * back to the target's current type if the entry is missing or malformed.
+ */
+function projectTargetMaterialType(
+  target: EditorNode,
+  materialTypeValue: unknown,
+): "basic" | "standard" | null {
+  if (target.type === "group") {
+    return null;
+  }
+  if (typeof materialTypeValue === "string" && (materialTypeValue === "basic" || materialTypeValue === "standard")) {
+    return materialTypeValue;
+  }
+  return target.material.type;
+}
+
+function deepEqualValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) {
+    return true;
+  }
+
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let i = 0; i < a.length; i += 1) {
+      if (!deepEqualValue(a[i], b[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (
+    a !== null &&
+    b !== null &&
+    typeof a === "object" &&
+    typeof b === "object" &&
+    !Array.isArray(a) &&
+    !Array.isArray(b)
+  ) {
+    const aKeys = Object.keys(a as Record<string, unknown>);
+    const bKeys = Object.keys(b as Record<string, unknown>);
+    if (aKeys.length !== bKeys.length) {
+      return false;
+    }
+    for (const key of aKeys) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) {
+        return false;
+      }
+      if (
+        !deepEqualValue(
+          (a as Record<string, unknown>)[key],
+          (b as Record<string, unknown>)[key],
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  return false;
 }
 
 function findClipboardRoot(nodes: EditorNode[]): EditorNode | null {
