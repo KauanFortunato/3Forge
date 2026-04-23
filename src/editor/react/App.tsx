@@ -352,7 +352,7 @@ export function App() {
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(320);
-  const [rightPanelWidth, setRightPanelWidth] = useState(() => Math.max(320, Math.min(readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 340), 620)));
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => Math.max(320, Math.min(readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 320), 620)));
   const [timelineHeight, setTimelineHeight] = useState(() => readStoredNumberPreference(TIMELINE_HEIGHT_KEY, 300));
   const [isTimelineVisible, setIsTimelineVisible] = useState(() => readStoredBooleanPreference(TIMELINE_VISIBLE_KEY, true));
   const [resizeMode, setResizeMode] = useState<"hierarchy" | "sidebar" | "timeline" | null>(null);
@@ -1869,7 +1869,6 @@ export function App() {
           canUndo={storeView.canUndo}
           canRedo={storeView.canRedo}
           currentTool={currentTool}
-          viewMode={storeView.viewMode}
           playback={activeClip ? {
             isPlaying: isAnimationPlaying,
             currentFrame,
@@ -1885,7 +1884,6 @@ export function App() {
           onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}
           onRedo={() => { if (store.redo()) setTransientStatus("Redo."); }}
           onToolChange={handleToolChange}
-          onViewModeChange={(mode) => store.setViewMode(mode)}
           onFrame={handleFrameSelection}
           isTimelineVisible={isTimelineVisible}
           onToggleTimeline={toggleTimelineVisibility}
@@ -1942,7 +1940,7 @@ export function App() {
                 <div className="panel__hd">
                   <span className="panel__hd-icon"><GroupIcon width={12} height={12} /></span>
                   <span className="panel__hd-title">Hierarchy</span>
-                  <span className="panel__hd-meta">{storeView.blueprintNodes.length} items</span>
+                  <span className="panel__hd-meta">{storeView.blueprintNodes.length} nodes</span>
                   <div className="panel__hd-spacer" />
                   <div className="panel__hd-actions">
                     <button

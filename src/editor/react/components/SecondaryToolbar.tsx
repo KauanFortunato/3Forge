@@ -21,8 +21,6 @@ import {
   StopIcon,
   TimelineIcon,
   UndoIcon,
-  ViewRenderedIcon,
-  ViewSolidIcon,
 } from "./icons";
 import { BufferedInput } from "./BufferedInput";
 
@@ -45,14 +43,18 @@ interface SecondaryToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   currentTool: ToolMode;
-  viewMode: ViewMode;
+  /**
+   * Retained for API stability. View-mode buttons render on the viewport HUD, not in the toolbar.
+   */
+  viewMode?: ViewMode;
   isTimelineVisible: boolean;
   playback?: PlaybackToolbarProps | null;
   onComponentNameChange: (value: string) => void;
   onUndo: () => void;
   onRedo: () => void;
   onToolChange: (mode: ToolMode) => void;
-  onViewModeChange: (mode: ViewMode) => void;
+  /** Retained for API stability; toolbar no longer renders view-mode buttons. */
+  onViewModeChange?: (mode: ViewMode) => void;
   onFrame: () => void;
   onToggleTimeline: () => void;
   onSave?: () => void;
@@ -68,14 +70,12 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     canUndo,
     canRedo,
     currentTool,
-    viewMode,
     isTimelineVisible,
     playback,
     onComponentNameChange,
     onUndo,
     onRedo,
     onToolChange,
-    onViewModeChange,
     onFrame,
     onToggleTimeline,
     onSave,
@@ -139,23 +139,6 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       </div>
 
       <div className="toolbar__right">
-        <div className="tgroup tgroup--view">
-          <ToolbarIconButton
-            label="Solid View"
-            isActive={viewMode === "solid"}
-            onClick={() => onViewModeChange("solid")}
-          >
-            <ViewSolidIcon />
-          </ToolbarIconButton>
-          <ToolbarIconButton
-            label="Rendered View"
-            isActive={viewMode === "rendered"}
-            onClick={() => onViewModeChange("rendered")}
-          >
-            <ViewRenderedIcon />
-          </ToolbarIconButton>
-        </div>
-
         <button
           type="button"
           className={`ibtn${isTimelineVisible ? " is-active" : ""}`}

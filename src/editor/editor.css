@@ -151,7 +151,7 @@ input, button, select, textarea {
 
 .app__body {
   display: grid;
-  grid-template-columns: var(--left-w, 260px) 1px minmax(0, 1fr) 1px var(--right-w, 340px);
+  grid-template-columns: var(--left-w, 260px) 1px minmax(0, 1fr) 1px var(--right-w, 320px);
   min-height: 0;
   overflow: hidden;
   background: var(--c-bg-1);
@@ -382,8 +382,8 @@ input, button, select, textarea {
   height: var(--h-toolbar);
   background: var(--c-bg-1);
   border-bottom: 1px solid var(--c-border);
-  padding: 0 var(--sp-3);
-  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  gap: var(--sp-5);
 }
 .toolbar__left,
 .toolbar__center,
@@ -395,7 +395,7 @@ input, button, select, textarea {
 .toolbar__left { flex: 0 0 auto; }
 .toolbar__center {
   justify-content: center;
-  gap: var(--sp-3);
+  gap: var(--sp-4);
   color: var(--c-text-dim);
   font-size: var(--fs-sm);
   overflow: hidden;
@@ -432,25 +432,25 @@ input, button, select, textarea {
 .playbar {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
-  height: 24px;
-  padding: 0 4px;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3);
+  height: 28px;
   background: var(--c-bg-2);
   border: 1px solid var(--c-border);
-  border-radius: 4px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  border-radius: var(--r-md);
 }
 .playbar__btn {
   display: inline-grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border: 0;
   background: transparent;
   color: var(--c-text-med);
-  border-radius: 2px;
+  border-radius: var(--r-sm);
   cursor: pointer;
   padding: 0;
+  transition: background 120ms, color 120ms;
 }
 .playbar__btn:hover {
   color: var(--c-text);
@@ -462,10 +462,12 @@ input, button, select, textarea {
 }
 .playbar__btn.is-active {
   background: var(--c-accent);
-  color: #fff;
+  color: var(--c-accent-fg);
 }
 .playbar__btn.is-active:hover {
   background: var(--c-accent);
+  color: var(--c-accent-fg);
+  filter: brightness(1.08);
 }
 .playbar__btn--primary {
   width: 22px;
@@ -475,18 +477,18 @@ input, button, select, textarea {
   width: 1px;
   height: 14px;
   background: var(--c-border-strong);
-  margin: 0 4px;
+  margin: 0 var(--sp-1);
 }
 .playbar__counter {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 0 6px 0 2px;
+  gap: 6px;
+  padding: 0 var(--sp-2);
   font-family: var(--f-mono);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   color: var(--c-text-med);
-  min-width: 58px;
-  justify-content: center;
+  min-width: 74px;
+  justify-content: flex-start;
 }
 .playbar__counter strong {
   color: var(--c-text);
@@ -515,7 +517,6 @@ input, button, select, textarea {
   border-radius: var(--r-md);
   padding: 2px;
   height: 28px;
-  gap: 1px;
 }
 .tgroup__sep {
   width: 1px; height: 16px; background: var(--c-border-strong);
@@ -562,6 +563,10 @@ input, button, select, textarea {
   background: transparent;
 }
 .tbtn:hover:not(:disabled) { background: var(--c-bg-4); color: var(--c-text); }
+.tbtn:focus-visible {
+  outline: 1px solid var(--c-accent);
+  outline-offset: -1px;
+}
 .tbtn.is-primary {
   background: var(--c-accent);
   color: var(--c-accent-fg);
@@ -584,7 +589,7 @@ input, button, select, textarea {
   background: var(--c-bg-2);
   border: 1px solid var(--c-border);
   border-radius: var(--r-md);
-  min-width: 220px; max-width: 360px;
+  min-width: 240px; max-width: 360px;
 }
 .proj-chip__icon {
   display: grid; place-items: center;
@@ -719,8 +724,8 @@ input, button, select, textarea {
 .sg-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
+  gap: 2px;
+  padding: 4px var(--sp-3);
   border-bottom: 1px solid var(--c-border);
   background: var(--c-bg-1);
   flex-shrink: 0;
@@ -731,7 +736,7 @@ input, button, select, textarea {
   align-items: center;
   gap: 5px;
   height: 22px;
-  padding: 0 var(--sp-3);
+  padding: 0 6px;
   background: var(--c-bg-3);
   border: 1px solid var(--c-border);
   border-radius: var(--r-sm);
@@ -976,7 +981,7 @@ input, button, select, textarea {
   color: var(--c-text-dim);
   font-weight: 400;
 }
-.sec__bd { padding: var(--sp-3) var(--sp-3) var(--sp-4); min-width: 0; }
+.sec__bd { padding: var(--sp-4) var(--sp-4) var(--sp-5); min-width: 0; }
 .sec.is-collapsed .sec__bd { display: none; }
 .sec.is-collapsed .sec__hd { border-bottom: 0; }
 
@@ -987,9 +992,10 @@ input, button, select, textarea {
   align-items: center;
   gap: var(--sp-3);
   min-height: var(--h-control);
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   width: 100%;
 }
+.row:last-child { margin-bottom: 0; }
 .row--wide {
   grid-template-columns: 78px minmax(0, 1fr);
 }
@@ -1052,7 +1058,8 @@ input, button, select, textarea {
   cursor: ew-resize;
 }
 .vec__cell:hover { background: var(--c-bg-4); }
-.vec__cell.is-editable { box-shadow: inset 0 0 0 1px var(--c-accent); }
+.vec__cell.is-editable,
+.vec__cell.is-focused { background: var(--c-bg-4); box-shadow: inset 0 0 0 1px var(--c-accent); }
 .vec__axis {
   font-family: var(--f-mono);
   font-size: var(--fs-xs);
@@ -1232,7 +1239,7 @@ input, button, select, textarea {
   position: relative;
 }
 .swatch {
-  width: 18px; height: 18px;
+  width: 20px; height: 20px;
   border-radius: 2px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   cursor: pointer;
@@ -1364,6 +1371,9 @@ input, button, select, textarea {
   gap: var(--sp-3);
 }
 .hud-group--lbl strong { color: var(--c-text); font-weight: 600; }
+.hud-group .ibtn { width: 22px; height: 22px; color: var(--c-text-med); }
+.hud-group .ibtn:hover:not(:disabled) { background: var(--c-bg-4); color: var(--c-text); }
+.hud-group .ibtn.is-active { background: var(--c-accent); color: var(--c-accent-fg); }
 
 /* =============================================================
    Timeline
@@ -1408,11 +1418,11 @@ input, button, select, textarea {
 
 .tl__body {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 240px 1fr;
   min-height: 0;
   overflow: hidden;
 }
-.tl__tracks { min-width: 180px; }
+.tl__tracks { min-width: 200px; }
 .tl__tracks {
   border-right: 1px solid var(--c-border);
   overflow: auto;
