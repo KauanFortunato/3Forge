@@ -16,6 +16,8 @@ const SHORTCUTS = [
   ["Ctrl + Y", "Redo"],
   ["Ctrl + C", "Copy selection"],
   ["Ctrl + V", "Paste copy"],
+  ["Ctrl + Shift + C", "Copy properties"],
+  ["Ctrl + Shift + V", "Paste properties"],
   ["Delete", "Remove selection"],
 ];
 

@@ -229,8 +229,21 @@ export interface EditableFieldEntry {
   binding: EditableBinding;
 }
 
+export type EditorStoreChangeReason =
+  | "structure"
+  | "node"
+  | "selection"
+  | "editable"
+  | "meta"
+  | "import"
+  | "history"
+  | "font"
+  | "view"
+  | "animation"
+  | "propertyClipboard";
+
 export type EditorStoreChange = {
-  reason: "structure" | "node" | "selection" | "editable" | "meta" | "import" | "history" | "font" | "view" | "animation";
+  reason: EditorStoreChangeReason;
   source: "ui" | "scene" | "system" | "import" | "history";
   nodeId?: string;
 };

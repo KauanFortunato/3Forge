@@ -106,6 +106,47 @@ describe("SceneGraphPanel", () => {
     expect(handleSelectNode).toHaveBeenCalledWith(ROOT_NODE_ID, false);
   });
 
+  it("adds the is-primary class only to the primary row when multiple nodes are selected", () => {
+    const store = createHierarchyStore();
+
+    const { container, rerender } = render(
+      <SceneGraphPanel
+        nodes={store.blueprint.nodes}
+        animatedNodeIds={new Set()}
+        selectedNodeId="plane-1"
+        selectedNodeIds={["group-1", "plane-1"]}
+        collapsedIds={new Set()}
+        onCollapsedIdsChange={vi.fn()}
+        onSelectNode={vi.fn()}
+        onMoveNode={vi.fn()}
+        onToggleVisibility={vi.fn()}
+        onContextMenu={vi.fn()}
+      />,
+    );
+
+    const primaryRows = container.querySelectorAll(".scene-row.is-primary");
+    expect(primaryRows).toHaveLength(1);
+    const primaryRow = primaryRows[0] as HTMLElement;
+    expect(within(primaryRow).getByText("Plane Child")).toBeTruthy();
+
+    // When only one node is selected, no row gets is-primary.
+    rerender(
+      <SceneGraphPanel
+        nodes={store.blueprint.nodes}
+        animatedNodeIds={new Set()}
+        selectedNodeId="plane-1"
+        selectedNodeIds={["plane-1"]}
+        collapsedIds={new Set()}
+        onCollapsedIdsChange={vi.fn()}
+        onSelectNode={vi.fn()}
+        onMoveNode={vi.fn()}
+        onToggleVisibility={vi.fn()}
+        onContextMenu={vi.fn()}
+      />,
+    );
+    expect(container.querySelectorAll(".scene-row.is-primary")).toHaveLength(0);
+  });
+
   it("honors externally controlled collapse state changes", () => {
     const store = createHierarchyStore();
 

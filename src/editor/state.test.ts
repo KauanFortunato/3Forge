@@ -823,4 +823,585 @@ describe("EditorStore", () => {
     store.updateAnimationKeyframes(trackId, [], { ease: "easeOut" });
     expect(store.canUndo).toBe(undoBefore);
   });
+
+  it("selectAll selects every non-ROOT node and keeps the primary if already selected", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+
+    store.selectNode(sphereId);
+    store.selectAll();
+
+    const selected = store.selectedNodeIds;
+    expect(selected).toContain(boxId);
+    expect(selected).toContain(sphereId);
+    expect(selected).not.toContain(ROOT_NODE_ID);
+    expect(store.selectedNodeId).toBe(sphereId);
+  });
+
+  it("clearSelection resets selection to the ROOT node", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+
+    store.setSelectedNodes([boxId, sphereId]);
+    store.clearSelection();
+
+    expect(store.selectedNodeIds).toEqual([ROOT_NODE_ID]);
+    expect(store.selectedNodeId).toBe(ROOT_NODE_ID);
+  });
+
+  it("moveSelectedNodes moves all selected root ids into the target parent, preserving order, in a single undo step", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const groupId = store.insertNode("group", ROOT_NODE_ID);
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+
+    store.setSelectedNodes([boxId, sphereId], "ui", sphereId);
+
+    const moved = store.moveSelectedNodes(groupId, 0);
+    expect(moved).toBe(true);
+
+    const groupChildren = store.getNodeChildren(groupId).map((node) => node.id);
+    expect(groupChildren).toEqual([boxId, sphereId]);
+
+    // A single undo restores both nodes to their original parent (one history entry).
+    store.undo();
+    const rootChildren = store.getNodeChildren(ROOT_NODE_ID).map((node) => node.id);
+    expect(rootChildren).toContain(boxId);
+    expect(rootChildren).toContain(sphereId);
+    expect(store.getNodeChildren(groupId).map((node) => node.id)).toEqual([]);
+  });
+
+  it("moveSelectedNodes rejects drops into a descendant of a selected node", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const outerGroupId = store.insertNode("group", ROOT_NODE_ID);
+    const innerGroupId = store.insertNode("group", outerGroupId);
+    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+
+    store.setSelectedNodes([outerGroupId, sphereId], "ui", sphereId);
+    expect(store.moveSelectedNodes(innerGroupId, 0)).toBe(false);
+  });
+});
+
+describe("property clipboard", () => {
+  function setColor(store: EditorStore, nodeId: string, color: string): void {
+    const node = store.getNode(nodeId);
+    if (!node || node.type === "group") {
+      throw new Error(`expected non-group node ${nodeId}`);
+    }
+    const defs = getPropertyDefinitions(node);
+    const colorDef = defs.find((def) => def.path === "material.color");
+    if (!colorDef) {
+      throw new Error(`no material.color on ${nodeId}`);
+    }
+    store.updateNodeProperty(nodeId, colorDef, color);
+  }
+
+  function setMaterialType(store: EditorStore, nodeId: string, type: "basic" | "standard"): void {
+    const node = store.getNode(nodeId);
+    if (!node || node.type === "group") {
+      throw new Error(`expected non-group node ${nodeId}`);
+    }
+    const defs = getPropertyDefinitions(node);
+    const typeDef = defs.find((def) => def.path === "material.type");
+    if (!typeDef) {
+      throw new Error(`no material.type on ${nodeId}`);
+    }
+    store.updateNodeProperty(nodeId, typeDef, type);
+  }
+
+  function setEmissive(store: EditorStore, nodeId: string, color: string): void {
+    const node = store.getNode(nodeId);
+    if (!node || node.type === "group") {
+      throw new Error(`expected non-group node ${nodeId}`);
+    }
+    const defs = getPropertyDefinitions(node);
+    const emissiveDef = defs.find((def) => def.path === "material.emissive");
+    if (!emissiveDef) {
+      throw new Error(`no material.emissive on ${nodeId}`);
+    }
+    store.updateNodeProperty(nodeId, emissiveDef, color);
+  }
+
+  function materialColorOf(store: EditorStore, nodeId: string): string {
+    const node = store.getNode(nodeId);
+    if (!node || node.type === "group") {
+      throw new Error(`expected non-group node ${nodeId}`);
+    }
+    return node.material.color;
+  }
+
+  function containsKeyDeep(value: unknown, key: string): boolean {
+    if (Array.isArray(value)) {
+      return value.some((item) => containsKeyDeep(item, key));
+    }
+    if (value && typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        if (k === key) {
+          return true;
+        }
+        if (containsKeyDeep(v, key)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  it("round-trips material color from one box to another via copy then paste", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+    setColor(store, boxAId, "#ff0000");
+    setColor(store, boxBId, "#0000ff");
+
+    store.selectNode(boxAId);
+    const clipboard = store.capturePropertiesFromSelection();
+    expect(clipboard).not.toBeNull();
+
+    store.selectNode(boxBId);
+    const report = store.applyPropertiesToSelection("material");
+
+    expect(materialColorOf(store, boxBId)).toBe("#ff0000");
+    expect(report.applied).toBeGreaterThanOrEqual(1);
+  });
+
+  it("applies to multiple targets in a single history transaction (one undo reverts all)", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+    const boxCId = store.insertNode("box", ROOT_NODE_ID);
+
+    setColor(store, boxAId, "#ff0000");
+    setColor(store, boxBId, "#00ff00");
+    setColor(store, boxCId, "#0000ff");
+
+    const preBColor = materialColorOf(store, boxBId);
+    const preCColor = materialColorOf(store, boxCId);
+
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([boxBId, boxCId], "ui", boxBId);
+    store.applyPropertiesToSelection("material");
+
+    expect(materialColorOf(store, boxBId)).toBe("#ff0000");
+    expect(materialColorOf(store, boxCId)).toBe("#ff0000");
+
+    expect(store.undo()).toBe(true);
+
+    expect(materialColorOf(store, boxBId)).toBe(preBColor);
+    expect(materialColorOf(store, boxCId)).toBe(preCColor);
+  });
+
+  it("reports incompatibility for sphere targets under scope 'geometry' from a box source", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([sphereId]);
+    const report = store.applyPropertiesToSelection("geometry");
+
+    expect(report.applied).toBe(0);
+    expect(report.skippedIncompatible).toBeGreaterThan(0);
+
+    // Transform paths are NOT part of scope "geometry", so they must not be
+    // counted in this report at all.
+    expect(report.perPath["transform.position.x"]).toBeUndefined();
+  });
+
+  it("canPasteProperties gates on clipboard presence and scope applicability", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+    const groupId = store.insertNode("group", ROOT_NODE_ID);
+
+    // No clipboard yet.
+    expect(store.canPasteProperties("material", [boxBId])).toBe(false);
+
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    expect(store.canPasteProperties("material", [boxBId])).toBe(true);
+    expect(store.canPasteProperties("geometry", [groupId])).toBe(false);
+  });
+
+  it("preserves the clipboard across unrelated mutations", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    store.selectNode(boxAId);
+    const clipboard = store.capturePropertiesFromSelection();
+    expect(clipboard).not.toBeNull();
+    const originalEntryCount = clipboard!.entries.length;
+
+    // Unrelated mutations.
+    const newBoxId = store.insertNode("box", ROOT_NODE_ID);
+    store.selectNode(newBoxId);
+    store.moveSelectedNodes(ROOT_NODE_ID, 0);
+    store.ensureAnimationTrack(newBoxId, "transform.position.x");
+
+    expect(store.propertyClipboard).not.toBeNull();
+    expect(store.propertyClipboard!.entries.length).toBe(originalEntryCount);
+  });
+
+  it("does not leak the clipboard into the exported blueprint JSON", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    const json = exportBlueprintToJson(store.blueprint);
+    expect(json.includes("propertyClipboard")).toBe(false);
+
+    const parsed = JSON.parse(json) as unknown;
+    expect(containsKeyDeep(parsed, "propertyClipboard")).toBe(false);
+  });
+
+  it("promotes basic target to standard and carries PBR values through in the same apply", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+
+    setMaterialType(store, boxAId, "standard");
+    setEmissive(store, boxAId, "#abcdef");
+    setMaterialType(store, boxBId, "basic");
+
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([boxBId]);
+    const report = store.applyPropertiesToSelection("material");
+
+    // After the fix, applyPropertiesToSelection detects the pending
+    // material.type promotion and re-plans PBR entries against the
+    // post-promotion type. The target ends up as standard AND carries the
+    // PBR values from the source.
+    const boxB = store.getNode(boxBId);
+    if (!boxB || boxB.type === "group") {
+      throw new Error("expected box B to remain a non-group node");
+    }
+    expect(boxB.material.type).toBe("standard");
+    expect(boxB.material.emissive).toBe("#abcdef");
+
+    expect(report.perPath["material.type"]?.applied ?? 0).toBeGreaterThanOrEqual(1);
+    expect(report.perPath["material.emissive"]?.applied ?? 0).toBeGreaterThanOrEqual(1);
+    expect(report.perPath["material.emissive"]?.incompatible ?? 0).toBe(0);
+  });
+
+  it("lifts full PBR material from standard source to basic target under scope 'material'", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+
+    setMaterialType(store, boxAId, "standard");
+    const boxA = store.getNode(boxAId);
+    if (!boxA || boxA.type === "group") {
+      throw new Error("expected box A to be non-group");
+    }
+    const defsA = getPropertyDefinitions(boxA);
+    const emissiveDef = defsA.find((def) => def.path === "material.emissive");
+    const roughnessDef = defsA.find((def) => def.path === "material.roughness");
+    const metalnessDef = defsA.find((def) => def.path === "material.metalness");
+    const colorDef = defsA.find((def) => def.path === "material.color");
+    if (!emissiveDef || !roughnessDef || !metalnessDef || !colorDef) {
+      throw new Error("missing PBR property definitions on source");
+    }
+    store.updateNodeProperty(boxAId, emissiveDef, "#ff0000");
+    store.updateNodeProperty(boxAId, roughnessDef, 0.9);
+    store.updateNodeProperty(boxAId, metalnessDef, 0.5);
+    store.updateNodeProperty(boxAId, colorDef, "#00ff00");
+
+    setMaterialType(store, boxBId, "basic");
+
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([boxBId]);
+    const report = store.applyPropertiesToSelection("material");
+
+    const boxB = store.getNode(boxBId);
+    if (!boxB || boxB.type === "group") {
+      throw new Error("expected box B to remain a non-group node");
+    }
+    expect(boxB.material.type).toBe("standard");
+    expect(boxB.material.emissive).toBe("#ff0000");
+    expect(boxB.material.roughness).toBe(0.9);
+    expect(boxB.material.metalness).toBe(0.5);
+    expect(boxB.material.color).toBe("#00ff00");
+
+    expect(report.perPath["material.emissive"]?.applied ?? 0).toBe(1);
+    expect(report.applied).toBeGreaterThanOrEqual(5);
+  });
+
+  it("still carries PBR values to a standard target that stays standard (regression for common case)", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+
+    setMaterialType(store, boxAId, "standard");
+    setMaterialType(store, boxBId, "standard");
+    setEmissive(store, boxAId, "#112233");
+
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([boxBId]);
+    const report = store.applyPropertiesToSelection("material");
+
+    const boxB = store.getNode(boxBId);
+    if (!boxB || boxB.type === "group") {
+      throw new Error("expected box B to remain a non-group node");
+    }
+    expect(boxB.material.type).toBe("standard");
+    expect(boxB.material.emissive).toBe("#112233");
+    expect(report.perPath["material.emissive"]?.applied ?? 0).toBeGreaterThanOrEqual(1);
+    expect(report.perPath["material.emissive"]?.incompatible ?? 0).toBe(0);
+  });
+
+  it("applies standard source uniformly to mixed basic + standard targets (mixed promotion)", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const sourceId = store.insertNode("box", ROOT_NODE_ID);
+    const basicTargetId = store.insertNode("box", ROOT_NODE_ID);
+    const standardTargetId = store.insertNode("box", ROOT_NODE_ID);
+
+    setMaterialType(store, sourceId, "standard");
+    setEmissive(store, sourceId, "#4488cc");
+    setColor(store, sourceId, "#aabbcc");
+    setMaterialType(store, basicTargetId, "basic");
+    setMaterialType(store, standardTargetId, "standard");
+
+    store.selectNode(sourceId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([basicTargetId, standardTargetId], "ui", basicTargetId);
+    store.applyPropertiesToSelection("material");
+
+    const basicTarget = store.getNode(basicTargetId);
+    const standardTarget = store.getNode(standardTargetId);
+    if (
+      !basicTarget ||
+      !standardTarget ||
+      basicTarget.type === "group" ||
+      standardTarget.type === "group"
+    ) {
+      throw new Error("expected both targets to be non-group");
+    }
+
+    expect(basicTarget.material.type).toBe("standard");
+    expect(standardTarget.material.type).toBe("standard");
+    expect(basicTarget.material.emissive).toBe("#4488cc");
+    expect(standardTarget.material.emissive).toBe("#4488cc");
+    expect(basicTarget.material.color).toBe("#aabbcc");
+    expect(standardTarget.material.color).toBe("#aabbcc");
+  });
+
+  it("demotes a standard target when source is basic and leaves existing PBR fields untouched", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const sourceId = store.insertNode("box", ROOT_NODE_ID);
+    const targetId = store.insertNode("box", ROOT_NODE_ID);
+
+    setMaterialType(store, sourceId, "basic");
+    setMaterialType(store, targetId, "standard");
+    setEmissive(store, targetId, "#123456");
+    const targetBefore = store.getNode(targetId);
+    if (!targetBefore || targetBefore.type === "group") {
+      throw new Error("expected target to be non-group");
+    }
+    const priorRoughness = targetBefore.material.roughness;
+    const priorMetalness = targetBefore.material.metalness;
+
+    store.selectNode(sourceId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([targetId]);
+    const report = store.applyPropertiesToSelection("material");
+
+    const targetAfter = store.getNode(targetId);
+    if (!targetAfter || targetAfter.type === "group") {
+      throw new Error("expected target to remain non-group");
+    }
+    expect(targetAfter.material.type).toBe("basic");
+    // Demotion does not clobber PBR fields on the underlying spec — they
+    // simply become hidden from the property surface.
+    expect(targetAfter.material.emissive).toBe("#123456");
+    expect(targetAfter.material.roughness).toBe(priorRoughness);
+    expect(targetAfter.material.metalness).toBe(priorMetalness);
+    // No PBR writes should appear in the report because the source did not
+    // carry them.
+    expect(report.perPath["material.emissive"]?.applied ?? 0).toBe(0);
+    expect(report.perPath["material.roughness"]?.applied ?? 0).toBe(0);
+    expect(report.perPath["material.metalness"]?.applied ?? 0).toBe(0);
+  });
+
+  it("applies shadow flags across targets under scope 'shadow'", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const sourceId = store.insertNode("box", ROOT_NODE_ID);
+    const targetAId = store.insertNode("box", ROOT_NODE_ID);
+    const targetBId = store.insertNode("box", ROOT_NODE_ID);
+
+    const source = store.getNode(sourceId);
+    if (!source || source.type === "group") {
+      throw new Error("expected source to be non-group");
+    }
+    const castShadowDef = getPropertyDefinitions(source).find(
+      (def) => def.path === "material.castShadow",
+    );
+    if (!castShadowDef) {
+      throw new Error("missing material.castShadow definition");
+    }
+    store.updateNodeProperty(sourceId, castShadowDef, false);
+
+    const targetABefore = store.getNode(targetAId);
+    const targetBBefore = store.getNode(targetBId);
+    if (
+      !targetABefore ||
+      !targetBBefore ||
+      targetABefore.type === "group" ||
+      targetBBefore.type === "group"
+    ) {
+      throw new Error("expected both targets to be non-group");
+    }
+    expect(targetABefore.material.castShadow).toBe(true);
+    expect(targetBBefore.material.castShadow).toBe(true);
+
+    store.selectNode(sourceId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([targetAId, targetBId], "ui", targetAId);
+    store.applyPropertiesToSelection("shadow");
+
+    const targetAAfter = store.getNode(targetAId);
+    const targetBAfter = store.getNode(targetBId);
+    if (
+      !targetAAfter ||
+      !targetBAfter ||
+      targetAAfter.type === "group" ||
+      targetBAfter.type === "group"
+    ) {
+      throw new Error("expected both targets to remain non-group");
+    }
+    expect(targetAAfter.material.castShadow).toBe(false);
+    expect(targetBAfter.material.castShadow).toBe(false);
+  });
+
+  it("redo re-applies a property paste after undo (full undo/redo chain)", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+    setColor(store, boxAId, "#ff0000");
+    setColor(store, boxBId, "#0000ff");
+
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([boxBId]);
+    store.applyPropertiesToSelection("material");
+    expect(materialColorOf(store, boxBId)).toBe("#ff0000");
+
+    // Undo reverts the paste.
+    expect(store.canUndo).toBe(true);
+    expect(store.undo()).toBe(true);
+    expect(materialColorOf(store, boxBId)).toBe("#0000ff");
+
+    // Redo re-applies it.
+    expect(store.canRedo).toBe(true);
+    expect(store.redo()).toBe(true);
+    expect(materialColorOf(store, boxBId)).toBe("#ff0000");
+  });
+
+  it("paste still succeeds when the clipboard source node has been deleted", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+    setColor(store, boxAId, "#ff0000");
+    setColor(store, boxBId, "#0000ff");
+
+    store.selectNode(boxAId);
+    store.capturePropertiesFromSelection();
+
+    // Delete the source node after capture — the clipboard holds cloned values.
+    store.deleteNode(boxAId);
+    expect(store.getNode(boxAId)).toBeUndefined();
+    expect(store.propertyClipboard).not.toBeNull();
+    expect(store.canPasteProperties("all", [boxBId])).toBe(true);
+
+    store.setSelectedNodes([boxBId]);
+    const report = store.applyPropertiesToSelection("all");
+
+    expect(materialColorOf(store, boxBId)).toBe("#ff0000");
+    expect(report.applied).toBeGreaterThan(0);
+  });
+
+  it("applyPropertiesToSelection with no capture returns an empty report and no history step", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const boxId = store.insertNode("box", ROOT_NODE_ID);
+    const notifications: string[] = [];
+    store.subscribe((change) => notifications.push(change.reason));
+
+    store.setSelectedNodes([boxId]);
+    const canUndoBefore = store.canUndo;
+    const report = store.applyPropertiesToSelection("material");
+
+    expect(report.applied).toBe(0);
+    expect(report.skippedIncompatible).toBe(0);
+    expect(Object.keys(report.perPath)).toHaveLength(0);
+    expect(store.canUndo).toBe(canUndoBefore);
+    // No "node" or "history" notification — silent no-op.
+    expect(notifications).not.toContain("node");
+    expect(notifications).not.toContain("history");
+  });
+
+  it("group source -> box target scope 'geometry' yields zero applicable entries and canPasteProperties is false", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const groupSourceId = store.insertNode("group", ROOT_NODE_ID);
+    const boxTargetId = store.insertNode("box", ROOT_NODE_ID);
+
+    store.selectNode(groupSourceId);
+    store.capturePropertiesFromSelection();
+
+    // A group captures no geometry entries, so pasting with scope "geometry"
+    // to a box must be a no-op — nothing to apply, nothing to count as
+    // incompatible either.
+    expect(store.canPasteProperties("geometry", [boxTargetId])).toBe(false);
+
+    store.setSelectedNodes([boxTargetId]);
+    const report = store.applyPropertiesToSelection("geometry");
+    expect(report.applied).toBe(0);
+  });
+
+  it("multi-target mixed compatibility — box+sphere accept, group incompatible, report buckets reflect per-node counts", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const sourceId = store.insertNode("box", ROOT_NODE_ID);
+    const boxTargetId = store.insertNode("box", ROOT_NODE_ID);
+    const sphereTargetId = store.insertNode("sphere", ROOT_NODE_ID);
+    const groupTargetId = store.insertNode("group", ROOT_NODE_ID);
+
+    setColor(store, sourceId, "#ff5500");
+
+    store.selectNode(sourceId);
+    store.capturePropertiesFromSelection();
+
+    store.setSelectedNodes([boxTargetId, sphereTargetId, groupTargetId], "ui", boxTargetId);
+    const report = store.applyPropertiesToSelection("material");
+
+    expect(report.applied).toBeGreaterThan(0);
+    expect(report.skippedIncompatible).toBeGreaterThan(0);
+
+    // Box and sphere must have applied writes.
+    expect(report.perNode[boxTargetId]?.applied ?? 0).toBeGreaterThan(0);
+    expect(report.perNode[sphereTargetId]?.applied ?? 0).toBeGreaterThan(0);
+
+    // The group cannot receive material entries — its bucket should only count
+    // incompatibles (if any) and no applied writes.
+    expect(report.perNode[groupTargetId]?.applied ?? 0).toBe(0);
+    expect(report.perNode[groupTargetId]?.incompatible ?? 0).toBeGreaterThan(0);
+
+    // Box target receives the color; the sphere does too (direct match).
+    expect(materialColorOf(store, boxTargetId)).toBe("#ff5500");
+    expect(materialColorOf(store, sphereTargetId)).toBe("#ff5500");
+  });
 });

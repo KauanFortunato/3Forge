@@ -209,6 +209,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
   const hasChildren = branch.children.length > 0;
   const isCollapsed = isGroup && collapsedIds.has(branch.node.id);
   const isSelected = selectedNodeIds.has(branch.node.id);
+  const isPrimary = isSelected && selectedNodeIds.size > 1 && selectedNodeId === branch.node.id;
   const isAncestor = !isSelected && selectedPathIds.has(branch.node.id);
   const rowDropState = getDropState(dropTarget, branch.node.id);
   const hasAnimation = animatedNodeIds.has(branch.node.id);
@@ -219,6 +220,7 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
         className={[
           "scene-row",
           isSelected ? "is-selected" : "",
+          isPrimary ? "is-primary" : "",
           isAncestor ? "is-ancestor" : "",
           isRoot ? "is-root" : "",
           isGroup ? "is-group" : "is-mesh",

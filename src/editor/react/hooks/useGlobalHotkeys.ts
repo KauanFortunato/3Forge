@@ -17,6 +17,17 @@ interface HotkeyHandlers {
   onDuplicate?: () => void;
   onAddKeyframeAtPlayhead?: () => void;
   onStopAnimation?: () => void;
+  onSelectAll?: () => void;
+  onEscapeSelection?: () => void;
+  onCopyProperties?: () => void;
+  onPasteProperties?: () => void;
+}
+
+function isOverlayOpen(): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  return Boolean(document.querySelector(".modal-backdrop, .context-menu"));
 }
 
 export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
@@ -30,6 +41,17 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
         Boolean(target?.isContentEditable);
 
       if (isTyping) {
+        return;
+      }
+
+      if (event.key === "Escape") {
+        if (isOverlayOpen()) {
+          // Let the open modal/menu handle its own dismissal; do not hijack Escape.
+          return;
+        }
+        if (handlers.onEscapeSelection) {
+          handlers.onEscapeSelection();
+        }
         return;
       }
 
@@ -75,6 +97,11 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       const isSaveAs = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "s";
       const isCopy = event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "c";
       const isPaste = event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "v";
+      const isCopyProperties =
+        (event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "c";
+      const isPasteProperties =
+        (event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "v";
+      const isSelectAll = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "a";
 
       if (isNew) {
         event.preventDefault();
@@ -112,6 +139,28 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
         return;
       }
 
+      if (isCopyProperties) {
+        event.preventDefault();
+        if (isOverlayOpen()) {
+          return;
+        }
+        if (handlers.onCopyProperties) {
+          handlers.onCopyProperties();
+        }
+        return;
+      }
+
+      if (isPasteProperties) {
+        event.preventDefault();
+        if (isOverlayOpen()) {
+          return;
+        }
+        if (handlers.onPasteProperties) {
+          handlers.onPasteProperties();
+        }
+        return;
+      }
+
       if (isCopy) {
         event.preventDefault();
         handlers.onCopy();
@@ -121,6 +170,14 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       if (isPaste) {
         event.preventDefault();
         handlers.onPaste();
+        return;
+      }
+
+      if (isSelectAll) {
+        event.preventDefault();
+        if (handlers.onSelectAll) {
+          handlers.onSelectAll();
+        }
         return;
       }
 

@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest";
 import { createDefaultFontAsset } from "./fonts";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "./exports";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "./animation";
-import { createDefaultBlueprint, createNode, ROOT_NODE_ID, toCamelCase } from "./state";
+import {
+  createDefaultBlueprint,
+  createNode,
+  EditorStore,
+  getPropertyDefinitions,
+  ROOT_NODE_ID,
+  toCamelCase,
+} from "./state";
 import { createBlueprintFixture } from "../test/fixtures";
 
 describe("exports", () => {
@@ -289,5 +296,297 @@ describe("exports", () => {
     // Muted-track property axis (rotation.z) should not appear as a target in the definitions.
     const rotationTargetCount = (output.match(/target: "rotation"/g) ?? []).length;
     expect(rotationTargetCount).toBe(0);
+  });
+});
+
+describe("export after property clipboard", () => {
+  function updateProperty(
+    store: EditorStore,
+    nodeId: string,
+    path: string,
+    value: string | number | boolean,
+  ): void {
+    const node = store.getNode(nodeId);
+    if (!node) {
+      throw new Error(`node ${nodeId} not found`);
+    }
+    const definition = getPropertyDefinitions(node).find((def) => def.path === path);
+    if (!definition) {
+      throw new Error(`definition for "${path}" not found on ${nodeId}`);
+    }
+    store.updateNodeProperty(nodeId, definition, value);
+  }
+
+  function updateMultiple(
+    store: EditorStore,
+    nodeIds: string[],
+    path: string,
+    value: string | number | boolean,
+  ): void {
+    const node = store.getNode(nodeIds[0]);
+    if (!node) {
+      throw new Error(`node ${nodeIds[0]} not found`);
+    }
+    const definition = getPropertyDefinitions(node).find((def) => def.path === path);
+    if (!definition) {
+      throw new Error(`definition for "${path}" not found on ${nodeIds[0]}`);
+    }
+    store.updateNodesProperty(nodeIds, definition, value);
+  }
+
+  function meshNameFor(store: EditorStore, nodeId: string): string {
+    const node = store.getNode(nodeId);
+    if (!node) {
+      throw new Error(`node ${nodeId} not found`);
+    }
+    return `${toCamelCase(node.name)}Mesh`;
+  }
+
+  it("paste 'material' from standard source onto basic target emits MeshStandardMaterial with copied PBR values and castShadow=false", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    store.updateNodeName(boxAId, "Source Box");
+    const boxA = store.getNode(boxAId);
+    if (!boxA || boxA.type !== "box") throw new Error("expected box A");
+    boxA.material.type = "standard";
+    boxA.material.emissive = "#abcdef";
+    boxA.material.roughness = 0.85;
+    boxA.material.metalness = 0.65;
+    boxA.material.castShadow = false;
+
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+    store.updateNodeName(boxBId, "Target Box");
+    const boxB = store.getNode(boxBId);
+    if (!boxB || boxB.type !== "box") throw new Error("expected box B");
+    boxB.material.type = "basic";
+    boxB.material.emissive = "#000000";
+    boxB.material.roughness = 0.4;
+    boxB.material.metalness = 0.1;
+    boxB.material.castShadow = true;
+
+    store.selectNode(boxAId);
+    const clipboard = store.capturePropertiesFromSelection();
+    expect(clipboard).not.toBeNull();
+
+    store.selectNode(boxBId);
+    // Scope "material" carries PBR + common material fields; "shadow" is a
+    // sibling scope, so we apply it separately to mirror a real "Paste Special
+    // -> Material" followed by "Paste Special -> Shadow Flags" user flow.
+    const materialReport = store.applyPropertiesToSelection("material");
+    expect(materialReport.applied).toBeGreaterThan(0);
+    const shadowReport = store.applyPropertiesToSelection("shadow");
+    expect(shadowReport.applied).toBeGreaterThan(0);
+
+    const boxBAfter = store.getNode(boxBId);
+    if (!boxBAfter || boxBAfter.type !== "box") throw new Error("expected box B after");
+    expect(boxBAfter.material.type).toBe("standard");
+    expect(boxBAfter.material.emissive).toBe("#abcdef");
+    expect(boxBAfter.material.roughness).toBeCloseTo(0.85, 5);
+    expect(boxBAfter.material.metalness).toBeCloseTo(0.65, 5);
+    expect(boxBAfter.material.castShadow).toBe(false);
+
+    const output = generateTypeScriptComponent(store.blueprint);
+    const meshB = meshNameFor(store, boxBId);
+
+    // B must now emit MeshStandardMaterial (the paste promoted the material type).
+    const bMaterialBlockRegex = new RegExp(
+      `const ${meshB.replace("Mesh", "Material")} = new (MeshStandardMaterial|MeshBasicMaterial)\\(\\{ ([^}]+) \\}\\);`,
+    );
+    const match = output.match(bMaterialBlockRegex);
+    expect(match).not.toBeNull();
+    expect(match![1]).toBe("MeshStandardMaterial");
+    expect(match![2]).toContain(`emissive: "#abcdef"`);
+    expect(match![2]).toContain(`roughness: 0.85`);
+    expect(match![2]).toContain(`metalness: 0.65`);
+
+    // castShadow = false must be emitted as a literal on B.
+    expect(output).toContain(`${meshB}.castShadow = false;`);
+
+    // Imports must include MeshStandardMaterial now that B is standard.
+    expect(output).toMatch(/^import \{[^}]*MeshStandardMaterial[^}]*\} from "three";/m);
+
+    // Round-trip JSON: export -> parse -> re-import -> re-export must match.
+    const json1 = exportBlueprintToJson(store.blueprint);
+    const reimported = new EditorStore(JSON.parse(json1));
+    const json2 = exportBlueprintToJson(reimported.blueprint);
+    expect(json2).toBe(json1);
+  });
+
+  it("multi-edit material.color via updateNodesProperty lands on all three boxes in the export", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+    const boxCId = store.insertNode("box", ROOT_NODE_ID);
+    store.updateNodeName(boxAId, "Multi A");
+    store.updateNodeName(boxBId, "Multi B");
+    store.updateNodeName(boxCId, "Multi C");
+
+    // Baseline: all three share the createNode default box color "#4bd6ff".
+    for (const id of [boxAId, boxBId, boxCId]) {
+      const n = store.getNode(id);
+      if (!n || n.type === "group") throw new Error("expected non-group");
+      expect(n.material.color).toBe("#4bd6ff");
+    }
+
+    updateMultiple(store, [boxAId, boxBId, boxCId], "material.color", "#112233");
+
+    for (const id of [boxAId, boxBId, boxCId]) {
+      const n = store.getNode(id);
+      if (!n || n.type === "group") throw new Error("expected non-group");
+      expect(n.material.color).toBe("#112233");
+    }
+
+    const output = generateTypeScriptComponent(store.blueprint);
+    const matches = output.match(/color: "#112233"/g) ?? [];
+    // One match per box material block. The default blueprint itself has a
+    // "Hero Panel" box whose color is #7c44de, so it must NOT show #112233.
+    expect(matches.length).toBeGreaterThanOrEqual(3);
+    expect(output).toContain("#7c44de");
+  });
+
+  it("multi-edit castShadow=false on two targets persists through JSON round-trip and emits false literals", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    const boxAId = store.insertNode("box", ROOT_NODE_ID);
+    const boxBId = store.insertNode("box", ROOT_NODE_ID);
+    store.updateNodeName(boxAId, "Shadow A");
+    store.updateNodeName(boxBId, "Shadow B");
+
+    updateMultiple(store, [boxAId, boxBId], "material.castShadow", false);
+
+    const boxAAfter = store.getNode(boxAId);
+    const boxBAfter = store.getNode(boxBId);
+    if (
+      !boxAAfter || !boxBAfter ||
+      boxAAfter.type === "group" || boxBAfter.type === "group"
+    ) {
+      throw new Error("expected both non-group");
+    }
+    expect(boxAAfter.material.castShadow).toBe(false);
+    expect(boxBAfter.material.castShadow).toBe(false);
+
+    const output = generateTypeScriptComponent(store.blueprint);
+    const meshA = meshNameFor(store, boxAId);
+    const meshB = meshNameFor(store, boxBId);
+    expect(output).toContain(`${meshA}.castShadow = false;`);
+    expect(output).toContain(`${meshB}.castShadow = false;`);
+
+    // JSON round-trip must preserve castShadow=false on both.
+    const json = exportBlueprintToJson(store.blueprint);
+    const reimported = new EditorStore(JSON.parse(json));
+    const rA = reimported.getNode(boxAId);
+    const rB = reimported.getNode(boxBId);
+    if (!rA || !rB || rA.type === "group" || rB.type === "group") {
+      throw new Error("expected both non-group on reimport");
+    }
+    expect(rA.material.castShadow).toBe(false);
+    expect(rB.material.castShadow).toBe(false);
+
+    // Re-exporting must still emit false literals — not hardcoded true.
+    const reoutput = generateTypeScriptComponent(reimported.blueprint);
+    const rMeshA = meshNameFor(reimported, boxAId);
+    const rMeshB = meshNameFor(reimported, boxBId);
+    expect(reoutput).toContain(`${rMeshA}.castShadow = false;`);
+    expect(reoutput).toContain(`${rMeshB}.castShadow = false;`);
+  });
+
+  it("paste 'material' onto a node with an editable material.color binding preserves the binding and emits this.options.<key>", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    const boundBoxId = store.insertNode("box", ROOT_NODE_ID);
+    store.updateNodeName(boundBoxId, "Bound Box");
+    const boundBox = store.getNode(boundBoxId);
+    if (!boundBox || boundBox.type !== "box") throw new Error("expected bound box");
+    boundBox.material.color = "#aa00aa";
+    boundBox.editable["material.color"] = {
+      path: "material.color",
+      key: "panelColor",
+      label: "Panel Color",
+      type: "color",
+    };
+
+    const sourceBoxId = store.insertNode("box", ROOT_NODE_ID);
+    store.updateNodeName(sourceBoxId, "Source Box 2");
+    updateProperty(store, sourceBoxId, "material.color", "#00ff00");
+
+    store.selectNode(sourceBoxId);
+    store.capturePropertiesFromSelection();
+
+    store.selectNode(boundBoxId);
+    store.applyPropertiesToSelection("material");
+
+    // Binding must still exist with the same key/label/type — paste only
+    // writes the underlying value, never the editable map.
+    const boundAfter = store.getNode(boundBoxId);
+    if (!boundAfter || boundAfter.type !== "box") throw new Error("expected bound box after");
+    const binding = boundAfter.editable["material.color"];
+    expect(binding).toBeTruthy();
+    expect(binding.key).toBe("panelColor");
+    expect(binding.label).toBe("Panel Color");
+    expect(binding.type).toBe("color");
+
+    // The underlying material color was updated...
+    expect(boundAfter.material.color).toBe("#00ff00");
+
+    // ...but the TS export must reference the binding, NOT the literal.
+    const output = generateTypeScriptComponent(store.blueprint);
+    const meshBound = meshNameFor(store, boundBoxId);
+    const boundMaterialLineRegex = new RegExp(
+      `const ${meshBound.replace("Mesh", "Material")}(?:StandardConfig|BasicConfig)?[^\\n]*color: this\\.options\\.panelColor`,
+    );
+    // The material line for the bound box should read color via this.options.panelColor.
+    expect(output).toMatch(boundMaterialLineRegex);
+
+    // And the options interface must expose the binding key.
+    expect(output).toContain("panelColor?: ColorRepresentation;");
+
+    // The bound box must NOT inline the pasted literal color on its own material line.
+    // We scan only the bound box's material block to avoid false positives from
+    // the source box (whose color is legitimately #00ff00 as a literal).
+    const boundBlockStart = output.indexOf(`const ${meshBound.replace("Mesh", "Material")}`);
+    expect(boundBlockStart).toBeGreaterThan(-1);
+    const boundBlockEnd = output.indexOf(");", boundBlockStart);
+    const boundBlock = output.slice(boundBlockStart, boundBlockEnd);
+    expect(boundBlock).not.toContain(`color: "#00ff00"`);
+    expect(boundBlock).toContain("color: this.options.panelColor");
+  });
+
+  it("paste geometry.width via plane->image alias emits the copied width on the image's PlaneGeometry", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    const planeId = store.insertNode("plane", ROOT_NODE_ID);
+    store.updateNodeName(planeId, "Source Plane");
+    updateProperty(store, planeId, "geometry.width", 3.75);
+
+    const imageId = store.insertNode("image", ROOT_NODE_ID);
+    store.updateNodeName(imageId, "Target Image");
+    // Force a distinct starting width so the test distinguishes pre/post paste.
+    updateProperty(store, imageId, "geometry.width", 1.25);
+
+    const imageBefore = store.getNode(imageId);
+    if (!imageBefore || imageBefore.type !== "image") throw new Error("expected image before");
+    expect(imageBefore.geometry.width).toBeCloseTo(1.25, 5);
+
+    store.selectNode(planeId);
+    store.capturePropertiesFromSelection();
+
+    store.selectNode(imageId);
+    const report = store.applyPropertiesToSelection("geometry");
+    expect(report.applied).toBeGreaterThan(0);
+
+    const imageAfter = store.getNode(imageId);
+    if (!imageAfter || imageAfter.type !== "image") throw new Error("expected image after");
+    expect(imageAfter.geometry.width).toBeCloseTo(3.75, 5);
+
+    const output = generateTypeScriptComponent(store.blueprint);
+    const imageMesh = meshNameFor(store, imageId);
+    const imageGeomVar = imageMesh.replace("Mesh", "Geometry");
+    // The image uses PlaneGeometry(width, height); width must now be 3.75.
+    const geomLineRegex = new RegExp(
+      `const ${imageGeomVar} = new PlaneGeometry\\(3\\.75, `,
+    );
+    expect(output).toMatch(geomLineRegex);
   });
 });

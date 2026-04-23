@@ -288,7 +288,10 @@ describe("InspectorPanel", () => {
 
     expect(screen.getByText("2 objects")).toBeTruthy();
     expect(screen.getByTitle("Material")).toBeTruthy();
-    expect(screen.queryByTitle("Object")).toBeNull();
+    expect(screen.getByTitle("Object")).toBeTruthy();
+    expect(screen.getByTitle("Transform")).toBeTruthy();
+
+    await user.click(screen.getByTitle("Material"));
 
     const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
     expect(colorInput.placeholder).toBe("Mixed");
@@ -333,7 +336,7 @@ describe("InspectorPanel", () => {
     expect(props.onNodePropertyChange).toHaveBeenCalledWith("box-1", expect.objectContaining({ path: "material.color" }), "#654321");
   });
 
-  it("explains when a multi-selection includes groups with no shared material fields", () => {
+  it("exposes only Object and Transform when a multi-selection includes a group", () => {
     const boxNode = createNode("box", ROOT_NODE_ID, "box-1");
     const groupNode = createNode("group", ROOT_NODE_ID, "group-1");
     const props = createCommonProps();
@@ -347,11 +350,14 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    expect(screen.getByText("Material editing is only available when all selected items expose a shared material field.")).toBeTruthy();
+    expect(screen.getByTitle("Object")).toBeTruthy();
+    expect(screen.getByTitle("Transform")).toBeTruthy();
     expect(screen.queryByTitle("Material")).toBeNull();
+    expect(screen.queryByTitle("Geometry")).toBeNull();
   });
 
-  it("hides material-type-specific controls for heterogeneous material selections", () => {
+  it("hides material-type-specific controls for heterogeneous material selections", async () => {
+    const user = userEvent.setup();
     const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
     const secondNode = createNode("plane", ROOT_NODE_ID, "plane-1");
     firstNode.material.type = "basic";
@@ -366,6 +372,8 @@ describe("InspectorPanel", () => {
         fonts={[createDefaultFontAsset()]}
       />,
     );
+
+    await user.click(screen.getByTitle("Material"));
 
     expect(screen.getByText(/Material-specific controls stay hidden while the selection mixes different material types\./)).toBeTruthy();
     expect(screen.queryByLabelText("Roughness")).toBeNull();
@@ -388,6 +396,8 @@ describe("InspectorPanel", () => {
         fonts={[createDefaultFontAsset()]}
       />,
     );
+
+    await user.click(screen.getByTitle("Material"));
 
     const opacityInput = screen.getByLabelText("Opacity");
     expect((opacityInput as HTMLInputElement).placeholder).toBe("Mixed");
@@ -415,6 +425,8 @@ describe("InspectorPanel", () => {
       />,
     );
 
+    await user.click(screen.getByTitle("Material"));
+
     const opacityInput = screen.getByLabelText("Opacity");
     await user.click(opacityInput);
     await user.type(opacityInput, "0.5");
@@ -426,5 +438,126 @@ describe("InspectorPanel", () => {
       expect.objectContaining({ path: "material.opacity" }),
       "0.5",
     );
+  });
+
+  it("renders and edits shared Transform values across two boxes", async () => {
+    const user = userEvent.setup();
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const secondNode = createNode("box", ROOT_NODE_ID, "box-2");
+    secondNode.transform.position.x = 3;
+    const props = createCommonProps();
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[firstNode, secondNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    expect(screen.getByText("2 objects")).toBeTruthy();
+    expect(screen.getByTitle("Transform")).toBeTruthy();
+
+    await user.click(screen.getByTitle("Transform"));
+
+    const transformInputs = container.querySelectorAll(".transform-cell input[type='text']");
+    expect(transformInputs.length).toBe(9);
+
+    const positionX = transformInputs[0] as HTMLInputElement;
+    expect(positionX.placeholder).toBe("Mixed");
+    expect(positionX.value).toBe("");
+
+    await user.click(positionX);
+    await user.type(positionX, "1.5");
+    await user.tab();
+
+    expect(props.onNodesPropertyChange).toHaveBeenCalledWith(
+      ["box-1", "box-2"],
+      expect.objectContaining({ path: "transform.position.x" }),
+      "1.5",
+    );
+  });
+
+  it("edits full material and shadow fields across two same-type boxes", async () => {
+    const user = userEvent.setup();
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const secondNode = createNode("box", ROOT_NODE_ID, "box-2");
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[firstNode, secondNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    await user.click(screen.getByTitle("Material"));
+
+    expect(screen.getByLabelText("Roughness")).toBeTruthy();
+    expect(screen.getByLabelText("Metalness")).toBeTruthy();
+    expect(screen.getByLabelText("Cast Shadow")).toBeTruthy();
+    expect(screen.getByLabelText("Receive Shadow")).toBeTruthy();
+
+    await user.click(screen.getByLabelText("Cast Shadow"));
+
+    expect(props.onNodesPropertyChange).toHaveBeenCalledWith(
+      ["box-1", "box-2"],
+      expect.objectContaining({ path: "material.castShadow" }),
+      false,
+    );
+  });
+
+  it("hides Geometry for cross-type selections while keeping Material and Transform", async () => {
+    const user = userEvent.setup();
+    const boxNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const sphereNode = createNode("sphere", ROOT_NODE_ID, "sphere-1");
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[boxNode, sphereNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    expect(screen.getByTitle("Transform")).toBeTruthy();
+    expect(screen.getByTitle("Material")).toBeTruthy();
+    expect(screen.queryByTitle("Geometry")).toBeNull();
+
+    await user.click(screen.getByTitle("Material"));
+    expect(screen.getByLabelText("Color")).toBeTruthy();
+  });
+
+  it("shows a Mixed placeholder for a transform axis with different values", () => {
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    const secondNode = createNode("box", ROOT_NODE_ID, "box-2");
+    firstNode.transform.position.y = 1;
+    secondNode.transform.position.y = 4;
+    const props = createCommonProps();
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={undefined}
+        nodes={[firstNode, secondNode]}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("Transform"));
+
+    const cells = Array.from(container.querySelectorAll(".transform-cell input[type='text']")) as HTMLInputElement[];
+    const positionX = cells[0];
+    const positionY = cells[1];
+
+    expect(positionX.placeholder).toBe("");
+    expect(positionX.value).toBe("0");
+    expect(positionY.placeholder).toBe("Mixed");
+    expect(positionY.value).toBe("");
   });
 });
