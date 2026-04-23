@@ -257,4 +257,4 @@ The viewport is treated as the primary workspace, while side panels act as opera
 
 ## License
 
-No license file is currently included in this repository. Add one before distributing the project publicly beyond internal or personal use.
+This project is licensed under the terms described in [LICENSE](./LICENSE).

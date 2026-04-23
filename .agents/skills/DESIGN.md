@@ -1,371 +1,371 @@
 ---
 name: Design-Skill-Local
-description: Usada para qualquer coisa que será feita de frontend no app
+description: Used for anything frontend-related that will be done in the app
 ---
 
 # DESIGN
 
-## Objetivo
+## Objective
 
-Atuar como especialista de design para o `3Forge`, sempre respeitando a identidade visual atual do produto. Esta skill deve ser usada em qualquer tarefa ligada a UI, UX visual, sistema de design, layout, componentes, paines, toolbar, viewport, landing page, empty states, modais, menus, tabelas, formularios e refinamento estetico.
+Act as a design specialist for `3Forge`, always respecting the product's current visual identity. This skill must be used for any task related to UI, visual UX, design system, layout, components, panels, toolbar, viewport, landing page, empty states, modals, menus, tables, forms, and visual refinement.
 
-## Contexto do Produto
+## Product Context
 
-O `3Forge` e uma ferramenta de autoria e edicao 3D. A interface deve parecer software profissional de criacao, nao site de marketing generico. A linguagem correta aqui e:
+`3Forge` is a 3D authoring and editing tool. The interface must feel like professional creation software, not a generic marketing site. The right language here is:
 
-- tecnica
-- precisa
+- technical
+- precise
 - desktop-first
-- escura
-- limpa
-- sofisticada sem excesso
-- orientada a produtividade
+- dark
+- clean
+- sophisticated without excess
+- productivity-oriented
 
-## Identidade Visual do 3Forge
+## 3Forge Visual Identity
 
-### Essencia
+### Essence
 
-- A UI deve transmitir ferramenta seria de criacao.
-- O utilizador deve sentir controlo, precisao e foco.
-- A interface precisa de parecer robusta o suficiente para fluxos longos de trabalho.
-- O visual deve ficar entre software criativo e software tecnico, sem cair nem em gamer UI nem em SaaS generico.
+- The UI must convey a serious creation tool.
+- The user should feel control, precision, and focus.
+- The interface needs to feel robust enough for long work sessions.
+- The visual language should sit between creative software and technical software, without becoming either gamer UI or generic SaaS.
 
-### Linguagem Formal
+### Formal Language
 
-- Base escura com profundidade discreta.
-- Paineis em camadas com leves gradientes, nao chapados.
-- Bordas suaves e de baixo contraste.
-- Sombras presentes, mas contidas.
-- Densidade media para alta, sem claustrofobia.
-- Microcontrastes para separar estrutura sem poluicao.
+- Dark base with subtle depth.
+- Panels layered with light gradients, not flat fills.
+- Soft, low-contrast borders.
+- Present but restrained shadows.
+- Medium to high density, without claustrophobia.
+- Micro-contrasts to separate structure without adding noise.
 
-## Direcao Visual Obrigatoria
+## Mandatory Visual Direction
 
-Sempre que desenhares ou alterares UI no `3Forge`, seguir estas regras:
+Whenever you design or alter UI in `3Forge`, follow these rules:
 
-1. Preservar o carater de aplicacao desktop profissional.
-2. Tratar a viewport como area principal e os paineis como infraestrutura de precisao.
-3. Priorizar legibilidade, escaneabilidade e eficiencia de uso.
-4. Usar o acento visual para orientar a acao, nao para colorir tudo.
-5. Manter a interface contida, calibrada e tecnicamente confiavel.
+1. Preserve the character of a professional desktop application.
+2. Treat the viewport as the main area and the panels as precision infrastructure.
+3. Prioritize legibility, scannability, and efficiency of use.
+4. Use visual accent to guide action, not to color everything.
+5. Keep the interface contained, calibrated, and technically trustworthy.
 
-## Cores do 3Forge
+## 3Forge Colors
 
-### Paleta Base
+### Base Palette
 
-O `3Forge` ja aponta para esta familia visual:
+`3Forge` already points to this visual family:
 
-- fundos quase pretos com variacao sutil entre camadas
-- cinzas frios e ligeiramente azulados
-- texto claro com niveis bem definidos
-- acento violeta para selecao, CTA, foco e estado ativo
+- near-black backgrounds with subtle variation between layers
+- cool grays with a slight bluish tint
+- light text with well-defined levels
+- violet accent for selection, CTA, focus, and active state
 
-### Regras de Uso
+### Usage Rules
 
-- Manter os neutros como base dominante da composicao.
-- Usar o violeta do produto como acento principal, porque ele ja faz parte da identidade atual.
-- Nao introduzir novas cores de destaque sem motivo funcional forte.
-- O acento deve aparecer em estados ativos, foco, selecao, drag targets, toggles ativos e highlights estrategicos.
-- Estados de erro, aviso e sucesso devem ser claros, mas visualmente subordinados ao sistema base.
+- Keep neutrals as the dominant compositional base.
+- Use the product violet as the main accent, because it is already part of the current identity.
+- Do not introduce new highlight colors without a strong functional reason.
+- The accent should appear in active states, focus, selection, drag targets, active toggles, and strategic highlights.
+- Error, warning, and success states should be clear, but visually subordinate to the base system.
 
-### O que evitar
+### What To Avoid
 
-- Grandes areas preenchidas com a cor de acento.
-- Misturar acentos secundarios concorrentes.
-- Contraste baixo em textos, labels e informacao de apoio.
-- Paineis com o mesmo tom exato sem qualquer separacao de camada.
+- Large areas filled with the accent color.
+- Mixing competing secondary accents.
+- Low contrast in text, labels, and supporting information.
+- Panels with the exact same tone and no layer separation.
 
-## Tipografia do 3Forge
+## 3Forge Typography
 
-### Papel tipografico
+### Typographic Role
 
-- UI operacional: limpa, neutra, compacta e altamente legivel.
-- Titulos de produto ou momentos de marca: podem usar uma voz mais expressiva e condensada.
+- Operational UI: clean, neutral, compact, and highly legible.
+- Product titles or brand moments: may use a more expressive and condensed voice.
 
-### Regras
+### Rules
 
-- Em UI principal, seguir tipografia de sistema ou equivalente neutra e eficiente.
-- Em elementos de branding, hero ou landing, usar tipografia condensada forte quando isso reforcar a identidade do produto.
-- Labels tecnicas, tabs, meta info e badges devem ter ritmo compacto e consistencia de caixa.
-- Evitar pesos em excesso e escalas tipograficas espalhadas.
-- A hierarquia deve vir de contraste, peso e espacamento, nao de ruido visual.
+- In the main UI, follow system typography or a similarly neutral and efficient equivalent.
+- In branding, hero, or landing elements, use strong condensed typography when it reinforces the product identity.
+- Technical labels, tabs, meta info, and badges should have a compact rhythm and consistent casing.
+- Avoid excessive weights and scattered typographic scales.
+- Hierarchy should come from contrast, weight, and spacing, not visual noise.
 
-### Assinatura visual observada
+### Observed Visual Signature
 
-- `Barlow Condensed` encaixa bem em titulos de produto e momentos de apresentacao.
-- Tipografia de sistema encaixa melhor na interface operacional.
+- `Barlow Condensed` fits well in product titles and presentation moments.
+- System typography fits better in the operational interface.
 
 ## Layout
 
-### Estrutura esperada
+### Expected Structure
 
-- Barra superior utilitaria e compacta.
-- Toolbar secundaria funcional, com grupos claros.
-- Workspace com viewport dominante.
-- Coluna lateral de inspecao e estrutura.
-- Status bar discreta, mas informativa.
-- Dock inferior proprio para timeline e paineis temporais.
+- Compact utility top bar.
+- Functional secondary toolbar with clear groups.
+- Workspace with a dominant viewport.
+- Side column for inspection and structure.
+- Discreet but informative status bar.
+- Dedicated lower dock for timeline and temporal panels.
 
-### Regras de composicao
+### Composition Rules
 
-- A viewport e o palco principal.
-- Paineis devem enquadrar o trabalho, nao competir com ele.
-- A grelha da app precisa de parecer estavel e bem ancorada.
-- Espacamento deve ser consistente e ligeiramente compacto.
-- O alinhamento deve parecer tecnico e deliberado.
-- Footer e timeline nunca devem disputar o mesmo espaco estrutural.
-- Paineis ocultos devem colapsar o dock inteiro correto, nao apenas sumir visualmente.
-- O layout do editor nao deve depender da ordem acidental dos siblings React para parecer correto.
+- The viewport is the main stage.
+- Panels should frame the work, not compete with it.
+- The app grid must feel stable and well-anchored.
+- Spacing should be consistent and slightly compact.
+- Alignment should feel technical and deliberate.
+- Footer and timeline must never compete for the same structural space.
+- Hidden panels must collapse the correct full dock, not just disappear visually.
+- The editor layout must not depend on the accidental order of React siblings to look correct.
 
-## Shell e Docking
+## Shell And Docking
 
-### Regras obrigatorias
+### Mandatory Rules
 
-- `workspace`, `timeline dock` e `statusbar` devem ser regioes separadas do layout.
-- Quando a timeline estiver escondida, o footer continua ancorado na shell principal.
-- Splitters devem operar dentro de regioes estaveis, nunca como remendo para layout fragil.
-- `min-height: 0` e contratos de `overflow` devem ser tratados como parte da arquitetura, nao como detalhe cosmetico.
-- Se uma regiao do editor puder ser escondida, o comportamento esperado deve ser previsivel em resize e breakpoints.
+- `workspace`, `timeline dock`, and `statusbar` must be separate layout regions.
+- When the timeline is hidden, the footer remains anchored to the main shell.
+- Splitters must operate inside stable regions, never as a patch for fragile layout.
+- `min-height: 0` and `overflow` contracts must be treated as part of the architecture, not as a cosmetic detail.
+- If an editor region can be hidden, the expected behavior must remain predictable during resize and at breakpoints.
 
-## Componentes do 3Forge
+## 3Forge Components
 
-### Paineis
+### Panels
 
-- Devem ter profundidade leve com gradient sutil.
-- Borda fina e de baixo contraste.
-- Header compacto, claro e funcional.
-- O corpo deve privilegiar leitura, organizacao e densidade controlada.
+- They should have light depth with subtle gradient.
+- Thin, low-contrast border.
+- Compact, clear, functional header.
+- The body should prioritize reading, organization, and controlled density.
 
 ### Toolbars
 
-- Devem comunicar ferramentas de forma rapida.
-- Grupos devem ser evidentes por proximidade e padrao.
-- Estados ativos precisam de ser imediatamente reconheciveis.
-- Organizar por intencao: contexto, estado atual, ferramentas, modos de visualizacao e utilitarios.
-- Nao misturar tudo no mesmo peso visual.
-- Toggles com estado binario devem comunicar `on/off` claramente.
+- They should communicate tools quickly.
+- Groups should be obvious through proximity and pattern.
+- Active states must be immediately recognizable.
+- Organize by intent: context, current state, tools, view modes, and utilities.
+- Do not mix everything at the same visual weight.
+- Binary toggles must communicate `on/off` clearly.
 
 ### Scene graph
 
-- Deve parecer uma estrutura tecnica e navegavel.
-- O estado selecionado precisa de ficar muito claro.
-- Hover, drag e drop devem ser subtis, mas inequivocos.
-- O nivel de detalhe visual deve ajudar orientacao hierarquica, nao enfeitar.
-- Acoes importantes nao devem depender apenas de hover.
-- Estados de ancestralidade, drop target e foco precisam de ser distinguiveis em poucos segundos.
-- A hierarchy deve privilegiar leitura de arvore antes de microdecoracao.
+- It should feel like a technical, navigable structure.
+- The selected state must be very clear.
+- Hover, drag, and drop should be subtle but unmistakable.
+- The level of visual detail should support hierarchical orientation, not decoration.
+- Important actions must not depend only on hover.
+- Ancestor, drop target, and focus states must be distinguishable within seconds.
+- The hierarchy should prioritize tree readability before micro-decoration.
 
 ### Inspector
 
-- Deve transmitir confianca e precisao.
-- Organizacao por secoes e grupos deve reduzir carga cognitiva.
-- Controles precisam de parecer editaveis, estaveis e consistentes.
-- A densidade pode ser alta, desde que o ritmo visual se mantenha limpo.
-- Tabs de secoes nao devem depender apenas de icones quando isso prejudicar descoberta.
-- Cada secao deve deixar claro o seu papel: objeto, transform, geometria, material, texto, imagem.
+- It should convey confidence and precision.
+- Organization by sections and groups should reduce cognitive load.
+- Controls must look editable, stable, and consistent.
+- Density can be high, as long as the visual rhythm stays clean.
+- Section tabs should not depend only on icons when that hurts discoverability.
+- Each section should clearly communicate its role: object, transform, geometry, material, text, image.
 
-### Menus e modais
+### Menus And Modals
 
-- Devem ser compactos, escuros e utilitarios.
-- Nao devem parecer popups de marketing.
-- A prioridade da acao precisa de ser imediata.
+- They should be compact, dark, and utilitarian.
+- They must not look like marketing popups.
+- Action priority must be immediate.
 
 ### Landing page
 
-- Pode ser mais atmosferica do que a area operacional.
-- Ainda assim, deve manter a mesma familia visual do editor.
-- O branding pode ser mais expressivo, mas sem quebrar o DNA tecnico do produto.
+- It can be more atmospheric than the operational area.
+- Even so, it must maintain the same visual family as the editor.
+- Branding can be more expressive, but without breaking the product's technical DNA.
 
 ## Motion
 
-- Animacoes devem ser discretas, suaves e funcionais.
-- Pequenas transicoes de hover, focus, fade e entrada sao bem-vindas.
-- Evitar motion exibicionista.
-- A sensacao deve ser de refinamento tecnico, nao de espetaculo.
+- Animations should be discreet, smooth, and functional.
+- Small hover, focus, fade, and entrance transitions are welcome.
+- Avoid performative motion.
+- The feeling should be one of technical refinement, not spectacle.
 
-## Estados de Interacao
+## Interaction States
 
-- Todo controle interativo relevante deve ter `hover`, `focus-visible`, `active` e `disabled`.
-- Em UI escura, `focus-visible` nao pode ficar implicito; ele precisa ser desenhado de forma consistente.
-- Selecionado, ativo, foco e hover nao podem parecer o mesmo estado.
-- Usar o violeta como estado ativo e de foco estrategico, nao como preenchimento estrutural da interface inteira.
+- Every relevant interactive control must have `hover`, `focus-visible`, `active`, and `disabled`.
+- In dark UI, `focus-visible` cannot be implicit; it must be drawn consistently.
+- Selected, active, focus, and hover cannot look like the same state.
+- Use violet as a strategic active and focus state, not as structural paint across the whole interface.
 
-## Densidade e Escala
+## Density And Scale
 
-- O `3Forge` aceita densidade media-alta, mas com ritmo consistente.
-- Usar uma escala curta e repetivel para:
-  - altura de headers
-  - altura de controles
-  - paddings de cards e paines
-  - row heights de listas tecnicas
-- Quando dois paineis semelhantes tiverem cromes diferentes, normalizar antes de introduzir novos componentes.
+- `3Forge` supports medium-high density, but with consistent rhythm.
+- Use a short, repeatable scale for:
+  - header heights
+  - control heights
+  - card and panel paddings
+  - row heights in technical lists
+- When two similar panels have different chrome, normalize them before introducing new components.
 
-## Densidade e Ritmo
+## Density And Rhythm
 
-- O `3Forge` aceita densidade superior a interfaces casuais.
-- Mesmo assim, toda densidade precisa de ser organizada.
-- Usar espacamento para criar respiracao entre grupos, nao para deixar tudo solto.
-- Quando houver muitas ferramentas, reduzir decoracao antes de reduzir clareza.
+- `3Forge` supports higher density than casual interfaces.
+- Even so, all density must be organized.
+- Use spacing to create breathing room between groups, not to leave everything floating.
+- When there are many tools, reduce decoration before reducing clarity.
 
-## Responsividade
+## Responsiveness
 
-- O produto e desktop-first.
-- Ao adaptar para larguras menores, preservar o fluxo do editor antes de tentar transformar tudo em experiencia mobile completa.
-- Se houver versao compacta, ela deve continuar a parecer ferramenta profissional.
-- Nunca sacrificar legibilidade, hit area ou hierarquia por compressao excessiva.
-- Em breakpoints menores, o objetivo e manter previsibilidade estrutural, nao imitar app mobile.
-- O viewport continua a ser o centro, mesmo quando os paineis forem reordenados.
+- The product is desktop-first.
+- When adapting to smaller widths, preserve the editor workflow before trying to turn everything into a full mobile experience.
+- If there is a compact version, it must still feel like a professional tool.
+- Never sacrifice legibility, hit area, or hierarchy for excessive compression.
+- At smaller breakpoints, the goal is to preserve structural predictability, not imitate a mobile app.
+- The viewport remains the center, even when panels are reordered.
 
-## Mobile e Tablet
+## Mobile And Tablet
 
-### Regra de produto
+### Product Rule
 
-- `desktop` continua a ser o modo principal de autoria completa.
-- `tablet` pode manter capacidades de edicao, desde que a composicao continue clara e controlada.
-- `phone` nao deve tentar replicar o editor inteiro; por defeito deve assumir papel de `viewer / launcher / playback`.
+- `desktop` remains the main mode for full authoring.
+- `tablet` may retain editing capabilities, as long as the composition remains clear and controlled.
+- `phone` should not try to replicate the whole editor; by default it should assume the role of `viewer / launcher / playback`.
 
 ### Phone
 
-- Em telefone, preferir:
-  - launcher claro
-  - abrir ficheiro
-  - continuar sessao local
-  - abrir recente
-  - viewport dominante
-  - playback de animacao
-- Em telefone, evitar:
-  - scene graph completa
-  - inspector denso
+- On phone, prefer:
+  - clear launcher
+  - open file
+  - continue local session
+  - open recent
+  - dominant viewport
+  - animation playback
+- On phone, avoid:
+  - full scene graph
+  - dense inspector
   - export panel
-  - timeline de autoria completa
-  - toolbar de edicao pesada
-  - menus desktop encolhidos artificialmente
-- O chrome de telefone deve ser curto, direto e orientado a consumo do projeto.
-- O viewport deve ocupar a maior parte da altura util.
-- Status e metadados devem ser resumidos; nao empilhar chips ou badges sem necessidade.
+  - full authoring timeline
+  - heavy editing toolbar
+  - artificially shrunken desktop menus
+- Phone chrome should be short, direct, and oriented toward project consumption.
+- The viewport should occupy most of the usable height.
+- Status and metadata should be summarized; do not stack chips or badges unnecessarily.
 
 ### Tablet
 
-- Tablet pode continuar editavel, mas com composicao compacta e intencional.
-- Em tablet, reorganizar o editor por prioridade:
-  - viewport primeiro
-  - painel lateral/tabulado depois
-  - timeline em modo mais compacto quando necessario
-- A toolbar em tablet deve ser reagrupada por intencao, nao apenas quebrada em varias linhas.
-- Se faltar espaco, reduzir redundancia e cromes antes de esconder capacidades essenciais.
+- Tablet can remain editable, but with compact and intentional composition.
+- On tablet, reorganize the editor by priority:
+  - viewport first
+  - side or tabbed panel second
+  - timeline in a more compact mode when necessary
+- The toolbar on tablet should be regrouped by intent, not merely broken across several lines.
+- If space is missing, reduce redundancy and chrome before hiding essential capabilities.
 
-### Landing / Welcome em mobile
+### Landing / Welcome On Mobile
 
-- A welcome screen e parte do produto, nao splash descartavel.
-- Em mobile, a landing deve funcionar como launcher real.
-- A landing precisa:
-  - mostrar logo sem corte
-  - permitir scroll vertical quando o conteudo exceder a altura
-  - priorizar as acoes principais antes de blocos decorativos
-  - evitar hero page longa ou demasiado promocional
-- Em `phone`, remover densidade desnecessaria antes de reduzir tipografia ou hit area.
-- Nao usar `overflow: hidden` na shell da landing se isso puder cortar conteudo ou impedir scroll.
+- The welcome screen is part of the product, not disposable splash content.
+- On mobile, the landing page must function as a real launcher.
+- The landing page needs to:
+  - show the logo without clipping
+  - allow vertical scroll when content exceeds height
+  - prioritize primary actions before decorative blocks
+  - avoid a long or overly promotional hero page
+- On `phone`, remove unnecessary density before reducing typography or hit area.
+- Do not use `overflow: hidden` on the landing shell if that can clip content or prevent scrolling.
 
-### Shell responsiva
+### Responsive Shell
 
-- Diferenciar explicitamente `phone`, `tablet` e `desktop` quando o produto mudar de natureza.
-- Nao depender apenas de um unico booleano `compact`.
-- Se `phone` usar viewer mode, a shell deve mudar de estrutura e nao apenas esconder meia duzia de paineis.
-- Footer, viewport e docks precisam continuar em regioes previsiveis em todos os modos.
+- Explicitly differentiate `phone`, `tablet`, and `desktop` when the product changes in nature.
+- Do not rely only on a single `compact` boolean.
+- If `phone` uses viewer mode, the shell should change structure rather than just hiding a handful of panels.
+- Footer, viewport, and docks must remain in predictable regions across all modes.
 
-### Playback mobile
+### Mobile Playback
 
-- Em telefone, animacao deve ser controlada por UI curta:
+- On phone, animation should be controlled by concise UI:
   - play/pause
   - stop
   - clip selector
-  - scrubber simples
-- A UI de playback deve parecer robusta, nao um prototipo improvisado.
-- Se nao houver clips, mostrar estado vazio curto e explicito.
+  - simple scrubber
+- Playback UI should feel robust, not like an improvised prototype.
+- If there are no clips, show a short and explicit empty state.
 
-### Regras de decisao para menor largura
+### Decision Rules For Smaller Widths
 
-- Em telas pequenas, cortar complexidade antes de cortar clareza.
-- Remover chrome desnecessario antes de encolher controles uteis.
-- Manter a ordem:
-  - acao principal
-  - contexto
-  - navegacao secundaria
-  - detalhe tecnico
-- Se um bloco nao ajudar `abrir`, `continuar`, `ver` ou `controlar`, ele provavelmente nao pertence ao phone.
+- On small screens, cut complexity before cutting clarity.
+- Remove unnecessary chrome before shrinking useful controls.
+- Preserve the order:
+  - primary action
+  - context
+  - secondary navigation
+  - technical detail
+- If a block does not help `open`, `continue`, `view`, or `control`, it probably does not belong on phone.
 
 ## Empty States
 
-- Empty states devem orientar a proxima acao, nao apenas descrever ausencia.
-- Preferir:
-  - titulo curto
-  - explicacao objetiva
-  - proximo passo implicito ou explicito
-- Empty states em paineis operacionais devem parecer parte da ferramenta, nao mensagem genérica.
+- Empty states should guide the next action, not only describe absence.
+- Prefer:
+  - short title
+  - objective explanation
+  - implicit or explicit next step
+- Empty states in operational panels should feel like part of the tool, not a generic message.
 
-## Principios de Decisao
+## Decision Principles
 
-Quando houver mais de uma solucao de UI valida, escolher a que:
+When there is more than one valid UI solution, choose the one that:
 
-- parece mais `3Forge`
-- parece mais precisa e profissional
-- melhora mais o fluxo de trabalho
-- reduz mais ruido sem perder capacidade
-- usa melhor a profundidade escura e o acento violeta
-- preserva o equilibrio entre criatividade e engenharia
-- mantem contratos estruturais estaveis com paineis visiveis ou ocultos
-- torna estados e affordances compreensiveis sem depender de hover ou adivinhacao
+- feels more like `3Forge`
+- feels more precise and professional
+- improves workflow more
+- reduces more noise without losing capability
+- uses dark depth and the violet accent better
+- preserves the balance between creativity and engineering
+- maintains stable structural contracts with panels visible or hidden
+- makes states and affordances understandable without relying on hover or guesswork
 
-## O que o Design do 3Forge Nao Deve Virar
+## What 3Forge Design Must Not Become
 
-- um dashboard SaaS branco com cards genericos
-- uma interface neon futurista caricata
-- uma UI gamer carregada
-- uma mistura de estilos sem sistema
-- um layout fofo ou casual demais
-- um produto visualmente plano e sem hierarquia
+- a white SaaS dashboard with generic cards
+- a caricatured futuristic neon interface
+- a heavy gamer UI
+- a mixture of styles without a system
+- a layout that is too cute or too casual
+- a visually flat product without hierarchy
 
-## Processo de Trabalho
+## Work Process
 
-Sempre que trabalhares em UI no `3Forge`:
+Whenever you work on UI in `3Forge`:
 
-1. Identificar se a area e operacional, estrutural ou de marca.
-2. Confirmar o papel da tela no fluxo do editor.
-3. Preservar a linguagem dark, tecnica e precisa do produto.
-4. Reutilizar a familia de neutros, gradientes e acento violeta do sistema atual.
-5. Confirmar se a mudanca afeta shell, docking, overflow ou resize.
-6. Ajustar hierarquia, densidade e legibilidade antes de adicionar novos efeitos.
-7. Refinar estados ativos, hover, foco, erro, vazio e loading com consistencia sistemica.
-8. Validar se o resultado ainda parece claramente `3Forge`.
+1. Identify whether the area is operational, structural, or brand-related.
+2. Confirm the role of the screen in the editor flow.
+3. Preserve the product's dark, technical, and precise language.
+4. Reuse the current system's neutral family, gradients, and violet accent.
+5. Confirm whether the change affects shell, docking, overflow, or resize.
+6. Adjust hierarchy, density, and legibility before adding new effects.
+7. Refine active, hover, focus, error, empty, and loading states with systemic consistency.
+8. Validate that the result still clearly feels like `3Forge`.
 
-## Checklist de Revisao
+## Review Checklist
 
-Antes de finalizar qualquer mudanca visual, confirmar:
+Before finalizing any visual change, confirm:
 
-- A interface parece ferramenta profissional de criacao 3D?
-- A viewport continua a ser o centro da experiencia quando aplicavel?
-- Os paineis ajudam o trabalho em vez de pesar visualmente?
-- O violeta foi usado como acento e nao como tinta geral?
-- A densidade esta organizada e legivel?
-- A hierarquia esta clara em poucos segundos?
-- A UI parece consistente com menu bar, toolbar, inspector e scene graph existentes?
-- Footer, timeline e workspace continuam estruturalmente separados?
-- Esconder paines ainda produz um layout estavel?
-- Os controlos principais continuam compreensiveis sem hover?
-- Existe `focus-visible` consistente nos elementos interativos relevantes?
-- O empty state ajuda o proximo passo em vez de apenas informar ausencia?
-- O resultado parece extensao natural do `3Forge`, e nao redesign de outro produto?
+- Does the interface feel like a professional 3D creation tool?
+- Does the viewport remain the center of the experience when applicable?
+- Do the panels support the work instead of weighing the UI down?
+- Was violet used as an accent rather than as general paint?
+- Is the density organized and legible?
+- Is the hierarchy clear within a few seconds?
+- Does the UI feel consistent with the existing menu bar, toolbar, inspector, and scene graph?
+- Do footer, timeline, and workspace remain structurally separate?
+- Does hiding panels still produce a stable layout?
+- Do the main controls remain understandable without hover?
+- Is there consistent `focus-visible` on relevant interactive elements?
+- Does the empty state guide the next step instead of only reporting absence?
+- Does the result feel like a natural extension of `3Forge`, not a redesign of another product?
 
-## Resultado Esperado
+## Expected Result
 
-As interfaces do `3Forge` devem transmitir:
+3Forge interfaces should convey:
 
-- precisao
-- controlo
-- foco
-- confianca
-- sofisticacao tecnica
-- profundidade escura bem composta
-- identidade visual coerente com ferramenta criativa profissional
+- precision
+- control
+- focus
+- confidence
+- technical sophistication
+- well-composed dark depth
+- visual identity coherent with a professional creative tool
 
-Se houver duvida entre uma solucao mais chamativa e uma mais calibrada ao produto, escolher a mais calibrada ao `3Forge`.
+If there is doubt between a more eye-catching solution and one more calibrated to the product, choose the one more calibrated to `3Forge`.
