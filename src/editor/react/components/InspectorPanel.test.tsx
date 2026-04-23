@@ -54,8 +54,8 @@ describe("InspectorPanel", () => {
     await user.click(screen.getByLabelText("Editable Visible"));
 
     await user.click(screen.getByTitle("Transform"));
-    const positionXInput = container.querySelector(".transform-cell input[type='text']");
-    const editableToggle = container.querySelector(".transform-cell input[type='checkbox']");
+    const positionXInput = container.querySelector(".vec__cell input[type='text']");
+    const editableToggle = container.querySelector(".vec__cell input[type='checkbox']");
 
     expect(positionXInput).toBeTruthy();
     expect(editableToggle).toBeTruthy();
@@ -163,11 +163,14 @@ describe("InspectorPanel", () => {
     expect(screen.getAllByLabelText("Cast Shadow")).toHaveLength(1);
     expect(screen.getAllByLabelText("Receive Shadow")).toHaveLength(1);
 
-    // The Shadows sub-header should render exactly once within the material card
-    const materialCard = container.querySelector(".inspector-card") as HTMLElement | null;
-    expect(materialCard).toBeTruthy();
+    // The Shadows sub-header should render exactly once within the material section
+    const materialSections = Array.from(container.querySelectorAll(".sec")).filter((el) => (
+      el.querySelector(".sec__hd-title")?.textContent?.trim() === "Material"
+    ));
+    expect(materialSections.length).toBeGreaterThan(0);
+    const materialCard = materialSections[0] as HTMLElement;
     const shadowSubHeaders = Array.from(
-      materialCard!.querySelectorAll(".inspector-sub-header"),
+      materialCard.querySelectorAll(".sec__sub"),
     ).filter((el) => el.textContent?.trim() === "Shadows");
     expect(shadowSubHeaders).toHaveLength(1);
   });
@@ -461,7 +464,7 @@ describe("InspectorPanel", () => {
 
     await user.click(screen.getByTitle("Transform"));
 
-    const transformInputs = container.querySelectorAll(".transform-cell input[type='text']");
+    const transformInputs = container.querySelectorAll(".vec__cell input[type='text']");
     expect(transformInputs.length).toBe(9);
 
     const positionX = transformInputs[0] as HTMLInputElement;
@@ -551,7 +554,7 @@ describe("InspectorPanel", () => {
 
     fireEvent.click(screen.getByTitle("Transform"));
 
-    const cells = Array.from(container.querySelectorAll(".transform-cell input[type='text']")) as HTMLInputElement[];
+    const cells = Array.from(container.querySelectorAll(".vec__cell input[type='text']")) as HTMLInputElement[];
     const positionX = cells[0];
     const positionY = cells[1];
 

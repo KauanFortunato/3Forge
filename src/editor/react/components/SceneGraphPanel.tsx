@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent, MouseEvent } from "react";
+import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import type { EditorNode } from "../../types";
 import type { TreeBranch, TreeDropTarget } from "../ui-types";
 import { ChevronDownIcon, ChevronRightIcon, ClosedEyeIcon, EyeIcon, GroupIcon, MeshIcon } from "./icons";
@@ -108,9 +108,11 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
     setDropTarget(null);
   };
 
+  const rows: BranchRow[] = useMemo(() => flattenBranches(branches, collapsedIds, 0, null), [branches, collapsedIds]);
+
   return (
     <div
-      className="scene-graph"
+      className="sg-tree"
       role="tree"
       aria-label="Scene hierarchy"
       tabIndex={selectedNodeIds.length === 0 ? 0 : -1}
@@ -131,24 +133,21 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
         }
       }}
     >
-      {branches.map((branch, index) => (
-        <SceneGraphBranch
-          key={branch.node.id}
-          branch={branch}
-          parentId={null}
-          siblingIndex={index}
-          siblingCount={branches.length}
+      {rows.map((row) => (
+        <SceneGraphRow
+          key={row.branch.node.id}
+          row={row}
           selectedNodeId={selectedNodeId}
           selectedNodeIds={selectedNodeIdsSet}
           selectedPathIds={selectedPathIds}
           collapsedIds={collapsedIds}
           draggedNodeId={draggedNodeId}
           dropTarget={dropTarget}
+          animatedNodeIds={animatedNodeIds}
           onToggleNode={toggleNode}
           onSelectNode={onSelectNode}
           onMoveNode={onMoveNode}
           onToggleVisibility={onToggleVisibility}
-          animatedNodeIds={animatedNodeIds}
           onContextMenu={onContextMenu}
           onDragStateChange={(nextDragged, nextDropTarget) => {
             setDraggedNodeId(nextDragged);
@@ -161,48 +160,75 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
   );
 }
 
-interface SceneGraphBranchProps {
+interface BranchRow {
   branch: TreeBranch;
+  depth: number;
   parentId: string | null;
   siblingIndex: number;
   siblingCount: number;
+}
+
+function flattenBranches(
+  branches: TreeBranch[],
+  collapsedIds: Set<string>,
+  depth: number,
+  parentId: string | null,
+): BranchRow[] {
+  const rows: BranchRow[] = [];
+  branches.forEach((branch, siblingIndex) => {
+    rows.push({
+      branch,
+      depth,
+      parentId,
+      siblingIndex,
+      siblingCount: branches.length,
+    });
+    const isGroup = branch.node.type === "group";
+    const isCollapsed = isGroup && collapsedIds.has(branch.node.id);
+    if (isGroup && !isCollapsed && branch.children.length > 0) {
+      rows.push(...flattenBranches(branch.children, collapsedIds, depth + 1, branch.node.id));
+    }
+  });
+  return rows;
+}
+
+interface SceneGraphRowProps {
+  row: BranchRow;
   selectedNodeId: string;
   selectedNodeIds: Set<string>;
   selectedPathIds: Set<string>;
   collapsedIds: Set<string>;
   draggedNodeId: string | null;
   dropTarget: TreeDropTarget | null;
+  animatedNodeIds: Set<string>;
   onToggleNode: (nodeId: string) => void;
   onSelectNode: (nodeId: string, additive: boolean) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
-  animatedNodeIds: Set<string>;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
   onDragStateChange: (draggedNodeId: string | null, target: TreeDropTarget | null) => void;
   onClearDragState: () => void;
 }
 
-function SceneGraphBranch(props: SceneGraphBranchProps) {
+function SceneGraphRow(props: SceneGraphRowProps) {
   const {
-    branch,
-    parentId,
-    siblingIndex,
-    siblingCount,
+    row,
     selectedNodeId,
     selectedNodeIds,
     selectedPathIds,
     collapsedIds,
     draggedNodeId,
     dropTarget,
+    animatedNodeIds,
     onToggleNode,
     onSelectNode,
     onMoveNode,
     onToggleVisibility,
-    animatedNodeIds,
     onContextMenu,
     onDragStateChange,
     onClearDragState,
   } = props;
+  const { branch, depth, siblingIndex, siblingCount } = row;
 
   const isRoot = branch.node.parentId === null;
   const isGroup = branch.node.type === "group";
@@ -214,192 +240,122 @@ function SceneGraphBranch(props: SceneGraphBranchProps) {
   const rowDropState = getDropState(dropTarget, branch.node.id);
   const hasAnimation = animatedNodeIds.has(branch.node.id);
 
-  return (
-    <div className={`scene-graph__branch${parentId ? " has-parent" : ""}`}>
-      <div
-        className={[
-          "scene-row",
-          isSelected ? "is-selected" : "",
-          isPrimary ? "is-primary" : "",
-          isAncestor ? "is-ancestor" : "",
-          isRoot ? "is-root" : "",
-          isGroup ? "is-group" : "is-mesh",
-          rowDropState ? `is-drop-${rowDropState}` : "",
-          draggedNodeId === branch.node.id ? "is-dragging" : "",
-        ].filter(Boolean).join(" ")}
-        role="treeitem"
-        tabIndex={isSelected ? 0 : -1}
-        aria-selected={isSelected}
-        aria-expanded={isGroup ? !isCollapsed : undefined}
-        draggable={!isRoot}
-        onClick={(event) => onSelectNode(branch.node.id, event.shiftKey)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onSelectNode(branch.node.id, event.shiftKey);
-          }
+  const indentStyle: CSSProperties = { "--indent": String(depth) } as CSSProperties;
 
-          if (isGroup && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-            const shouldExpand = event.key === "ArrowRight";
-            if (shouldExpand === isCollapsed) {
-              event.preventDefault();
+  return (
+    <div
+      className={[
+        "sg-row",
+        isSelected ? "is-selected" : "",
+        isPrimary ? "is-primary" : "",
+        isAncestor ? "is-ancestor" : "",
+        isRoot ? "is-root" : "",
+        isGroup ? "is-group" : "is-mesh",
+        rowDropState ? `is-drop-${rowDropState}` : "",
+        draggedNodeId === branch.node.id ? "is-dragging" : "",
+      ].filter(Boolean).join(" ")}
+      role="treeitem"
+      style={indentStyle}
+      tabIndex={isSelected ? 0 : -1}
+      aria-selected={isSelected}
+      aria-expanded={isGroup ? !isCollapsed : undefined}
+      draggable={!isRoot}
+      onClick={(event) => onSelectNode(branch.node.id, event.shiftKey)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelectNode(branch.node.id, event.shiftKey);
+        }
+
+        if (isGroup && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+          const shouldExpand = event.key === "ArrowRight";
+          if (shouldExpand === isCollapsed) {
+            event.preventDefault();
+            onToggleNode(branch.node.id);
+          }
+        }
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onContextMenu(event, branch.node.id);
+      }}
+      onDragStart={(event) => {
+        if (isRoot) {
+          event.preventDefault();
+          return;
+        }
+
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", branch.node.id);
+        onDragStateChange(branch.node.id, null);
+      }}
+      onDragEnd={onClearDragState}
+      onDragOver={(event) => {
+        if (!draggedNodeId || draggedNodeId === branch.node.id) {
+          return;
+        }
+
+        const target = resolveDropTarget(branch, event, siblingIndex, siblingCount);
+        if (!target) {
+          return;
+        }
+
+        event.preventDefault();
+        onDragStateChange(draggedNodeId, target);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        const sourceNodeId = draggedNodeId ?? event.dataTransfer.getData("text/plain");
+        const target = resolveDropTarget(branch, event, siblingIndex, siblingCount);
+        if (sourceNodeId && target) {
+          onMoveNode(sourceNodeId, target);
+        }
+        onClearDragState();
+      }}
+    >
+      <div className="sg-row__main">
+        <button
+          type="button"
+          className={`sg-row__chev${hasChildren && isGroup ? "" : " is-hidden"}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (isGroup) {
               onToggleNode(branch.node.id);
             }
-          }
-        }}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          onContextMenu(event, branch.node.id);
-        }}
-        onDragStart={(event) => {
-          if (isRoot) {
-            event.preventDefault();
-            return;
-          }
-
-          event.dataTransfer.effectAllowed = "move";
-          event.dataTransfer.setData("text/plain", branch.node.id);
-          onDragStateChange(branch.node.id, null);
-        }}
-        onDragEnd={onClearDragState}
-        onDragOver={(event) => {
-          if (!draggedNodeId || draggedNodeId === branch.node.id) {
-            return;
-          }
-
-          const target = resolveDropTarget(branch, event, siblingIndex, siblingCount);
-          if (!target) {
-            return;
-          }
-
-          event.preventDefault();
-          onDragStateChange(draggedNodeId, target);
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          const sourceNodeId = draggedNodeId ?? event.dataTransfer.getData("text/plain");
-          const target = resolveDropTarget(branch, event, siblingIndex, siblingCount);
-          if (sourceNodeId && target) {
-            onMoveNode(sourceNodeId, target);
-          }
-          onClearDragState();
-        }}
-      >
-        <div className="scene-row__main">
+          }}
+          aria-label={isCollapsed ? "Expand group" : "Collapse group"}
+          tabIndex={-1}
+        >
           {isGroup ? (
-            <button
-              type="button"
-              className="scene-row__toggle"
-              onClick={(event) => {
-                event.stopPropagation();
-                onToggleNode(branch.node.id);
-              }}
-              aria-label={isCollapsed ? "Expand group" : "Collapse group"}
-            >
-              {isCollapsed ? <ChevronRightIcon width={12} height={12} /> : <ChevronDownIcon width={12} height={12} />}
-            </button>
-          ) : (
-            <span className="scene-row__toggle scene-row__toggle--spacer" />
-          )}
+            isCollapsed ? <ChevronRightIcon width={10} height={10} /> : <ChevronDownIcon width={10} height={10} />
+          ) : null}
+        </button>
 
-          <span className="scene-row__icon">
-            {isGroup ? <GroupIcon width={14} height={14} /> : <MeshIcon width={14} height={14} />}
-          </span>
+        <span className="sg-row__icon">
+          {isGroup ? <GroupIcon width={12} height={12} /> : <MeshIcon width={12} height={12} />}
+        </span>
 
-          <span className="scene-row__text">
-            <span className="scene-row__name">{branch.node.name}</span>
-            <span className="scene-row__subtext">{isGroup ? `${branch.children.length} children` : "Mesh node"}</span>
-          </span>
-        </div>
-
-        <div className="scene-row__actions">
-          <button
-            type="button"
-            className={`scene-row__action-btn${!branch.node.visible ? " is-hidden" : ""}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleVisibility(branch.node.id);
-            }}
-            title={branch.node.visible ? "Hide item" : "Show item"}
-          >
-            {branch.node.visible ? <EyeIcon width={14} height={14} /> : <ClosedEyeIcon width={14} height={14} />}
-          </button>
-        </div>
-
-        <div className="scene-row__meta">
-          {hasAnimation ? <span className="scene-row__type scene-row__type--animation">Anim</span> : null}
-          <span className="scene-row__type">{isGroup ? "Group" : "Mesh"}</span>
-        </div>
+        <span className="sg-row__name">{branch.node.name}</span>
       </div>
 
-      {isGroup && !isCollapsed ? (
-        <div
-          className="scene-graph__children"
-          role="group"
-          onContextMenu={(event) => {
-            if (event.target === event.currentTarget) {
-              event.preventDefault();
-              onContextMenu(event, branch.node.id);
-            }
+      <span className="sg-row__badge">
+        {hasAnimation ? "anim" : isGroup ? `${branch.children.length}` : ""}
+      </span>
+
+      <div className="sg-row__actions">
+        <button
+          type="button"
+          className={`sg-row__ibtn${!branch.node.visible ? " is-off" : ""}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleVisibility(branch.node.id);
           }}
+          title={branch.node.visible ? "Hide item" : "Show item"}
+          tabIndex={-1}
         >
-          {branch.children.map((child, index) => (
-            <SceneGraphBranch
-              key={child.node.id}
-              branch={child}
-              parentId={branch.node.id}
-              siblingIndex={index}
-              siblingCount={branch.children.length}
-              selectedNodeId={selectedNodeId}
-              selectedNodeIds={selectedNodeIds}
-              selectedPathIds={selectedPathIds}
-              collapsedIds={collapsedIds}
-              draggedNodeId={draggedNodeId}
-              dropTarget={dropTarget}
-              onToggleNode={onToggleNode}
-              onSelectNode={onSelectNode}
-              onMoveNode={onMoveNode}
-              onToggleVisibility={onToggleVisibility}
-              animatedNodeIds={animatedNodeIds}
-              onContextMenu={onContextMenu}
-              onDragStateChange={onDragStateChange}
-              onClearDragState={onClearDragState}
-            />
-          ))}
-
-          <div
-            className={`scene-graph__end-drop${dropTarget?.parentId === branch.node.id && dropTarget.position === "end" ? " is-active" : ""}`}
-            onDragOver={(event) => {
-              if (!draggedNodeId) {
-                return;
-              }
-
-              event.preventDefault();
-              onDragStateChange(draggedNodeId, {
-                parentId: branch.node.id,
-                index: branch.children.length,
-                position: "end",
-                rowNodeId: branch.node.id,
-              });
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              const sourceNodeId = draggedNodeId ?? event.dataTransfer.getData("text/plain");
-              if (sourceNodeId) {
-                onMoveNode(sourceNodeId, {
-                  parentId: branch.node.id,
-                  index: branch.children.length,
-                  position: "end",
-                  rowNodeId: branch.node.id,
-                });
-              }
-              onClearDragState();
-            }}
-          >
-            Drop at end of {branch.node.name}
-          </div>
-        </div>
-      ) : null}
+          {branch.node.visible ? <EyeIcon width={12} height={12} /> : <ClosedEyeIcon width={12} height={12} />}
+        </button>
+      </div>
     </div>
   );
 }

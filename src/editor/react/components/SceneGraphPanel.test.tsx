@@ -61,7 +61,7 @@ describe("SceneGraphPanel", () => {
       />,
     );
 
-    const groupRow = screen.getByText("Fixture Group").closest(".scene-row");
+    const groupRow = screen.getByText("Fixture Group").closest(".sg-row");
     expect(groupRow).toBeTruthy();
     fireEvent.click(within(groupRow as HTMLElement).getByRole("button", { name: "Collapse group" }));
 
@@ -124,7 +124,7 @@ describe("SceneGraphPanel", () => {
       />,
     );
 
-    const primaryRows = container.querySelectorAll(".scene-row.is-primary");
+    const primaryRows = container.querySelectorAll(".sg-row.is-primary");
     expect(primaryRows).toHaveLength(1);
     const primaryRow = primaryRows[0] as HTMLElement;
     expect(within(primaryRow).getByText("Plane Child")).toBeTruthy();
@@ -144,7 +144,7 @@ describe("SceneGraphPanel", () => {
         onContextMenu={vi.fn()}
       />,
     );
-    expect(container.querySelectorAll(".scene-row.is-primary")).toHaveLength(0);
+    expect(container.querySelectorAll(".sg-row.is-primary")).toHaveLength(0);
   });
 
   it("honors externally controlled collapse state changes", () => {

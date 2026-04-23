@@ -11,43 +11,46 @@ interface FieldsPanelProps {
 export function FieldsPanel({ entries, onUpdateBinding, onRemoveEditable }: FieldsPanelProps) {
   if (entries.length === 0) {
     return (
-      <div className="panel-empty panel-empty--card">
-        <strong className="panel-empty__title">No Runtime Fields Yet</strong>
-        <span className="panel-empty__body">Mark properties as editable in the Inspector to generate runtime options here.</span>
+      <div className="panel__empty">
+        Mark properties as editable in the Inspector to generate runtime options here.
       </div>
     );
   }
 
   return (
-    <div className="editable-fields">
+    <div>
       {entries.map((entry) => (
-        <div key={`${entry.node.id}:${entry.binding.path}`} className="editable-card">
-          <div className="editable-card__title">{entry.node.name}</div>
-          <div className="editable-card__path">{entry.binding.path}</div>
+        <div key={`${entry.node.id}:${entry.binding.path}`} className="sec sec--field">
+          <div className="sec__title">{entry.node.name}</div>
+          <div className="sec__path">{entry.binding.path}</div>
 
-          <label className="field-block">
-            <span className="field-block__label">Key</span>
-            <BufferedInput
-              className="editor-input"
-              type="text"
-              value={entry.binding.key}
-              onCommit={(value) => onUpdateBinding(entry.node.id, entry.binding.path, { key: value })}
-            />
-          </label>
+          <div className="row">
+            <span className="row__lbl">Key</span>
+            <span className="text">
+              <BufferedInput
+                type="text"
+                value={entry.binding.key}
+                onCommit={(value) => onUpdateBinding(entry.node.id, entry.binding.path, { key: value })}
+              />
+            </span>
+            <span aria-hidden="true" />
+          </div>
 
-          <label className="field-block">
-            <span className="field-block__label">Label</span>
-            <BufferedInput
-              className="editor-input"
-              type="text"
-              value={entry.binding.label}
-              onCommit={(value) => onUpdateBinding(entry.node.id, entry.binding.path, { label: value })}
-            />
-          </label>
+          <div className="row">
+            <span className="row__lbl">Label</span>
+            <span className="text">
+              <BufferedInput
+                type="text"
+                value={entry.binding.label}
+                onCommit={(value) => onUpdateBinding(entry.node.id, entry.binding.path, { label: value })}
+              />
+            </span>
+            <span aria-hidden="true" />
+          </div>
 
           <button
             type="button"
-            className="tool-button tool-button--full"
+            className="tbtn is-ghost tbtn--block"
             onClick={() => {
               const definition = getPropertyDefinitions(entry.node).find((item) => item.path === entry.binding.path);
               if (!definition) {

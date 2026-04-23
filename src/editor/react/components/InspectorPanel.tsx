@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
 import { getSharedPropertyDefinitions } from "../../sharedProperties";
 import type { SharedPropertyResult } from "../../sharedProperties";
 import type { EditorNode, FontAsset, GroupPivotPreset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
 import {
+  BoxIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CircleFilledIcon,
   CircleIcon,
   GeometryIcon,
+  GroupIcon,
   ImagePropertyIcon,
   MaterialIcon,
+  MeshIcon,
   ObjectDataIcon,
   TextPropertyIcon,
   TransformIcon,
@@ -114,368 +119,370 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
   if (selectionNodes.length === 0) {
     return (
-      <div className="panel-empty panel-empty--card">
-        <strong className="panel-empty__title">Inspector</strong>
-        <span className="panel-empty__body">{emptyMessage ?? "Selecione um objeto para editar."}</span>
+      <div className="panel__empty">
+        {emptyMessage ?? "Selecione um objeto para editar."}
       </div>
     );
   }
 
   const groupedDefinitions = primaryNode ? groupDefinitions(getPropertyDefinitions(primaryNode)) : new Map<string, NodePropertyDefinition[]>();
+  const iconForNode = primaryNode?.type === "group" ? <GroupIcon width={14} height={14} /> : <MeshIcon width={14} height={14} />;
 
   return (
-    <div className="inspector-shell">
-      <div className="inspector-layout">
-        <div className="inspector-section-tabs">
-          {sections.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              className={`inspector-section-tab${activeSection === section.id ? " is-active" : ""}`}
-              title={section.label}
-              aria-label={section.label}
-              onClick={() => setActiveSection(section.id)}
-            >
-              <span className="inspector-section-tab__icon">{section.icon}</span>
-              <span className="inspector-section-tab__label">{section.label}</span>
-            </button>
-          ))}
+    <div>
+      <div className="insp-head">
+        <div className="insp-head__top">
+          <span className="insp-head__icon">{isMultiSelection ? <GroupIcon width={14} height={14} /> : iconForNode}</span>
+          <span className="insp-head__name">{isMultiSelection ? `${selectionNodes.length} objects` : primaryNode?.name}</span>
         </div>
-
-        <div className="inspector-section-body">
-          <div className="inspector-node-strip">
-            <div className="inspector-node-strip__titles">
-              <span className="inspector-node-strip__title">{isMultiSelection ? `${selectionNodes.length} objects` : primaryNode?.name}</span>
-              {isMultiSelection ? (
-                <SharedScopeSubline
-                  object={sharedObject}
-                  transform={sharedTransform}
-                  geometry={sharedGeometry}
-                  material={sharedMaterial}
-                />
-              ) : null}
-            </div>
-            <span className="inspector-node-strip__meta">
-              {isMultiSelection ? "Multi-selection" : primaryNode?.type === "group" ? "Group" : "Mesh"}
-            </span>
-          </div>
-
-          {activeSection === "object" && isMultiSelection ? (
-            <section className="inspector-card">
-              <div className="inspector-card__header">
-                <h4>Object</h4>
-                {renderExcludedNote(sharedObject, selectionNodes)}
-              </div>
-
-              <div className="inspector-simple-grid">
-                {sharedObject.definitions.map((definition) => (
-                  <div key={definition.path} className="field-block field-block--wide">
-                    <PropertyRow
-                      nodes={filterNodesByIds(selectionNodes, sharedObject.includedNodeIds)}
-                      definition={definition}
-                      mixedPaths={sharedObject.mixedPaths}
-                      onNodePropertyChange={onNodePropertyChange}
-                      onNodesPropertyChange={onNodesPropertyChange}
-                      onToggleEditable={onToggleEditable}
-                      allowEditableToggle={false}
-                    />
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {activeSection === "object" && primaryNode ? (
-            <section className="inspector-card">
-              <div className="inspector-card__header">
-                <h4>Object</h4>
-              </div>
-
-              <div className="inspector-simple-grid">
-                <label className="field-block">
-                  <span className="field-block__label">Node Name</span>
-                  <BufferedInput
-                    className="editor-input editor-input--compact"
-                    type="text"
-                    value={primaryNode.name}
-                    onCommit={(value) => onNodeNameChange(primaryNode.id, value)}
-                  />
-                </label>
-
-                <label className="field-block">
-                  <span className="field-block__label">Parent Group</span>
-                  <select
-                    className="editor-select"
-                    value={primaryNode.parentId ?? ROOT_NODE_ID}
-                    disabled={primaryNode.id === ROOT_NODE_ID}
-                    onChange={(event) => onParentChange(primaryNode.id, event.target.value)}
-                  >
-                    {getEligibleParents(primaryNode.id).map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {(groupedDefinitions.get("Object") ?? []).map((definition) => (
-                  <div key={definition.path} className="field-block field-block--wide">
-                    <PropertyRow
-                      nodes={[primaryNode]}
-                      definition={definition}
-                      onNodePropertyChange={onNodePropertyChange}
-                      onToggleEditable={onToggleEditable}
-                    />
-                  </div>
-                ))}
-
-                {primaryNode.type === "group" ? (
-                  <div className="field-block field-block--wide">
-                    <span className="field-block__label">Pivot From Content</span>
-                    <div className="inspector-inline-actions">
-                      <select
-                        aria-label="Group pivot preset"
-                        className="editor-select"
-                        value={groupPivotPreset}
-                        onChange={(event) => setGroupPivotPreset(event.target.value as GroupPivotPreset)}
-                      >
-                        <option value="center">Center</option>
-                        <option value="bottom-center">Bottom Center</option>
-                        <option value="top-center">Top Center</option>
-                        <option value="left-center">Left Center</option>
-                        <option value="right-center">Right Center</option>
-                        <option value="front-center">Front Center</option>
-                        <option value="back-center">Back Center</option>
-                      </select>
-
-                      <button
-                        type="button"
-                        className="tool-button"
-                        onClick={() => onGroupPivotPresetApply(primaryNode.id, groupPivotPreset)}
-                      >
-                        Apply Pivot
-                      </button>
-                    </div>
-                    <p className="field-block__hint">
-                      Computes the group pivot from current content bounds and keeps the visible layout unchanged.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="field-block field-block--wide">
-                    <span className="field-block__label">Origin</span>
-                    <div className="inspector-origin-grid">
-                      <label className="inspector-origin-field">
-                        <span>X</span>
-                        <select
-                          className="editor-select"
-                          value={primaryNode.origin.x}
-                          onChange={(event) => onNodeOriginChange(primaryNode.id, { x: event.target.value as NodeOriginSpec["x"] })}
-                        >
-                          <option value="left">Left</option>
-                          <option value="center">Center</option>
-                          <option value="right">Right</option>
-                        </select>
-                      </label>
-
-                      <label className="inspector-origin-field">
-                        <span>Y</span>
-                        <select
-                          className="editor-select"
-                          value={primaryNode.origin.y}
-                          onChange={(event) => onNodeOriginChange(primaryNode.id, { y: event.target.value as NodeOriginSpec["y"] })}
-                        >
-                          <option value="top">Top</option>
-                          <option value="center">Center</option>
-                          <option value="bottom">Bottom</option>
-                        </select>
-                      </label>
-
-                      <label className="inspector-origin-field">
-                        <span>Z</span>
-                        <select
-                          className="editor-select"
-                          value={primaryNode.origin.z}
-                          onChange={(event) => onNodeOriginChange(primaryNode.id, { z: event.target.value as NodeOriginSpec["z"] })}
-                        >
-                          <option value="front">Front</option>
-                          <option value="center">Center</option>
-                          <option value="back">Back</option>
-                        </select>
-                      </label>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </section>
-          ) : null}
-
-          {activeSection === "transform" ? (
-            <section className="inspector-card">
-              <div className="inspector-card__header">
-                <h4>Transform</h4>
-                {isMultiSelection ? renderExcludedNote(sharedTransform, selectionNodes) : null}
-              </div>
-
-              <TransformAxisGroup
-                title="Position"
-                nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
-                definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.position"))}
-                mixedPaths={sharedTransform.mixedPaths}
-                onNodePropertyChange={onNodePropertyChange}
-                onNodesPropertyChange={onNodesPropertyChange}
-                onToggleEditable={onToggleEditable}
-              />
-
-              <TransformAxisGroup
-                title="Rotation"
-                nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
-                definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.rotation"))}
-                mixedPaths={sharedTransform.mixedPaths}
-                onNodePropertyChange={onNodePropertyChange}
-                onNodesPropertyChange={onNodesPropertyChange}
-                onToggleEditable={onToggleEditable}
-              />
-
-              <TransformAxisGroup
-                title="Scale"
-                nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
-                definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.scale"))}
-                mixedPaths={sharedTransform.mixedPaths}
-                onNodePropertyChange={onNodePropertyChange}
-                onNodesPropertyChange={onNodesPropertyChange}
-                onToggleEditable={onToggleEditable}
-              />
-            </section>
-          ) : null}
-
-          {activeSection === "geometry" && isMultiSelection ? (
-            <section className="inspector-card">
-              <div className="inspector-card__header">
-                <h4>Geometry</h4>
-                {renderExcludedNote(sharedGeometry, selectionNodes)}
-              </div>
-
-              <div className="inspector-properties">
-                {sharedGeometry.definitions.map((definition) => (
-                  <PropertyRow
-                    key={definition.path}
-                    nodes={filterNodesByIds(selectionNodes, sharedGeometry.includedNodeIds)}
-                    definition={definition}
-                    mixedPaths={sharedGeometry.mixedPaths}
-                    onNodePropertyChange={onNodePropertyChange}
-                    onNodesPropertyChange={onNodesPropertyChange}
-                    onToggleEditable={onToggleEditable}
-                    allowEditableToggle={false}
-                  />
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {activeSection === "geometry" && primaryNode ? (
-            <DefinitionSection
-              title="Geometry"
-              node={primaryNode}
-              definitions={groupedDefinitions.get("Geometry") ?? []}
-              onNodePropertyChange={onNodePropertyChange}
-              onToggleEditable={onToggleEditable}
+        <span className="insp-head__sub">
+          {isMultiSelection ? (
+            <SharedScopeSubline
+              object={sharedObject}
+              transform={sharedTransform}
+              geometry={sharedGeometry}
+              material={sharedMaterial}
             />
-          ) : null}
+          ) : primaryNode?.type === "group" ? "Group" : "Mesh"}
+        </span>
+      </div>
 
-          {activeSection === "material" ? (
-            <MaterialDefinitionSection
-              nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedMaterial.includedNodeIds) : primaryNode ? [primaryNode] : []}
-              selectionCount={isMultiSelection ? selectionNodes.length : 1}
-              definitions={isMultiSelection ? sharedMaterialDefinitions : groupedDefinitions.get("Material") ?? []}
-              mixedPaths={isMultiSelection ? sharedMaterial.mixedPaths : undefined}
-              excludedNote={isMultiSelection ? buildExcludedNote(sharedMaterial, selectionNodes) : undefined}
+      <div className="insp-tabs">
+        {sections.map((section) => (
+          <button
+            key={section.id}
+            type="button"
+            className={`insp-tab${activeSection === section.id ? " is-active" : ""}`}
+            title={section.label}
+            aria-label={section.label}
+            onClick={() => setActiveSection(section.id)}
+          >
+            <span className="insp-tab__icon">{section.icon}</span>
+            <span>{section.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {activeSection === "object" && isMultiSelection ? (
+        <Sec title="Object" meta={renderExcludedNote(sharedObject, selectionNodes)}>
+          {sharedObject.definitions.map((definition) => (
+            <PropertyRow
+              key={definition.path}
+              nodes={filterNodesByIds(selectionNodes, sharedObject.includedNodeIds)}
+              definition={definition}
+              mixedPaths={sharedObject.mixedPaths}
               onNodePropertyChange={onNodePropertyChange}
               onNodesPropertyChange={onNodesPropertyChange}
               onToggleEditable={onToggleEditable}
-              allowEditableToggle={!isMultiSelection}
-              hasGroupSelection={hasGroupSelection}
-              hasMixedMaterialTypes={hasMixedMaterialTypes}
+              allowEditableToggle={false}
             />
-          ) : null}
+          ))}
+        </Sec>
+      ) : null}
 
-          {activeSection === "text" && primaryNode ? (
-            <div className="inspector-stack">
-              <section className="inspector-card">
-                <div className="inspector-card__header">
-                  <h4>Font</h4>
-                </div>
+      {activeSection === "object" && primaryNode ? (
+        <Sec title="Object">
+          <div className="row">
+            <span className="row__lbl">Name</span>
+            <span className="text">
+              <BufferedInput
+                type="text"
+                value={primaryNode.name}
+                onCommit={(value) => onNodeNameChange(primaryNode.id, value)}
+              />
+            </span>
+            <span aria-hidden="true" />
+          </div>
 
-                <label className="field-block">
-                  <span className="field-block__label">Active Font</span>
+          <div className="row">
+            <span className="row__lbl">Parent</span>
+            <span className="sel">
+              <select
+                value={primaryNode.parentId ?? ROOT_NODE_ID}
+                disabled={primaryNode.id === ROOT_NODE_ID}
+                onChange={(event) => onParentChange(primaryNode.id, event.target.value)}
+                aria-label="Parent Group"
+              >
+                {getEligibleParents(primaryNode.id).map((group) => (
+                  <option key={group.id} value={group.id}>
+                    {group.name}
+                  </option>
+                ))}
+              </select>
+              <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
+            </span>
+            <span aria-hidden="true" />
+          </div>
+
+          {(groupedDefinitions.get("Object") ?? []).map((definition) => (
+            <PropertyRow
+              key={definition.path}
+              nodes={[primaryNode]}
+              definition={definition}
+              onNodePropertyChange={onNodePropertyChange}
+              onToggleEditable={onToggleEditable}
+            />
+          ))}
+
+          {primaryNode.type === "group" ? (
+            <div className="row row--wide">
+              <span className="row__lbl">Pivot</span>
+              <div className="row__inline-actions">
+                <span className="sel" style={{ flex: 1 }}>
                   <select
-                    className="editor-select"
-                    value={primaryNode.type === "text" ? primaryNode.fontId : fonts[0]?.id}
-                    onChange={(event) => onTextFontChange(primaryNode.id, event.target.value)}
+                    aria-label="Group pivot preset"
+                    value={groupPivotPreset}
+                    onChange={(event) => setGroupPivotPreset(event.target.value as GroupPivotPreset)}
                   >
-                    {fonts.map((font) => (
-                      <option key={font.id} value={font.id}>
-                        {font.name}
-                      </option>
-                    ))}
+                    <option value="center">Center</option>
+                    <option value="bottom-center">Bottom Center</option>
+                    <option value="top-center">Top Center</option>
+                    <option value="left-center">Left Center</option>
+                    <option value="right-center">Right Center</option>
+                    <option value="front-center">Front Center</option>
+                    <option value="back-center">Back Center</option>
                   </select>
-                </label>
-
-                <button type="button" className="tool-button" onClick={onImportFont}>
-                  Import font
+                  <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
+                </span>
+                <button
+                  type="button"
+                  className="tbtn is-ghost"
+                  onClick={() => onGroupPivotPresetApply(primaryNode.id, groupPivotPreset)}
+                >
+                  Apply Pivot
                 </button>
-              </section>
-
-              <DefinitionSection
-                title="Text"
-                node={primaryNode}
-                definitions={groupedDefinitions.get("Text") ?? []}
-                onNodePropertyChange={onNodePropertyChange}
-                onToggleEditable={onToggleEditable}
-              />
-            </div>
-          ) : null}
-
-          {activeSection === "image" && primaryNode?.type === "image" ? (
-            <div className="inspector-stack">
-              <section className="inspector-card">
-                <div className="inspector-card__header">
-                  <h4>Image</h4>
-                </div>
-                <div className="image-preview">
-                  <img src={primaryNode.image.src} alt={primaryNode.image.name} className="image-preview__img" />
-                </div>
-                <p className="field-help">
-                  {primaryNode.image.name} | {primaryNode.image.width} x {primaryNode.image.height} px
-                </p>
-                <button type="button" className="tool-button" onClick={() => onReplaceImage(primaryNode.id)}>
-                  Replace image
-                </button>
-              </section>
-
-              <DefinitionSection
-                title="Geometry"
-                node={primaryNode}
-                definitions={groupedDefinitions.get("Geometry") ?? []}
-                onNodePropertyChange={onNodePropertyChange}
-                onToggleEditable={onToggleEditable}
-              />
-            </div>
-          ) : null}
-
-          {sections.length === 0 ? (
-            <section className="inspector-card">
-              <div className="inspector-card__header">
-                <h4>Inspector</h4>
               </div>
-              <p className="field-help">
-                {hasGroupSelection
-                  ? "Material editing is only available when all selected items expose a shared material field."
-                  : emptyMessage ?? "Selecione um objeto para editar."}
+              <p className="row__hint">
+                Computes the group pivot from current content bounds and keeps the visible layout unchanged.
               </p>
-            </section>
-          ) : null}
-        </div>
-      </div>
+            </div>
+          ) : (
+            <>
+              <div className="row">
+                <span className="row__lbl">Origin X</span>
+                <span className="sel">
+                  <select
+                    value={primaryNode.origin.x}
+                    onChange={(event) => onNodeOriginChange(primaryNode.id, { x: event.target.value as NodeOriginSpec["x"] })}
+                    aria-label="Origin X"
+                  >
+                    <option value="left">Left</option>
+                    <option value="center">Center</option>
+                    <option value="right">Right</option>
+                  </select>
+                  <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
+                </span>
+                <span aria-hidden="true" />
+              </div>
+              <div className="row">
+                <span className="row__lbl">Origin Y</span>
+                <span className="sel">
+                  <select
+                    value={primaryNode.origin.y}
+                    onChange={(event) => onNodeOriginChange(primaryNode.id, { y: event.target.value as NodeOriginSpec["y"] })}
+                    aria-label="Origin Y"
+                  >
+                    <option value="top">Top</option>
+                    <option value="center">Center</option>
+                    <option value="bottom">Bottom</option>
+                  </select>
+                  <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
+                </span>
+                <span aria-hidden="true" />
+              </div>
+              <div className="row">
+                <span className="row__lbl">Origin Z</span>
+                <span className="sel">
+                  <select
+                    value={primaryNode.origin.z}
+                    onChange={(event) => onNodeOriginChange(primaryNode.id, { z: event.target.value as NodeOriginSpec["z"] })}
+                    aria-label="Origin Z"
+                  >
+                    <option value="front">Front</option>
+                    <option value="center">Center</option>
+                    <option value="back">Back</option>
+                  </select>
+                  <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
+                </span>
+                <span aria-hidden="true" />
+              </div>
+            </>
+          )}
+        </Sec>
+      ) : null}
+
+      {activeSection === "transform" ? (
+        <Sec title="Transform" meta={isMultiSelection ? renderExcludedNote(sharedTransform, selectionNodes) : null}>
+          <TransformAxisGroup
+            title="Position"
+            nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
+            definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.position"))}
+            mixedPaths={sharedTransform.mixedPaths}
+            onNodePropertyChange={onNodePropertyChange}
+            onNodesPropertyChange={onNodesPropertyChange}
+            onToggleEditable={onToggleEditable}
+          />
+
+          <TransformAxisGroup
+            title="Rotation"
+            nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
+            definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.rotation"))}
+            mixedPaths={sharedTransform.mixedPaths}
+            onNodePropertyChange={onNodePropertyChange}
+            onNodesPropertyChange={onNodesPropertyChange}
+            onToggleEditable={onToggleEditable}
+          />
+
+          <TransformAxisGroup
+            title="Scale"
+            nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedTransform.includedNodeIds) : primaryNode ? [primaryNode] : []}
+            definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.scale"))}
+            mixedPaths={sharedTransform.mixedPaths}
+            onNodePropertyChange={onNodePropertyChange}
+            onNodesPropertyChange={onNodesPropertyChange}
+            onToggleEditable={onToggleEditable}
+          />
+        </Sec>
+      ) : null}
+
+      {activeSection === "geometry" && isMultiSelection ? (
+        <Sec title="Geometry" meta={renderExcludedNote(sharedGeometry, selectionNodes)}>
+          {sharedGeometry.definitions.map((definition) => (
+            <PropertyRow
+              key={definition.path}
+              nodes={filterNodesByIds(selectionNodes, sharedGeometry.includedNodeIds)}
+              definition={definition}
+              mixedPaths={sharedGeometry.mixedPaths}
+              onNodePropertyChange={onNodePropertyChange}
+              onNodesPropertyChange={onNodesPropertyChange}
+              onToggleEditable={onToggleEditable}
+              allowEditableToggle={false}
+            />
+          ))}
+        </Sec>
+      ) : null}
+
+      {activeSection === "geometry" && primaryNode ? (
+        <DefinitionSection
+          title="Geometry"
+          node={primaryNode}
+          definitions={groupedDefinitions.get("Geometry") ?? []}
+          onNodePropertyChange={onNodePropertyChange}
+          onToggleEditable={onToggleEditable}
+        />
+      ) : null}
+
+      {activeSection === "material" ? (
+        <MaterialDefinitionSection
+          nodes={isMultiSelection ? filterNodesByIds(selectionNodes, sharedMaterial.includedNodeIds) : primaryNode ? [primaryNode] : []}
+          selectionCount={isMultiSelection ? selectionNodes.length : 1}
+          definitions={isMultiSelection ? sharedMaterialDefinitions : groupedDefinitions.get("Material") ?? []}
+          mixedPaths={isMultiSelection ? sharedMaterial.mixedPaths : undefined}
+          excludedNote={isMultiSelection ? buildExcludedNote(sharedMaterial, selectionNodes) : undefined}
+          onNodePropertyChange={onNodePropertyChange}
+          onNodesPropertyChange={onNodesPropertyChange}
+          onToggleEditable={onToggleEditable}
+          allowEditableToggle={!isMultiSelection}
+          hasGroupSelection={hasGroupSelection}
+          hasMixedMaterialTypes={hasMixedMaterialTypes}
+        />
+      ) : null}
+
+      {activeSection === "text" && primaryNode ? (
+        <>
+          <Sec title="Font">
+            <div className="row">
+              <span className="row__lbl">Font</span>
+              <span className="sel">
+                <select
+                  value={primaryNode.type === "text" ? primaryNode.fontId : fonts[0]?.id}
+                  onChange={(event) => onTextFontChange(primaryNode.id, event.target.value)}
+                  aria-label="Active Font"
+                >
+                  {fonts.map((font) => (
+                    <option key={font.id} value={font.id}>
+                      {font.name}
+                    </option>
+                  ))}
+                </select>
+                <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
+              </span>
+              <span aria-hidden="true" />
+            </div>
+            <button type="button" className="tbtn is-ghost tbtn--block" onClick={onImportFont}>
+              Import font
+            </button>
+          </Sec>
+
+          <DefinitionSection
+            title="Text"
+            node={primaryNode}
+            definitions={groupedDefinitions.get("Text") ?? []}
+            onNodePropertyChange={onNodePropertyChange}
+            onToggleEditable={onToggleEditable}
+          />
+        </>
+      ) : null}
+
+      {activeSection === "image" && primaryNode?.type === "image" ? (
+        <>
+          <Sec title="Image">
+            <div className="insp-image-preview">
+              <img src={primaryNode.image.src} alt={primaryNode.image.name} />
+            </div>
+            <p className="row__hint" style={{ marginTop: "var(--sp-3)" }}>
+              {primaryNode.image.name} | {primaryNode.image.width} x {primaryNode.image.height} px
+            </p>
+            <button type="button" className="tbtn is-ghost tbtn--block" onClick={() => onReplaceImage(primaryNode.id)}>
+              Replace image
+            </button>
+          </Sec>
+
+          <DefinitionSection
+            title="Geometry"
+            node={primaryNode}
+            definitions={groupedDefinitions.get("Geometry") ?? []}
+            onNodePropertyChange={onNodePropertyChange}
+            onToggleEditable={onToggleEditable}
+          />
+        </>
+      ) : null}
+
+      {sections.length === 0 ? (
+        <Sec title="Inspector">
+          <p className="row__hint">
+            {hasGroupSelection
+              ? "Material editing is only available when all selected items expose a shared material field."
+              : emptyMessage ?? "Selecione um objeto para editar."}
+          </p>
+        </Sec>
+      ) : null}
+    </div>
+  );
+}
+
+interface SecProps {
+  title: string;
+  meta?: ReactNode;
+  children: ReactNode;
+}
+
+function Sec({ title, meta, children }: SecProps) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div className={`sec${collapsed ? " is-collapsed" : ""}`}>
+      <button
+        type="button"
+        className="sec__hd"
+        onClick={() => setCollapsed((value) => !value)}
+      >
+        <span className="sec__hd-chev">
+          {collapsed ? <ChevronRightIcon width={8} height={8} /> : <ChevronDownIcon width={8} height={8} />}
+        </span>
+        <span className="sec__hd-title">{title}</span>
+        {meta ? <span className="sec__hd-meta">{meta}</span> : null}
+      </button>
+      <div className="sec__bd">{children}</div>
     </div>
   );
 }
@@ -492,23 +499,17 @@ function DefinitionSection(props: DefinitionSectionProps) {
   const { title, node, definitions, onNodePropertyChange, onToggleEditable } = props;
 
   return (
-    <section className="inspector-card">
-      <div className="inspector-card__header">
-        <h4>{title}</h4>
-      </div>
-
-      <div className="inspector-properties">
-        {definitions.map((definition) => (
-          <PropertyRow
-            key={definition.path}
-            nodes={[node]}
-            definition={definition}
-            onNodePropertyChange={onNodePropertyChange}
-            onToggleEditable={onToggleEditable}
-          />
-        ))}
-      </div>
-    </section>
+    <Sec title={title}>
+      {definitions.map((definition) => (
+        <PropertyRow
+          key={definition.path}
+          nodes={[node]}
+          definition={definition}
+          onNodePropertyChange={onNodePropertyChange}
+          onToggleEditable={onToggleEditable}
+        />
+      ))}
+    </Sec>
   );
 }
 
@@ -557,16 +558,9 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
   );
 
   return (
-    <section className="inspector-card">
-      <div className="inspector-card__header">
-        <h4>Material</h4>
-        {isMultiSelection && excludedNote ? (
-          <span className="inspector-card__note">{excludedNote}</span>
-        ) : null}
-      </div>
-
+    <Sec title="Material" meta={isMultiSelection && excludedNote ? excludedNote : null}>
       {isMultiSelection ? (
-        <p className="field-help">
+        <p className="row__hint" style={{ marginBottom: "var(--sp-3)" }}>
           {`Applying changes to ${selectionCount} selected objects.`}
           {hasGroupSelection ? " Group items are excluded because they do not expose material controls." : ""}
           {hasMixedMaterialTypes ? " Material-specific controls stay hidden while the selection mixes different material types." : ""}
@@ -574,79 +568,77 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
       ) : null}
 
       {definitions.length === 0 ? (
-        <p className="field-help">No shared material properties are available for this selection.</p>
+        <p className="row__hint">No shared material properties are available for this selection.</p>
       ) : null}
 
-      <div className="inspector-properties">
-        <div className="inspector-sub-header"><span>Base</span></div>
-        {baseProps.map((definition) => (
-          <PropertyRow
-            key={definition.path}
-            nodes={nodes}
-            definition={definition}
-            mixedPaths={mixedPaths}
-            onNodePropertyChange={onNodePropertyChange}
-            onNodesPropertyChange={onNodesPropertyChange}
-            onToggleEditable={onToggleEditable}
-            allowEditableToggle={allowEditableToggle}
-          />
-        ))}
+      <div className="sec__sub">Base</div>
+      {baseProps.map((definition) => (
+        <PropertyRow
+          key={definition.path}
+          nodes={nodes}
+          definition={definition}
+          mixedPaths={mixedPaths}
+          onNodePropertyChange={onNodePropertyChange}
+          onNodesPropertyChange={onNodesPropertyChange}
+          onToggleEditable={onToggleEditable}
+          allowEditableToggle={allowEditableToggle}
+        />
+      ))}
 
-        {pbrProps.length > 0 ? (
-          <>
-            <div className="inspector-sub-header"><span>Standard PBR</span></div>
-            {pbrProps.map((definition) => (
-              <PropertyRow
-                key={definition.path}
-                nodes={nodes}
-                definition={definition}
-                mixedPaths={mixedPaths}
-                onNodePropertyChange={onNodePropertyChange}
-                onNodesPropertyChange={onNodesPropertyChange}
-                onToggleEditable={onToggleEditable}
-                allowEditableToggle={allowEditableToggle}
-              />
-            ))}
-          </>
-        ) : null}
+      {pbrProps.length > 0 ? (
+        <>
+          <div className="sec__sub">Standard PBR</div>
+          {pbrProps.map((definition) => (
+            <PropertyRow
+              key={definition.path}
+              nodes={nodes}
+              definition={definition}
+              mixedPaths={mixedPaths}
+              onNodePropertyChange={onNodePropertyChange}
+              onNodesPropertyChange={onNodesPropertyChange}
+              onToggleEditable={onToggleEditable}
+              allowEditableToggle={allowEditableToggle}
+            />
+          ))}
+        </>
+      ) : null}
 
-        {advancedProps.length > 0 ? (
-          <>
-            <div className="inspector-sub-header"><span>Advanced</span></div>
-            {advancedProps.map((definition) => (
-              <PropertyRow
-                key={definition.path}
-                nodes={nodes}
-                definition={definition}
-                mixedPaths={mixedPaths}
-                onNodePropertyChange={onNodePropertyChange}
-                onNodesPropertyChange={onNodesPropertyChange}
-                onToggleEditable={onToggleEditable}
-                allowEditableToggle={allowEditableToggle}
-              />
-            ))}
-          </>
-        ) : null}
+      {advancedProps.length > 0 ? (
+        <>
+          <div className="sec__sub">Advanced</div>
+          {advancedProps.map((definition) => (
+            <PropertyRow
+              key={definition.path}
+              nodes={nodes}
+              definition={definition}
+              mixedPaths={mixedPaths}
+              onNodePropertyChange={onNodePropertyChange}
+              onNodesPropertyChange={onNodesPropertyChange}
+              onToggleEditable={onToggleEditable}
+              allowEditableToggle={allowEditableToggle}
+            />
+          ))}
+        </>
+      ) : null}
 
-        {shadowProps.length > 0 ? (
-          <>
-            <div className="inspector-sub-header"><span>Shadows</span></div>
-            {shadowProps.map((definition) => (
-              <PropertyRow
-                key={definition.path}
-                nodes={nodes}
-                definition={definition}
-                mixedPaths={mixedPaths}
-                onNodePropertyChange={onNodePropertyChange}
-                onNodesPropertyChange={onNodesPropertyChange}
-                onToggleEditable={onToggleEditable}
-                allowEditableToggle={allowEditableToggle}
-              />
-            ))}
-          </>
-        ) : null}
-      </div>
-    </section>
+      {shadowProps.length > 0 ? (
+        <>
+          <div className="sec__sub">Shadows</div>
+          {shadowProps.map((definition) => (
+            <PropertyRow
+              key={definition.path}
+              nodes={nodes}
+              definition={definition}
+              mixedPaths={mixedPaths}
+              onNodePropertyChange={onNodePropertyChange}
+              onNodesPropertyChange={onNodesPropertyChange}
+              onToggleEditable={onToggleEditable}
+              allowEditableToggle={allowEditableToggle}
+            />
+          ))}
+        </>
+      ) : null}
+    </Sec>
   );
 }
 
@@ -670,11 +662,12 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
   }
 
   return (
-    <div className="transform-group">
-      <div className="inspector-sub-header"><span>{title}</span></div>
-      <div className="transform-grid">
+    <div className="row row--wide">
+      <span className="row__lbl">{title}</span>
+      <div className="vec">
         {definitions.map((definition) => {
-          const axis = definition.path.split(".").at(-1)?.toUpperCase() ?? "?";
+          const axis = definition.path.split(".").at(-1)?.toLowerCase() ?? "x";
+          const axisLetter = axis.toUpperCase();
           const isMixed = mixedPaths?.has(definition.path) ?? false;
           const displayValue = isMixed ? "" : String(getDisplayValue(primaryNode, definition));
           const isEditable = !isMultiSelection && Boolean(primaryNode.editable[definition.path]);
@@ -691,20 +684,23 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
           };
 
           return (
-            <div key={definition.path} className={`transform-cell${isEditable ? " is-editable" : ""}`}>
-              <span className="transform-cell__axis">{axis}</span>
+            <div
+              key={definition.path}
+              className={`vec__cell${isEditable ? " is-editable" : ""}`}
+              data-axis={axis}
+            >
+              <span className="vec__axis">{axisLetter}</span>
               <BufferedInput
-                className="editor-input editor-input--compact"
+                className="vec__val"
                 type="text"
                 inputMode="decimal"
                 value={displayValue}
                 placeholder={isMixed ? "Mixed" : undefined}
                 onCommit={commit}
+                aria-label={`${title} ${axisLetter}`}
               />
-              {isMultiSelection ? (
-                <span className="transform-cell__editable" aria-hidden="true" />
-              ) : (
-                <label className={`transform-cell__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
+              {isMultiSelection ? null : (
+                <label className={`vec__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
                   <input
                     type="checkbox"
                     checked={isEditable}
@@ -773,57 +769,70 @@ function PropertyRow({
     onNodePropertyChange(primaryNode.id, definition, value);
   };
 
+  let control: ReactNode;
+  if (definition.input === "checkbox") {
+    const checkedState = hasMixedValue ? false : Boolean(currentValue);
+    control = (
+      <label className={`tog${checkedState ? " is-on" : ""}`} style={{ display: "inline-block" }}>
+        <input
+          ref={checkboxRef}
+          type="checkbox"
+          aria-label={definition.label}
+          checked={checkedState}
+          onChange={(event) => commitValue(event.target.checked)}
+          style={{ position: "absolute", width: "100%", height: "100%", opacity: 0, margin: 0, top: 0, left: 0, cursor: "pointer" }}
+        />
+      </label>
+    );
+  } else if (definition.input === "select") {
+    control = (
+      <span className="sel">
+        <select
+          aria-label={definition.label}
+          value={hasMixedValue ? "__mixed__" : stringValue}
+          onChange={(event) => commitValue(event.target.value)}
+        >
+          {hasMixedValue ? <option value="__mixed__">Mixed</option> : null}
+          {(definition.options ?? []).map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
+      </span>
+    );
+  } else if (definition.input === "color") {
+    control = (
+      <ColorPropertyControl
+        ariaLabel={definition.label}
+        value={stringValue}
+        placeholder={hasMixedValue ? "Mixed" : undefined}
+        mixedFallbackValue={hasMixedValue ? String(currentValue) : undefined}
+        onCommit={commitValue}
+      />
+    );
+  } else {
+    control = (
+      <span className={definition.input === "text" ? "text" : "num"}>
+        <BufferedInput
+          type="text"
+          aria-label={definition.label}
+          inputMode={definition.input === "text" ? "text" : "decimal"}
+          value={hasMixedValue ? "" : stringValue}
+          placeholder={hasMixedValue ? "Mixed" : undefined}
+          onCommit={(value) => commitValue(value)}
+        />
+      </span>
+    );
+  }
+
   return (
-    <div className={`inspector-property${isEditable ? " is-editable" : ""}`}>
-      <span className="inspector-property__label">{definition.label}</span>
-
-      <div className="inspector-property__control">
-        {definition.input === "checkbox" ? (
-          <input
-            ref={checkboxRef}
-            type="checkbox"
-            className="editor-checkbox"
-            aria-label={definition.label}
-            checked={hasMixedValue ? false : Boolean(currentValue)}
-            onChange={(event) => commitValue(event.target.checked)}
-          />
-        ) : definition.input === "select" ? (
-          <select
-            className="editor-select"
-            aria-label={definition.label}
-            value={hasMixedValue ? "__mixed__" : stringValue}
-            onChange={(event) => commitValue(event.target.value)}
-          >
-            {hasMixedValue ? <option value="__mixed__">Mixed</option> : null}
-            {(definition.options ?? []).map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        ) : definition.input === "color" ? (
-          <ColorPropertyControl
-            ariaLabel={definition.label}
-            value={stringValue}
-            placeholder={hasMixedValue ? "Mixed" : undefined}
-            mixedFallbackValue={hasMixedValue ? String(currentValue) : undefined}
-            onCommit={commitValue}
-          />
-        ) : (
-          <BufferedInput
-            className="editor-input editor-input--compact"
-            type="text"
-            aria-label={definition.label}
-            inputMode={definition.input === "text" ? "text" : "decimal"}
-            value={hasMixedValue ? "" : stringValue}
-            placeholder={hasMixedValue ? "Mixed" : undefined}
-            onCommit={(value) => commitValue(value)}
-          />
-        )}
-      </div>
-
+    <div className="row">
+      <span className="row__lbl">{definition.label}</span>
+      {control}
       {allowEditableToggle && nodes[0] ? (
-        <label className={`inspector-property__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
+        <label className={`row__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
           <input
             type="checkbox"
             aria-label={editableLabel}
@@ -833,7 +842,7 @@ function PropertyRow({
           {isEditable ? <CircleFilledIcon width={10} height={10} /> : <CircleIcon width={10} height={10} />}
         </label>
       ) : (
-        <span className="inspector-property__editable" aria-hidden="true" />
+        <span aria-hidden="true" />
       )}
     </div>
   );
@@ -858,11 +867,28 @@ function ColorPropertyControl({ ariaLabel, value, placeholder, mixedFallbackValu
   }, [isSwatchFocused, value]);
 
   const normalizedDraftValue = normalizeCommittedColorValue(draftValue);
+  const swatchColor = normalizeColorSwatchValue(draftValue || mixedFallbackValue || value);
+  const style: CSSProperties = { color: swatchColor };
 
   return (
-    <div className="inspector-color-control">
+    <span className="swatch-row">
+      <input
+        className="swatch"
+        type="color"
+        aria-label={`${ariaLabel} swatch`}
+        value={swatchColor}
+        onFocus={() => setIsSwatchFocused(true)}
+        onChange={(event) => setDraftValue(event.target.value)}
+        onBlur={() => {
+          setIsSwatchFocused(false);
+          if (normalizedDraftValue && normalizedDraftValue !== value) {
+            onCommit(normalizedDraftValue);
+          }
+        }}
+        style={style}
+      />
       <BufferedInput
-        className="editor-input editor-input--compact inspector-color-control__hex"
+        className="swatch-hex"
         type="text"
         aria-label={ariaLabel}
         value={draftValue}
@@ -875,21 +901,7 @@ function ColorPropertyControl({ ariaLabel, value, placeholder, mixedFallbackValu
           onCommit(normalizedValue);
         }}
       />
-      <input
-        className="inspector-color-control__swatch"
-        type="color"
-        aria-label={`${ariaLabel} swatch`}
-        value={normalizeColorSwatchValue(draftValue || mixedFallbackValue || value)}
-        onFocus={() => setIsSwatchFocused(true)}
-        onChange={(event) => setDraftValue(event.target.value)}
-        onBlur={() => {
-          setIsSwatchFocused(false);
-          if (normalizedDraftValue && normalizedDraftValue !== value) {
-            onCommit(normalizedDraftValue);
-          }
-        }}
-      />
-    </div>
+    </span>
   );
 }
 
@@ -933,28 +945,28 @@ function getSectionsForSelection(
       sections.push({
         id: "object",
         label: "Object",
-        icon: <ObjectDataIcon width={16} height={16} />,
+        icon: <ObjectDataIcon width={14} height={14} />,
       });
     }
     if (shared.transform.definitions.length > 0) {
       sections.push({
         id: "transform",
         label: "Transform",
-        icon: <TransformIcon width={16} height={16} />,
+        icon: <TransformIcon width={14} height={14} />,
       });
     }
     if (shared.geometry.definitions.length > 0) {
       sections.push({
         id: "geometry",
         label: "Geometry",
-        icon: <GeometryIcon width={16} height={16} />,
+        icon: <GeometryIcon width={14} height={14} />,
       });
     }
     if (shared.material.definitions.length > 0) {
       sections.push({
         id: "material",
         label: "Material",
-        icon: <MaterialIcon width={16} height={16} />,
+        icon: <MaterialIcon width={14} height={14} />,
       });
     }
     return sections;
@@ -968,12 +980,12 @@ function getSectionsForSelection(
     {
       id: "object",
       label: "Object",
-      icon: <ObjectDataIcon width={16} height={16} />,
+      icon: <ObjectDataIcon width={14} height={14} />,
     },
     {
       id: "transform",
       label: "Transform",
-      icon: <TransformIcon width={16} height={16} />,
+      icon: <TransformIcon width={14} height={14} />,
     },
   ];
 
@@ -981,12 +993,12 @@ function getSectionsForSelection(
     sections.push({
       id: "geometry",
       label: "Geometry",
-      icon: <GeometryIcon width={16} height={16} />,
+      icon: <GeometryIcon width={14} height={14} />,
     });
     sections.push({
       id: "material",
       label: "Material",
-      icon: <MaterialIcon width={16} height={16} />,
+      icon: <MaterialIcon width={14} height={14} />,
     });
   }
 
@@ -994,7 +1006,7 @@ function getSectionsForSelection(
     sections.push({
       id: "text",
       label: "Text",
-      icon: <TextPropertyIcon width={16} height={16} />,
+      icon: <TextPropertyIcon width={14} height={14} />,
     });
   }
 
@@ -1002,7 +1014,7 @@ function getSectionsForSelection(
     sections.push({
       id: "image",
       label: "Image",
-      icon: <ImagePropertyIcon width={16} height={16} />,
+      icon: <ImagePropertyIcon width={14} height={14} />,
     });
   }
 
@@ -1044,7 +1056,7 @@ function renderExcludedNote(result: SharedPropertyResult, selectionNodes: Editor
   if (!note) {
     return null;
   }
-  return <span className="inspector-card__note">{note}</span>;
+  return note;
 }
 
 interface SharedScopeSublineProps {
@@ -1072,10 +1084,10 @@ function SharedScopeSubline({ object, transform, geometry, material }: SharedSco
   record("material", material.definitions.length > 0);
 
   if (hidden.length === 0 || present.length === 0) {
-    return null;
+    return <>Multi-selection</>;
   }
 
-  return <span className="inspector-node-strip__subline">{present.join(" · ")}</span>;
+  return <>{present.join(" · ")}</>;
 }
 
 function groupDefinitions(definitions: NodePropertyDefinition[]): Map<string, NodePropertyDefinition[]> {
