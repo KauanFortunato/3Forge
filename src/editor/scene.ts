@@ -8,7 +8,6 @@ import {
   CylinderGeometry,
   DirectionalLight,
   DoubleSide,
-  GridHelper,
   Group,
   HemisphereLight,
   Mesh,
@@ -19,6 +18,7 @@ import {
   PlaneGeometry,
   Raycaster,
   Scene,
+  ShaderMaterial,
   SRGBColorSpace,
   SphereGeometry,
   Texture,
@@ -28,29 +28,45 @@ import {
   WebGLRenderer,
   CircleGeometry,
 } from "three";
-import gsap from "gsap";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import {
   animationValueToBoolean,
-  frameToSeconds,
   getAnimationValue,
-  getTrackSegments,
   isDiscreteAnimationProperty,
   isTrackMuted,
-  mapAnimationEaseToGsap,
-  secondsToFrame,
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { EditorStore } from "./state";
-import type { AnimationPropertyPath, EditorNode, EditorStoreChange, ImageNode, NodeOriginSpec, TextNode } from "./types";
+import type {
+  AnimationEasePreset,
+  AnimationKeyframe,
+  AnimationPropertyPath,
+  EditorNode,
+  EditorStoreChange,
+  ImageNode,
+  NodeOriginSpec,
+  TextNode,
+} from "./types";
 
 type GizmoMode = "translate" | "rotate" | "scale";
 export type ToolMode = "select" | GizmoMode;
 
 const DRAG_SNAP_THRESHOLD = 0.18;
+const ANIMATION_UI_EMIT_INTERVAL_MS = 1000 / 20;
+const SELECTION_HELPER_PLAYBACK_UPDATE_INTERVAL_MS = 1000 / 12;
+
+interface CompiledAnimationTrack {
+  propertyPath: AnimationPropertyPath;
+  owner: Record<string, unknown>;
+  property: string;
+  baseValue: number;
+  keyframes: AnimationKeyframe[];
+  target?: Object3D;
+  visibilityMesh?: Mesh | null;
+}
 
 export class SceneEditor {
   private readonly textureLoader = new TextureLoader();
@@ -77,14 +93,24 @@ export class SceneEditor {
   private readonly selectionBounds = new Box3();
   private readonly selectionSize = new Vector3();
   private readonly selectionCenter = new Vector3();
+  private readonly selectedObjects: Object3D[] = [];
+  private readonly infiniteGrid: Mesh<PlaneGeometry, ShaderMaterial>;
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribe: () => void;
   private readonly textureCache = new Map<string, Texture>();
   private readonly animationFrameListeners = new Set<(frame: number) => void>();
 
   private animationFrame = 0;
-  private animationTimeline: gsap.core.Timeline | null = null;
+  private animationTracks: CompiledAnimationTrack[] = [];
+  private animationRuntimeReady = false;
+  private currentAnimationFrame = 0;
+  private isAnimationPlaying = false;
+  private animationPlaybackStartedAt = 0;
+  private animationPlaybackStartFrame = 0;
   private lastEmittedAnimationFrame: number | null = null;
+  private lastAnimationFrameEmitAt = 0;
+  private lastSelectionHelperUpdateAt = 0;
+  private selectionHelperDirty = true;
   private isSnapModifierPressed = false;
   private pointerDownX = 0;
   private pointerDownY = 0;
@@ -175,6 +201,8 @@ export class SceneEditor {
       );
     });
 
+    this.infiniteGrid = this.createInfiniteGrid();
+    this.scene.add(this.infiniteGrid);
     this.scene.add(this.viewportRoot);
     this.scene.add(this.transformHelper);
     this.addHelpers();
@@ -248,15 +276,11 @@ export class SceneEditor {
   }
 
   getCurrentAnimationFrame(): number {
-    if (!this.animationTimeline) {
-      return 0;
-    }
-
     const clip = this.store.getActiveAnimationClip();
     if (!clip) {
       return 0;
     }
-    return secondsToFrame(this.animationTimeline.time(), clip.fps);
+    return Math.max(0, Math.min(Math.round(this.currentAnimationFrame), clip.durationFrames));
   }
 
   getNodeAnimationValue(nodeId: string, property: AnimationPropertyPath): number | null {
@@ -282,28 +306,31 @@ export class SceneEditor {
   }
 
   playAnimation(): void {
-    if (!this.store.getActiveAnimationClip()) {
+    const clip = this.store.getActiveAnimationClip();
+    if (!clip) {
       return;
     }
-    if (!this.animationTimeline) {
+
+    if (!this.animationRuntimeReady) {
       this.rebuildAnimationTimeline(false);
     }
-
-    this.animationTimeline?.play();
+    const startFrame = this.currentAnimationFrame >= clip.durationFrames ? 0 : this.currentAnimationFrame;
+    if (startFrame !== this.currentAnimationFrame) {
+      this.applyAnimationFrame(startFrame);
+    }
+    this.animationPlaybackStartFrame = startFrame;
+    this.animationPlaybackStartedAt = performance.now();
+    this.isAnimationPlaying = true;
     this.emitAnimationFrame(undefined, true);
   }
 
   pauseAnimation(): void {
-    this.animationTimeline?.pause();
+    this.isAnimationPlaying = false;
     this.emitAnimationFrame(undefined, true);
   }
 
   stopAnimation(): void {
-    if (!this.animationTimeline) {
-      return;
-    }
-
-    this.animationTimeline.pause();
+    this.isAnimationPlaying = false;
     this.seekAnimation(0);
     this.emitAnimationFrame(undefined, true);
   }
@@ -313,13 +340,8 @@ export class SceneEditor {
       this.emitAnimationFrame(0);
       return;
     }
-    if (!this.animationTimeline) {
+    if (!this.animationRuntimeReady) {
       this.rebuildAnimationTimeline(false);
-    }
-
-    if (!this.animationTimeline) {
-      this.emitAnimationFrame(Math.max(0, Math.round(frame)));
-      return;
     }
 
     const clip = this.store.getActiveAnimationClip();
@@ -328,9 +350,8 @@ export class SceneEditor {
       return;
     }
     const normalizedFrame = Math.max(0, Math.min(Math.round(frame), clip.durationFrames));
-    const time = frameToSeconds(normalizedFrame, clip.fps);
-    this.animationTimeline.pause();
-    this.animationTimeline.seek(time, false);
+    this.isAnimationPlaying = false;
+    this.applyAnimationFrame(normalizedFrame);
     this.emitAnimationFrame(undefined, true);
   }
 
@@ -338,7 +359,7 @@ export class SceneEditor {
     cancelAnimationFrame(this.animationFrame);
     this.unsubscribe();
     this.resizeObserver.disconnect();
-    this.animationTimeline?.kill();
+    this.isAnimationPlaying = false;
     window.removeEventListener("keydown", this.handleWindowKeyDown);
     window.removeEventListener("keyup", this.handleWindowKeyUp);
     window.removeEventListener("blur", this.handleWindowBlur);
@@ -347,6 +368,8 @@ export class SceneEditor {
     this.orbitControls.dispose();
     this.clearViewportRoot();
     this.selectionHelper?.removeFromParent();
+    this.infiniteGrid.geometry.dispose();
+    this.infiniteGrid.material.dispose();
     this.renderer.dispose();
     this.orientationRenderer.dispose();
     this.orientationRenderer.domElement.removeEventListener("pointerdown", this.handleOrientationPointerDown);
@@ -434,10 +457,6 @@ export class SceneEditor {
   }
 
   private addHelpers(): void {
-    const grid = new GridHelper(50, 50, 0x4a4d55, 0x363940);
-    grid.position.y = -0.001;
-    this.scene.add(grid);
-
     const hemi = new HemisphereLight(0xe4e0ea, 0x1f2024, 1.1);
     this.scene.add(hemi);
 
@@ -449,6 +468,72 @@ export class SceneEditor {
     this.mainLight.castShadow = true;
     this.mainLight.shadow.mapSize.set(2048, 2048);
     this.scene.add(this.mainLight);
+  }
+
+  private createInfiniteGrid(): Mesh<PlaneGeometry, ShaderMaterial> {
+    const geometry = new PlaneGeometry(1200, 1200, 1, 1);
+    const material = new ShaderMaterial({
+      uniforms: {
+        uCameraPosition: { value: new Vector3() },
+      },
+      vertexShader: `
+        varying vec3 vWorldPosition;
+
+        void main() {
+          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+          vWorldPosition = worldPosition.xyz;
+          gl_Position = projectionMatrix * viewMatrix * worldPosition;
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 uCameraPosition;
+        varying vec3 vWorldPosition;
+
+        float gridLine(float size, float thickness) {
+          vec2 coordinate = vWorldPosition.xz / size;
+          vec2 derivative = fwidth(coordinate);
+          vec2 grid = abs(fract(coordinate - 0.5) - 0.5) / derivative;
+          float line = min(grid.x, grid.y);
+          return 1.0 - min(line / thickness, 1.0);
+        }
+
+        void main() {
+          float minorLine = gridLine(1.0, 1.0);
+          float majorLine = gridLine(5.0, 1.25);
+          float axisX = 1.0 - smoothstep(0.0, fwidth(vWorldPosition.z) * 1.5, abs(vWorldPosition.z));
+          float axisZ = 1.0 - smoothstep(0.0, fwidth(vWorldPosition.x) * 1.5, abs(vWorldPosition.x));
+          float distanceToCamera = distance(vWorldPosition.xz, uCameraPosition.xz);
+          float fade = 1.0 - smoothstep(90.0, 430.0, distanceToCamera);
+          float alpha = max(max(minorLine * 0.2, majorLine * 0.42), max(axisX, axisZ) * 0.48) * fade;
+
+          vec3 baseColor = vec3(0.212, 0.224, 0.251);
+          vec3 majorColor = vec3(0.29, 0.302, 0.333);
+          vec3 axisXColor = vec3(0.55, 0.21, 0.3);
+          vec3 axisZColor = vec3(0.24, 0.32, 0.62);
+          vec3 gridColor = mix(baseColor, majorColor, majorLine);
+          gridColor = mix(gridColor, axisXColor, axisX * 0.7);
+          gridColor = mix(gridColor, axisZColor, axisZ * 0.7);
+
+          gl_FragColor = vec4(gridColor, alpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      side: DoubleSide,
+    });
+    const grid = new Mesh(geometry, material);
+    grid.rotation.x = -Math.PI / 2;
+    grid.position.y = -0.001;
+    grid.renderOrder = -10;
+    return grid;
+  }
+
+  private updateInfiniteGrid(): void {
+    const snapSize = 1;
+    this.infiniteGrid.position.x = Math.round(this.camera.position.x / snapSize) * snapSize;
+    this.infiniteGrid.position.z = Math.round(this.camera.position.z / snapSize) * snapSize;
+    this.infiniteGrid.material.uniforms.uCameraPosition.value.copy(this.camera.position);
   }
 
   private buildOrientationGizmo(): void {
@@ -791,6 +876,8 @@ export class SceneEditor {
     const selectedObjects = this.store.selectedNodeIds
       .map((nodeId) => this.objectMap.get(nodeId))
       .filter((object): object is Object3D => Boolean(object));
+    this.selectedObjects.length = 0;
+    this.selectedObjects.push(...selectedObjects);
     const primaryObject = this.objectMap.get(this.store.selectedNodeId);
 
     if (shouldAttachTransformGizmo(this.currentMode, selectedObjects.length, Boolean(primaryObject)) && primaryObject) {
@@ -802,6 +889,7 @@ export class SceneEditor {
     }
 
     this.updateSelectionHelper(selectedObjects);
+    this.selectionHelperDirty = false;
   }
 
   private applyDragAlignmentSnap(nodeId: string, object: Object3D): void {
@@ -889,6 +977,7 @@ export class SceneEditor {
     if (!this.computeSelectionBounds(objects)) {
       this.selectionHelper?.removeFromParent();
       this.selectionHelper = null;
+      this.lastSelectionHelperUpdateAt = performance.now();
       return;
     }
 
@@ -899,6 +988,32 @@ export class SceneEditor {
     }
 
     this.selectionHelper.box.copy(this.selectionBounds);
+    this.lastSelectionHelperUpdateAt = performance.now();
+  }
+
+  private updateSelectionHelperFromCache(): void {
+    if (this.selectedObjects.length === 0) {
+      if (this.selectionHelper) {
+        this.updateSelectionHelper([]);
+      }
+      this.selectionHelperDirty = false;
+      return;
+    }
+
+    if (!this.selectionHelperDirty) {
+      return;
+    }
+
+    const now = performance.now();
+    if (
+      this.isAnimationPlaying &&
+      now - this.lastSelectionHelperUpdateAt < SELECTION_HELPER_PLAYBACK_UPDATE_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    this.updateSelectionHelper(this.selectedObjects);
+    this.selectionHelperDirty = false;
   }
 
   private computeSelectionBounds(objects: Object3D[]): boolean {
@@ -960,12 +1075,10 @@ export class SceneEditor {
   private startLoop(): void {
     const tick = () => {
       this.animationFrame = requestAnimationFrame(tick);
+      this.updateAnimationPlayback();
       this.orbitControls.update();
-      this.updateSelectionHelper(
-        this.store.selectedNodeIds
-          .map((nodeId) => this.objectMap.get(nodeId))
-          .filter((object): object is Object3D => Boolean(object)),
-      );
+      this.updateInfiniteGrid();
+      this.updateSelectionHelperFromCache();
       this.renderer.render(this.scene, this.camera);
       this.orientationRoot.quaternion.copy(this.camera.quaternion).invert();
       this.orientationRenderer.render(this.orientationScene, this.orientationCamera);
@@ -975,30 +1088,23 @@ export class SceneEditor {
   }
 
   private rebuildAnimationTimeline(preserveState = true): void {
-    const previousTimeline = this.animationTimeline;
     const previousFrame = preserveState ? this.getCurrentAnimationFrame() : 0;
-    const wasPaused = previousTimeline?.paused() ?? true;
-    previousTimeline?.kill();
+    const wasPlaying = this.isAnimationPlaying;
+    this.isAnimationPlaying = false;
+    this.animationTracks = [];
+    this.animationRuntimeReady = false;
     this.lastEmittedAnimationFrame = null;
     this.resetAnimatedObjectsToBlueprintState();
 
-    const timeline = gsap.timeline({
-      paused: true,
-      repeat: -1,
-      onUpdate: () => this.emitAnimationFrame(),
-    });
     const clip = this.store.getActiveAnimationClip();
     if (!clip) {
-      this.animationTimeline = timeline;
+      this.currentAnimationFrame = 0;
+      this.animationRuntimeReady = true;
       this.emitAnimationFrame(0, true);
       return;
     }
-    const tracks = clip.tracks;
-    const totalDuration = frameToSeconds(clip.durationFrames, clip.fps);
-    const hold = { progress: 0 };
-    timeline.to(hold, { progress: 1, duration: Math.max(totalDuration, 0.0001), ease: "none" }, 0);
 
-    for (const track of tracks) {
+    for (const track of clip.tracks) {
       if (isTrackMuted(track)) {
         continue;
       }
@@ -1022,54 +1128,26 @@ export class SceneEditor {
         continue;
       }
 
-      if (isDiscreteAnimationProperty(track.property)) {
-        const baseVisible = animationValueToBoolean(track.property, getAnimationValue(node, track.property));
-        timeline.set(target, { visible: baseVisible }, 0);
-        const baseMesh = this.getAnimatedVisibilityMeshTarget(target);
-        if (baseMesh) {
-          timeline.set(baseMesh, { visible: baseVisible }, 0);
-        }
-
-        for (const keyframe of ordered) {
-          const visible = animationValueToBoolean(track.property, keyframe.value);
-          const at = frameToSeconds(keyframe.frame, clip.fps);
-          timeline.set(target, { visible }, at);
-          const mesh = this.getAnimatedVisibilityMeshTarget(target);
-          if (mesh) {
-            timeline.set(mesh, { visible }, at);
-          }
-        }
-        continue;
-      }
-
-      timeline.set(owner, { [property]: getAnimationValue(node, track.property) }, 0);
-      timeline.set(owner, { [property]: ordered[0].value }, frameToSeconds(ordered[0].frame, clip.fps));
-
-      for (const segment of getTrackSegments(track)) {
-        timeline.to(
-          owner,
-          {
-            [property]: segment.to.value,
-            duration: frameToSeconds(segment.to.frame - segment.from.frame, clip.fps),
-            ease: mapAnimationEaseToGsap(segment.to.ease),
-          },
-          frameToSeconds(segment.from.frame, clip.fps),
-        );
-      }
-    }
-
-    this.animationTimeline = timeline;
-
-    if (timeline.duration() <= 0) {
-      this.emitAnimationFrame(0, true);
-      return;
+      this.animationTracks.push({
+        propertyPath: track.property,
+        owner,
+        property,
+        baseValue: getAnimationValue(node, track.property),
+        keyframes: ordered,
+        target,
+        visibilityMesh: isDiscreteAnimationProperty(track.property)
+          ? this.getAnimatedVisibilityMeshTarget(target)
+          : null,
+      });
     }
 
     const clampedFrame = Math.max(0, Math.min(previousFrame, clip.durationFrames));
-    timeline.pause();
-    timeline.seek(frameToSeconds(clampedFrame, clip.fps), false);
-    if (!wasPaused) {
-      timeline.play();
+    this.animationRuntimeReady = true;
+    this.applyAnimationFrame(clampedFrame);
+    if (wasPlaying) {
+      this.animationPlaybackStartFrame = clampedFrame;
+      this.animationPlaybackStartedAt = performance.now();
+      this.isAnimationPlaying = true;
     }
     this.emitAnimationFrame(undefined, true);
   }
@@ -1081,8 +1159,67 @@ export class SceneEditor {
     }
 
     this.lastEmittedAnimationFrame = roundedFrame;
+    this.lastAnimationFrameEmitAt = performance.now();
     for (const listener of this.animationFrameListeners) {
       listener(roundedFrame);
+    }
+  }
+
+  private updateAnimationPlayback(): void {
+    if (!this.isAnimationPlaying) {
+      return;
+    }
+
+    const clip = this.store.getActiveAnimationClip();
+    if (!clip) {
+      this.isAnimationPlaying = false;
+      this.applyAnimationFrame(0);
+      this.emitAnimationFrame(0, true);
+      return;
+    }
+
+    const now = performance.now();
+    const fps = Math.max(clip.fps, 1);
+    const elapsedFrames = ((now - this.animationPlaybackStartedAt) / 1000) * fps;
+    const durationFrames = Math.max(clip.durationFrames, 1);
+    const nextFrame = (this.animationPlaybackStartFrame + elapsedFrames) % durationFrames;
+    const didLoop = nextFrame < this.currentAnimationFrame;
+    this.applyAnimationFrame(nextFrame);
+    if (didLoop || now - this.lastAnimationFrameEmitAt >= ANIMATION_UI_EMIT_INTERVAL_MS) {
+      this.emitAnimationFrame();
+    }
+  }
+
+  private applyAnimationFrame(frame: number): void {
+    const clip = this.store.getActiveAnimationClip();
+    const durationFrames = clip?.durationFrames ?? 0;
+    const normalizedFrame = Math.max(0, Math.min(frame, durationFrames));
+    this.currentAnimationFrame = normalizedFrame;
+    let selectedObjectWasAnimated = false;
+
+    for (const track of this.animationTracks) {
+      const value = evaluateCompiledTrack(track, normalizedFrame);
+      if (isDiscreteAnimationProperty(track.propertyPath)) {
+        const visible = animationValueToBoolean(track.propertyPath, value);
+        if (track.target) {
+          track.target.visible = visible;
+        }
+        if (track.visibilityMesh) {
+          track.visibilityMesh.visible = visible;
+        }
+      } else {
+        track.owner[track.property] = value;
+      }
+      if (
+        track.target &&
+        this.store.selectedNodeIds.includes(String(track.target.userData.nodeId ?? ""))
+      ) {
+        selectedObjectWasAnimated = true;
+      }
+    }
+
+    if (selectedObjectWasAnimated) {
+      this.selectionHelperDirty = true;
     }
   }
 
@@ -1152,6 +1289,86 @@ function resolveAnimationTarget(target: Object3D, path: string): [Record<string,
   }
 
   return [owner as Record<string, unknown>, property];
+}
+
+function evaluateCompiledTrack(track: CompiledAnimationTrack, frame: number): number {
+  const keyframes = track.keyframes;
+  if (keyframes.length === 0 || frame < keyframes[0].frame) {
+    return track.baseValue;
+  }
+
+  if (keyframes.length === 1 || frame === keyframes[0].frame) {
+    return keyframes[0].value;
+  }
+
+  let low = 0;
+  let high = keyframes.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const keyframe = keyframes[middle];
+    if (frame === keyframe.frame) {
+      return keyframe.value;
+    }
+    if (frame < keyframe.frame) {
+      high = middle - 1;
+    } else {
+      low = middle + 1;
+    }
+  }
+
+  const previous = keyframes[Math.max(0, high)];
+  const next = keyframes[low];
+  if (!next) {
+    return previous.value;
+  }
+  if (isDiscreteAnimationProperty(track.propertyPath)) {
+    return previous.value;
+  }
+
+  const span = Math.max(next.frame - previous.frame, 1);
+  const progress = applyAnimationEase((frame - previous.frame) / span, next.ease);
+  return previous.value + (next.value - previous.value) * progress;
+}
+
+function applyAnimationEase(progress: number, ease: AnimationEasePreset): number {
+  const t = Math.max(0, Math.min(progress, 1));
+  switch (ease) {
+    case "linear":
+      return t;
+    case "easeIn":
+      return t * t;
+    case "easeOut":
+      return 1 - ((1 - t) * (1 - t));
+    case "easeInOut":
+      return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+    case "backOut": {
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      return 1 + c3 * ((t - 1) ** 3) + c1 * ((t - 1) ** 2);
+    }
+    case "bounceOut":
+      return bounceOut(t);
+    default:
+      return t;
+  }
+}
+
+function bounceOut(t: number): number {
+  const n1 = 7.5625;
+  const d1 = 2.75;
+  if (t < 1 / d1) {
+    return n1 * t * t;
+  }
+  if (t < 2 / d1) {
+    const shifted = t - 1.5 / d1;
+    return n1 * shifted * shifted + 0.75;
+  }
+  if (t < 2.5 / d1) {
+    const shifted = t - 2.25 / d1;
+    return n1 * shifted * shifted + 0.9375;
+  }
+  const shifted = t - 2.625 / d1;
+  return n1 * shifted * shifted + 0.984375;
 }
 
 function resolveOriginOffset(

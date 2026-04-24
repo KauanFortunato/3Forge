@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   ANIMATION_EASE_OPTIONS,
   ANIMATION_PROPERTIES,
@@ -111,6 +111,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   const [scrubState, setScrubState] = useState<ScrubState | null>(null);
   const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<Set<string>>(() => new Set());
   const [timelinePixelsPerFrame, setTimelinePixelsPerFrame] = useState(12);
+  const timelineRootRef = useRef<HTMLElement | null>(null);
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const tracksScrollRef = useRef<HTMLDivElement | null>(null);
   const lanesScrollRef = useRef<HTMLDivElement | null>(null);
@@ -360,12 +361,16 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   }
   const timelineContentWidth = Math.max(480, durationFrames * timelinePixelsPerFrame);
   const timelineContentStyle = { minWidth: "100%", width: `${timelineContentWidth}px` };
-  const handleTimelineWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
+  const handleTimelineWheel = useCallback((event: WheelEvent) => {
     const lanes = lanesScrollRef.current;
     const ruler = rulerScrollRef.current;
-    const scrollHost = event.currentTarget;
+    const scrollHost = lanes ?? ruler;
+    if (!scrollHost) {
+      return;
+    }
+
     if (event.shiftKey) {
+      event.preventDefault();
       const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
       const nextScrollLeft = Math.max(0, scrollHost.scrollLeft + delta);
       if (lanes) {
@@ -377,6 +382,11 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
       return;
     }
 
+    if (!event.ctrlKey && !event.metaKey) {
+      return;
+    }
+
+    event.preventDefault();
     const rect = scrollHost.getBoundingClientRect();
     const pointerX = Math.max(0, Math.min(event.clientX - rect.left, rect.width));
     const currentScrollLeft = scrollHost.scrollLeft;
@@ -407,8 +417,18 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     });
   }, []);
 
+  useEffect(() => {
+    const timelineRoot = timelineRootRef.current;
+    if (!timelineRoot) {
+      return;
+    }
+
+    timelineRoot.addEventListener("wheel", handleTimelineWheel, { passive: false });
+    return () => timelineRoot.removeEventListener("wheel", handleTimelineWheel);
+  }, [handleTimelineWheel]);
+
   return (
-    <section className="tl">
+    <section className="tl" ref={timelineRootRef}>
       <div className="panel__hd">
         <span className="panel__hd-icon"><TimelineIcon width={12} height={12} /></span>
         <span className="panel__hd-title">Timeline</span>
@@ -521,7 +541,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         <div className="tl__ruler-spacer">
           <span>Channels</span>
         </div>
-        <div className="tl__ruler" ref={rulerScrollRef} onWheel={handleTimelineWheel}>
+        <div className="tl__ruler" ref={rulerScrollRef}>
           <div
             className="tl__ruler-inner"
             style={timelineContentStyle}
@@ -667,7 +687,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
           </div>
         </div>
 
-        <div className="tl__lanes" ref={lanesScrollRef} onWheel={handleTimelineWheel}>
+        <div className="tl__lanes" ref={lanesScrollRef}>
           <div className="tl__lanes-inner" style={timelineContentStyle}>
             {/* Spacer lane matching the property-selector track */}
             <div className="tl-lane" />
