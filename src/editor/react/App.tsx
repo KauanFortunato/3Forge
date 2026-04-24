@@ -692,7 +692,8 @@ export function App() {
 
   const handleAnimationFrameChange = useCallback((frame: number) => {
     const durationFrames = store.getActiveAnimationClip()?.durationFrames ?? 0;
-    setCurrentFrame(Math.max(0, Math.min(frame, durationFrames)));
+    const nextFrame = Math.max(0, Math.min(Math.round(frame), durationFrames));
+    setCurrentFrame((previousFrame) => previousFrame === nextFrame ? previousFrame : nextFrame);
   }, [store]);
 
   const handleTimelineFrameChange = useCallback((frame: number) => {

@@ -36,6 +36,7 @@ import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import {
   animationValueToBoolean,
   frameToSeconds,
+  getAnimationValue,
   getTrackSegments,
   isDiscreteAnimationProperty,
   isTrackMuted,
@@ -83,6 +84,7 @@ export class SceneEditor {
 
   private animationFrame = 0;
   private animationTimeline: gsap.core.Timeline | null = null;
+  private lastEmittedAnimationFrame: number | null = null;
   private isSnapModifierPressed = false;
   private pointerDownX = 0;
   private pointerDownY = 0;
@@ -288,12 +290,12 @@ export class SceneEditor {
     }
 
     this.animationTimeline?.play();
-    this.emitAnimationFrame();
+    this.emitAnimationFrame(undefined, true);
   }
 
   pauseAnimation(): void {
     this.animationTimeline?.pause();
-    this.emitAnimationFrame();
+    this.emitAnimationFrame(undefined, true);
   }
 
   stopAnimation(): void {
@@ -303,7 +305,7 @@ export class SceneEditor {
 
     this.animationTimeline.pause();
     this.seekAnimation(0);
-    this.emitAnimationFrame();
+    this.emitAnimationFrame(undefined, true);
   }
 
   seekAnimation(frame: number): void {
@@ -329,7 +331,7 @@ export class SceneEditor {
     const time = frameToSeconds(normalizedFrame, clip.fps);
     this.animationTimeline.pause();
     this.animationTimeline.seek(time, false);
-    this.emitAnimationFrame();
+    this.emitAnimationFrame(undefined, true);
   }
 
   dispose(): void {
@@ -977,6 +979,8 @@ export class SceneEditor {
     const previousFrame = preserveState ? this.getCurrentAnimationFrame() : 0;
     const wasPaused = previousTimeline?.paused() ?? true;
     previousTimeline?.kill();
+    this.lastEmittedAnimationFrame = null;
+    this.resetAnimatedObjectsToBlueprintState();
 
     const timeline = gsap.timeline({
       paused: true,
@@ -986,7 +990,7 @@ export class SceneEditor {
     const clip = this.store.getActiveAnimationClip();
     if (!clip) {
       this.animationTimeline = timeline;
-      this.emitAnimationFrame(0);
+      this.emitAnimationFrame(0, true);
       return;
     }
     const tracks = clip.tracks;
@@ -1002,6 +1006,10 @@ export class SceneEditor {
       if (!target) {
         continue;
       }
+      const node = this.store.getNode(track.nodeId);
+      if (!node) {
+        continue;
+      }
 
       const objectPath = toObjectAnimationPath(track.property);
       const [owner, property] = resolveAnimationTarget(target, objectPath);
@@ -1015,6 +1023,13 @@ export class SceneEditor {
       }
 
       if (isDiscreteAnimationProperty(track.property)) {
+        const baseVisible = animationValueToBoolean(track.property, getAnimationValue(node, track.property));
+        timeline.set(target, { visible: baseVisible }, 0);
+        const baseMesh = this.getAnimatedVisibilityMeshTarget(target);
+        if (baseMesh) {
+          timeline.set(baseMesh, { visible: baseVisible }, 0);
+        }
+
         for (const keyframe of ordered) {
           const visible = animationValueToBoolean(track.property, keyframe.value);
           const at = frameToSeconds(keyframe.frame, clip.fps);
@@ -1027,6 +1042,7 @@ export class SceneEditor {
         continue;
       }
 
+      timeline.set(owner, { [property]: getAnimationValue(node, track.property) }, 0);
       timeline.set(owner, { [property]: ordered[0].value }, frameToSeconds(ordered[0].frame, clip.fps));
 
       for (const segment of getTrackSegments(track)) {
@@ -1045,7 +1061,7 @@ export class SceneEditor {
     this.animationTimeline = timeline;
 
     if (timeline.duration() <= 0) {
-      this.emitAnimationFrame(0);
+      this.emitAnimationFrame(0, true);
       return;
     }
 
@@ -1055,12 +1071,37 @@ export class SceneEditor {
     if (!wasPaused) {
       timeline.play();
     }
-    this.emitAnimationFrame();
+    this.emitAnimationFrame(undefined, true);
   }
 
-  private emitAnimationFrame(frame = this.getCurrentAnimationFrame()): void {
+  private emitAnimationFrame(frame = this.getCurrentAnimationFrame(), force = false): void {
+    const roundedFrame = Math.max(0, Math.round(frame));
+    if (!force && this.lastEmittedAnimationFrame === roundedFrame) {
+      return;
+    }
+
+    this.lastEmittedAnimationFrame = roundedFrame;
     for (const listener of this.animationFrameListeners) {
-      listener(frame);
+      listener(roundedFrame);
+    }
+  }
+
+  private resetAnimatedObjectsToBlueprintState(): void {
+    for (const node of this.store.blueprint.nodes) {
+      const object = this.objectMap.get(node.id);
+      if (!object) {
+        continue;
+      }
+
+      object.visible = node.visible;
+      object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
+      object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
+      object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
+
+      const mesh = this.getAnimatedVisibilityMeshTarget(object);
+      if (mesh) {
+        mesh.visible = node.visible;
+      }
     }
   }
 
