@@ -22,6 +22,11 @@ interface NumberDragInputProps extends Omit<InputHTMLAttributes<HTMLInputElement
    * Class applied to the drag handle button. Defaults to "num__drag".
    */
   dragClassName?: string;
+  /**
+   * Allows dragging directly from the input surface after a small movement.
+   * A plain click still focuses the input for normal typing.
+   */
+  scrubOnInput?: boolean;
 }
 
 function defaultParse(raw: string): number {
@@ -60,6 +65,7 @@ export function NumberDragInput({
   onKeyDown,
   "aria-label": ariaLabel,
   dragClassName = "num__drag",
+  scrubOnInput = false,
   ...inputProps
 }: NumberDragInputProps) {
   const [draft, setDraft] = useState(value);
@@ -71,6 +77,7 @@ export function NumberDragInput({
     startValue: number;
     lastValue: number;
     pointerId: number;
+    didDrag: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -114,6 +121,7 @@ export function NumberDragInput({
       startValue: parsed,
       lastValue: parsed,
       pointerId: event.pointerId,
+      didDrag: true,
     };
     draggingRef.current = true;
     setIsDragging(true);
@@ -128,6 +136,7 @@ export function NumberDragInput({
     const state = dragState.current;
     if (!state) return;
     const dx = event.clientX - state.startX;
+    state.didDrag = true;
     const increment = resolveStep(event);
     const next = state.startValue + dx * increment;
     state.lastValue = next;
@@ -152,7 +161,71 @@ export function NumberDragInput({
       setDraft(value);
       return;
     }
-    if (state.lastValue !== state.startValue) {
+    if (state.didDrag && state.lastValue !== state.startValue) {
+      const committed = formatNumber(state.lastValue, precision);
+      setDraft(committed);
+      onCommit(committed);
+    }
+  };
+
+  const handleInputPointerDown = (event: ReactPointerEvent<HTMLInputElement>) => {
+    if (!scrubOnInput || event.button !== 0) return;
+    const parsed = parseValue ? parseValue(draft || value) : defaultParse(draft || value);
+    dragState.current = {
+      startX: event.clientX,
+      startValue: parsed,
+      lastValue: parsed,
+      pointerId: event.pointerId,
+      didDrag: false,
+    };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Some environments (jsdom) may not support pointer capture; ignore.
+    }
+  };
+
+  const handleInputPointerMove = (event: ReactPointerEvent<HTMLInputElement>) => {
+    if (!scrubOnInput) return;
+    const state = dragState.current;
+    if (!state) return;
+    const dx = event.clientX - state.startX;
+    if (!state.didDrag && Math.abs(dx) < 3) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    state.didDrag = true;
+    draggingRef.current = true;
+    setIsDragging(true);
+
+    const increment = resolveStep(event);
+    const next = state.startValue + dx * increment;
+    state.lastValue = next;
+    setDraft(formatNumber(next, precision));
+  };
+
+  const endInputDrag = (event: ReactPointerEvent<HTMLInputElement>, cancel = false) => {
+    if (!scrubOnInput) return;
+    const state = dragState.current;
+    if (!state) return;
+    const target = event.currentTarget;
+    try {
+      if (target.hasPointerCapture(state.pointerId)) {
+        target.releasePointerCapture(state.pointerId);
+      }
+    } catch {
+      // Ignore release failures in test environments.
+    }
+    dragState.current = null;
+    draggingRef.current = false;
+    setIsDragging(false);
+    if (cancel) {
+      setDraft(value);
+      return;
+    }
+    if (state.didDrag && state.lastValue !== state.startValue) {
       const committed = formatNumber(state.lastValue, precision);
       setDraft(committed);
       onCommit(committed);
@@ -208,6 +281,10 @@ export function NumberDragInput({
           onBlur?.(event);
         }}
         onKeyDown={handleKeyDown}
+        onPointerDown={handleInputPointerDown}
+        onPointerMove={handleInputPointerMove}
+        onPointerUp={(event) => endInputDrag(event, false)}
+        onPointerCancel={(event) => endInputDrag(event, true)}
       />
       <button
         type="button"

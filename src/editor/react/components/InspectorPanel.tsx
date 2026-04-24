@@ -24,6 +24,7 @@ import { NumberDragInput } from "./NumberDragInput";
 interface InspectorPanelProps {
   node: EditorNode | undefined;
   nodes?: EditorNode[];
+  mode?: "all" | "properties" | "material";
   emptyMessage?: string;
   fonts: FontAsset[];
   onNodeNameChange: (nodeId: string, value: string) => void;
@@ -49,6 +50,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
   const {
     node,
     nodes,
+    mode = "all",
     emptyMessage,
     fonts,
     onNodeNameChange,
@@ -117,12 +119,12 @@ export function InspectorPanel(props: InspectorPanelProps) {
     material: sharedMaterial,
   });
 
-  const showObject = sections.some((section) => section === "object");
-  const showTransform = sections.some((section) => section === "transform");
-  const showGeometry = sections.some((section) => section === "geometry");
-  const showMaterial = sections.some((section) => section === "material");
-  const showText = sections.some((section) => section === "text");
-  const showImage = sections.some((section) => section === "image");
+  const showObject = mode !== "material" && sections.some((section) => section === "object");
+  const showTransform = mode !== "material" && sections.some((section) => section === "transform");
+  const showGeometry = mode !== "material" && sections.some((section) => section === "geometry");
+  const showMaterial = mode !== "properties" && sections.some((section) => section === "material");
+  const showText = mode !== "material" && sections.some((section) => section === "text");
+  const showImage = mode !== "material" && sections.some((section) => section === "image");
 
   return (
     <div>
@@ -441,6 +443,16 @@ export function InspectorPanel(props: InspectorPanelProps) {
           </p>
         </Sec>
       ) : null}
+
+      {mode === "material" && !showMaterial ? (
+        <Sec title="Material" icon={<MaterialIcon width={12} height={12} />}>
+          <p className="row__hint">
+            {hasGroupSelection
+              ? "Groups do not expose material controls. Select a mesh, text, or image node to edit material fields."
+              : "No material properties are available for this selection."}
+          </p>
+        </Sec>
+      ) : null}
     </div>
   );
 }
@@ -693,6 +705,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                 onCommit={commit}
                 aria-label={`${title} ${axisLetter}`}
                 dragClassName="vec__drag"
+                scrubOnInput
                 step={definition.step ?? (definition.input === "degrees" ? 1 : 0.1)}
                 precision={definition.input === "degrees" ? 2 : 3}
               />

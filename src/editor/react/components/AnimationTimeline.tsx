@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
 import {
   ANIMATION_EASE_OPTIONS,
   ANIMATION_PROPERTIES,
@@ -72,6 +72,10 @@ interface ScrubState {
 }
 
 type TimelineViewMode = "selected" | "all";
+const MIN_TIMELINE_PIXELS_PER_FRAME = 4;
+const MAX_TIMELINE_PIXELS_PER_FRAME = 80;
+const TARGET_RULER_TICK_SPACING = 72;
+const RULER_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500];
 
 export function AnimationTimeline(props: AnimationTimelineProps) {
   const {
@@ -83,8 +87,6 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     selectedKeyframeId,
     onFrameChange,
     onAnimationConfigChange,
-    onCreateClip,
-    onSelectClip,
     onRenameClip,
     onRemoveClip,
     onAddTrack,
@@ -107,6 +109,8 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [scrubState, setScrubState] = useState<ScrubState | null>(null);
   const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<Set<string>>(() => new Set());
+  const [timelinePixelsPerFrame, setTimelinePixelsPerFrame] = useState(12);
+  const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const tracksScrollRef = useRef<HTMLDivElement | null>(null);
   const lanesScrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -197,12 +201,15 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   useEffect(() => {
     const leftBody = tracksScrollRef.current;
     const rightBody = lanesScrollRef.current;
-    if (!leftBody || !rightBody) {
+    const rulerBody = rulerScrollRef.current;
+    if (!leftBody || !rightBody || !rulerBody) {
       return;
     }
 
     let syncingLeftTop = false;
     let syncingRightTop = false;
+    let syncingRulerLeft = false;
+    let syncingLanesLeft = false;
 
     const handleLeftScroll = () => {
       if (syncingLeftTop) {
@@ -217,33 +224,58 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     const handleRightScroll = () => {
       if (syncingRightTop) {
         syncingRightTop = false;
+      } else {
+        syncingLeftTop = true;
+        leftBody.scrollTop = rightBody.scrollTop;
+      }
+
+      if (syncingLanesLeft) {
+        syncingLanesLeft = false;
         return;
       }
 
-      syncingLeftTop = true;
-      leftBody.scrollTop = rightBody.scrollTop;
+      syncingRulerLeft = true;
+      rulerBody.scrollLeft = rightBody.scrollLeft;
+    };
+
+    const handleRulerScroll = () => {
+      if (syncingRulerLeft) {
+        syncingRulerLeft = false;
+        return;
+      }
+
+      syncingLanesLeft = true;
+      rightBody.scrollLeft = rulerBody.scrollLeft;
     };
 
     leftBody.addEventListener("scroll", handleLeftScroll);
     rightBody.addEventListener("scroll", handleRightScroll);
+    rulerBody.addEventListener("scroll", handleRulerScroll);
 
     leftBody.scrollTop = rightBody.scrollTop;
+    rulerBody.scrollLeft = rightBody.scrollLeft;
 
     return () => {
       leftBody.removeEventListener("scroll", handleLeftScroll);
       rightBody.removeEventListener("scroll", handleRightScroll);
+      rulerBody.removeEventListener("scroll", handleRulerScroll);
     };
   }, [viewMode, visibleGroupedTracks.length]);
 
   useEffect(() => {
     const leftBody = tracksScrollRef.current;
     const rightBody = lanesScrollRef.current;
+    const rulerBody = rulerScrollRef.current;
     if (!leftBody || !rightBody) {
       return;
     }
 
     leftBody.scrollTop = 0;
     rightBody.scrollTop = 0;
+    rightBody.scrollLeft = 0;
+    if (rulerBody) {
+      rulerBody.scrollLeft = 0;
+    }
   }, [activeClip?.id, viewMode]);
 
   useEffect(() => {
@@ -318,10 +350,61 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   const durationFrames = activeClip?.durationFrames ?? 1;
 
   const rulerTicks: Array<{ frame: number; isMajor: boolean }> = [];
-  const rulerStep = durationFrames >= 60 ? 5 : 1;
+  const rulerStep = getRulerStep(timelinePixelsPerFrame);
   for (let frame = 0; frame <= durationFrames; frame += rulerStep) {
-    rulerTicks.push({ frame, isMajor: frame % 10 === 0 });
+    rulerTicks.push({ frame, isMajor: frame % (rulerStep * 2) === 0 || frame === 0 });
   }
+  if (rulerTicks.at(-1)?.frame !== durationFrames) {
+    rulerTicks.push({ frame: durationFrames, isMajor: true });
+  }
+  const timelineContentWidth = Math.max(480, durationFrames * timelinePixelsPerFrame);
+  const timelineContentStyle = { minWidth: "100%", width: `${timelineContentWidth}px` };
+  const handleTimelineWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const lanes = lanesScrollRef.current;
+    const ruler = rulerScrollRef.current;
+    const scrollHost = event.currentTarget;
+    if (event.shiftKey) {
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      const nextScrollLeft = Math.max(0, scrollHost.scrollLeft + delta);
+      if (lanes) {
+        lanes.scrollLeft = nextScrollLeft;
+      }
+      if (ruler) {
+        ruler.scrollLeft = nextScrollLeft;
+      }
+      return;
+    }
+
+    const rect = scrollHost.getBoundingClientRect();
+    const pointerX = Math.max(0, Math.min(event.clientX - rect.left, rect.width));
+    const currentScrollLeft = scrollHost.scrollLeft;
+
+    setTimelinePixelsPerFrame((previous) => {
+      const zoomIntensity = 1.22;
+      const factor = event.deltaY < 0 ? zoomIntensity : 1 / zoomIntensity;
+      const next = Math.max(
+        MIN_TIMELINE_PIXELS_PER_FRAME,
+        Math.min(MAX_TIMELINE_PIXELS_PER_FRAME, Number((previous * factor).toFixed(3))),
+      );
+      if (next === previous) {
+        return previous;
+      }
+
+      const frameUnderPointer = (currentScrollLeft + pointerX) / Math.max(previous, 0.001);
+      const nextScrollLeft = Math.max(0, frameUnderPointer * next - pointerX);
+      window.requestAnimationFrame(() => {
+        if (lanes) {
+          lanes.scrollLeft = nextScrollLeft;
+        }
+        if (ruler) {
+          ruler.scrollLeft = nextScrollLeft;
+        }
+      });
+
+      return next;
+    });
+  }, []);
 
   return (
     <section className="tl">
@@ -333,24 +416,12 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
           <span className="tl__panel-hd-clock-dim">/</span>
           <span>{String(durationFrames).padStart(3, "0")}</span>
         </span>
-
-        <div className="ptabs" role="tablist" aria-label="Animation clip">
-          {animation.clips.map((clip) => (
-            <button
-              key={clip.id}
-              type="button"
-              className={`ptab${activeClip?.id === clip.id ? " is-active" : ""}`}
-              onClick={() => onSelectClip(clip.id)}
-              role="tab"
-              aria-selected={activeClip?.id === clip.id}
-            >
-              {clip.name}
-            </button>
-          ))}
-          <button type="button" className="ibtn" onClick={onCreateClip} aria-label="New clip" title="New clip">
-            <PlusIcon width={11} height={11} />
-          </button>
-        </div>
+        <span className="tl__range">
+          <strong>0</strong>
+          <span>-</span>
+          <strong>{durationFrames}</strong>
+          <span>frames</span>
+        </span>
 
         <span className="panel__hd-meta" aria-hidden="true">
           {visibleTrackCount} channels
@@ -445,40 +516,46 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         </div>
       </div>
 
-      <div className="tl__ruler">
-        <div
-          className="tl__ruler-inner"
-          onPointerDown={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect();
-            const laneLeft = rect.left;
-            const laneWidth = rect.width;
-            onFrameChange(positionToFrame(event.clientX, laneLeft, laneWidth, durationFrames));
-            setScrubState({ laneLeft, laneWidth });
-          }}
-        >
-          {rulerTicks.map(({ frame, isMajor }) => (
-            <div
-              key={frame}
-              className={`tl__ruler-tick${isMajor ? " is-major" : " is-minor"}`}
-              style={{ left: framePercent(frame, durationFrames) }}
-            />
-          ))}
-          {rulerTicks.filter((tick) => tick.isMajor).map(({ frame }) => (
-            <div
-              key={`lbl-${frame}`}
-              className="tl__ruler-line"
-              style={{ left: framePercent(frame, durationFrames) }}
-            >
-              {frame}
-            </div>
-          ))}
+      <div className="tl__ruler-row">
+        <div className="tl__ruler-spacer">
+          <span>Channels</span>
+        </div>
+        <div className="tl__ruler" ref={rulerScrollRef} onWheel={handleTimelineWheel}>
+          <div
+            className="tl__ruler-inner"
+            style={timelineContentStyle}
+            onPointerDown={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              const laneLeft = rect.left;
+              const laneWidth = rect.width;
+              onFrameChange(positionToFrame(event.clientX, laneLeft, laneWidth, durationFrames));
+              setScrubState({ laneLeft, laneWidth });
+            }}
+          >
+            {rulerTicks.map(({ frame, isMajor }) => (
+              <div
+                key={frame}
+                className={`tl__ruler-tick${isMajor ? " is-major" : " is-minor"}`}
+                style={{ left: framePercent(frame, durationFrames) }}
+              />
+            ))}
+            {rulerTicks.filter((tick) => tick.isMajor).map(({ frame }) => (
+              <div
+                key={`lbl-${frame}`}
+                className="tl__ruler-line"
+                style={{ left: framePercent(frame, durationFrames) }}
+              >
+                {frame}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
       <div className="tl__body">
         <div className="tl__tracks" ref={tracksScrollRef}>
           <div className="tl__tracks-inner">
-            <div className="tl-track" style={{ padding: "0 var(--sp-3)", minHeight: 22 }}>
+            <div className="tl-track tl-track--add">
               <span className="sel" style={{ width: "100%" }} title="Channel to add">
                 <select
                   value={propertyToAdd}
@@ -512,8 +589,9 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
 
             {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
               <div key={node.id}>
-                <div className="tl-track" style={{ background: "var(--c-bg-2)" }}>
-                  <span className="tl-track__name" style={{ color: "var(--c-text)" }}>{node.name}</span>
+                <div className="tl-track tl-track--group">
+                  <span className="tl-track__ico"><TimelineIcon width={11} height={11} /></span>
+                  <span className="tl-track__name">{node.name}</span>
                   <span className="tl-track__prop">{node.type}</span>
                   <span className="tl-track__kf-count">{tracks.length}ch</span>
                 </div>
@@ -534,6 +612,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                         }
                       }}
                     >
+                      <span className="tl-track__ico"><TimelineIcon width={10} height={10} /></span>
                       <span className="tl-track__name">{getAnimationPropertyLabel(track.property)}</span>
                       <span className="tl-track__prop">{getTrackCategoryLabel(track.property)}</span>
                       <span className="tl-track__kf-count">{track.keyframes.length}</span>
@@ -594,8 +673,8 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
           </div>
         </div>
 
-        <div className="tl__lanes" ref={lanesScrollRef}>
-          <div className="tl__lanes-inner">
+        <div className="tl__lanes" ref={lanesScrollRef} onWheel={handleTimelineWheel}>
+          <div className="tl__lanes-inner" style={timelineContentStyle}>
             {/* Spacer lane matching the property-selector track */}
             <div className="tl-lane" />
 
@@ -932,4 +1011,9 @@ function getTrackCategoryLabel(property: AnimationPropertyPath): string {
 function findNodeLabel(nodes: EditorNode[], nodeId: string): string {
   const node = nodes.find((entry) => entry.id === nodeId);
   return node ? node.name : "Object";
+}
+
+function getRulerStep(pixelsPerFrame: number): number {
+  const desired = TARGET_RULER_TICK_SPACING / Math.max(pixelsPerFrame, 1);
+  return RULER_STEPS.find((step) => step >= desired) ?? RULER_STEPS.at(-1) ?? 100;
 }

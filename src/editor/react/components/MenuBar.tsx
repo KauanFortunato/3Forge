@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuAction } from "../ui-types";
 import { MenuList } from "./ContextMenu";
+import { LogoGlyph } from "./icons";
 
 interface TopMenu {
   id: string;
@@ -41,7 +42,9 @@ export function MenuBar({ menus, appVersion }: MenuBarProps) {
   return (
     <div ref={rootRef} className="menubar">
       <div className="menubar__brand" aria-label="3Forge">
-        <div className="menubar__brand-mark" aria-hidden="true">3F</div>
+        <div className="menubar__brand-mark" aria-hidden="true">
+          <LogoGlyph width={11} height={11} />
+        </div>
         <span>3Forge</span>
       </div>
       <div className="menubar__sep" aria-hidden="true" />

@@ -2,7 +2,24 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import type { EditorNode } from "../../types";
 import type { TreeBranch, TreeDropTarget } from "../ui-types";
-import { ChevronDownIcon, ChevronRightIcon, ClosedEyeIcon, EyeIcon, GroupIcon, MeshIcon, SearchIcon } from "./icons";
+import {
+  BoxIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CircleIcon,
+  ClosedEyeIcon,
+  CopyIcon,
+  CylinderIcon,
+  EyeIcon,
+  GroupIcon,
+  ImageIcon,
+  MeshIcon,
+  PlaneIcon,
+  SearchIcon,
+  SphereIcon,
+  TextPropertyIcon,
+  TrashIcon,
+} from "./icons";
 
 interface SceneGraphPanelProps {
   nodes: EditorNode[];
@@ -14,6 +31,8 @@ interface SceneGraphPanelProps {
   onSelectNode: (nodeId: string, additive: boolean) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
+  onDuplicateNode?: (nodeId: string) => void;
+  onDeleteNode?: (nodeId: string) => void;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
 }
 
@@ -28,6 +47,8 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
     onSelectNode,
     onMoveNode,
     onToggleVisibility,
+    onDuplicateNode = () => {},
+    onDeleteNode = () => {},
     onContextMenu,
   } = props;
   const branches = useMemo(() => buildTree(nodes), [nodes]);
@@ -188,6 +209,8 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
               onSelectNode={onSelectNode}
               onMoveNode={onMoveNode}
               onToggleVisibility={onToggleVisibility}
+              onDuplicateNode={onDuplicateNode}
+              onDeleteNode={onDeleteNode}
               onContextMenu={onContextMenu}
               onDragStateChange={(nextDragged, nextDropTarget) => {
                 setDraggedNodeId(nextDragged);
@@ -247,6 +270,8 @@ interface SceneGraphRowProps {
   onSelectNode: (nodeId: string, additive: boolean) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
+  onDuplicateNode: (nodeId: string) => void;
+  onDeleteNode: (nodeId: string) => void;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
   onDragStateChange: (draggedNodeId: string | null, target: TreeDropTarget | null) => void;
   onClearDragState: () => void;
@@ -266,6 +291,8 @@ function SceneGraphRow(props: SceneGraphRowProps) {
     onSelectNode,
     onMoveNode,
     onToggleVisibility,
+    onDuplicateNode,
+    onDeleteNode,
     onContextMenu,
     onDragStateChange,
     onClearDragState,
@@ -373,9 +400,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
           ) : null}
         </button>
 
-        <span className="sg-row__icon">
-          {isGroup ? <GroupIcon width={12} height={12} /> : <MeshIcon width={12} height={12} />}
-        </span>
+        <span className="sg-row__icon">{getNodeTypeIcon(branch.node)}</span>
 
         <span className="sg-row__name">{branch.node.name}</span>
       </div>
@@ -397,9 +422,60 @@ function SceneGraphRow(props: SceneGraphRowProps) {
         >
           {branch.node.visible ? <EyeIcon width={12} height={12} /> : <ClosedEyeIcon width={12} height={12} />}
         </button>
+        <button
+          type="button"
+          className="sg-row__ibtn"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDuplicateNode(branch.node.id);
+          }}
+          title="Duplicate"
+          tabIndex={-1}
+          disabled={isRoot}
+        >
+          <CopyIcon width={11} height={11} />
+        </button>
+        <button
+          type="button"
+          className="sg-row__ibtn"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDeleteNode(branch.node.id);
+          }}
+          title="Delete"
+          tabIndex={-1}
+          disabled={isRoot}
+        >
+          <TrashIcon width={11} height={11} />
+        </button>
       </div>
     </div>
   );
+}
+
+function getNodeTypeIcon(node: EditorNode) {
+  const iconProps = { width: 12, height: 12 };
+
+  switch (node.type) {
+    case "group":
+      return <GroupIcon {...iconProps} />;
+    case "box":
+      return <BoxIcon {...iconProps} />;
+    case "circle":
+      return <CircleIcon {...iconProps} />;
+    case "sphere":
+      return <SphereIcon {...iconProps} />;
+    case "cylinder":
+      return <CylinderIcon {...iconProps} />;
+    case "plane":
+      return <PlaneIcon {...iconProps} />;
+    case "text":
+      return <TextPropertyIcon {...iconProps} />;
+    case "image":
+      return <ImageIcon {...iconProps} />;
+    default:
+      return <MeshIcon {...iconProps} />;
+  }
 }
 
 function buildTree(nodes: EditorNode[]): TreeBranch[] {

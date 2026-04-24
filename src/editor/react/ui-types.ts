@@ -11,7 +11,7 @@ import type {
 } from "../types";
 
 export type ExportMode = "json" | "typescript";
-export type RightPanelTab = "inspector" | "fields" | "export";
+export type RightPanelTab = "properties" | "material";
 export type ToolMode = "select" | "translate" | "rotate" | "scale";
 
 export interface EditorStoreView {

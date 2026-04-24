@@ -1,26 +1,27 @@
 import type { ReactNode } from "react";
 import type { ToolMode } from "../ui-types";
-import type { ViewMode } from "../../types";
+import type { EditorNodeType } from "../../types";
 import {
   BoxIcon,
-  CursorIcon,
-  ExportIcon,
   FastForwardIcon,
-  FrameIcon,
+  GroupIcon,
   HelpIcon,
-  MoveIcon,
+  ImageIcon,
   PauseIcon,
   PlayIcon,
+  PlaneIcon,
   RedoIcon,
   RewindIcon,
-  RotateIcon,
   SaveIcon,
-  ScaleIcon,
   SkipBackIcon,
   SkipForwardIcon,
+  SphereIcon,
   StopIcon,
+  TextPropertyIcon,
   TimelineIcon,
   UndoIcon,
+  CylinderIcon,
+  ShortcutIcon,
 } from "./icons";
 import { BufferedInput } from "./BufferedInput";
 
@@ -43,22 +44,17 @@ interface SecondaryToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   currentTool: ToolMode;
-  /**
-   * Retained for API stability. View-mode buttons render on the viewport HUD, not in the toolbar.
-   */
-  viewMode?: ViewMode;
   isTimelineVisible: boolean;
   playback?: PlaybackToolbarProps | null;
   onComponentNameChange: (value: string) => void;
   onUndo: () => void;
   onRedo: () => void;
-  onToolChange: (mode: ToolMode) => void;
-  /** Retained for API stability; toolbar no longer renders view-mode buttons. */
-  onViewModeChange?: (mode: ViewMode) => void;
-  onFrame: () => void;
+  onAddNode?: (type: Exclude<EditorNodeType, "image">) => void;
+  onAddImage?: () => void;
+  onGroupSelection?: () => void;
+  canGroupSelection?: boolean;
   onToggleTimeline: () => void;
   onSave?: () => void;
-  onExport?: () => void;
   onShortcuts?: () => void;
 }
 
@@ -75,11 +71,12 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     onComponentNameChange,
     onUndo,
     onRedo,
-    onToolChange,
-    onFrame,
+    onAddNode,
+    onAddImage,
+    onGroupSelection,
+    canGroupSelection = false,
     onToggleTimeline,
     onSave,
-    onExport,
     onShortcuts,
   } = props;
 
@@ -91,31 +88,37 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
             <BoxIcon width={11} height={11} />
           </div>
           <div className="proj-chip__meta">
-            <span className="proj-chip__label">Component</span>
             <BufferedInput
               className="proj-chip__name"
               type="text"
               value={componentName}
               onCommit={onComponentNameChange}
             />
+            <span className="proj-chip__sub">{`blueprint / ${nodeCount} nodes`}</span>
           </div>
         </div>
 
-        <div className="tgroup tgroup--tools">
-          <ToolbarIconButton label="Select" shortcut="Q" isActive={currentTool === "select"} onClick={() => onToolChange("select")}>
-            <CursorIcon />
+        <div className="tgroup tgroup--create" aria-label="Create nodes">
+          <ToolbarIconButton label="Add Box" onClick={() => onAddNode?.("box")} disabled={!onAddNode}>
+            <BoxIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Move" shortcut="W" isActive={currentTool === "translate"} onClick={() => onToolChange("translate")}>
-            <MoveIcon />
+          <ToolbarIconButton label="Add Sphere" onClick={() => onAddNode?.("sphere")} disabled={!onAddNode}>
+            <SphereIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Rotate" shortcut="E" isActive={currentTool === "rotate"} onClick={() => onToolChange("rotate")}>
-            <RotateIcon />
+          <ToolbarIconButton label="Add Cylinder" onClick={() => onAddNode?.("cylinder")} disabled={!onAddNode}>
+            <CylinderIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Scale" shortcut="R" isActive={currentTool === "scale"} onClick={() => onToolChange("scale")}>
-            <ScaleIcon />
+          <ToolbarIconButton label="Add Plane" onClick={() => onAddNode?.("plane")} disabled={!onAddNode}>
+            <PlaneIcon />
           </ToolbarIconButton>
-          <ToolbarIconButton label="Frame" shortcut="F" onClick={onFrame}>
-            <FrameIcon />
+          <ToolbarIconButton label="Add Text" onClick={() => onAddNode?.("text")} disabled={!onAddNode}>
+            <TextPropertyIcon />
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Add Image" onClick={() => onAddImage?.()} disabled={!onAddImage}>
+            <ImageIcon />
+          </ToolbarIconButton>
+          <ToolbarIconButton label="Group" onClick={() => onGroupSelection?.()} disabled={!onGroupSelection || !canGroupSelection}>
+            <GroupIcon />
           </ToolbarIconButton>
         </div>
       </div>
@@ -139,17 +142,6 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       </div>
 
       <div className="toolbar__right">
-        <button
-          type="button"
-          className={`ibtn${isTimelineVisible ? " is-active" : ""}`}
-          onClick={onToggleTimeline}
-          aria-pressed={isTimelineVisible}
-          aria-label={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
-          title={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
-        >
-          <TimelineIcon />
-        </button>
-
         <div className="tgroup tgroup--history">
           <ToolbarIconButton label="Undo" disabled={!canUndo} onClick={onUndo}>
             <UndoIcon />
@@ -162,27 +154,27 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
         {onShortcuts ? (
           <button
             type="button"
-            className="ibtn"
+            className="tbtn is-ghost"
             onClick={onShortcuts}
             aria-label="Shortcuts (F1)"
             title="Shortcuts (F1)"
           >
-            <HelpIcon />
+            <ShortcutIcon />
+            <span>Shortcuts</span>
           </button>
         ) : null}
 
-        {onExport ? (
-          <button
-            type="button"
-            className="tbtn is-ghost"
-            onClick={onExport}
-            aria-label="Export"
-            title="Export"
-          >
-            <ExportIcon />
-            <span>Export</span>
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className={`tbtn is-ghost${isTimelineVisible ? " is-active" : ""}`}
+          onClick={onToggleTimeline}
+          aria-pressed={isTimelineVisible}
+          aria-label={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
+          title={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
+        >
+          <TimelineIcon />
+          <span>Timeline</span>
+        </button>
 
         {onSave ? (
           <button
@@ -218,7 +210,7 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
     <div className="playbar" role="group" aria-label="Playback controls">
       <button
         type="button"
-        className="playbar__btn"
+        className="ibtn"
         onClick={onSkipBack}
         aria-label="Skip to start"
         title="Skip to start"
@@ -227,7 +219,7 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
       </button>
       <button
         type="button"
-        className="playbar__btn"
+        className="ibtn"
         onClick={onRewind}
         aria-label="Rewind"
         title="Rewind"
@@ -236,7 +228,7 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
       </button>
       <button
         type="button"
-        className={`playbar__btn playbar__btn--primary${isPlaying ? " is-active" : ""}`}
+        className={`ibtn${isPlaying ? " is-active" : ""}`}
         onClick={onPlayToggle}
         aria-label={isPlaying ? "Pause" : "Play"}
         aria-pressed={isPlaying}
@@ -246,7 +238,7 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
       </button>
       <button
         type="button"
-        className="playbar__btn"
+        className="ibtn playbar__btn--danger"
         onClick={onStop}
         aria-label="Stop"
         title="Stop"
@@ -255,7 +247,7 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
       </button>
       <button
         type="button"
-        className="playbar__btn"
+        className="ibtn"
         onClick={onFastForward}
         aria-label="Fast forward"
         title="Fast forward"
@@ -264,7 +256,7 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
       </button>
       <button
         type="button"
-        className="playbar__btn"
+        className="ibtn"
         onClick={onSkipForward}
         aria-label="Skip to end"
         title="Skip to end"
@@ -272,7 +264,7 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
         <SkipForwardIcon width={12} height={12} />
       </button>
       <span className="playbar__sep" aria-hidden="true" />
-      <span className="playbar__counter" aria-label="Current frame">
+      <span className="playbar__frame" aria-label="Current frame">
         <strong>{String(currentFrame).padStart(3, "0")}</strong>
         <span className="playbar__counter-sep">/</span>
         <span>{String(durationFrames).padStart(3, "0")}</span>

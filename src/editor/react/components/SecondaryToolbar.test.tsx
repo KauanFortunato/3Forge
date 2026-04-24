@@ -10,14 +10,10 @@ function makeBaseProps() {
     canUndo: true,
     canRedo: true,
     currentTool: "select" as const,
-    viewMode: "rendered" as const,
     isTimelineVisible: true,
     onComponentNameChange: () => undefined,
     onUndo: () => undefined,
     onRedo: () => undefined,
-    onToolChange: () => undefined,
-    onViewModeChange: () => undefined,
-    onFrame: () => undefined,
     onToggleTimeline: () => undefined,
   };
 }
@@ -85,18 +81,22 @@ describe("SecondaryToolbar", () => {
     expect(screen.queryByRole("button", { name: "Play" })).toBeNull();
   });
 
-  it("renders the Export button when onExport is provided and calls it on click", () => {
-    const onExport = vi.fn();
+  it("renders create controls and calls the create handlers", () => {
+    const onAddNode = vi.fn();
+    const onAddImage = vi.fn();
     render(
       <SecondaryToolbar
         {...makeBaseProps()}
-        onExport={onExport}
+        onAddNode={onAddNode}
+        onAddImage={onAddImage}
       />,
     );
 
-    const button = screen.getByRole("button", { name: "Export" });
-    expect(button).toBeTruthy();
-    fireEvent.click(button);
-    expect(onExport).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Add Box" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add Image" }));
+
+    expect(onAddNode).toHaveBeenCalledWith("box");
+    expect(onAddImage).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Export" })).toBeNull();
   });
 });

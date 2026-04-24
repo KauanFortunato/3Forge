@@ -117,8 +117,8 @@ export class SceneEditor {
     this.orientationRenderer.setClearColor(0x000000, 0);
     this.orientationRenderer.domElement.className = "viewport-orientation-gizmo";
     this.orientationRenderer.domElement.style.position = "absolute";
-    this.orientationRenderer.domElement.style.top = "10px";
-    this.orientationRenderer.domElement.style.right = "10px";
+    this.orientationRenderer.domElement.style.bottom = "10px";
+    this.orientationRenderer.domElement.style.left = "10px";
     this.orientationRenderer.domElement.style.pointerEvents = "auto";
     this.orientationRenderer.domElement.style.cursor = "pointer";
     this.orientationRenderer.domElement.style.width = `${this.ORIENTATION_SIZE}px`;

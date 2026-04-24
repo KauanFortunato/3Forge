@@ -396,6 +396,15 @@ export function PlusIcon(props: IconProps) {
   );
 }
 
+export function XIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="m3.6 3.6 6.8 6.8" />
+      <path d="m10.4 3.6-6.8 6.8" />
+    </Ico>
+  );
+}
+
 export function SaveIcon(props: IconProps) {
   return (
     <Ico {...props}>

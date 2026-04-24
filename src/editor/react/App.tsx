@@ -15,7 +15,6 @@ import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
-import { writeTextToClipboard } from "../clipboard";
 import {
   createDefaultBlueprint,
   EditorStore,
@@ -46,25 +45,33 @@ import { useEditorStoreSnapshot } from "./hooks/useEditorStoreSnapshot";
 import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
 import { AnimationTimeline } from "./components/AnimationTimeline";
 import { ContextMenu } from "./components/ContextMenu";
-import { ExportPanel } from "./components/ExportPanel";
 import { FieldsPanel } from "./components/FieldsPanel";
 import {
   CopyIcon,
+  CursorIcon,
   DownloadIcon,
+  EyeIcon,
   FileIcon,
   FrameIcon,
   InfoIcon,
+  LogoGlyph,
   PlusIcon,
   TrashIcon,
   ShortcutIcon,
   GroupIcon,
   MeshIcon,
   ImagePropertyIcon,
+  MoveIcon,
+  ObjectDataIcon,
+  RotateIcon,
+  ScaleIcon,
   TextPropertyIcon,
+  TimelineIcon,
   UndoIcon,
   RedoIcon,
   ViewSolidIcon,
   ViewRenderedIcon,
+  XIcon,
 } from "./components/icons";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MenuBar } from "./components/MenuBar";
@@ -81,6 +88,8 @@ interface NodeClipboard {
   sourceNodeIds: string[];
   subtrees: EditorNode[][];
 }
+
+type RuntimePanelTab = "animations" | "fields";
 
 type PendingImageImport =
   | { mode: "create"; parentId: string; index?: number }
@@ -218,7 +227,9 @@ function LandingPage({
       <section className="landing-hero">
         <div className="landing-hero__grid" aria-hidden="true" />
         <div className="landing-hero__brand">
-          <div className="landing-hero__brand-mark" aria-hidden="true">3F</div>
+          <div className="landing-hero__brand-mark" aria-hidden="true">
+            <LogoGlyph width={14} height={14} />
+          </div>
           <span>3Forge</span>
         </div>
         <div className="landing-hero__body">
@@ -337,9 +348,10 @@ export function App() {
   const [persistedWorkspace, setPersistedWorkspace] = useState<PersistedWorkspaceRecord | null>(bootState.persistedWorkspace);
   const [isStarted, setIsStarted] = useState(bootState.shouldOpenEditor);
   const storeView = useEditorStoreSnapshot(store);
-  const [exportMode, setExportMode] = useState<ExportMode>("typescript");
-  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("inspector");
+  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("properties");
+  const [runtimePanelTab, setRuntimePanelTab] = useState<RuntimePanelTab>("fields");
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
+  const [isViewportToolsHudVisible, setIsViewportToolsHudVisible] = useState(true);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isAnimationPlaying, setIsAnimationPlaying] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
@@ -374,7 +386,6 @@ export function App() {
   const blueprintSnapshot = useMemo(() => store.getSnapshot(), [store, storeView]);
   const blueprintJson = useMemo(() => exportBlueprintToJson(blueprintSnapshot), [blueprintSnapshot]);
   const typeScriptExport = useMemo(() => generateTypeScriptComponent(blueprintSnapshot), [blueprintSnapshot]);
-  const exportPreview = exportMode === "json" ? blueprintJson : typeScriptExport;
   const isPhoneLayout = layoutMode === "phone";
   const isCompactLayout = layoutMode !== "desktop";
   const effectiveToolMode = isPhoneLayout ? "select" : currentTool;
@@ -1053,6 +1064,16 @@ export function App() {
     ];
   }, [requestImageImport, setTransientStatus, store]);
 
+  const handleToolbarAddNode = useCallback((type: Exclude<EditorNodeType, "image">) => {
+    const target = resolveSelectionInsertTarget();
+    store.insertNode(type, target.parentId, target.index);
+    setTransientStatus(`Added ${type}.`);
+  }, [resolveSelectionInsertTarget, setTransientStatus, store]);
+
+  const handleToolbarAddImage = useCallback(() => {
+    requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() });
+  }, [requestImageImport, resolveSelectionInsertTarget]);
+
   const syncRecentProject = useCallback(async (
     blueprint: ComponentBlueprint,
     {
@@ -1132,26 +1153,6 @@ export function App() {
       setTransientStatus("Unable to build ZIP package.");
     }
   }, [blueprintSnapshot, setTransientStatus]);
-
-  const copyExportText = useCallback(async () => {
-    const result = await writeTextToClipboard(exportPreview);
-    if (result.status === "copied") {
-      setTransientStatus("Export copied.");
-      return;
-    }
-
-    if (result.status === "denied") {
-      setTransientStatus("Clipboard permission denied. Use download instead.");
-      return;
-    }
-
-    if (result.status === "unsupported") {
-      setTransientStatus("Clipboard API unavailable. Use download instead.");
-      return;
-    }
-
-    setTransientStatus("Unable to copy export.");
-  }, [exportPreview, setTransientStatus]);
 
   const importJsonFromFile = useCallback(async (file: File) => {
     const rawBlueprint = await readBlueprintFromFile(file);
@@ -1503,6 +1504,15 @@ export function App() {
         : new Set(collapsibleHierarchyNodeIds);
     });
   }, [collapsibleHierarchyNodeIds]);
+
+  const openHierarchyAddMenu = useCallback((event: MouseEvent<HTMLButtonElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setContextMenu({
+      x: rect.left,
+      y: rect.bottom + 4,
+      items: createAddMenuActions(resolveSelectionInsertTarget),
+    });
+  }, [createAddMenuActions, resolveSelectionInsertTarget]);
 
   const openSceneGraphContextMenu = useCallback((event: MouseEvent, nodeId: string | null) => {
     const shouldUseExistingSelection = !nodeId || selectedNodeIdsSet.has(nodeId);
@@ -1883,12 +1893,13 @@ export function App() {
           onComponentNameChange={(value) => store.updateComponentName(value)}
           onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}
           onRedo={() => { if (store.redo()) setTransientStatus("Redo."); }}
-          onToolChange={handleToolChange}
-          onFrame={handleFrameSelection}
+          onAddNode={handleToolbarAddNode}
+          onAddImage={handleToolbarAddImage}
+          onGroupSelection={() => handleGroupSelection()}
+          canGroupSelection={canGroupNodeIds(selectedRootIds)}
           isTimelineVisible={isTimelineVisible}
           onToggleTimeline={toggleTimelineVisibility}
           onSave={() => { void handleSaveProject(); }}
-          onExport={() => { void downloadExportPackage(); }}
           onShortcuts={() => setIsShortcutDialogOpen(true)}
         />
       ) : (
@@ -1935,7 +1946,10 @@ export function App() {
         ) : (
           <>
             {/* Left column — Scene Graph */}
-            <aside className="app__col app__col--left">
+            <aside
+              className="app__col app__col--left"
+              style={{ "--hierarchy-h": `${hierarchyHeight}px` } as CSSProperties}
+            >
               <section className="panel">
                 <div className="panel__hd">
                   <span className="panel__hd-icon"><GroupIcon width={12} height={12} /></span>
@@ -1945,11 +1959,32 @@ export function App() {
                   <div className="panel__hd-actions">
                     <button
                       type="button"
-                      className="tbtn is-ghost"
+                      className="ibtn"
+                      onClick={openHierarchyAddMenu}
+                      title="Add node"
+                      aria-label="Add node"
+                    >
+                      <PlusIcon width={12} height={12} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ibtn"
+                      onClick={() => handleGroupSelection()}
+                      disabled={!canGroupNodeIds(selectedRootIds)}
+                      title="Group selection"
+                      aria-label="Group selection"
+                    >
+                      <GroupIcon width={12} height={12} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ibtn"
                       onClick={handleToggleHierarchyCollapse}
                       disabled={collapsibleHierarchyNodeIds.length === 0}
+                      title={areAllHierarchyGroupsCollapsed ? "Expand all" : "Collapse all"}
+                      aria-label={areAllHierarchyGroupsCollapsed ? "Expand all" : "Collapse all"}
                     >
-                      {areAllHierarchyGroupsCollapsed ? "Expand all" : "Collapse all"}
+                      <FrameIcon width={12} height={12} />
                     </button>
                   </div>
                 </div>
@@ -1965,8 +2000,96 @@ export function App() {
                     onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
                     onMoveNode={handleSceneMove}
                     onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
+                    onDuplicateNode={(nodeId) => handleDuplicate(nodeId)}
+                    onDeleteNode={(nodeId) => handleDelete(nodeId)}
                     onContextMenu={openSceneGraphContextMenu}
                   />
+                </div>
+              </section>
+
+              <div
+                className={`app__sep app__sep--row${resizeMode === "hierarchy" ? " is-active" : ""}`}
+                onPointerDown={startHierarchyResizing}
+              />
+
+              <section className="panel">
+                <div className="panel__hd">
+                  <span className="panel__hd-icon"><ObjectDataIcon width={12} height={12} /></span>
+                  <span className="panel__hd-title">Runtime Fields</span>
+                  <span className="panel__hd-meta">
+                    {runtimePanelTab === "fields" ? storeView.editableFields.length : storeView.animation.clips.length}
+                  </span>
+                  <div className="panel__hd-spacer" />
+                  <div className="ptabs" role="tablist" aria-label="Runtime panel tabs">
+                    <button
+                      type="button"
+                      className={`ptab${runtimePanelTab === "animations" ? " is-active" : ""}`}
+                      onClick={() => setRuntimePanelTab("animations")}
+                      role="tab"
+                      aria-selected={runtimePanelTab === "animations"}
+                    >
+                      Animations
+                    </button>
+                    <button
+                      type="button"
+                      className={`ptab${runtimePanelTab === "fields" ? " is-active" : ""}`}
+                      onClick={() => setRuntimePanelTab("fields")}
+                      role="tab"
+                      aria-selected={runtimePanelTab === "fields"}
+                    >
+                      Fields
+                    </button>
+                  </div>
+                </div>
+
+                <div className="panel__bd panel__bd--fields">
+                  {runtimePanelTab === "animations" ? (
+                    <div className="runtime-animations">
+                      <div className="runtime-animations__head">
+                        <span>Timelines</span>
+                        <button
+                          type="button"
+                          className="ibtn"
+                          onClick={handleCreateAnimationClip}
+                          aria-label="New animation"
+                          title="New animation"
+                        >
+                          <PlusIcon width={11} height={11} />
+                        </button>
+                      </div>
+                      <div className="runtime-animations__list">
+                        {storeView.animation.clips.map((clip) => (
+                          <button
+                            key={clip.id}
+                            type="button"
+                            className={`runtime-animation${activeClip?.id === clip.id ? " is-active" : ""}`}
+                            onClick={() => handleSelectAnimationClip(clip.id)}
+                          >
+                            <span className="runtime-animation__icon">
+                              <TimelineIcon width={12} height={12} />
+                            </span>
+                            <span className="runtime-animation__meta">
+                              <span className="runtime-animation__name">{clip.name}</span>
+                              <span className="runtime-animation__sub">{`0-${clip.durationFrames}f / ${clip.tracks.length} channels`}</span>
+                            </span>
+                            <span className="runtime-animation__fps">{clip.fps}fps</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <FieldsPanel
+                      entries={storeView.editableFields}
+                      onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
+                      onRemoveEditable={(nodeId, path) => {
+                        const node = store.getNode(nodeId);
+                        const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
+                        if (definition) {
+                          store.toggleEditableProperty(nodeId, definition, false);
+                        }
+                      }}
+                    />
+                  )}
                 </div>
               </section>
             </aside>
@@ -1995,11 +2118,85 @@ export function App() {
                   }}
                   onContextMenu={openViewportContextMenu}
                 />
-                <div className="vp-hud vp-hud--tl">
-                  <div className="hud-group hud-group--lbl">
-                    <span>{currentTool}</span>
-                    <strong>{storeView.blueprintNodes.length} items</strong>
-                  </div>
+                <div className="vp-hud vp-hud--tc vp-hud--tools">
+                  {isViewportToolsHudVisible ? (
+                    <div className="hud-group hud-group--tools" role="group" aria-label="Viewport tools">
+                      <button
+                        type="button"
+                        className={`ibtn${currentTool === "select" ? " is-active" : ""}`}
+                        onClick={() => handleToolChange("select")}
+                        aria-pressed={currentTool === "select"}
+                        aria-label="Select"
+                        title="Select (1)"
+                        data-kbd="1"
+                      >
+                        <CursorIcon width={12} height={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className={`ibtn${currentTool === "translate" ? " is-active" : ""}`}
+                        onClick={() => handleToolChange("translate")}
+                        aria-pressed={currentTool === "translate"}
+                        aria-label="Move"
+                        title="Move (2)"
+                        data-kbd="2"
+                      >
+                        <MoveIcon width={12} height={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className={`ibtn${currentTool === "rotate" ? " is-active" : ""}`}
+                        onClick={() => handleToolChange("rotate")}
+                        aria-pressed={currentTool === "rotate"}
+                        aria-label="Rotate"
+                        title="Rotate (3)"
+                        data-kbd="3"
+                      >
+                        <RotateIcon width={12} height={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className={`ibtn${currentTool === "scale" ? " is-active" : ""}`}
+                        onClick={() => handleToolChange("scale")}
+                        aria-pressed={currentTool === "scale"}
+                        aria-label="Scale"
+                        title="Scale (4)"
+                        data-kbd="4"
+                      >
+                        <ScaleIcon width={12} height={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className="ibtn"
+                        onClick={handleFrameSelection}
+                        aria-label="Frame"
+                        title="Frame (F)"
+                        data-kbd="F"
+                      >
+                        <FrameIcon width={12} height={12} />
+                      </button>
+                      <span className="hud-group__sep" aria-hidden="true" />
+                      <button
+                        type="button"
+                        className="ibtn hud-close"
+                        onClick={() => setIsViewportToolsHudVisible(false)}
+                        aria-label="Hide viewport tools HUD"
+                        title="Hide viewport tools HUD"
+                      >
+                        <XIcon width={12} height={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="ibtn hud-toggle"
+                      onClick={() => setIsViewportToolsHudVisible(true)}
+                      aria-label="Show viewport tools HUD"
+                      title="Show viewport tools HUD"
+                    >
+                      <EyeIcon width={12} height={12} />
+                    </button>
+                  )}
                 </div>
                 <div className="vp-hud vp-hud--tr">
                   <div className="hud-group" role="group" aria-label="Viewport shading">
@@ -2073,88 +2270,54 @@ export function App() {
               data-role="right-separator"
             />
 
-            {/* Right column — Inspector/Fields/Export */}
+            {/* Right column — Properties/Material */}
             <aside className="app__col app__col--right">
               <div className="panel__hd">
                 <div className="ptabs" role="tablist" aria-label="Right panel tabs">
                   <button
                     type="button"
-                    className={`ptab${rightPanelTab === "inspector" ? " is-active" : ""}`}
-                    onClick={() => setRightPanelTab("inspector")}
+                    className={`ptab${rightPanelTab === "properties" ? " is-active" : ""}`}
+                    onClick={() => setRightPanelTab("properties")}
                     role="tab"
-                    aria-selected={rightPanelTab === "inspector"}
+                    aria-selected={rightPanelTab === "properties"}
                   >
-                    Inspector
+                    Properties
                   </button>
                   <button
                     type="button"
-                    className={`ptab${rightPanelTab === "fields" ? " is-active" : ""}`}
-                    onClick={() => setRightPanelTab("fields")}
+                    className={`ptab${rightPanelTab === "material" ? " is-active" : ""}`}
+                    onClick={() => setRightPanelTab("material")}
                     role="tab"
-                    aria-selected={rightPanelTab === "fields"}
+                    aria-selected={rightPanelTab === "material"}
                   >
-                    Fields
-                  </button>
-                  <button
-                    type="button"
-                    className={`ptab${rightPanelTab === "export" ? " is-active" : ""}`}
-                    onClick={() => setRightPanelTab("export")}
-                    role="tab"
-                    aria-selected={rightPanelTab === "export"}
-                  >
-                    Export
+                    Material
                   </button>
                 </div>
                 <div className="panel__hd-spacer" />
               </div>
 
               <div className="panel__bd">
-                {rightPanelTab === "inspector" ? (
-                  <InspectorPanel
-                    node={inspectorNode}
-                    nodes={selectedNodes}
-                    emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
-                    fonts={storeView.fonts}
-                    onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
-                    onParentChange={(nodeId, parentId) => {
-                      const eligibleChildren = store.getNodeChildren(parentId);
-                      store.moveNode(nodeId, parentId, eligibleChildren.length);
-                    }}
-                    onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
-                    onGroupPivotPresetApply={handleApplyGroupPivotPreset}
-                    getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
-                    onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
-                    onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
-                    onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
-                    onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
-                    onImportFont={() => fontInputRef.current?.click()}
-                    onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
-                  />
-                ) : null}
-
-                {rightPanelTab === "fields" ? (
-                  <FieldsPanel
-                    entries={storeView.editableFields}
-                    onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
-                    onRemoveEditable={(nodeId, path) => {
-                      const node = store.getNode(nodeId);
-                      const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
-                      if (definition) {
-                        store.toggleEditableProperty(nodeId, definition, false);
-                      }
-                    }}
-                  />
-                ) : null}
-
-                {rightPanelTab === "export" ? (
-                  <ExportPanel
-                    exportMode={exportMode}
-                    preview={exportPreview}
-                    onExportModeChange={setExportMode}
-                    onCopy={copyExportText}
-                    onDownload={() => downloadExportFile(exportMode)}
-                  />
-                ) : null}
+                <InspectorPanel
+                  node={inspectorNode}
+                  nodes={selectedNodes}
+                  mode={rightPanelTab}
+                  emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
+                  fonts={storeView.fonts}
+                  onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
+                  onParentChange={(nodeId, parentId) => {
+                    const eligibleChildren = store.getNodeChildren(parentId);
+                    store.moveNode(nodeId, parentId, eligibleChildren.length);
+                  }}
+                  onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
+                  onGroupPivotPresetApply={handleApplyGroupPivotPreset}
+                  getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
+                  onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
+                  onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
+                  onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
+                  onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
+                  onImportFont={() => fontInputRef.current?.click()}
+                  onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
+                />
               </div>
             </aside>
           </>
