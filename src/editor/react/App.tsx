@@ -54,7 +54,6 @@ import {
   FileIcon,
   FrameIcon,
   InfoIcon,
-  LogoGlyph,
   PlusIcon,
   TrashIcon,
   ShortcutIcon,
@@ -101,6 +100,7 @@ interface InsertTarget {
 }
 
 const RIGHT_PANEL_WIDTH_KEY = "3forge-right-panel-width";
+const LEFT_PANEL_WIDTH_KEY = "3forge-left-panel-width";
 const TIMELINE_HEIGHT_KEY = "3forge-timeline-height";
 const TIMELINE_VISIBLE_KEY = "3forge-timeline-visible";
 const PHONE_LAYOUT_MAX_WIDTH = 720;
@@ -228,7 +228,7 @@ function LandingPage({
         <div className="landing-hero__grid" aria-hidden="true" />
         <div className="landing-hero__brand">
           <div className="landing-hero__brand-mark" aria-hidden="true">
-            <LogoGlyph width={14} height={14} />
+            <img src="/assets/web/logo.svg" alt="" />
           </div>
           <span>3Forge</span>
         </div>
@@ -349,7 +349,7 @@ export function App() {
   const [isStarted, setIsStarted] = useState(bootState.shouldOpenEditor);
   const storeView = useEditorStoreSnapshot(store);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("properties");
-  const [runtimePanelTab, setRuntimePanelTab] = useState<RuntimePanelTab>("fields");
+  const [runtimePanelTab, setRuntimePanelTab] = useState<RuntimePanelTab>("animations");
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
   const [isViewportToolsHudVisible, setIsViewportToolsHudVisible] = useState(true);
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -363,11 +363,12 @@ export function App() {
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
   const [statusTick, setStatusTick] = useState(0);
-  const [hierarchyHeight, setHierarchyHeight] = useState(320);
+  const [hierarchyHeight, setHierarchyHeight] = useState(480);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(() => Math.max(240, Math.min(readStoredNumberPreference(LEFT_PANEL_WIDTH_KEY, 280), 520)));
   const [rightPanelWidth, setRightPanelWidth] = useState(() => Math.max(320, Math.min(readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 320), 620)));
   const [timelineHeight, setTimelineHeight] = useState(() => readStoredNumberPreference(TIMELINE_HEIGHT_KEY, 300));
   const [isTimelineVisible, setIsTimelineVisible] = useState(() => readStoredBooleanPreference(TIMELINE_VISIBLE_KEY, true));
-  const [resizeMode, setResizeMode] = useState<"hierarchy" | "sidebar" | "timeline" | null>(null);
+  const [resizeMode, setResizeMode] = useState<"hierarchy" | "left-sidebar" | "right-sidebar" | "timeline" | null>(null);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => (
     typeof window === "undefined" ? "desktop" : resolveLayoutMode(window.innerWidth)
   ));
@@ -395,10 +396,11 @@ export function App() {
   const shellStyle = useMemo(
     () => ({
       "--right-w": `${rightPanelWidth}px`,
+      "--left-w": `${leftPanelWidth}px`,
       "--tl-h": `${timelineHeight}px`,
       "--hierarchy-h": `${hierarchyHeight}px`,
     }) as CSSProperties,
-    [rightPanelWidth, timelineHeight, hierarchyHeight],
+    [leftPanelWidth, rightPanelWidth, timelineHeight, hierarchyHeight],
   );
   const selectedNodeIds = storeView.selectedNodeIds;
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
@@ -455,6 +457,14 @@ export function App() {
       toastTimerRef.current = null;
     }, 2500);
   }, []);
+
+  useEffect(() => {
+    if (!canUseLocalStorage()) {
+      return;
+    }
+
+    window.localStorage.setItem(LEFT_PANEL_WIDTH_KEY, String(leftPanelWidth));
+  }, [leftPanelWidth]);
 
   useEffect(() => {
     if (!canUseLocalStorage()) {
@@ -1424,9 +1434,14 @@ export function App() {
     setResizeMode("hierarchy");
   }, []);
 
-  const startSidebarResizing = useCallback((event: ReactPointerEvent) => {
+  const startLeftSidebarResizing = useCallback((event: ReactPointerEvent) => {
     event.preventDefault();
-    setResizeMode("sidebar");
+    setResizeMode("left-sidebar");
+  }, []);
+
+  const startRightSidebarResizing = useCallback((event: ReactPointerEvent) => {
+    event.preventDefault();
+    setResizeMode("right-sidebar");
   }, []);
 
   const startTimelineResizing = useCallback((event: ReactPointerEvent) => {
@@ -1439,16 +1454,26 @@ export function App() {
 
     const handlePointerMove = (event: PointerEvent) => {
       if (resizeMode === "hierarchy") {
-        const panel = document.querySelector(".app__col--right");
+        const panel = document.querySelector(".app__col--left");
         if (!panel) return;
 
         const rect = panel.getBoundingClientRect();
         const newHeight = event.clientY - rect.top;
-        setHierarchyHeight(Math.max(120, Math.min(newHeight, rect.height - 120)));
+        setHierarchyHeight(Math.max(160, Math.min(newHeight, rect.height - 96)));
         return;
       }
 
-      if (resizeMode === "sidebar") {
+      if (resizeMode === "left-sidebar") {
+        const body = document.querySelector(".app__body");
+        if (!body) return;
+
+        const rect = body.getBoundingClientRect();
+        const newWidth = event.clientX - rect.left;
+        setLeftPanelWidth(Math.max(240, Math.min(newWidth, 520)));
+        return;
+      }
+
+      if (resizeMode === "right-sidebar") {
         const body = document.querySelector(".app__body");
         if (!body) return;
 
@@ -1948,7 +1973,6 @@ export function App() {
             {/* Left column — Scene Graph */}
             <aside
               className="app__col app__col--left"
-              style={{ "--hierarchy-h": `${hierarchyHeight}px` } as CSSProperties}
             >
               <section className="panel">
                 <div className="panel__hd">
@@ -2095,8 +2119,8 @@ export function App() {
             </aside>
 
             <div
-              className={`app__sep${resizeMode === "sidebar" ? " is-active" : ""}`}
-              onPointerDown={startSidebarResizing}
+              className={`app__sep${resizeMode === "left-sidebar" ? " is-active" : ""}`}
+              onPointerDown={startLeftSidebarResizing}
               data-role="left-separator"
             />
 
@@ -2265,8 +2289,8 @@ export function App() {
             </div>
 
             <div
-              className={`app__sep${resizeMode === "sidebar" ? " is-active" : ""}`}
-              onPointerDown={startSidebarResizing}
+              className={`app__sep${resizeMode === "right-sidebar" ? " is-active" : ""}`}
+              onPointerDown={startRightSidebarResizing}
               data-role="right-separator"
             />
 
@@ -2313,6 +2337,9 @@ export function App() {
                   getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
                   onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
                   onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
+                  onPropertyEditStart={() => store.beginHistoryTransaction()}
+                  onPropertyEditEnd={() => store.commitHistoryTransaction("ui")}
+                  onPropertyEditCancel={() => store.cancelHistoryTransaction("ui")}
                   onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
                   onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
                   onImportFont={() => fontInputRef.current?.click()}

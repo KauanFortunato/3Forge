@@ -974,6 +974,24 @@ export class EditorStore extends EventTarget {
     return true;
   }
 
+  cancelHistoryTransaction(source: EditorStoreChange["source"] = "history"): boolean {
+    if (!this._activeHistorySnapshot) {
+      return false;
+    }
+
+    const snapshot = this._activeHistorySnapshot;
+    const shouldNotify = this._activeHistoryDirty;
+    this._activeHistorySnapshot = null;
+    this._activeHistoryDirty = false;
+
+    if (shouldNotify) {
+      this.restoreSnapshot(snapshot);
+      this.notify({ reason: "history", source, nodeId: this._selectedNodeId });
+    }
+
+    return shouldNotify;
+  }
+
   undo(source: EditorStoreChange["source"] = "history"): boolean {
     const previous = this._undoStack.pop();
     if (!previous) {

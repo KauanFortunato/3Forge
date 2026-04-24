@@ -19,7 +19,8 @@ import type {
   EditorNode,
 } from "../../types";
 import { BufferedInput } from "./BufferedInput";
-import { ChevronDownIcon, CopyIcon, PlusIcon, TimelineIcon, TrashIcon } from "./icons";
+import { CustomSelect } from "./CustomSelect";
+import { CopyIcon, EyeIcon, MoveIcon, PlusIcon, RotateIcon, ScaleIcon, TimelineIcon, TrashIcon } from "./icons";
 
 function framePercent(frame: number, durationFrames: number): string {
   const safeDuration = Math.max(durationFrames, 1);
@@ -556,25 +557,16 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         <div className="tl__tracks" ref={tracksScrollRef}>
           <div className="tl__tracks-inner">
             <div className="tl-track tl-track--add">
-              <span className="sel" style={{ width: "100%" }} title="Channel to add">
-                <select
-                  value={propertyToAdd}
-                  onChange={(event) => setPropertyToAdd(event.target.value as AnimationPropertyPath)}
-                  disabled={!selectedNode || availableProperties.length === 0}
-                  aria-label="Channel to add"
-                >
-                  {availableProperties.length > 0 ? (
-                    availableProperties.map((entry) => (
-                      <option key={entry.path} value={entry.path}>
-                        {entry.label}
-                      </option>
-                    ))
-                  ) : (
-                    <option value={propertyToAdd}>No transform channels left</option>
-                  )}
-                </select>
-                <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-              </span>
+              <CustomSelect
+                value={propertyToAdd}
+                onChange={(value) => setPropertyToAdd(value as AnimationPropertyPath)}
+                disabled={!selectedNode || availableProperties.length === 0}
+                ariaLabel="Channel to add"
+                style={{ width: "100%" }}
+                options={availableProperties.length > 0
+                  ? availableProperties.map((entry) => ({ value: entry.path, label: entry.label }))
+                  : [{ value: propertyToAdd, label: "No transform channels left" }]}
+              />
               <button
                 type="button"
                 className="tl-track__ibtn"
@@ -612,7 +604,9 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                         }
                       }}
                     >
-                      <span className="tl-track__ico"><TimelineIcon width={10} height={10} /></span>
+                      <span className={`tl-track__ico ${getTrackIconClass(track.property)}`}>
+                        <TrackPropertyIcon property={track.property} />
+                      </span>
                       <span className="tl-track__name">{getAnimationPropertyLabel(track.property)}</span>
                       <span className="tl-track__prop">{getTrackCategoryLabel(track.property)}</span>
                       <span className="tl-track__kf-count">{track.keyframes.length}</span>
@@ -789,20 +783,19 @@ function KeyframeEditorStrip({ track, keyframe, nodes, durationFrames, onUpdateK
       </span>
 
       {isDiscreteAnimationProperty(track.property) ? (
-        <span className="sel" style={{ width: 100 }}>
-          <select
-            value={String(displayValueForInput(track.property, keyframe.value))}
-            aria-label="Keyframe value"
-            onChange={(event) =>
-              onUpdateKeyframe(track.id, keyframe.id, {
-                value: parseValueFromInput(track.property, Number(event.target.value)),
-              })}
-          >
-            <option value="1">Visible</option>
-            <option value="0">Hidden</option>
-          </select>
-          <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-        </span>
+        <CustomSelect
+          value={String(displayValueForInput(track.property, keyframe.value))}
+          ariaLabel="Keyframe value"
+          style={{ width: 100 }}
+          onChange={(value) =>
+            onUpdateKeyframe(track.id, keyframe.id, {
+              value: parseValueFromInput(track.property, Number(value)),
+            })}
+          options={[
+            { value: "1", label: "Visible" },
+            { value: "0", label: "Hidden" },
+          ]}
+        />
       ) : (
         <span className="num" style={{ width: 80 }} title="Value">
           <BufferedInput
@@ -818,20 +811,13 @@ function KeyframeEditorStrip({ track, keyframe, nodes, durationFrames, onUpdateK
         </span>
       )}
 
-      <span className="sel" style={{ width: 120 }} title="Ease">
-        <select
-          value={keyframe.ease}
-          aria-label="Keyframe ease"
-          onChange={(event) => onUpdateKeyframe(track.id, keyframe.id, { ease: event.target.value as AnimationEasePreset })}
-        >
-          {ANIMATION_EASE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-      </span>
+      <CustomSelect
+        value={keyframe.ease}
+        ariaLabel="Keyframe ease"
+        style={{ width: 120 }}
+        onChange={(value) => onUpdateKeyframe(track.id, keyframe.id, { ease: value as AnimationEasePreset })}
+        options={ANIMATION_EASE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+      />
 
       <button
         type="button"
@@ -993,6 +979,10 @@ function parseValueFromInput(property: AnimationPropertyPath, value: number): nu
 }
 
 function getTrackCategoryLabel(property: AnimationPropertyPath): string {
+  if (property === "visible") {
+    return "Visible";
+  }
+
   if (property.includes("position")) {
     return "Position";
   }
@@ -1006,6 +996,46 @@ function getTrackCategoryLabel(property: AnimationPropertyPath): string {
   }
 
   return "Transform";
+}
+
+function getTrackIconClass(property: AnimationPropertyPath): string {
+  if (property === "visible") {
+    return "tl-track__ico--visible";
+  }
+
+  if (property.includes("position")) {
+    return "tl-track__ico--position";
+  }
+
+  if (property.includes("rotation")) {
+    return "tl-track__ico--rotation";
+  }
+
+  if (property.includes("scale")) {
+    return "tl-track__ico--scale";
+  }
+
+  return "tl-track__ico--default";
+}
+
+function TrackPropertyIcon({ property }: { property: AnimationPropertyPath }) {
+  if (property === "visible") {
+    return <EyeIcon width={11} height={11} />;
+  }
+
+  if (property.includes("position")) {
+    return <MoveIcon width={11} height={11} />;
+  }
+
+  if (property.includes("rotation")) {
+    return <RotateIcon width={11} height={11} />;
+  }
+
+  if (property.includes("scale")) {
+    return <ScaleIcon width={11} height={11} />;
+  }
+
+  return <TimelineIcon width={11} height={11} />;
 }
 
 function findNodeLabel(nodes: EditorNode[], nodeId: string): string {

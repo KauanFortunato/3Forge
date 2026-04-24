@@ -19,6 +19,7 @@ import {
   TransformIcon,
 } from "./icons";
 import { BufferedInput } from "./BufferedInput";
+import { CustomSelect } from "./CustomSelect";
 import { NumberDragInput } from "./NumberDragInput";
 
 interface InspectorPanelProps {
@@ -34,6 +35,9 @@ interface InspectorPanelProps {
   getEligibleParents: (nodeId: string) => EditorNode[];
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
+  onPropertyEditStart?: () => void;
+  onPropertyEditEnd?: () => void;
+  onPropertyEditCancel?: () => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
   onTextFontChange: (nodeId: string, fontId: string) => void;
   onImportFont: () => void;
@@ -60,6 +64,9 @@ export function InspectorPanel(props: InspectorPanelProps) {
     getEligibleParents,
     onNodePropertyChange,
     onNodesPropertyChange,
+    onPropertyEditStart,
+    onPropertyEditEnd,
+    onPropertyEditCancel,
     onToggleEditable,
     onTextFontChange,
     onImportFont,
@@ -182,21 +189,13 @@ export function InspectorPanel(props: InspectorPanelProps) {
 
           <div className="row">
             <span className="row__lbl">Parent</span>
-            <span className="sel">
-              <select
-                value={primaryNode.parentId ?? ROOT_NODE_ID}
-                disabled={primaryNode.id === ROOT_NODE_ID}
-                onChange={(event) => onParentChange(primaryNode.id, event.target.value)}
-                aria-label="Parent Group"
-              >
-                {getEligibleParents(primaryNode.id).map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name}
-                  </option>
-                ))}
-              </select>
-              <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-            </span>
+            <CustomSelect
+              value={primaryNode.parentId ?? ROOT_NODE_ID}
+              disabled={primaryNode.id === ROOT_NODE_ID}
+              onChange={(value) => onParentChange(primaryNode.id, value)}
+              ariaLabel="Parent Group"
+              options={getEligibleParents(primaryNode.id).map((group) => ({ value: group.id, label: group.name }))}
+            />
             <span aria-hidden="true" />
           </div>
 
@@ -214,22 +213,21 @@ export function InspectorPanel(props: InspectorPanelProps) {
             <div className="row row--wide">
               <span className="row__lbl">Pivot</span>
               <div className="row__inline-actions">
-                <span className="sel" style={{ flex: 1 }}>
-                  <select
-                    aria-label="Group pivot preset"
-                    value={groupPivotPreset}
-                    onChange={(event) => setGroupPivotPreset(event.target.value as GroupPivotPreset)}
-                  >
-                    <option value="center">Center</option>
-                    <option value="bottom-center">Bottom Center</option>
-                    <option value="top-center">Top Center</option>
-                    <option value="left-center">Left Center</option>
-                    <option value="right-center">Right Center</option>
-                    <option value="front-center">Front Center</option>
-                    <option value="back-center">Back Center</option>
-                  </select>
-                  <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-                </span>
+                <CustomSelect
+                  ariaLabel="Group pivot preset"
+                  value={groupPivotPreset}
+                  onChange={(value) => setGroupPivotPreset(value as GroupPivotPreset)}
+                  style={{ flex: 1 }}
+                  options={[
+                    { value: "center", label: "Center" },
+                    { value: "bottom-center", label: "Bottom Center" },
+                    { value: "top-center", label: "Top Center" },
+                    { value: "left-center", label: "Left Center" },
+                    { value: "right-center", label: "Right Center" },
+                    { value: "front-center", label: "Front Center" },
+                    { value: "back-center", label: "Back Center" },
+                  ]}
+                />
                 <button
                   type="button"
                   className="tbtn is-ghost"
@@ -246,50 +244,44 @@ export function InspectorPanel(props: InspectorPanelProps) {
             <>
               <div className="row">
                 <span className="row__lbl">Origin X</span>
-                <span className="sel">
-                  <select
-                    value={primaryNode.origin.x}
-                    onChange={(event) => onNodeOriginChange(primaryNode.id, { x: event.target.value as NodeOriginSpec["x"] })}
-                    aria-label="Origin X"
-                  >
-                    <option value="left">Left</option>
-                    <option value="center">Center</option>
-                    <option value="right">Right</option>
-                  </select>
-                  <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-                </span>
+                <CustomSelect
+                  value={primaryNode.origin.x}
+                  onChange={(value) => onNodeOriginChange(primaryNode.id, { x: value as NodeOriginSpec["x"] })}
+                  ariaLabel="Origin X"
+                  options={[
+                    { value: "left", label: "Left" },
+                    { value: "center", label: "Center" },
+                    { value: "right", label: "Right" },
+                  ]}
+                />
                 <span aria-hidden="true" />
               </div>
               <div className="row">
                 <span className="row__lbl">Origin Y</span>
-                <span className="sel">
-                  <select
-                    value={primaryNode.origin.y}
-                    onChange={(event) => onNodeOriginChange(primaryNode.id, { y: event.target.value as NodeOriginSpec["y"] })}
-                    aria-label="Origin Y"
-                  >
-                    <option value="top">Top</option>
-                    <option value="center">Center</option>
-                    <option value="bottom">Bottom</option>
-                  </select>
-                  <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-                </span>
+                <CustomSelect
+                  value={primaryNode.origin.y}
+                  onChange={(value) => onNodeOriginChange(primaryNode.id, { y: value as NodeOriginSpec["y"] })}
+                  ariaLabel="Origin Y"
+                  options={[
+                    { value: "top", label: "Top" },
+                    { value: "center", label: "Center" },
+                    { value: "bottom", label: "Bottom" },
+                  ]}
+                />
                 <span aria-hidden="true" />
               </div>
               <div className="row">
                 <span className="row__lbl">Origin Z</span>
-                <span className="sel">
-                  <select
-                    value={primaryNode.origin.z}
-                    onChange={(event) => onNodeOriginChange(primaryNode.id, { z: event.target.value as NodeOriginSpec["z"] })}
-                    aria-label="Origin Z"
-                  >
-                    <option value="front">Front</option>
-                    <option value="center">Center</option>
-                    <option value="back">Back</option>
-                  </select>
-                  <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-                </span>
+                <CustomSelect
+                  value={primaryNode.origin.z}
+                  onChange={(value) => onNodeOriginChange(primaryNode.id, { z: value as NodeOriginSpec["z"] })}
+                  ariaLabel="Origin Z"
+                  options={[
+                    { value: "front", label: "Front" },
+                    { value: "center", label: "Center" },
+                    { value: "back", label: "Back" },
+                  ]}
+                />
                 <span aria-hidden="true" />
               </div>
             </>
@@ -310,6 +302,9 @@ export function InspectorPanel(props: InspectorPanelProps) {
             mixedPaths={sharedTransform.mixedPaths}
             onNodePropertyChange={onNodePropertyChange}
             onNodesPropertyChange={onNodesPropertyChange}
+            onPropertyEditStart={onPropertyEditStart}
+            onPropertyEditEnd={onPropertyEditEnd}
+            onPropertyEditCancel={onPropertyEditCancel}
             onToggleEditable={onToggleEditable}
           />
 
@@ -320,6 +315,9 @@ export function InspectorPanel(props: InspectorPanelProps) {
             mixedPaths={sharedTransform.mixedPaths}
             onNodePropertyChange={onNodePropertyChange}
             onNodesPropertyChange={onNodesPropertyChange}
+            onPropertyEditStart={onPropertyEditStart}
+            onPropertyEditEnd={onPropertyEditEnd}
+            onPropertyEditCancel={onPropertyEditCancel}
             onToggleEditable={onToggleEditable}
           />
 
@@ -330,6 +328,9 @@ export function InspectorPanel(props: InspectorPanelProps) {
             mixedPaths={sharedTransform.mixedPaths}
             onNodePropertyChange={onNodePropertyChange}
             onNodesPropertyChange={onNodesPropertyChange}
+            onPropertyEditStart={onPropertyEditStart}
+            onPropertyEditEnd={onPropertyEditEnd}
+            onPropertyEditCancel={onPropertyEditCancel}
             onToggleEditable={onToggleEditable}
           />
         </Sec>
@@ -388,20 +389,12 @@ export function InspectorPanel(props: InspectorPanelProps) {
           <Sec title="Font" icon={<TextPropertyIcon width={12} height={12} />}>
             <div className="row">
               <span className="row__lbl">Font</span>
-              <span className="sel">
-                <select
-                  value={primaryNode.type === "text" ? primaryNode.fontId : fonts[0]?.id}
-                  onChange={(event) => onTextFontChange(primaryNode.id, event.target.value)}
-                  aria-label="Active Font"
-                >
-                  {fonts.map((font) => (
-                    <option key={font.id} value={font.id}>
-                      {font.name}
-                    </option>
-                  ))}
-                </select>
-                <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-              </span>
+              <CustomSelect
+                value={primaryNode.type === "text" ? primaryNode.fontId : fonts[0]?.id}
+                onChange={(value) => onTextFontChange(primaryNode.id, value)}
+                ariaLabel="Active Font"
+                options={fonts.map((font) => ({ value: font.id, label: font.name }))}
+              />
               <span aria-hidden="true" />
             </div>
             <button type="button" className="tbtn is-ghost tbtn--block" onClick={onImportFont}>
@@ -523,6 +516,9 @@ interface MaterialDefinitionSectionProps {
   excludedNote?: string;
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
+  onPropertyEditStart?: () => void;
+  onPropertyEditEnd?: () => void;
+  onPropertyEditCancel?: () => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
   allowEditableToggle?: boolean;
   hasGroupSelection?: boolean;
@@ -655,11 +651,25 @@ interface TransformAxisGroupProps {
   mixedPaths?: Set<string>;
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
+  onPropertyEditStart?: () => void;
+  onPropertyEditEnd?: () => void;
+  onPropertyEditCancel?: () => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
 }
 
 function TransformAxisGroup(props: TransformAxisGroupProps) {
-  const { title, nodes, definitions, mixedPaths, onNodePropertyChange, onNodesPropertyChange, onToggleEditable } = props;
+  const {
+    title,
+    nodes,
+    definitions,
+    mixedPaths,
+    onNodePropertyChange,
+    onNodesPropertyChange,
+    onPropertyEditStart,
+    onPropertyEditEnd,
+    onPropertyEditCancel,
+    onToggleEditable,
+  } = props;
   const isMultiSelection = nodes.length > 1;
   const primaryNode = nodes[0];
 
@@ -703,6 +713,10 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                 value={displayValue}
                 placeholder={isMixed ? "Mixed" : undefined}
                 onCommit={commit}
+                onPreview={commit}
+                onEditStart={onPropertyEditStart}
+                onEditEnd={onPropertyEditEnd}
+                onEditCancel={onPropertyEditCancel}
                 aria-label={`${title} ${axisLetter}`}
                 dragClassName="vec__drag"
                 scrubOnInput
@@ -795,22 +809,17 @@ function PropertyRow({
       </label>
     );
   } else if (definition.input === "select") {
+    const options = [
+      ...(hasMixedValue ? [{ value: "__mixed__", label: "Mixed" }] : []),
+      ...(definition.options ?? []).map((option) => ({ value: option.value, label: option.label })),
+    ];
     control = (
-      <span className="sel">
-        <select
-          aria-label={definition.label}
-          value={hasMixedValue ? "__mixed__" : stringValue}
-          onChange={(event) => commitValue(event.target.value)}
-        >
-          {hasMixedValue ? <option value="__mixed__">Mixed</option> : null}
-          {(definition.options ?? []).map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <span className="sel__caret"><ChevronDownIcon width={10} height={10} /></span>
-      </span>
+      <CustomSelect
+        ariaLabel={definition.label}
+        value={hasMixedValue ? "__mixed__" : stringValue}
+        onChange={commitValue}
+        options={options}
+      />
     );
   } else if (definition.input === "color") {
     control = (

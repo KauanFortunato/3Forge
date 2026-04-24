@@ -4,6 +4,10 @@ import type { InputHTMLAttributes, KeyboardEvent, PointerEvent as ReactPointerEv
 interface NumberDragInputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> {
   value: string;
   onCommit: (value: string) => void;
+  onPreview?: (value: string) => void;
+  onEditStart?: () => void;
+  onEditEnd?: () => void;
+  onEditCancel?: () => void;
   /**
    * Base step applied per pixel of horizontal movement. Defaults to 0.1 which
    * mirrors the feel used in most DCC tools (Blender / C4D / Figma).
@@ -57,6 +61,10 @@ function formatNumber(value: number, precision: number): string {
 export function NumberDragInput({
   value,
   onCommit,
+  onPreview,
+  onEditStart,
+  onEditEnd,
+  onEditCancel,
   step = 0.1,
   parseValue,
   precision = 3,
@@ -72,6 +80,11 @@ export function NumberDragInput({
   const [isFocused, setIsFocused] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const draggingRef = useRef(false);
+  const editingRef = useRef(false);
+  const skipCommitOnBlurRef = useRef(false);
+  const previewFrameRef = useRef<number | null>(null);
+  const pendingPreviewRef = useRef<string | null>(null);
+  const lastPreviewValueRef = useRef<string | null>(null);
   const dragState = useRef<{
     startX: number;
     startValue: number;
@@ -86,9 +99,82 @@ export function NumberDragInput({
     }
   }, [isFocused, isDragging, value]);
 
+  useEffect(() => () => {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+    }
+  }, []);
+
+  const beginEdit = () => {
+    if (editingRef.current) {
+      return;
+    }
+    editingRef.current = true;
+    onEditStart?.();
+  };
+
+  const endEdit = () => {
+    if (!editingRef.current) {
+      return;
+    }
+    editingRef.current = false;
+    onEditEnd?.();
+  };
+
+  const cancelEdit = () => {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    }
+    pendingPreviewRef.current = null;
+    lastPreviewValueRef.current = null;
+    if (!editingRef.current) {
+      return;
+    }
+    editingRef.current = false;
+    onEditCancel?.();
+  };
+
+  const flushPreview = () => {
+    if (previewFrameRef.current !== null) {
+      window.cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    }
+    const pending = pendingPreviewRef.current;
+    pendingPreviewRef.current = null;
+    if (pending !== null) {
+      lastPreviewValueRef.current = pending;
+      onPreview?.(pending);
+    }
+  };
+
+  const schedulePreview = (next: string) => {
+    if (!onPreview) {
+      return;
+    }
+    pendingPreviewRef.current = next;
+    if (previewFrameRef.current !== null) {
+      return;
+    }
+    previewFrameRef.current = window.requestAnimationFrame(() => {
+      previewFrameRef.current = null;
+      const pending = pendingPreviewRef.current;
+      pendingPreviewRef.current = null;
+      if (pending !== null) {
+        lastPreviewValueRef.current = pending;
+        onPreview(pending);
+      }
+    });
+  };
+
   const commitDraft = (next: string) => {
+    flushPreview();
     setIsFocused(false);
-    onCommit(next);
+    if (lastPreviewValueRef.current !== next) {
+      onCommit(next);
+    }
+    lastPreviewValueRef.current = null;
+    endEdit();
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -97,7 +183,9 @@ export function NumberDragInput({
       return;
     }
     if (event.key === "Escape") {
+      skipCommitOnBlurRef.current = true;
       setDraft(value);
+      cancelEdit();
       event.currentTarget.blur();
       return;
     }
@@ -116,6 +204,7 @@ export function NumberDragInput({
     event.stopPropagation();
 
     const parsed = parseValue ? parseValue(draft || value) : defaultParse(draft || value);
+    beginEdit();
     dragState.current = {
       startX: event.clientX,
       startValue: parsed,
@@ -140,7 +229,9 @@ export function NumberDragInput({
     const increment = resolveStep(event);
     const next = state.startValue + dx * increment;
     state.lastValue = next;
-    setDraft(formatNumber(next, precision));
+    const formatted = formatNumber(next, precision);
+    setDraft(formatted);
+    schedulePreview(formatted);
   };
 
   const endDrag = (event: ReactPointerEvent<HTMLButtonElement>, cancel = false) => {
@@ -159,18 +250,28 @@ export function NumberDragInput({
     setIsDragging(false);
     if (cancel) {
       setDraft(value);
+      cancelEdit();
       return;
     }
     if (state.didDrag && state.lastValue !== state.startValue) {
       const committed = formatNumber(state.lastValue, precision);
+      flushPreview();
       setDraft(committed);
-      onCommit(committed);
+      if (lastPreviewValueRef.current !== committed) {
+        onCommit(committed);
+      }
+      lastPreviewValueRef.current = null;
+      endEdit();
+    } else {
+      lastPreviewValueRef.current = null;
+      endEdit();
     }
   };
 
   const handleInputPointerDown = (event: ReactPointerEvent<HTMLInputElement>) => {
     if (!scrubOnInput || event.button !== 0) return;
     const parsed = parseValue ? parseValue(draft || value) : defaultParse(draft || value);
+    beginEdit();
     dragState.current = {
       startX: event.clientX,
       startValue: parsed,
@@ -203,7 +304,9 @@ export function NumberDragInput({
     const increment = resolveStep(event);
     const next = state.startValue + dx * increment;
     state.lastValue = next;
-    setDraft(formatNumber(next, precision));
+    const formatted = formatNumber(next, precision);
+    setDraft(formatted);
+    schedulePreview(formatted);
   };
 
   const endInputDrag = (event: ReactPointerEvent<HTMLInputElement>, cancel = false) => {
@@ -223,12 +326,21 @@ export function NumberDragInput({
     setIsDragging(false);
     if (cancel) {
       setDraft(value);
+      cancelEdit();
       return;
     }
     if (state.didDrag && state.lastValue !== state.startValue) {
       const committed = formatNumber(state.lastValue, precision);
+      flushPreview();
       setDraft(committed);
-      onCommit(committed);
+      if (lastPreviewValueRef.current !== committed) {
+        onCommit(committed);
+      }
+      lastPreviewValueRef.current = null;
+      endEdit();
+    } else {
+      lastPreviewValueRef.current = null;
+      endEdit();
     }
   };
 
@@ -258,6 +370,7 @@ export function NumberDragInput({
       draggingRef.current = false;
       setIsDragging(false);
       setDraft(value);
+      cancelEdit();
     }
   };
 
@@ -268,13 +381,25 @@ export function NumberDragInput({
         aria-label={ariaLabel}
         value={draft}
         spellCheck={false}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={(event) => {
+          const next = event.target.value;
+          beginEdit();
+          setDraft(next);
+          schedulePreview(next);
+        }}
         onFocus={(event) => {
+          beginEdit();
           setIsFocused(true);
           onFocus?.(event);
         }}
         onBlur={(event) => {
           if (draggingRef.current) {
+            return;
+          }
+          if (skipCommitOnBlurRef.current) {
+            skipCommitOnBlurRef.current = false;
+            setIsFocused(false);
+            onBlur?.(event);
             return;
           }
           commitDraft(draft);

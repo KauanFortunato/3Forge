@@ -1,5 +1,6 @@
 import type { ChangeEvent } from "react";
 import type { AnimationClip, ViewMode } from "../../types";
+import { CustomSelect } from "./CustomSelect";
 import { FrameIcon, ViewRenderedIcon, ViewSolidIcon } from "./icons";
 
 interface PhoneViewerHeaderProps {
@@ -118,16 +119,13 @@ export function PhonePlaybackBar({
       <div className="phone-playback__top">
         <div className="phone-playback__meta">
           <p className="phone-playback__eyebrow">Animation</p>
-          <select
+          <CustomSelect
             className="phone-playback__clip"
             value={activeClip.id}
-            onChange={(event) => onSelectClip(event.currentTarget.value)}
-            aria-label="Animation clip"
-          >
-            {clips.map((clip) => (
-              <option key={clip.id} value={clip.id}>{clip.name}</option>
-            ))}
-          </select>
+            onChange={onSelectClip}
+            ariaLabel="Animation clip"
+            options={clips.map((clip) => ({ value: clip.id, label: clip.name }))}
+          />
         </div>
 
         <div className="phone-playback__controls">
