@@ -168,6 +168,62 @@ code {
   font-family: var(--f-mono);
 }
 
+.shortcut-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--sp-4);
+}
+
+.shortcut-group__title {
+  margin: 0 0 var(--sp-2) 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-text-dim);
+}
+
+.shortcut-group__list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) 1fr;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 4px 0;
+}
+
+.shortcut-row__keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.shortcut-row__key-combo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shortcut-row__plus {
+  color: var(--c-text-dim);
+  font-size: 10px;
+  font-family: var(--f-mono);
+}
+
+.shortcut-row__label {
+  margin: 0;
+  color: var(--c-text-med);
+  font-size: var(--fs-sm);
+}
+
 /* =============================================================
    App shell
    ============================================================= */
@@ -686,7 +742,10 @@ code {
   height: 28px;
 }
 
-.tgroup--create {
+.tgroup--create,
+.tgroup--tools,
+.tgroup--shading,
+.tgroup--history {
   gap: 1px;
 }
 
@@ -2987,6 +3046,14 @@ code {
   overflow: hidden;
 }
 
+.modal--wide {
+  max-width: min(880px, calc(100vw - 32px));
+}
+
+.modal--wide .modal__bd {
+  overflow: visible;
+}
+
 .modal__hd {
   display: flex;
   align-items: center;
@@ -3437,8 +3504,11 @@ code {
   transform: translate(calc(-50% + var(--pie-item-x, 0)), calc(-50% + var(--pie-item-y, 0)));
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
+  justify-content: center;
+  gap: var(--sp-3);
+  height: 32px;
+  padding: 0 14px;
+  min-width: 92px;
   border: 1px solid var(--c-border);
   border-radius: 999px;
   background: color-mix(in srgb, var(--c-bg-2) 92%, transparent);

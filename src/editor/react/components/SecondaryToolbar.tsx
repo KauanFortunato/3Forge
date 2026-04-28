@@ -1,18 +1,25 @@
 import type { ReactNode } from "react";
 import type { ToolMode } from "../ui-types";
-import type { EditorNodeType } from "../../types";
+import type { EditorNodeType, ViewMode } from "../../types";
 import {
   BoxIcon,
+  CursorIcon,
+  CylinderIcon,
   FastForwardIcon,
+  FrameIcon,
+  GeometryIcon,
   GroupIcon,
   HelpIcon,
   ImageIcon,
+  MoveIcon,
   PauseIcon,
   PlayIcon,
   PlaneIcon,
   RedoIcon,
   RewindIcon,
+  RotateIcon,
   SaveIcon,
+  ScaleIcon,
   SkipBackIcon,
   SkipForwardIcon,
   SphereIcon,
@@ -20,7 +27,8 @@ import {
   TextPropertyIcon,
   TimelineIcon,
   UndoIcon,
-  CylinderIcon,
+  ViewRenderedIcon,
+  ViewSolidIcon,
   ShortcutIcon,
 } from "./icons";
 import { BufferedInput } from "./BufferedInput";
@@ -44,6 +52,7 @@ interface SecondaryToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   currentTool: ToolMode;
+  viewMode?: ViewMode;
   isTimelineVisible: boolean;
   playback?: PlaybackToolbarProps | null;
   onComponentNameChange: (value: string) => void;
@@ -53,6 +62,9 @@ interface SecondaryToolbarProps {
   onAddImage?: () => void;
   onGroupSelection?: () => void;
   canGroupSelection?: boolean;
+  onToolChange?: (mode: ToolMode) => void;
+  onFrameSelection?: () => void;
+  onViewModeChange?: (mode: ViewMode) => void;
   onToggleTimeline: () => void;
   onSave?: () => void;
   onShortcuts?: () => void;
@@ -66,6 +78,7 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     canUndo,
     canRedo,
     currentTool,
+    viewMode,
     isTimelineVisible,
     playback,
     onComponentNameChange,
@@ -75,6 +88,9 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     onAddImage,
     onGroupSelection,
     canGroupSelection = false,
+    onToolChange,
+    onFrameSelection,
+    onViewModeChange,
     onToggleTimeline,
     onSave,
     onShortcuts,
@@ -121,6 +137,44 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
             <GroupIcon />
           </ToolbarIconButton>
         </div>
+
+        {onToolChange ? (
+          <div className="tgroup tgroup--tools" aria-label="Transform tools">
+            <ToolbarIconButton
+              label="Select (1)"
+              isActive={currentTool === "select"}
+              onClick={() => onToolChange("select")}
+            >
+              <CursorIcon />
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Move (2)"
+              isActive={currentTool === "translate"}
+              onClick={() => onToolChange("translate")}
+            >
+              <MoveIcon />
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Rotate (3)"
+              isActive={currentTool === "rotate"}
+              onClick={() => onToolChange("rotate")}
+            >
+              <RotateIcon />
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Scale (4)"
+              isActive={currentTool === "scale"}
+              onClick={() => onToolChange("scale")}
+            >
+              <ScaleIcon />
+            </ToolbarIconButton>
+            {onFrameSelection ? (
+              <ToolbarIconButton label="Frame (F)" onClick={onFrameSelection}>
+                <FrameIcon />
+              </ToolbarIconButton>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="toolbar__center">
@@ -142,6 +196,32 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       </div>
 
       <div className="toolbar__right">
+        {onViewModeChange && viewMode ? (
+          <div className="tgroup tgroup--shading" aria-label="Viewport shading">
+            <ToolbarIconButton
+              label="Solid"
+              isActive={viewMode === "solid"}
+              onClick={() => onViewModeChange("solid")}
+            >
+              <ViewSolidIcon />
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Rendered"
+              isActive={viewMode === "rendered"}
+              onClick={() => onViewModeChange("rendered")}
+            >
+              <ViewRenderedIcon />
+            </ToolbarIconButton>
+            <ToolbarIconButton
+              label="Wireframe (Z)"
+              isActive={viewMode === "wireframe"}
+              onClick={() => onViewModeChange("wireframe")}
+            >
+              <GeometryIcon />
+            </ToolbarIconButton>
+          </div>
+        ) : null}
+
         <div className="tgroup tgroup--history">
           <ToolbarIconButton label="Undo" disabled={!canUndo} onClick={onUndo}>
             <UndoIcon />

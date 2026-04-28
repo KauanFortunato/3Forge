@@ -6,10 +6,11 @@ interface ModalProps {
   title: string;
   isOpen: boolean;
   onClose: () => void;
+  size?: "default" | "wide";
   children: ReactNode;
 }
 
-export function Modal({ title, isOpen, onClose, children }: ModalProps) {
+export function Modal({ title, isOpen, onClose, size = "default", children }: ModalProps) {
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -31,7 +32,10 @@ export function Modal({ title, isOpen, onClose, children }: ModalProps) {
 
   return createPortal(
     <div className="modal-overlay" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(event) => event.stopPropagation()}>
+      <div
+        className={`modal${size === "wide" ? " modal--wide" : ""}`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
         <div className="modal__hd">
           <h2 className="modal__title">{title}</h2>
           <button type="button" className="modal__close" onClick={onClose} aria-label="Fechar">

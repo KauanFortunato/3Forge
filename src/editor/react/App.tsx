@@ -2212,6 +2212,10 @@ export function App() {
           canUndo={storeView.canUndo}
           canRedo={storeView.canRedo}
           currentTool={currentTool}
+          viewMode={storeView.viewMode}
+          onToolChange={handleToolChange}
+          onFrameSelection={handleFrameSelection}
+          onViewModeChange={(mode) => store.setViewMode(mode)}
           playback={activeClip ? {
             isPlaying: isAnimationPlaying,
             currentFrame,
@@ -2616,6 +2620,16 @@ export function App() {
                       title="Rendered View"
                     >
                       <ViewRenderedIcon width={12} height={12} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`ibtn${storeView.viewMode === "wireframe" ? " is-active" : ""}`}
+                      onClick={() => store.setViewMode("wireframe")}
+                      aria-pressed={storeView.viewMode === "wireframe"}
+                      aria-label="Wireframe View"
+                      title="Wireframe View (Z)"
+                    >
+                      <GeometryIcon width={12} height={12} />
                     </button>
                   </div>
                 </div>
