@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
 import { getSharedPropertyDefinitions } from "../../sharedProperties";
 import type { SharedPropertyResult } from "../../sharedProperties";
-import type { EditorNode, FontAsset, GroupPivotPreset, MaterialAsset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
+import type { EditorNode, FontAsset, GroupPivotPreset, ImageAsset, MaterialAsset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -29,6 +29,7 @@ interface InspectorPanelProps {
   emptyMessage?: string;
   fonts: FontAsset[];
   materials?: MaterialAsset[];
+  images?: Array<ImageAsset & { id: string }>;
   onNodeNameChange: (nodeId: string, value: string) => void;
   onParentChange: (nodeId: string, parentId: string) => void;
   onNodeOriginChange: (nodeId: string, origin: Partial<NodeOriginSpec>) => void;
@@ -43,6 +44,8 @@ interface InspectorPanelProps {
   onTextFontChange: (nodeId: string, fontId: string) => void;
   onImportFont: () => void;
   onReplaceImage: (nodeId: string) => void;
+  onAssignImageAsset?: (nodeId: string, imageId: string) => void;
+  onUnassignImageAsset?: (nodeId: string) => void;
   onUnbindMaterial?: (nodeIds: string[]) => void;
   onAssignMaterial?: (nodeIds: string[], materialId: string) => void;
 }
@@ -61,6 +64,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
     emptyMessage,
     fonts,
     materials,
+    images = [],
     onNodeNameChange,
     onParentChange,
     onNodeOriginChange,
@@ -75,6 +79,8 @@ export function InspectorPanel(props: InspectorPanelProps) {
     onTextFontChange,
     onImportFont,
     onReplaceImage,
+    onAssignImageAsset,
+    onUnassignImageAsset,
     onUnbindMaterial,
     onAssignMaterial,
   } = props;
@@ -430,6 +436,27 @@ export function InspectorPanel(props: InspectorPanelProps) {
           <p className="row__hint" style={{ marginTop: "var(--sp-3)" }}>
             {primaryNode.image.name} | {primaryNode.image.width} x {primaryNode.image.height} px
           </p>
+          {images.length > 0 ? (
+            <div className="row">
+              <span className="row__lbl">Asset</span>
+              <CustomSelect
+                ariaLabel="Image asset"
+                value={primaryNode.imageId ?? "__inline__"}
+                onChange={(value) => {
+                  if (value === "__inline__") {
+                    onUnassignImageAsset?.(primaryNode.id);
+                    return;
+                  }
+                  onAssignImageAsset?.(primaryNode.id, value);
+                }}
+                options={[
+                  { value: "__inline__", label: "Inline texture" },
+                  ...images.map((image) => ({ value: image.id, label: image.name })),
+                ]}
+              />
+              <span aria-hidden="true" />
+            </div>
+          ) : null}
           <button type="button" className="tbtn is-ghost tbtn--block" onClick={() => onReplaceImage(primaryNode.id)}>
             Replace image
           </button>

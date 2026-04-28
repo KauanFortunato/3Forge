@@ -1,16 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createDefaultFontAsset } from "../../fonts";
+import { createTransparentImageAsset } from "../../images";
 import { createNode, ROOT_NODE_ID } from "../../state";
 import { InspectorPanel } from "./InspectorPanel";
-
-async function pickCustomSelect(user: UserEvent, combobox: HTMLElement, optionLabel: string) {
-  await user.click(combobox);
-  const option = await screen.findByRole("option", { name: optionLabel });
-  await user.click(option);
-}
 
 function createCommonProps() {
   const rootGroup = createNode("group", null, ROOT_NODE_ID);
@@ -31,7 +25,14 @@ function createCommonProps() {
     onTextFontChange: vi.fn(),
     onImportFont: vi.fn(),
     onReplaceImage: vi.fn(),
+    onAssignImageAsset: vi.fn(),
+    onUnassignImageAsset: vi.fn(),
   };
+}
+
+async function selectCustomOption(user: ReturnType<typeof userEvent.setup>, ariaName: string, optionName: string) {
+  await user.click(screen.getByRole("combobox", { name: ariaName }));
+  await user.click(screen.getByRole("option", { name: optionName }));
 }
 
 describe("InspectorPanel", () => {
@@ -54,9 +55,8 @@ describe("InspectorPanel", () => {
     await user.type(nameInput, "Panel Copy");
     await user.tab();
 
-    const comboBoxes = screen.getAllByRole("combobox");
-    await pickCustomSelect(user, comboBoxes[0], "Wrapper");
-    await pickCustomSelect(user, comboBoxes[1], "Left");
+    await selectCustomOption(user, "Parent Group", "Wrapper");
+    await selectCustomOption(user, "Origin X", "Left");
     await user.click(screen.getByLabelText("Visible"));
     await user.click(screen.getByLabelText("Editable Visible"));
 
@@ -102,12 +102,37 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    const fontSelect = screen.getByRole("combobox", { name: "Active Font" });
-    await pickCustomSelect(user, fontSelect, "Fixture Font");
+    await selectCustomOption(user, "Active Font", "Fixture Font");
     await user.click(screen.getByRole("button", { name: "Import font" }));
 
     expect(props.onTextFontChange).toHaveBeenCalledWith("text-1", "fixture-font");
     expect(props.onImportFont).toHaveBeenCalledTimes(1);
+  });
+
+  it("assigns an existing image asset from the image inspector", async () => {
+    const user = userEvent.setup();
+    const node = createNode("image", ROOT_NODE_ID, "image-1");
+    const props = createCommonProps();
+    const fixtureAsset = {
+      ...createTransparentImageAsset(),
+      id: "asset-hero",
+      name: "Hero Texture",
+      width: 128,
+      height: 64,
+    };
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        images={[fixtureAsset]}
+      />,
+    );
+
+    await selectCustomOption(user, "Image asset", "Hero Texture");
+
+    expect(props.onAssignImageAsset).toHaveBeenCalledWith("image-1", "asset-hero");
   });
 
   it("applies a group pivot preset from current content", async () => {
@@ -123,7 +148,7 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await pickCustomSelect(user, screen.getByRole("combobox", { name: "Group pivot preset" }), "Bottom Center");
+    await selectCustomOption(user, "Group pivot preset", "Bottom Center");
     await user.click(screen.getByRole("button", { name: "Apply Pivot" }));
 
     expect(props.onGroupPivotPresetApply).toHaveBeenCalledWith("group-1", "bottom-center");

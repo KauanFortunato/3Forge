@@ -58,6 +58,45 @@ describe("exportPackage", () => {
     expect(JSON.parse(blueprintContent)).toEqual(blueprint);
   });
 
+  it("packages image assets referenced by imageId and deduplicates by source", () => {
+    const blueprint = createBlueprintFixture();
+    blueprint.componentName = "Asset Images";
+    const imageNodes = blueprint.nodes.filter((node) => node.type === "image");
+    const firstImage = imageNodes[0];
+    expect(firstImage).toBeTruthy();
+    if (!firstImage || firstImage.type !== "image") {
+      throw new Error("Expected fixture image.");
+    }
+
+    const sharedAsset = {
+      id: "shared-poster",
+      name: "Shared Poster.png",
+      mimeType: "image/png",
+      src: "data:image/png;base64,c2hhcmVk",
+      width: 512,
+      height: 256,
+    };
+    const secondImage = {
+      ...firstImage,
+      id: "second-image",
+      name: "Second Image",
+      imageId: sharedAsset.id,
+      image: { ...firstImage.image, name: "Inline Fallback.png" },
+    };
+    firstImage.imageId = sharedAsset.id;
+    firstImage.image = { ...firstImage.image, name: "Inline Fallback.png" };
+    blueprint.images = [sharedAsset];
+    blueprint.nodes.push(secondImage);
+
+    const packageData = createExportPackageData(blueprint);
+    const imageFiles = packageData.files.filter((file) => file.path.startsWith("assets/images/"));
+    const typeScriptContent = String(packageData.files.find((file) => file.path === packageData.typeScriptFileName)?.content ?? "");
+
+    expect(imageFiles).toHaveLength(1);
+    expect(imageFiles[0]?.path).toContain("shared-poster");
+    expect(typeScriptContent.match(/\.\/assets\/images\/shared-poster\.png/g)).toHaveLength(2);
+  });
+
   it("packages the generated files into a ZIP archive", async () => {
     const blueprint = createBlueprintFixture();
     blueprint.componentName = "Hero Banner";

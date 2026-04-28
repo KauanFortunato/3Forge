@@ -1,6 +1,6 @@
 import { frameToSeconds, getTrackSegments, isTrackMuted, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
-import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageNode } from "./types";
+import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageAsset, ImageNode } from "./types";
 import { ROOT_NODE_ID, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
 
 interface CollectedBinding {
@@ -83,6 +83,7 @@ export function generateTypeScriptComponent(
   const imageVariables = new Map(images.map((image) => [image.node.id, image.textureVariableName]));
   const fontAssetPathsById = options.fontAssetPathsById ?? {};
   const imageAssetPathsByNodeId = options.imageAssetPathsByNodeId ?? {};
+  const imagesById = new Map((blueprint.images ?? []).map((image) => [image.id, image] as const));
   const inlineFonts = fonts.filter((font) => !fontAssetPathsById[font.font.id]);
   const externalFonts = fonts.filter((font) => Boolean(fontAssetPathsById[font.font.id]));
   const lines: string[] = [];
@@ -148,7 +149,7 @@ export function generateTypeScriptComponent(
 
   if (images.length > 0) {
     for (const image of images) {
-      const imageSource = imageAssetPathsByNodeId[image.node.id] ?? image.node.image.src;
+      const imageSource = imageAssetPathsByNodeId[image.node.id] ?? resolveImageAssetForNode(image.node, imagesById).src;
       lines.push(`const ${image.dataVariableName} = ${JSON.stringify(imageSource)} as const;`);
     }
     lines.push("");
@@ -315,6 +316,7 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNo
   const bindings: CollectedBinding[] = [];
   const availableFonts = getAvailableFonts(blueprint.fonts);
   const fontsById = new Map(availableFonts.map((font) => [font.id, font]));
+  const imagesById = new Map((blueprint.images ?? []).map((image) => [image.id, image] as const));
   const collectedFontIds = new Set<string>();
   const fontUsedNames = new Set<string>();
   const imageUsedNames = new Set<string>();
@@ -353,7 +355,8 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNo
     }
 
     if (node.type === "image") {
-      const base = toCamelCase(node.name || node.image.name) || "image";
+      const image = resolveImageAssetForNode(node, imagesById);
+      const base = toCamelCase(node.name || image.name) || "image";
       let dataVariableName = `${base}ImageData`;
       let textureVariableName = `${base}Texture`;
       let suffix = 2;
@@ -375,6 +378,17 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNo
     fonts,
     images,
   };
+}
+
+function resolveImageAssetForNode(node: ImageNode, imagesById: Map<string | undefined, ImageAsset>): ImageAsset {
+  if (node.imageId) {
+    const asset = imagesById.get(node.imageId);
+    if (asset) {
+      return asset;
+    }
+  }
+
+  return node.image;
 }
 
 function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<string> {

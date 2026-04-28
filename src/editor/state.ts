@@ -15,7 +15,7 @@ import {
   sortTrackKeyframes,
 } from "./animation";
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset } from "./fonts";
-import { createTransparentImageAsset, fitImageToMaxSize } from "./images";
+import { createTransparentImageAsset, fitImageToMaxSize, normalizeImageAsset, normalizeImageLibrary } from "./images";
 import {
   cloneMaterialSpec,
   createMaterialSpec,
@@ -185,6 +185,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
     componentName: "3Forge-Component",
     fonts: [],
     materials: [],
+    images: [],
     nodes: [root, panel, accent, title],
     animation: createDefaultAnimation(),
   };
@@ -669,25 +670,6 @@ function normalizeMaterial(value: unknown, fallback: MaterialSpec): MaterialSpec
   return normalizeMaterialSpec(value, fallback);
 }
 
-function normalizeImageAsset(value: unknown, fallback: ImageAsset): ImageAsset {
-  if (!value || typeof value !== "object") {
-    return { ...fallback };
-  }
-
-  const source = value as Record<string, unknown>;
-  const src = typeof source.src === "string" && source.src.trim()
-    ? source.src
-    : fallback.src;
-
-  return {
-    name: typeof source.name === "string" && source.name.trim() ? source.name.trim() : fallback.name,
-    mimeType: typeof source.mimeType === "string" && source.mimeType.trim() ? source.mimeType.trim() : fallback.mimeType,
-    src,
-    width: clampNumber(normalizeNumber(source.width, fallback.width), 1),
-    height: clampNumber(normalizeNumber(source.height, fallback.height), 1),
-  };
-}
-
 function normalizeEditableBindings(node: EditorNode, rawBindings: unknown): Record<NodePropertyPath, EditableBinding> {
   if (!rawBindings || typeof rawBindings !== "object") {
     return {};
@@ -776,6 +758,9 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
         node.geometry.width = clampNumber(normalizeNumber(geometry.width, node.geometry.width), 0.01);
         node.geometry.height = clampNumber(normalizeNumber(geometry.height, node.geometry.height), 0.01);
         node.image = normalizeImageAsset(source.image, node.image);
+        if (typeof source.imageId === "string" && source.imageId.trim()) {
+          node.imageId = source.imageId.trim();
+        }
         break;
       case "text":
         node.geometry.text = typeof geometry.text === "string" ? geometry.text : node.geometry.text;
@@ -809,6 +794,8 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
   const availableFontIds = new Set(availableFonts.map((font) => font.id));
   const importedMaterials = normalizeMaterialLibrary(source.materials);
   const availableMaterialIds = new Set(importedMaterials.map((material) => material.id));
+  const importedImages = normalizeImageLibrary(source.images);
+  const availableImages = new Map(importedImages.map((image) => [image.id, image] as const));
   const importedNodes = Array.isArray(source.nodes)
     ? source.nodes.map(normalizeImportedNode).filter((node): node is EditorNode => Boolean(node))
     : [];
@@ -845,6 +832,15 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
       node.fontId = DEFAULT_FONT_ID;
     }
 
+    if (node.type === "image" && node.imageId) {
+      const imageAsset = availableImages.get(node.imageId);
+      if (imageAsset) {
+        node.image = normalizeImageAsset(imageAsset, node.image);
+      } else {
+        delete node.imageId;
+      }
+    }
+
     if (node.type !== "group") {
       const candidate = (node as { materialId?: string }).materialId;
       if (candidate && availableMaterialIds.has(candidate)) {
@@ -865,6 +861,7 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     componentName: typeof source.componentName === "string" ? source.componentName : fallback.componentName,
     fonts: importedFonts,
     materials: importedMaterials,
+    images: importedImages,
     nodes: importedNodes,
     animation,
   };
@@ -923,6 +920,10 @@ export class EditorStore extends EventTarget {
 
   get materials(): MaterialAsset[] {
     return this._blueprint.materials;
+  }
+
+  get images(): ImageAsset[] {
+    return this._blueprint.images;
   }
 
   get canUndo(): boolean {
@@ -1059,12 +1060,22 @@ export class EditorStore extends EventTarget {
     return this._blueprint.materials.find((material) => material.id === materialId);
   }
 
+  getImageAsset(imageId: string): ImageAsset | undefined {
+    return this._blueprint.images.find((image) => image.id === imageId);
+  }
+
   getNodesUsingMaterial(materialId: string): EditorNode[] {
     return this._blueprint.nodes.filter((node) => {
       if (node.type === "group") {
         return false;
       }
       return (node as { materialId?: string }).materialId === materialId;
+    });
+  }
+
+  getNodesUsingImageAsset(imageId: string): ImageNode[] {
+    return this._blueprint.nodes.filter((node): node is ImageNode => {
+      return node.type === "image" && node.imageId === imageId;
     });
   }
 
@@ -1849,6 +1860,36 @@ export class EditorStore extends EventTarget {
     return node.id;
   }
 
+  insertImageAssetNode(
+    imageAssetId: string,
+    parentId: string | null = ROOT_NODE_ID,
+    siblingIndex?: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): string | null {
+    const asset = this.getImageAsset(imageAssetId);
+    if (!asset) {
+      return null;
+    }
+
+    const targetParentId = this.resolveInsertParentId(parentId);
+    const node = createNode("image", targetParentId);
+    node.imageId = imageAssetId;
+    applyImageAssetToNode(node, asset);
+    node.name = stripExtension(asset.name) || node.name;
+
+    this.recordHistorySnapshot();
+    this._blueprint.nodes = insertSubtreeIntoBlueprint(
+      this._blueprint.nodes,
+      [node],
+      targetParentId,
+      siblingIndex,
+    );
+    this._selectedNodeId = node.id;
+    this._selectedNodeIds = [node.id];
+    this.notify({ reason: "structure", source, nodeId: node.id });
+    return node.id;
+  }
+
   pasteNodes(nodes: EditorNode[], parentId: string | null, source: EditorStoreChange["source"] = "ui"): string | null {
     return this.pasteNodeSubtrees([nodes], parentId, undefined, source)[0] ?? null;
   }
@@ -2581,10 +2622,148 @@ export class EditorStore extends EventTarget {
 
     this.recordHistorySnapshot();
     applyImageAssetToNode(node, image, Math.max(node.geometry.width, node.geometry.height));
+    delete node.imageId;
     if (!node.name || /copy$/i.test(node.name)) {
       node.name = stripExtension(image.name) || node.name;
     }
     this.notify({ reason: "node", source, nodeId });
+  }
+
+  addImageAsset(
+    image: ImageAsset,
+    options: { name?: string; id?: string } = {},
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    const id = this.makeUniqueImageId(options.id ?? image.id);
+    const normalized = normalizeImageAsset(image);
+    const proposedName = (options.name ?? normalized.name ?? "").trim() || "Image";
+    const name = this.makeUniqueImageName(proposedName);
+
+    this.recordHistorySnapshot();
+    this._blueprint.images.push({
+      ...normalized,
+      id,
+      name,
+    });
+    this.notify({ reason: "image", source });
+    return id;
+  }
+
+  updateImageAsset(
+    imageId: string,
+    image: ImageAsset,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const asset = this.getImageAsset(imageId);
+    if (!asset) {
+      return false;
+    }
+
+    const normalized = normalizeImageAsset(image, asset);
+
+    this.recordHistorySnapshot();
+    asset.name = normalized.name;
+    asset.mimeType = normalized.mimeType;
+    asset.src = normalized.src;
+    asset.width = normalized.width;
+    asset.height = normalized.height;
+    for (const node of this.getNodesUsingImageAsset(imageId)) {
+      applyImageAssetToNode(node, asset, Math.max(node.geometry.width, node.geometry.height));
+    }
+    this.notify({ reason: "image", source });
+    return true;
+  }
+
+  renameImageAsset(
+    imageId: string,
+    nextName: string,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const asset = this.getImageAsset(imageId);
+    if (!asset) {
+      return false;
+    }
+    const proposed = nextName.trim();
+    if (!proposed || proposed === asset.name) {
+      return false;
+    }
+
+    this.recordHistorySnapshot();
+    asset.name = this.makeUniqueImageName(proposed, imageId);
+    this.notify({ reason: "image", source });
+    return true;
+  }
+
+  assignImageAssetToNodes(
+    nodeIds: string[],
+    imageId: string,
+    source: EditorStoreChange["source"] = "ui",
+  ): number {
+    const asset = this.getImageAsset(imageId);
+    if (!asset) {
+      return 0;
+    }
+    const targets: ImageNode[] = [];
+    for (const nodeId of [...new Set(nodeIds)]) {
+      const node = this.getNode(nodeId);
+      if (!node || node.type !== "image") {
+        continue;
+      }
+      targets.push(node);
+    }
+    if (targets.length === 0) {
+      return 0;
+    }
+
+    this.recordHistorySnapshot();
+    for (const node of targets) {
+      node.imageId = imageId;
+      applyImageAssetToNode(node, asset, Math.max(node.geometry.width, node.geometry.height));
+    }
+    this.notify({ reason: "image", source, nodeId: targets[0].id });
+    return targets.length;
+  }
+
+  unassignImageAssetFromNodes(
+    nodeIds: string[],
+    source: EditorStoreChange["source"] = "ui",
+  ): number {
+    const targets: ImageNode[] = [];
+    for (const nodeId of [...new Set(nodeIds)]) {
+      const node = this.getNode(nodeId);
+      if (!node || node.type !== "image" || !node.imageId) {
+        continue;
+      }
+      targets.push(node);
+    }
+    if (targets.length === 0) {
+      return 0;
+    }
+
+    this.recordHistorySnapshot();
+    for (const node of targets) {
+      delete node.imageId;
+    }
+    this.notify({ reason: "image", source, nodeId: targets[0].id });
+    return targets.length;
+  }
+
+  removeImageAsset(
+    imageId: string,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const index = this._blueprint.images.findIndex((image) => image.id === imageId);
+    if (index < 0) {
+      return false;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.images.splice(index, 1);
+    for (const node of this.getNodesUsingImageAsset(imageId)) {
+      delete node.imageId;
+    }
+    this.notify({ reason: "image", source });
+    return true;
   }
 
   addFont(font: FontAsset, source: EditorStoreChange["source"] = "ui"): string {
@@ -2779,6 +2958,37 @@ export class EditorStore extends EventTarget {
       this._blueprint.materials
         .filter((material) => material.id !== excludeId)
         .map((material) => material.name),
+    );
+    if (!taken.has(base)) {
+      return base;
+    }
+    let counter = 2;
+    while (taken.has(`${base} ${counter}`)) {
+      counter += 1;
+    }
+    return `${base} ${counter}`;
+  }
+
+  private makeUniqueImageId(proposed?: string): string {
+    const existing = new Set(this._blueprint.images.map((image) => image.id).filter((id): id is string => Boolean(id)));
+    const trimmed = proposed?.trim();
+    if (trimmed && !existing.has(trimmed)) {
+      return trimmed;
+    }
+
+    let id = generateId("image-asset");
+    while (existing.has(id)) {
+      id = generateId("image-asset");
+    }
+    return id;
+  }
+
+  private makeUniqueImageName(proposed: string, excludeId: string | null = null): string {
+    const base = proposed.trim() || "Image";
+    const taken = new Set(
+      this._blueprint.images
+        .filter((image) => image.id !== excludeId)
+        .map((image) => image.name),
     );
     if (!taken.has(base)) {
       return base;

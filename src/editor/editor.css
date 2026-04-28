@@ -3417,6 +3417,140 @@ code {
   color: var(--c-accent);
 }
 
+.image-assets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.image-assets-panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-content: space-between;
+  color: var(--c-text-dim);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.image-assets-panel__head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.image-assets-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.image-assets-panel__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-bg-2);
+  color: var(--c-text-med);
+  overflow: hidden;
+}
+
+.image-assets-panel__item:hover {
+  background: var(--c-bg-3);
+  color: var(--c-text);
+}
+
+.image-assets-panel__item.is-active {
+  border-color: color-mix(in srgb, var(--c-accent) 65%, var(--c-border));
+  background: color-mix(in srgb, var(--c-accent) 14%, var(--c-bg-2));
+  color: var(--c-text);
+}
+
+.image-assets-panel__item-main {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.image-assets-panel__item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 var(--sp-2);
+  border-left: 1px solid var(--c-border);
+}
+
+.image-assets-panel__thumb {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(45deg, color-mix(in srgb, var(--c-bg-3) 70%, #ffffff) 25%, transparent 25%),
+    linear-gradient(-45deg, color-mix(in srgb, var(--c-bg-3) 70%, #ffffff) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--c-bg-3) 70%, #ffffff) 75%),
+    linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--c-bg-3) 70%, #ffffff) 75%);
+  background-color: var(--c-bg-1);
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+  background-size: 12px 12px;
+  overflow: hidden;
+}
+
+.image-assets-panel__thumb img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.image-assets-panel__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.image-assets-panel__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.image-assets-panel__sub {
+  color: var(--c-text-dim);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+}
+
+.image-assets-panel__icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-sm);
+  background: var(--c-bg-3);
+  color: var(--c-accent);
+}
+
 .material-asset-editor {
   display: flex;
   flex-direction: column;

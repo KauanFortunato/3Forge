@@ -46,6 +46,8 @@ import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
 import { AnimationTimeline } from "./components/AnimationTimeline";
 import { ContextMenu } from "./components/ContextMenu";
 import { FieldsPanel } from "./components/FieldsPanel";
+import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
+import type { ProjectImageAsset } from "./components/ImageAssetsPanel";
 import { MaterialAssetEditor } from "./components/MaterialAssetEditor";
 import { MaterialsPanel } from "./components/MaterialsPanel";
 import {
@@ -93,11 +95,13 @@ interface NodeClipboard {
   subtrees: EditorNode[][];
 }
 
-type RuntimePanelTab = "animations" | "materials";
+type RuntimePanelTab = "animations" | "images" | "materials";
 
 type PendingImageImport =
+  | { mode: "asset" }
   | { mode: "create"; parentId: string; index?: number }
-  | { mode: "replace"; nodeId: string };
+  | { mode: "replace"; nodeId: string }
+  | { mode: "replaceAsset"; imageId: string };
 
 interface InsertTarget {
   parentId: string;
@@ -189,6 +193,21 @@ function countMaterialUsage(nodes: EditorNode[]): Record<string, number> {
       continue;
     }
     usage[materialId] = (usage[materialId] ?? 0) + 1;
+  }
+  return usage;
+}
+
+function resolveImageAssetLibrary(images: ImageAsset[]): ProjectImageAsset[] {
+  return images.flatMap((image) => image.id ? [{ ...image, id: image.id }] : []);
+}
+
+function countImageUsage(nodes: EditorNode[]): Record<string, number> {
+  const usage: Record<string, number> = {};
+  for (const node of nodes) {
+    if (node.type !== "image" || !node.imageId) {
+      continue;
+    }
+    usage[node.imageId] = (usage[node.imageId] ?? 0) + 1;
   }
   return usage;
 }
@@ -392,6 +411,7 @@ export function App() {
   const [isAssetsPanelCollapsed, setIsAssetsPanelCollapsed] = useState(false);
   const [isFieldsPanelCollapsed, setIsFieldsPanelCollapsed] = useState(true);
   const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
   const [isViewportToolsHudVisible, setIsViewportToolsHudVisible] = useState(true);
@@ -461,6 +481,18 @@ export function App() {
     () => countMaterialUsage(storeView.blueprintNodes),
     [storeView.blueprintNodes],
   );
+  const imageAssets = useMemo(
+    () => resolveImageAssetLibrary(storeView.images),
+    [storeView],
+  );
+  const totalImageUsage = useMemo(
+    () => countImageUsage(storeView.blueprintNodes),
+    [storeView],
+  );
+  const selectedImageNodeCount = useMemo(
+    () => storeView.selectedNodes.filter((node) => node.type === "image").length,
+    [storeView.selectedNodes],
+  );
 
   const previousSelectedNodeIdRef = useRef(storeView.selectedNodeId);
   useEffect(() => {
@@ -476,6 +508,11 @@ export function App() {
       setEditingMaterialId(null);
     }
   }, [storeView.materials, editingMaterialId]);
+  useEffect(() => {
+    if (selectedImageId && !imageAssets.some((image) => image.id === selectedImageId)) {
+      setSelectedImageId(null);
+    }
+  }, [imageAssets, selectedImageId]);
   const selectedRootIds = useMemo(
     () => store.getSelectionRootIds(selectedNodeIds),
     [selectedNodeIds, store, storeView.blueprintNodes],
@@ -1280,15 +1317,80 @@ export function App() {
       return;
     }
 
+    if (pending.mode === "asset") {
+      const imageId = store.addImageAsset(image);
+      setSelectedImageId(imageId);
+      setTransientStatus(`Imported image asset "${image.name}".`);
+      return;
+    }
+
     if (pending.mode === "replace") {
       store.updateImageNodeAsset(pending.nodeId, image);
       setTransientStatus(`Replaced image with "${image.name}".`);
       return;
     }
 
-    store.insertImageNode(image, pending.parentId, pending.index);
-    setTransientStatus(`Imported image "${image.name}".`);
+    if (pending.mode === "replaceAsset") {
+      const didReplace = store.updateImageAsset(pending.imageId, image);
+      if (didReplace) {
+        setTransientStatus(`Replaced image asset with "${image.name}".`);
+        return;
+      }
+
+      setTransientStatus("Image asset was not found.");
+      return;
+    }
+
+    if (pending.mode === "create") {
+      store.insertImageNode(image, pending.parentId, pending.index);
+      setTransientStatus(`Imported image "${image.name}".`);
+    }
   }, [resolveSelectionInsertTarget, setTransientStatus, store]);
+
+  const handleApplyImageAssetToSelection = useCallback((image: ProjectImageAsset) => {
+    const imageNodeIds = storeView.selectedNodes
+      .filter((node) => node.type === "image")
+      .map((node) => node.id);
+    if (imageNodeIds.length === 0) {
+      return;
+    }
+
+    const assigned = store.assignImageAssetToNodes(imageNodeIds, image.id);
+    if (assigned > 0) {
+      setTransientStatus(`Applied "${image.name}" to ${assigned} image node${assigned === 1 ? "" : "s"}.`);
+      return;
+    }
+
+    setTransientStatus("No selected image nodes could use that asset.");
+  }, [setTransientStatus, store, storeView.selectedNodes]);
+
+  const handleCreateImageNodeFromAsset = useCallback((image: ProjectImageAsset) => {
+    const target = resolveSelectionInsertTarget();
+    const nodeId = store.insertImageAssetNode(image.id, target.parentId, target.index);
+    if (!nodeId) {
+      setTransientStatus(`Unable to create image node from "${image.name}".`);
+      return;
+    }
+
+    setTransientStatus(`Created image node from "${image.name}".`);
+  }, [resolveSelectionInsertTarget, setTransientStatus, store]);
+
+  const handleRemoveImageAsset = useCallback((imageId: string) => {
+    if ((totalImageUsage[imageId] ?? 0) > 0) {
+      setTransientStatus("Image asset is in use.");
+      return;
+    }
+
+    const didRemove = store.removeImageAsset(imageId);
+    if (didRemove) {
+      setSelectedImageId((current) => current === imageId ? null : current);
+      setTransientStatus("Removed image asset.");
+    }
+  }, [setTransientStatus, store, totalImageUsage]);
+
+  const canRemoveImageAsset = useCallback((imageId: string) => {
+    return (totalImageUsage[imageId] ?? 0) === 0;
+  }, [totalImageUsage]);
 
   const handleNewBlueprint = useCallback(() => {
     activeFileHandleRef.current = null;
@@ -2154,6 +2256,8 @@ export function App() {
                   <span className="panel__hd-meta">
                     {runtimePanelTab === "materials"
                       ? storeView.materials.length
+                      : runtimePanelTab === "images"
+                        ? imageAssets.length
                       : storeView.animation.clips.length}
                   </span>
                   <div className="panel__hd-spacer" />
@@ -2167,6 +2271,15 @@ export function App() {
                         aria-selected={runtimePanelTab === "animations"}
                       >
                         Animations
+                      </button>
+                      <button
+                        type="button"
+                        className={`ptab${runtimePanelTab === "images" ? " is-active" : ""}`}
+                        onClick={() => setRuntimePanelTab("images")}
+                        role="tab"
+                        aria-selected={runtimePanelTab === "images"}
+                      >
+                        Images
                       </button>
                       <button
                         type="button"
@@ -2217,6 +2330,20 @@ export function App() {
                           ))}
                         </div>
                       </div>
+                    ) : runtimePanelTab === "images" ? (
+                      <ImageAssetsPanel
+                        images={imageAssets}
+                        selectedImageId={selectedImageId}
+                        selectedImageNodeCount={selectedImageNodeCount}
+                        usageById={totalImageUsage}
+                        onSelectImage={setSelectedImageId}
+                        onImport={() => requestImageImport({ mode: "asset" })}
+                        onApplyToSelection={handleApplyImageAssetToSelection}
+                        onCreateNode={handleCreateImageNodeFromAsset}
+                        onReplace={(imageId) => requestImageImport({ mode: "replaceAsset", imageId })}
+                        onRemove={handleRemoveImageAsset}
+                        canRemoveImage={canRemoveImageAsset}
+                      />
                     ) : (
                       <MaterialsPanel
                         materials={storeView.materials}
@@ -2482,6 +2609,7 @@ export function App() {
                         emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
                         fonts={storeView.fonts}
                         materials={storeView.materials}
+                        images={imageAssets}
                         onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
                         onParentChange={(nodeId, parentId) => {
                           const eligibleChildren = store.getNodeChildren(parentId);
@@ -2499,6 +2627,8 @@ export function App() {
                         onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
                         onImportFont={() => fontInputRef.current?.click()}
                         onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
+                        onAssignImageAsset={(nodeId, imageId) => store.assignImageAssetToNodes([nodeId], imageId)}
+                        onUnassignImageAsset={(nodeId) => store.unassignImageAssetFromNodes([nodeId])}
                         onUnbindMaterial={(nodeIds) => store.unassignMaterialFromNodes(nodeIds)}
                         onAssignMaterial={(nodeIds, materialId) => store.assignMaterialToNodes(nodeIds, materialId)}
                       />
