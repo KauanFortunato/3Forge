@@ -466,11 +466,10 @@ export function App() {
   useEffect(() => {
     if (storeView.selectedNodeId !== previousSelectedNodeIdRef.current) {
       previousSelectedNodeIdRef.current = storeView.selectedNodeId;
-      if (editingMaterialId) {
-        setEditingMaterialId(null);
-      }
+      setEditingMaterialId(null);
+      setSelectedMaterialId(null);
     }
-  }, [storeView.selectedNodeId, editingMaterialId]);
+  }, [storeView.selectedNodeId]);
 
   useEffect(() => {
     if (editingMaterialId && !storeView.materials.some((material) => material.id === editingMaterialId)) {

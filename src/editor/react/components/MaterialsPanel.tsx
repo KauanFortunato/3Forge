@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { MouseEvent } from "react";
 import type { MaterialAsset } from "../../types";
 import { MaterialIcon, PlusIcon, TrashIcon, UnlinkIcon } from "./icons";
@@ -28,6 +29,12 @@ export function MaterialsPanel(props: MaterialsPanelProps) {
     onUnassignSelection,
     onRemove,
   } = props;
+
+  useEffect(() => {
+    if (selectedMaterialId && !materials.some((material) => material.id === selectedMaterialId)) {
+      onSelectMaterial(null);
+    }
+  }, [materials, selectedMaterialId, onSelectMaterial]);
 
   const handleCreate = () => {
     const id = onCreate();
