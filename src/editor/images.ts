@@ -13,6 +13,52 @@ export function createTransparentImageAsset(): ImageAsset {
   };
 }
 
+export function normalizeImageAsset(value: unknown, fallback: ImageAsset = createTransparentImageAsset()): ImageAsset {
+  if (!value || typeof value !== "object") {
+    return { ...fallback };
+  }
+
+  const source = value as Record<string, unknown>;
+  const src = typeof source.src === "string" && source.src.trim()
+    ? source.src
+    : fallback.src;
+
+  return {
+    ...(typeof source.id === "string" && source.id.trim() ? { id: source.id.trim() } : {}),
+    name: typeof source.name === "string" && source.name.trim() ? source.name.trim() : fallback.name,
+    mimeType: typeof source.mimeType === "string" && source.mimeType.trim() ? source.mimeType.trim() : fallback.mimeType,
+    src,
+    width: clampNumber(normalizeNumber(source.width, fallback.width), 1),
+    height: clampNumber(normalizeNumber(source.height, fallback.height), 1),
+  };
+}
+
+export function normalizeImageLibrary(value: unknown): ImageAsset[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const result: ImageAsset[] = [];
+  const usedIds = new Set<string>();
+
+  for (const entry of value) {
+    const asset = normalizeImageAsset(entry);
+    const proposedId = asset.id?.trim() || toImageAssetId(asset.name || "image", result.length + 1);
+    let id = proposedId;
+    let counter = 2;
+    while (usedIds.has(id)) {
+      id = `${proposedId}-${counter}`;
+      counter += 1;
+    }
+
+    asset.id = id;
+    usedIds.add(id);
+    result.push(asset);
+  }
+
+  return result;
+}
+
 export async function imageFileToAsset(file: File): Promise<ImageAsset> {
   const src = await readFileAsDataUrl(file);
   const dimensions = await readImageDimensions(src);
@@ -82,4 +128,32 @@ function inferMimeType(fileName: string): string {
   if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) return "image/jpeg";
   if (normalized.endsWith(".svg")) return "image/svg+xml";
   return "application/octet-stream";
+}
+
+function normalizeNumber(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return fallback;
+}
+
+function clampNumber(value: number, min: number): number {
+  return Math.max(value, min);
+}
+
+function toImageAssetId(name: string, fallbackIndex: number): string {
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized ? `image-${normalized}` : `image-${fallbackIndex}`;
 }

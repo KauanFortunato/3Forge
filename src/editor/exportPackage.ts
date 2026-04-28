@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import { getAvailableFonts, getFontData } from "./fonts";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "./exports";
-import type { ComponentBlueprint, FontAsset, ImageNode } from "./types";
+import type { ComponentBlueprint, FontAsset, ImageAsset, ImageNode } from "./types";
 
 export interface ExportPackageFile {
   path: string;
@@ -31,6 +31,7 @@ export function createExportPackageData(blueprint: ComponentBlueprint): ExportPa
   const availableFonts = new Map(getAvailableFonts(blueprint.fonts).map((font) => [font.id, font]));
   const usedFonts = collectUsedFonts(blueprint, availableFonts);
   const usedImages = collectUsedImages(blueprint);
+  const imagesById = new Map((blueprint.images ?? []).map((image) => [image.id, image] as const));
   const imageAssetPathsBySource = new Map<string, string>();
 
   for (const font of usedFonts) {
@@ -43,7 +44,8 @@ export function createExportPackageData(blueprint: ComponentBlueprint): ExportPa
   }
 
   for (const imageNode of usedImages) {
-    const imagePath = resolvePackagedImagePath(imageNode, usedPaths, imageAssetPathsBySource);
+    const image = resolveImageAssetForNode(imageNode, imagesById);
+    const imagePath = resolvePackagedImagePath(imageNode, image, usedPaths, imageAssetPathsBySource);
     imageAssetPathsByNodeId[imageNode.id] = toRelativeAssetPath(imagePath.publicPath);
 
     if (imagePath.file) {
@@ -128,30 +130,42 @@ function collectUsedImages(blueprint: ComponentBlueprint): ImageNode[] {
 
 function resolvePackagedImagePath(
   imageNode: ImageNode,
+  image: ImageAsset,
   usedPaths: Set<string>,
   imageAssetPathsBySource: Map<string, string>,
 ): { publicPath: string; file?: ExportPackageFile } {
-  const existingPath = imageAssetPathsBySource.get(imageNode.image.src);
+  const existingPath = imageAssetPathsBySource.get(image.src);
   if (existingPath) {
     return { publicPath: existingPath };
   }
 
-  if (!isDataUrl(imageNode.image.src)) {
-    return { publicPath: imageNode.image.src };
+  if (!isDataUrl(image.src)) {
+    return { publicPath: image.src };
   }
 
-  const extension = resolveImageExtension(imageNode.image.name, imageNode.image.mimeType);
-  const path = createUniquePath(usedPaths, "assets/images", imageNode.image.name || imageNode.name, extension);
+  const extension = resolveImageExtension(image.name, image.mimeType);
+  const path = createUniquePath(usedPaths, "assets/images", image.name || imageNode.name, extension);
   const file = {
     path,
-    content: decodeDataUrl(imageNode.image.src),
+    content: decodeDataUrl(image.src),
   };
 
-  imageAssetPathsBySource.set(imageNode.image.src, path);
+  imageAssetPathsBySource.set(image.src, path);
   return {
     publicPath: path,
     file,
   };
+}
+
+function resolveImageAssetForNode(node: ImageNode, imagesById: Map<string | undefined, ImageAsset>): ImageAsset {
+  if (node.imageId) {
+    const asset = imagesById.get(node.imageId);
+    if (asset) {
+      return asset;
+    }
+  }
+
+  return node.image;
 }
 
 function toRelativeAssetPath(path: string): string {

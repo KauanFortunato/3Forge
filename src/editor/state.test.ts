@@ -177,6 +177,184 @@ describe("EditorStore", () => {
     expect(store.getSnapshot()).toEqual(blueprint);
   });
 
+  it("normalizes project image libraries without breaking inline image fallbacks", () => {
+    const image = {
+      id: "poster",
+      name: "Poster.png",
+      mimeType: "image/png",
+      src: "data:image/png;base64,cG9zdGVy",
+      width: 640,
+      height: 320,
+    };
+    const store = new EditorStore({
+      ...createDefaultBlueprint(),
+      images: [image],
+      nodes: [
+        createDefaultBlueprint().nodes[0],
+        {
+          ...createTransparentImageAsset(),
+          id: "image-node",
+          type: "image",
+          name: "Image Node",
+          parentId: ROOT_NODE_ID,
+          visible: true,
+          transform: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+          origin: { x: "center", y: "center", z: "center" },
+          editable: {},
+          geometry: { width: 1, height: 1 },
+          imageId: "poster",
+          image: createTransparentImageAsset(),
+          material: {
+            type: "basic",
+            color: "#ffffff",
+            emissive: "#000000",
+            roughness: 0.5,
+            metalness: 0,
+            opacity: 1,
+            transparent: false,
+            visible: true,
+            alphaTest: 0,
+            depthTest: true,
+            depthWrite: true,
+            wireframe: false,
+            castShadow: true,
+            receiveShadow: true,
+          },
+        },
+        {
+          id: "fallback-image",
+          type: "image",
+          name: "Fallback Image",
+          parentId: ROOT_NODE_ID,
+          visible: true,
+          transform: { position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+          origin: { x: "center", y: "center", z: "center" },
+          editable: {},
+          geometry: { width: 1, height: 1 },
+          imageId: "missing",
+          image: { ...createTransparentImageAsset(), name: "Inline.png" },
+          material: {
+            type: "basic",
+            color: "#ffffff",
+            emissive: "#000000",
+            roughness: 0.5,
+            metalness: 0,
+            opacity: 1,
+            transparent: false,
+            visible: true,
+            alphaTest: 0,
+            depthTest: true,
+            depthWrite: true,
+            wireframe: false,
+            castShadow: true,
+            receiveShadow: true,
+          },
+        },
+      ],
+    });
+
+    const imageNode = store.getNode("image-node");
+    const fallbackNode = store.getNode("fallback-image");
+
+    expect(store.images).toEqual([image]);
+    expect(imageNode?.type).toBe("image");
+    expect(fallbackNode?.type).toBe("image");
+    if (imageNode?.type !== "image" || fallbackNode?.type !== "image") {
+      throw new Error("Expected image nodes.");
+    }
+    expect(imageNode.image.src).toBe(image.src);
+    expect(fallbackNode.imageId).toBeUndefined();
+    expect(fallbackNode.image.name).toBe("Inline.png");
+  });
+
+  it("adds, assigns, updates, and safely removes project image assets", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const nodeId = store.insertNode("image", ROOT_NODE_ID);
+    const assetId = store.addImageAsset({
+      name: "Poster.png",
+      mimeType: "image/png",
+      src: "data:image/png;base64,cG9zdGVy",
+      width: 800,
+      height: 400,
+    });
+
+    expect(store.assignImageAssetToNodes([nodeId], assetId)).toBe(1);
+    let node = store.getNode(nodeId);
+    expect(node?.type).toBe("image");
+    if (node?.type !== "image") {
+      throw new Error("Expected image node.");
+    }
+    expect(node.imageId).toBe(assetId);
+    expect(node.image.name).toBe("Poster.png");
+    expect(store.getNodesUsingImageAsset(assetId).map((entry) => entry.id)).toEqual([nodeId]);
+
+    expect(store.updateImageAsset(assetId, {
+      name: "Poster Wide.png",
+      mimeType: "image/png",
+      src: "data:image/png;base64,d2lkZQ==",
+      width: 1200,
+      height: 300,
+    })).toBe(true);
+    node = store.getNode(nodeId);
+    expect(node?.type).toBe("image");
+    if (node?.type !== "image") {
+      throw new Error("Expected image node.");
+    }
+    expect(node.image.src).toContain("d2lkZQ==");
+    expect(node.geometry).toEqual({ width: 1.6, height: 0.4 });
+
+    expect(store.removeImageAsset(assetId)).toBe(true);
+    node = store.getNode(nodeId);
+    expect(node?.type).toBe("image");
+    if (node?.type !== "image") {
+      throw new Error("Expected image node.");
+    }
+    expect(node.imageId).toBeUndefined();
+    expect(node.image.name).toBe("Poster Wide.png");
+  });
+
+  it("inserts image nodes linked to existing project image assets", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const assetId = store.addImageAsset({
+      name: "Linked Poster.png",
+      mimeType: "image/png",
+      src: "data:image/png;base64,bGlua2Vk",
+      width: 600,
+      height: 300,
+    });
+
+    const nodeId = store.insertImageAssetNode(assetId, ROOT_NODE_ID);
+    expect(nodeId).toBeTruthy();
+    expect(store.insertImageAssetNode("missing-asset", ROOT_NODE_ID)).toBeNull();
+
+    const node = store.getNode(nodeId!);
+    expect(node?.type).toBe("image");
+    if (node?.type !== "image") {
+      throw new Error("Expected linked image node.");
+    }
+    expect(node.imageId).toBe(assetId);
+    expect(node.image.name).toBe("Linked Poster.png");
+    expect(node.geometry).toEqual({ width: 2, height: 1 });
+
+    expect(store.updateImageAsset(assetId, {
+      name: "Updated Linked Poster.png",
+      mimeType: "image/png",
+      src: "data:image/png;base64,dXBkYXRlZA==",
+      width: 300,
+      height: 600,
+    })).toBe(true);
+
+    const updatedNode = store.getNode(nodeId!);
+    expect(updatedNode?.type).toBe("image");
+    if (updatedNode?.type !== "image") {
+      throw new Error("Expected updated linked image node.");
+    }
+    expect(updatedNode.imageId).toBe(assetId);
+    expect(updatedNode.image.name).toBe("Updated Linked Poster.png");
+    expect(updatedNode.image.src).toContain("dXBkYXRlZA==");
+    expect(updatedNode.geometry).toEqual({ width: 1, height: 2 });
+  });
+
   it("groups, moves, and rejects cyclical hierarchy changes", () => {
     const store = new EditorStore(createDefaultBlueprint());
     const circleId = store.insertNode("circle", ROOT_NODE_ID);

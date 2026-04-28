@@ -77,6 +77,7 @@ export interface FontAsset {
 }
 
 export interface ImageAsset {
+  id?: string;
   name: string;
   mimeType: string;
   src: string;
@@ -210,6 +211,7 @@ export interface ImageNode extends BaseEditorNode {
     width: number;
     height: number;
   };
+  imageId?: string;
   image: ImageAsset;
   material: MaterialSpec;
   materialId?: string;
@@ -222,6 +224,7 @@ export interface ComponentBlueprint {
   componentName: string;
   fonts: FontAsset[];
   materials: MaterialAsset[];
+  images: ImageAsset[];
   nodes: EditorNode[];
   animation: ComponentAnimation;
 }
@@ -253,6 +256,7 @@ export type EditorStoreChangeReason =
   | "history"
   | "font"
   | "material"
+  | "image"
   | "view"
   | "animation"
   | "propertyClipboard";
