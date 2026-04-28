@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
 import { getSharedPropertyDefinitions } from "../../sharedProperties";
 import type { SharedPropertyResult } from "../../sharedProperties";
-import type { EditorNode, FontAsset, GroupPivotPreset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
+import type { EditorNode, FontAsset, GroupPivotPreset, MaterialAsset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -28,6 +28,7 @@ interface InspectorPanelProps {
   mode?: "all" | "properties" | "material";
   emptyMessage?: string;
   fonts: FontAsset[];
+  materials?: MaterialAsset[];
   onNodeNameChange: (nodeId: string, value: string) => void;
   onParentChange: (nodeId: string, parentId: string) => void;
   onNodeOriginChange: (nodeId: string, origin: Partial<NodeOriginSpec>) => void;
@@ -42,6 +43,8 @@ interface InspectorPanelProps {
   onTextFontChange: (nodeId: string, fontId: string) => void;
   onImportFont: () => void;
   onReplaceImage: (nodeId: string) => void;
+  onUnbindMaterial?: (nodeIds: string[]) => void;
+  onAssignMaterial?: (nodeIds: string[], materialId: string) => void;
 }
 
 const NUMERIC_INPUT_TYPES = new Set<NodePropertyDefinition["input"]>(["number", "degrees"]);
@@ -57,6 +60,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
     mode = "all",
     emptyMessage,
     fonts,
+    materials,
     onNodeNameChange,
     onParentChange,
     onNodeOriginChange,
@@ -71,6 +75,8 @@ export function InspectorPanel(props: InspectorPanelProps) {
     onTextFontChange,
     onImportFont,
     onReplaceImage,
+    onUnbindMaterial,
+    onAssignMaterial,
   } = props;
 
   const selectionNodes = useMemo(() => {
@@ -381,6 +387,9 @@ export function InspectorPanel(props: InspectorPanelProps) {
           allowEditableToggle={!isMultiSelection}
           hasGroupSelection={hasGroupSelection}
           hasMixedMaterialTypes={hasMixedMaterialTypes}
+          materials={materials}
+          onUnbindMaterial={onUnbindMaterial}
+          onAssignMaterial={onAssignMaterial}
         />
       ) : null}
 
@@ -523,6 +532,9 @@ interface MaterialDefinitionSectionProps {
   allowEditableToggle?: boolean;
   hasGroupSelection?: boolean;
   hasMixedMaterialTypes?: boolean;
+  materials?: MaterialAsset[];
+  onUnbindMaterial?: (nodeIds: string[]) => void;
+  onAssignMaterial?: (nodeIds: string[], materialId: string) => void;
 }
 
 function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
@@ -538,8 +550,33 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
     allowEditableToggle = true,
     hasGroupSelection = false,
     hasMixedMaterialTypes = false,
+    materials,
+    onUnbindMaterial,
+    onAssignMaterial,
   } = props;
   const isMultiSelection = selectionCount > 1;
+
+  const meshNodes = nodes.filter((node) => node.type !== "group") as Array<EditorNode & { materialId?: string }>;
+  const meshNodeIds = meshNodes.map((node) => node.id);
+
+  const bindingState: { kind: "inline" } | { kind: "shared"; materialId: string } | { kind: "mixed" } | null = (() => {
+    if (meshNodes.length === 0) {
+      return null;
+    }
+    const ids = new Set(meshNodes.map((node) => node.materialId ?? null));
+    if (ids.size > 1) {
+      return { kind: "mixed" };
+    }
+    const onlyId = meshNodes[0]?.materialId;
+    if (!onlyId) {
+      return { kind: "inline" };
+    }
+    return { kind: "shared", materialId: onlyId };
+  })();
+
+  const sharedAsset = bindingState?.kind === "shared"
+    ? materials?.find((entry) => entry.id === bindingState.materialId) ?? null
+    : null;
 
   const basePaths = ["material.type", "material.color", "material.opacity", "material.transparent"];
   const pbrPaths = ["material.emissive", "material.roughness", "material.metalness"];
@@ -561,6 +598,42 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
       icon={<MaterialIcon width={12} height={12} />}
       meta={isMultiSelection && excludedNote ? excludedNote : null}
     >
+      {bindingState && (onAssignMaterial || onUnbindMaterial) ? (
+        <div className="row">
+          <span className="row__lbl">Material</span>
+          <CustomSelect
+            ariaLabel="Material binding"
+            value={bindingState.kind === "shared"
+              ? bindingState.materialId
+              : bindingState.kind === "mixed"
+                ? "__mixed__"
+                : "__inline__"}
+            onChange={(value) => {
+              if (value === "__mixed__") {
+                return;
+              }
+              if (value === "__inline__") {
+                onUnbindMaterial?.(meshNodeIds);
+                return;
+              }
+              onAssignMaterial?.(meshNodeIds, value);
+            }}
+            options={[
+              ...(bindingState.kind === "mixed" ? [{ value: "__mixed__", label: "Mixed" }] : []),
+              { value: "__inline__", label: "Inline (this object only)" },
+              ...(materials ?? []).map((asset) => ({ value: asset.id, label: asset.name })),
+            ]}
+          />
+          <span aria-hidden="true" />
+        </div>
+      ) : null}
+
+      {sharedAsset ? (
+        <p className="row__hint" style={{ marginTop: 0, marginBottom: "var(--sp-3)" }}>
+          {`Shared "${sharedAsset.name}" — edits propagate to every bound object.`}
+        </p>
+      ) : null}
+
       {isMultiSelection ? (
         <p className="row__hint" style={{ marginBottom: "var(--sp-3)" }}>
           {`Applying changes to ${selectionCount} selected objects.`}

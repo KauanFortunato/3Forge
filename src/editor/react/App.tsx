@@ -46,7 +46,11 @@ import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
 import { AnimationTimeline } from "./components/AnimationTimeline";
 import { ContextMenu } from "./components/ContextMenu";
 import { FieldsPanel } from "./components/FieldsPanel";
+import { MaterialAssetEditor } from "./components/MaterialAssetEditor";
+import { MaterialsPanel } from "./components/MaterialsPanel";
 import {
+  ChevronDownIcon,
+  ChevronRightIcon,
   CopyIcon,
   CursorIcon,
   DownloadIcon,
@@ -60,6 +64,7 @@ import {
   GroupIcon,
   MeshIcon,
   ImagePropertyIcon,
+  MaterialIcon,
   MoveIcon,
   ObjectDataIcon,
   RotateIcon,
@@ -88,7 +93,7 @@ interface NodeClipboard {
   subtrees: EditorNode[][];
 }
 
-type RuntimePanelTab = "animations" | "fields";
+type RuntimePanelTab = "animations" | "materials";
 
 type PendingImageImport =
   | { mode: "create"; parentId: string; index?: number }
@@ -171,6 +176,40 @@ function getProjectSourceLabel(source: WorkspaceProjectContext["source"], canOve
   }
 
   return "Local workspace";
+}
+
+function countMaterialUsage(nodes: EditorNode[]): Record<string, number> {
+  const usage: Record<string, number> = {};
+  for (const node of nodes) {
+    if (node.type === "group") {
+      continue;
+    }
+    const materialId = (node as { materialId?: string }).materialId;
+    if (!materialId) {
+      continue;
+    }
+    usage[materialId] = (usage[materialId] ?? 0) + 1;
+  }
+  return usage;
+}
+
+function resolveSelectionMaterialId(nodes: EditorNode[]): string | null {
+  let materialId: string | null = null;
+  for (const node of nodes) {
+    if (node.type === "group") {
+      continue;
+    }
+    const candidate = (node as { materialId?: string }).materialId;
+    if (!candidate) {
+      return null;
+    }
+    if (materialId === null) {
+      materialId = candidate;
+    } else if (materialId !== candidate) {
+      return null;
+    }
+  }
+  return materialId;
 }
 
 function resolveLayoutMode(width: number): LayoutMode {
@@ -350,6 +389,11 @@ export function App() {
   const storeView = useEditorStoreSnapshot(store);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("properties");
   const [runtimePanelTab, setRuntimePanelTab] = useState<RuntimePanelTab>("animations");
+  const [isAssetsPanelCollapsed, setIsAssetsPanelCollapsed] = useState(false);
+  const [isFieldsPanelCollapsed, setIsFieldsPanelCollapsed] = useState(true);
+  const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
+  const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
+  const assetsPanelRef = useRef<HTMLElement | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
   const [isViewportToolsHudVisible, setIsViewportToolsHudVisible] = useState(true);
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -364,11 +408,12 @@ export function App() {
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(480);
+  const [fieldsHeight, setFieldsHeight] = useState(220);
   const [leftPanelWidth, setLeftPanelWidth] = useState(() => Math.max(240, Math.min(readStoredNumberPreference(LEFT_PANEL_WIDTH_KEY, 280), 520)));
   const [rightPanelWidth, setRightPanelWidth] = useState(() => Math.max(320, Math.min(readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 320), 620)));
   const [timelineHeight, setTimelineHeight] = useState(() => readStoredNumberPreference(TIMELINE_HEIGHT_KEY, 300));
   const [isTimelineVisible, setIsTimelineVisible] = useState(() => readStoredBooleanPreference(TIMELINE_VISIBLE_KEY, true));
-  const [resizeMode, setResizeMode] = useState<"hierarchy" | "left-sidebar" | "right-sidebar" | "timeline" | null>(null);
+  const [resizeMode, setResizeMode] = useState<"hierarchy" | "left-sidebar" | "right-sidebar" | "timeline" | "fields" | null>(null);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => (
     typeof window === "undefined" ? "desktop" : resolveLayoutMode(window.innerWidth)
   ));
@@ -399,8 +444,9 @@ export function App() {
       "--left-w": `${leftPanelWidth}px`,
       "--tl-h": `${timelineHeight}px`,
       "--hierarchy-h": `${hierarchyHeight}px`,
+      "--fields-h": `${fieldsHeight}px`,
     }) as CSSProperties,
-    [leftPanelWidth, rightPanelWidth, timelineHeight, hierarchyHeight],
+    [leftPanelWidth, rightPanelWidth, timelineHeight, hierarchyHeight, fieldsHeight],
   );
   const selectedNodeIds = storeView.selectedNodeIds;
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
@@ -408,6 +454,30 @@ export function App() {
   const selectedNode = storeView.selectedNode;
   const selectedNodes = storeView.selectedNodes;
   const inspectorNode = selectedNodeCount > 1 ? undefined : selectedNode;
+  const editingMaterial = useMemo(
+    () => storeView.materials.find((material) => material.id === editingMaterialId) ?? null,
+    [storeView.materials, editingMaterialId],
+  );
+  const totalMaterialUsage = useMemo(
+    () => countMaterialUsage(storeView.blueprintNodes),
+    [storeView.blueprintNodes],
+  );
+
+  const previousSelectedNodeIdRef = useRef(storeView.selectedNodeId);
+  useEffect(() => {
+    if (storeView.selectedNodeId !== previousSelectedNodeIdRef.current) {
+      previousSelectedNodeIdRef.current = storeView.selectedNodeId;
+      if (editingMaterialId) {
+        setEditingMaterialId(null);
+      }
+    }
+  }, [storeView.selectedNodeId, editingMaterialId]);
+
+  useEffect(() => {
+    if (editingMaterialId && !storeView.materials.some((material) => material.id === editingMaterialId)) {
+      setEditingMaterialId(null);
+    }
+  }, [storeView.materials, editingMaterialId]);
   const selectedRootIds = useMemo(
     () => store.getSelectionRootIds(selectedNodeIds),
     [selectedNodeIds, store, storeView.blueprintNodes],
@@ -1005,8 +1075,22 @@ export function App() {
       return;
     }
 
+    const assetsPanelHasFocus =
+      typeof document !== "undefined" &&
+      Boolean(assetsPanelRef.current?.contains(document.activeElement));
+    if (
+      assetsPanelHasFocus &&
+      runtimePanelTab === "materials" &&
+      selectedMaterialId &&
+      store.getMaterial(selectedMaterialId)
+    ) {
+      store.removeMaterial(selectedMaterialId);
+      setTransientStatus("Material deleted.");
+      return;
+    }
+
     handleDelete();
-  }, [handleDelete, handleRemoveAnimationKeyframe, selectedKeyframeId, selectedTrackId]);
+  }, [handleDelete, handleRemoveAnimationKeyframe, selectedKeyframeId, selectedTrackId, selectedMaterialId, runtimePanelTab, store, setTransientStatus]);
 
   const handleDuplicate = useCallback((nodeId?: string | null) => {
     const targetId = nodeId ?? storeView.selectedNodeId;
@@ -1450,6 +1534,11 @@ export function App() {
     setResizeMode("timeline");
   }, []);
 
+  const startFieldsResizing = useCallback((event: ReactPointerEvent) => {
+    event.preventDefault();
+    setResizeMode("fields");
+  }, []);
+
   useEffect(() => {
     if (!resizeMode) return;
 
@@ -1481,6 +1570,16 @@ export function App() {
         const rect = body.getBoundingClientRect();
         const newWidth = rect.right - event.clientX;
         setRightPanelWidth(Math.max(320, Math.min(newWidth, 620)));
+        return;
+      }
+
+      if (resizeMode === "fields") {
+        const panel = document.querySelector(".app__col--right");
+        if (!panel) return;
+
+        const rect = panel.getBoundingClientRect();
+        const newHeight = rect.bottom - event.clientY;
+        setFieldsHeight(Math.max(80, Math.min(newHeight, rect.height - 200)));
         return;
       }
 
@@ -2037,85 +2136,118 @@ export function App() {
                 onPointerDown={startHierarchyResizing}
               />
 
-              <section className="panel">
+              <section
+                ref={assetsPanelRef}
+                data-asset-panel="true"
+                className={`panel${isAssetsPanelCollapsed ? " panel--collapsed" : ""}`}
+              >
                 <div className="panel__hd">
-                  <span className="panel__hd-icon"><ObjectDataIcon width={12} height={12} /></span>
-                  <span className="panel__hd-title">Runtime Fields</span>
+                  <button
+                    type="button"
+                    className="panel__hd-toggle"
+                    onClick={() => setIsAssetsPanelCollapsed((value) => !value)}
+                    aria-expanded={!isAssetsPanelCollapsed}
+                    title={isAssetsPanelCollapsed ? "Expand Assets" : "Collapse Assets"}
+                    aria-label={isAssetsPanelCollapsed ? "Expand Assets" : "Collapse Assets"}
+                  >
+                    {isAssetsPanelCollapsed
+                      ? <ChevronRightIcon width={10} height={10} />
+                      : <ChevronDownIcon width={10} height={10} />}
+                  </button>
+                  <span className="panel__hd-icon"><FileIcon width={12} height={12} /></span>
+                  <span className="panel__hd-title">Assets</span>
                   <span className="panel__hd-meta">
-                    {runtimePanelTab === "fields" ? storeView.editableFields.length : storeView.animation.clips.length}
+                    {runtimePanelTab === "materials"
+                      ? storeView.materials.length
+                      : storeView.animation.clips.length}
                   </span>
                   <div className="panel__hd-spacer" />
-                  <div className="ptabs" role="tablist" aria-label="Runtime panel tabs">
-                    <button
-                      type="button"
-                      className={`ptab${runtimePanelTab === "animations" ? " is-active" : ""}`}
-                      onClick={() => setRuntimePanelTab("animations")}
-                      role="tab"
-                      aria-selected={runtimePanelTab === "animations"}
-                    >
-                      Animations
-                    </button>
-                    <button
-                      type="button"
-                      className={`ptab${runtimePanelTab === "fields" ? " is-active" : ""}`}
-                      onClick={() => setRuntimePanelTab("fields")}
-                      role="tab"
-                      aria-selected={runtimePanelTab === "fields"}
-                    >
-                      Fields
-                    </button>
-                  </div>
+                  {!isAssetsPanelCollapsed ? (
+                    <div className="ptabs" role="tablist" aria-label="Assets panel tabs">
+                      <button
+                        type="button"
+                        className={`ptab${runtimePanelTab === "animations" ? " is-active" : ""}`}
+                        onClick={() => setRuntimePanelTab("animations")}
+                        role="tab"
+                        aria-selected={runtimePanelTab === "animations"}
+                      >
+                        Animations
+                      </button>
+                      <button
+                        type="button"
+                        className={`ptab${runtimePanelTab === "materials" ? " is-active" : ""}`}
+                        onClick={() => setRuntimePanelTab("materials")}
+                        role="tab"
+                        aria-selected={runtimePanelTab === "materials"}
+                      >
+                        Materials
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
 
-                <div className="panel__bd panel__bd--fields">
-                  {runtimePanelTab === "animations" ? (
-                    <div className="runtime-animations">
-                      <div className="runtime-animations__head">
-                        <span>Timelines</span>
-                        <button
-                          type="button"
-                          className="ibtn"
-                          onClick={handleCreateAnimationClip}
-                          aria-label="New animation"
-                          title="New animation"
-                        >
-                          <PlusIcon width={11} height={11} />
-                        </button>
-                      </div>
-                      <div className="runtime-animations__list">
-                        {storeView.animation.clips.map((clip) => (
+                {!isAssetsPanelCollapsed ? (
+                  <div className="panel__bd panel__bd--fields">
+                    {runtimePanelTab === "animations" ? (
+                      <div className="runtime-animations">
+                        <div className="runtime-animations__head">
+                          <span>Timelines</span>
                           <button
-                            key={clip.id}
                             type="button"
-                            className={`runtime-animation${activeClip?.id === clip.id ? " is-active" : ""}`}
-                            onClick={() => handleSelectAnimationClip(clip.id)}
+                            className="ibtn"
+                            onClick={handleCreateAnimationClip}
+                            aria-label="New animation"
+                            title="New animation"
                           >
-                            <span className="runtime-animation__icon">
-                              <TimelineIcon width={12} height={12} />
-                            </span>
-                            <span className="runtime-animation__meta">
-                              <span className="runtime-animation__name">{clip.name}</span>
-                              <span className="runtime-animation__sub">{`0-${clip.durationFrames}f / ${clip.tracks.length} channels`}</span>
-                            </span>
-                            <span className="runtime-animation__fps">{clip.fps}fps</span>
+                            <PlusIcon width={11} height={11} />
                           </button>
-                        ))}
+                        </div>
+                        <div className="runtime-animations__list">
+                          {storeView.animation.clips.map((clip) => (
+                            <button
+                              key={clip.id}
+                              type="button"
+                              className={`runtime-animation${activeClip?.id === clip.id ? " is-active" : ""}`}
+                              onClick={() => handleSelectAnimationClip(clip.id)}
+                            >
+                              <span className="runtime-animation__icon">
+                                <TimelineIcon width={12} height={12} />
+                              </span>
+                              <span className="runtime-animation__meta">
+                                <span className="runtime-animation__name">{clip.name}</span>
+                                <span className="runtime-animation__sub">{`0-${clip.durationFrames}f / ${clip.tracks.length} channels`}</span>
+                              </span>
+                              <span className="runtime-animation__fps">{clip.fps}fps</span>
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <FieldsPanel
-                      entries={storeView.editableFields}
-                      onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
-                      onRemoveEditable={(nodeId, path) => {
-                        const node = store.getNode(nodeId);
-                        const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
-                        if (definition) {
-                          store.toggleEditableProperty(nodeId, definition, false);
-                        }
-                      }}
-                    />
-                  )}
-                </div>
+                    ) : (
+                      <MaterialsPanel
+                        materials={storeView.materials}
+                        hasSelection={storeView.selectedNodes.some((node) => node.type !== "group")}
+                        selectionUsesMaterialId={resolveSelectionMaterialId(storeView.selectedNodes)}
+                        selectionUsageById={countMaterialUsage(storeView.selectedNodes)}
+                        totalUsageById={totalMaterialUsage}
+                        selectedMaterialId={selectedMaterialId}
+                        onSelectMaterial={(materialId) => {
+                          setSelectedMaterialId(materialId);
+                          setEditingMaterialId(materialId);
+                        }}
+                        onCreate={() => store.createMaterial()}
+                        onUnassignSelection={() => {
+                          const targets = storeView.selectedNodes
+                            .filter((node) => node.type !== "group")
+                            .map((node) => node.id);
+                          if (targets.length > 0) {
+                            store.unassignMaterialFromNodes(targets);
+                          }
+                        }}
+                        onRemove={(materialId) => store.removeMaterial(materialId)}
+                      />
+                    )}
+                  </div>
+                ) : null}
               </section>
             </aside>
 
@@ -2295,58 +2427,132 @@ export function App() {
               data-role="right-separator"
             />
 
-            {/* Right column — Properties/Material */}
-            <aside className="app__col app__col--right">
-              <div className="panel__hd">
-                <div className="ptabs" role="tablist" aria-label="Right panel tabs">
-                  <button
-                    type="button"
-                    className={`ptab${rightPanelTab === "properties" ? " is-active" : ""}`}
-                    onClick={() => setRightPanelTab("properties")}
-                    role="tab"
-                    aria-selected={rightPanelTab === "properties"}
-                  >
-                    Properties
-                  </button>
-                  <button
-                    type="button"
-                    className={`ptab${rightPanelTab === "material" ? " is-active" : ""}`}
-                    onClick={() => setRightPanelTab("material")}
-                    role="tab"
-                    aria-selected={rightPanelTab === "material"}
-                  >
-                    Material
-                  </button>
-                </div>
-                <div className="panel__hd-spacer" />
-              </div>
+            {/* Right column — Inspector + Fields */}
+            <aside
+              className={`app__col app__col--right${isFieldsPanelCollapsed ? " is-fields-collapsed" : ""}`}
+            >
+              <section className="panel">
+                {editingMaterial ? (
+                  <>
+                    <div className="panel__hd">
+                      <span className="panel__hd-icon"><MaterialIcon width={12} height={12} /></span>
+                      <span className="panel__hd-title">Material</span>
+                      <span className="panel__hd-meta">{editingMaterial.name}</span>
+                      <div className="panel__hd-spacer" />
+                    </div>
+                    <div className="panel__bd panel__bd--fields">
+                      <MaterialAssetEditor
+                        material={editingMaterial}
+                        usageCount={totalMaterialUsage[editingMaterial.id] ?? 0}
+                        onRename={(materialId, name) => store.renameMaterial(materialId, name)}
+                        onUpdate={(materialId, definition, value) =>
+                          store.updateMaterialAsset(materialId, definition, value)
+                        }
+                        onClose={() => setEditingMaterialId(null)}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="panel__hd">
+                      <div className="ptabs" role="tablist" aria-label="Right panel tabs">
+                        <button
+                          type="button"
+                          className={`ptab${rightPanelTab === "properties" ? " is-active" : ""}`}
+                          onClick={() => setRightPanelTab("properties")}
+                          role="tab"
+                          aria-selected={rightPanelTab === "properties"}
+                        >
+                          Properties
+                        </button>
+                        <button
+                          type="button"
+                          className={`ptab${rightPanelTab === "material" ? " is-active" : ""}`}
+                          onClick={() => setRightPanelTab("material")}
+                          role="tab"
+                          aria-selected={rightPanelTab === "material"}
+                        >
+                          Material
+                        </button>
+                      </div>
+                      <div className="panel__hd-spacer" />
+                    </div>
 
-              <div className="panel__bd">
-                <InspectorPanel
-                  node={inspectorNode}
-                  nodes={selectedNodes}
-                  mode={rightPanelTab}
-                  emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
-                  fonts={storeView.fonts}
-                  onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
-                  onParentChange={(nodeId, parentId) => {
-                    const eligibleChildren = store.getNodeChildren(parentId);
-                    store.moveNode(nodeId, parentId, eligibleChildren.length);
-                  }}
-                  onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
-                  onGroupPivotPresetApply={handleApplyGroupPivotPreset}
-                  getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
-                  onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
-                  onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
-                  onPropertyEditStart={() => store.beginHistoryTransaction()}
-                  onPropertyEditEnd={() => store.commitHistoryTransaction("ui")}
-                  onPropertyEditCancel={() => store.cancelHistoryTransaction("ui")}
-                  onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
-                  onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
-                  onImportFont={() => fontInputRef.current?.click()}
-                  onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
-                />
-              </div>
+                    <div className="panel__bd">
+                      <InspectorPanel
+                        node={inspectorNode}
+                        nodes={selectedNodes}
+                        mode={rightPanelTab}
+                        emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
+                        fonts={storeView.fonts}
+                        materials={storeView.materials}
+                        onNodeNameChange={(nodeId, value) => store.updateNodeName(nodeId, value)}
+                        onParentChange={(nodeId, parentId) => {
+                          const eligibleChildren = store.getNodeChildren(parentId);
+                          store.moveNode(nodeId, parentId, eligibleChildren.length);
+                        }}
+                        onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
+                        onGroupPivotPresetApply={handleApplyGroupPivotPreset}
+                        getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
+                        onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
+                        onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
+                        onPropertyEditStart={() => store.beginHistoryTransaction()}
+                        onPropertyEditEnd={() => store.commitHistoryTransaction("ui")}
+                        onPropertyEditCancel={() => store.cancelHistoryTransaction("ui")}
+                        onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
+                        onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
+                        onImportFont={() => fontInputRef.current?.click()}
+                        onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}
+                        onUnbindMaterial={(nodeIds) => store.unassignMaterialFromNodes(nodeIds)}
+                        onAssignMaterial={(nodeIds, materialId) => store.assignMaterialToNodes(nodeIds, materialId)}
+                      />
+                    </div>
+                  </>
+                )}
+              </section>
+
+              <div
+                className={`app__sep app__sep--row${resizeMode === "fields" ? " is-active" : ""}${isFieldsPanelCollapsed ? " is-disabled" : ""}`}
+                onPointerDown={isFieldsPanelCollapsed ? undefined : startFieldsResizing}
+                aria-hidden="true"
+              />
+
+              <section className={`panel${isFieldsPanelCollapsed ? " panel--collapsed" : ""}`}>
+                <div className="panel__hd">
+                  <button
+                    type="button"
+                    className="panel__hd-toggle"
+                    onClick={() => setIsFieldsPanelCollapsed((value) => !value)}
+                    aria-expanded={!isFieldsPanelCollapsed}
+                    title={isFieldsPanelCollapsed ? "Expand Fields" : "Collapse Fields"}
+                    aria-label={isFieldsPanelCollapsed ? "Expand Fields" : "Collapse Fields"}
+                  >
+                    {isFieldsPanelCollapsed
+                      ? <ChevronRightIcon width={10} height={10} />
+                      : <ChevronDownIcon width={10} height={10} />}
+                  </button>
+                  <span className="panel__hd-icon"><ObjectDataIcon width={12} height={12} /></span>
+                  <span className="panel__hd-title">Fields</span>
+                  <span className="panel__hd-meta">{storeView.editableFields.length}</span>
+                  <div className="panel__hd-spacer" />
+                </div>
+
+                {!isFieldsPanelCollapsed ? (
+                  <div className="panel__bd panel__bd--fields">
+                    <FieldsPanel
+                      entries={storeView.editableFields}
+                      onUpdateBinding={(nodeId, path, patch) => store.updateEditableBinding(nodeId, path, patch)}
+                      onRemoveEditable={(nodeId, path) => {
+                        const node = store.getNode(nodeId);
+                        const definition = node ? getPropertyDefinitions(node).find((entry) => entry.path === path) : undefined;
+                        if (definition) {
+                          store.toggleEditableProperty(nodeId, definition, false);
+                        }
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </section>
             </aside>
           </>
         )}

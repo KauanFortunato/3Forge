@@ -405,6 +405,29 @@ export function XIcon(props: IconProps) {
   );
 }
 
+export function AssignIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M7 1.7v6.9" />
+      <path d="m4.4 6 2.6 2.6L9.6 6" />
+      <path d="M2.4 9.5v1.4a1.2 1.2 0 0 0 1.2 1.2h6.8a1.2 1.2 0 0 0 1.2-1.2V9.5" />
+    </Ico>
+  );
+}
+
+export function UnlinkIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M5.6 6.4 2.8 9.2a1.8 1.8 0 0 0 2.55 2.55L7 10.1" />
+      <path d="m8.4 7.6 2.8-2.8a1.8 1.8 0 0 0-2.55-2.55L7 3.9" />
+      <path d="M9.6 1.6V3" />
+      <path d="M11.4 3.6h1.4" />
+      <path d="M4.4 12.4V11" />
+      <path d="M1.2 10.4h1.4" />
+    </Ico>
+  );
+}
+
 export function SaveIcon(props: IconProps) {
   return (
     <Ico {...props}>
