@@ -898,17 +898,21 @@ describe("App", () => {
     expect(toolbar?.querySelector(".playbar")).toBeNull();
   });
 
-  it("triggers the export package download when the toolbar Export button is clicked", async () => {
+  it("triggers the export package download when the File > Export > ZIP menu item is clicked", async () => {
     persistLocalWorkspace("Export Toolbar");
     markWorkspaceSessionActive();
     mockNavigationType("reload");
 
     render(<App />);
 
-    const toolbar = document.querySelector(".toolbar") as HTMLElement | null;
-    expect(toolbar).toBeTruthy();
-    const exportButton = within(toolbar as HTMLElement).getByRole("button", { name: "Export" });
-    fireEvent.click(exportButton);
+    const fileMenuButton = screen.getByRole("button", { name: "File" });
+    fireEvent.click(fileMenuButton);
+
+    const exportItem = await screen.findByRole("button", { name: /Export/ });
+    fireEvent.click(exportItem);
+
+    const zipItem = await screen.findByRole("button", { name: "ZIP file" });
+    fireEvent.click(zipItem);
 
     await waitFor(() => {
       expect(exportPackageMocks.createExportPackageZip).toHaveBeenCalledTimes(1);

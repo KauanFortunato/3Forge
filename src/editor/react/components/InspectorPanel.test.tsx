@@ -1,9 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createDefaultFontAsset } from "../../fonts";
 import { createNode, ROOT_NODE_ID } from "../../state";
 import { InspectorPanel } from "./InspectorPanel";
+
+async function pickCustomSelect(user: UserEvent, combobox: HTMLElement, optionLabel: string) {
+  await user.click(combobox);
+  const option = await screen.findByRole("option", { name: optionLabel });
+  await user.click(option);
+}
 
 function createCommonProps() {
   const rootGroup = createNode("group", null, ROOT_NODE_ID);
@@ -48,8 +55,8 @@ describe("InspectorPanel", () => {
     await user.tab();
 
     const comboBoxes = screen.getAllByRole("combobox");
-    await user.selectOptions(comboBoxes[0], "group-1");
-    await user.selectOptions(comboBoxes[1], "left");
+    await pickCustomSelect(user, comboBoxes[0], "Wrapper");
+    await pickCustomSelect(user, comboBoxes[1], "Left");
     await user.click(screen.getByLabelText("Visible"));
     await user.click(screen.getByLabelText("Editable Visible"));
 
@@ -96,7 +103,7 @@ describe("InspectorPanel", () => {
     );
 
     const fontSelect = screen.getByRole("combobox", { name: "Active Font" });
-    await user.selectOptions(fontSelect, "fixture-font");
+    await pickCustomSelect(user, fontSelect, "Fixture Font");
     await user.click(screen.getByRole("button", { name: "Import font" }));
 
     expect(props.onTextFontChange).toHaveBeenCalledWith("text-1", "fixture-font");
@@ -116,7 +123,7 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Group pivot preset" }), "bottom-center");
+    await pickCustomSelect(user, screen.getByRole("combobox", { name: "Group pivot preset" }), "Bottom Center");
     await user.click(screen.getByRole("button", { name: "Apply Pivot" }));
 
     expect(props.onGroupPivotPresetApply).toHaveBeenCalledWith("group-1", "bottom-center");
