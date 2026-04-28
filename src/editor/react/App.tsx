@@ -2478,7 +2478,7 @@ export function App() {
                       <InspectorPanel
                         node={inspectorNode}
                         nodes={selectedNodes}
-                        mode={rightPanelTab}
+                        mode={rightPanelTab === "material" ? "material" : "all"}
                         emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
                         fonts={storeView.fonts}
                         materials={storeView.materials}
