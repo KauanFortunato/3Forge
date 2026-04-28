@@ -393,7 +393,6 @@ export function App() {
   const [isFieldsPanelCollapsed, setIsFieldsPanelCollapsed] = useState(true);
   const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
-  const assetsPanelRef = useRef<HTMLElement | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
   const [isViewportToolsHudVisible, setIsViewportToolsHudVisible] = useState(true);
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -1070,27 +1069,21 @@ export function App() {
   }, [resolveContextSelectionRootIds, selectedRootIds, setTransientStatus, store]);
 
   const handleDeleteSelection = useCallback(() => {
+    if (editingMaterialId && store.getMaterial(editingMaterialId)) {
+      store.removeMaterial(editingMaterialId);
+      setEditingMaterialId(null);
+      setSelectedMaterialId(null);
+      setTransientStatus("Material deleted.");
+      return;
+    }
+
     if (selectedTrackId && selectedKeyframeId) {
       handleRemoveAnimationKeyframe(selectedTrackId, selectedKeyframeId);
       return;
     }
 
-    const assetsPanelHasFocus =
-      typeof document !== "undefined" &&
-      Boolean(assetsPanelRef.current?.contains(document.activeElement));
-    if (
-      assetsPanelHasFocus &&
-      runtimePanelTab === "materials" &&
-      selectedMaterialId &&
-      store.getMaterial(selectedMaterialId)
-    ) {
-      store.removeMaterial(selectedMaterialId);
-      setTransientStatus("Material deleted.");
-      return;
-    }
-
     handleDelete();
-  }, [handleDelete, handleRemoveAnimationKeyframe, selectedKeyframeId, selectedTrackId, selectedMaterialId, runtimePanelTab, store, setTransientStatus]);
+  }, [handleDelete, handleRemoveAnimationKeyframe, selectedKeyframeId, selectedTrackId, editingMaterialId, store, setTransientStatus]);
 
   const handleDuplicate = useCallback((nodeId?: string | null) => {
     const targetId = nodeId ?? storeView.selectedNodeId;
@@ -2137,7 +2130,6 @@ export function App() {
               />
 
               <section
-                ref={assetsPanelRef}
                 data-asset-panel="true"
                 className={`panel${isAssetsPanelCollapsed ? " panel--collapsed" : ""}`}
               >
