@@ -275,6 +275,7 @@ describe("exported component runtime", () => {
       version: 1,
       componentName: "Shadow Sample",
       fonts: [],
+      materials: [],
       nodes: [root, litBox, noShadowBox],
       animation: createDefaultAnimation(),
     };
@@ -391,6 +392,7 @@ function createAnimatedBlueprint(): ComponentBlueprint {
     version: 1,
     componentName: "Runtime Export Sample",
     fonts: [],
+    materials: [],
     nodes: [root, firstBox, secondBox],
     animation: {
       ...createDefaultAnimation(),
@@ -426,6 +428,7 @@ function createTrailingHoldBlueprint(): ComponentBlueprint {
     version: 1,
     componentName: "Trailing Hold Sample",
     fonts: [],
+    materials: [],
     nodes: [root, holdBox],
     animation: {
       ...createDefaultAnimation(),
@@ -457,6 +460,7 @@ function createQuickPlaybackBlueprint(): ComponentBlueprint {
     version: 1,
     componentName: "Quick Playback Sample",
     fonts: [],
+    materials: [],
     nodes: [root, quickBox],
     animation: {
       ...createDefaultAnimation(),
@@ -489,6 +493,7 @@ function createVisibleAnimationBlueprint(): ComponentBlueprint {
     version: 1,
     componentName: "Visible Animation Sample",
     fonts: [],
+    materials: [],
     nodes: [root, blinkBox],
     animation: {
       ...createDefaultAnimation(),
@@ -521,6 +526,7 @@ function createDelayedVisibleAnimationBlueprint(): ComponentBlueprint {
     version: 1,
     componentName: "Delayed Visible Animation Sample",
     fonts: [],
+    materials: [],
     nodes: [root, blinkBox],
     animation: {
       ...createDefaultAnimation(),
@@ -553,6 +559,7 @@ function createDelayedNumericAnimationBlueprint(): ComponentBlueprint {
     version: 1,
     componentName: "Delayed Numeric Sample",
     fonts: [],
+    materials: [],
     nodes: [root, delayedBox],
     animation: {
       ...createDefaultAnimation(),

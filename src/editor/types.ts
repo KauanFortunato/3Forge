@@ -63,6 +63,12 @@ export interface MaterialSpec {
   receiveShadow: boolean;
 }
 
+export interface MaterialAsset {
+  id: string;
+  name: string;
+  spec: MaterialSpec;
+}
+
 export interface FontAsset {
   id: string;
   name: string;
@@ -137,6 +143,7 @@ export interface BoxNode extends BaseEditorNode {
     depth: number;
   };
   material: MaterialSpec;
+  materialId?: string;
 }
 
 export interface CircleNode extends BaseEditorNode {
@@ -148,6 +155,7 @@ export interface CircleNode extends BaseEditorNode {
     thetaLenght: number;
   };
   material: MaterialSpec;
+  materialId?: string;
 }
 
 export interface SphereNode extends BaseEditorNode {
@@ -156,6 +164,7 @@ export interface SphereNode extends BaseEditorNode {
     radius: number;
   };
   material: MaterialSpec;
+  materialId?: string;
 }
 
 export interface CylinderNode extends BaseEditorNode {
@@ -166,6 +175,7 @@ export interface CylinderNode extends BaseEditorNode {
     height: number;
   };
   material: MaterialSpec;
+  materialId?: string;
 }
 
 export interface PlaneNode extends BaseEditorNode {
@@ -175,6 +185,7 @@ export interface PlaneNode extends BaseEditorNode {
     height: number;
   };
   material: MaterialSpec;
+  materialId?: string;
 }
 
 export interface TextNode extends BaseEditorNode {
@@ -190,6 +201,7 @@ export interface TextNode extends BaseEditorNode {
     bevelSize: number;
   };
   material: MaterialSpec;
+  materialId?: string;
 }
 
 export interface ImageNode extends BaseEditorNode {
@@ -200,6 +212,7 @@ export interface ImageNode extends BaseEditorNode {
   };
   image: ImageAsset;
   material: MaterialSpec;
+  materialId?: string;
 }
 
 export type EditorNode = GroupNode | BoxNode | CircleNode | SphereNode | CylinderNode | PlaneNode | TextNode | ImageNode;
@@ -208,6 +221,7 @@ export interface ComponentBlueprint {
   version: 1;
   componentName: string;
   fonts: FontAsset[];
+  materials: MaterialAsset[];
   nodes: EditorNode[];
   animation: ComponentAnimation;
 }
@@ -238,6 +252,7 @@ export type EditorStoreChangeReason =
   | "import"
   | "history"
   | "font"
+  | "material"
   | "view"
   | "animation"
   | "propertyClipboard";

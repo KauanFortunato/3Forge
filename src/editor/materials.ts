@@ -1,4 +1,4 @@
-import type { MaterialSpec, MaterialType, NodePropertyDefinition } from "./types";
+import type { MaterialAsset, MaterialSpec, MaterialType, NodePropertyDefinition } from "./types";
 
 export const MATERIAL_TYPE_OPTIONS = [
   { label: "BasicMaterial", value: "basic" },
@@ -100,6 +100,50 @@ export function normalizeMaterialSpec(value: unknown, fallback: MaterialSpec): M
     castShadow: typeof source.castShadow === "boolean" ? source.castShadow : true,
     receiveShadow: typeof source.receiveShadow === "boolean" ? source.receiveShadow : true,
   };
+}
+
+export function cloneMaterialSpec(spec: MaterialSpec): MaterialSpec {
+  return { ...spec };
+}
+
+export function normalizeMaterialAsset(value: unknown, fallbackSpec: MaterialSpec): MaterialAsset | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const source = value as Record<string, unknown>;
+  const id = typeof source.id === "string" && source.id.trim() ? source.id.trim() : null;
+  if (!id) {
+    return null;
+  }
+
+  const name = typeof source.name === "string" && source.name.trim()
+    ? source.name.trim()
+    : "Material";
+
+  return {
+    id,
+    name,
+    spec: normalizeMaterialSpec(source.spec, fallbackSpec),
+  };
+}
+
+export function normalizeMaterialLibrary(value: unknown): MaterialAsset[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const fallbackSpec = createMaterialSpec();
+  const seen = new Set<string>();
+  const result: MaterialAsset[] = [];
+  for (const entry of value) {
+    const asset = normalizeMaterialAsset(entry, fallbackSpec);
+    if (!asset || seen.has(asset.id)) {
+      continue;
+    }
+    seen.add(asset.id);
+    result.push(asset);
+  }
+  return result;
 }
 
 function clampNumber(value: number, min?: number, max?: number): number {

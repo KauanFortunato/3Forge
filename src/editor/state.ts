@@ -16,7 +16,14 @@ import {
 } from "./animation";
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset } from "./fonts";
 import { createTransparentImageAsset, fitImageToMaxSize } from "./images";
-import { createMaterialSpec, getMaterialPropertyDefinitions, MATERIAL_SHADOW_PROPERTY_DEFINITIONS, normalizeMaterialSpec } from "./materials";
+import {
+  cloneMaterialSpec,
+  createMaterialSpec,
+  getMaterialPropertyDefinitions,
+  MATERIAL_SHADOW_PROPERTY_DEFINITIONS,
+  normalizeMaterialLibrary,
+  normalizeMaterialSpec,
+} from "./materials";
 import {
   capturePropertiesFromNode,
   resolveApplicableEntries,
@@ -44,6 +51,7 @@ import type {
   GroupPivotPreset,
   ImageAsset,
   ImageNode,
+  MaterialAsset,
   MaterialSpec,
   NodeOriginDepth,
   NodeOriginHorizontal,
@@ -176,6 +184,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
     version: 1,
     componentName: "3Forge-Component",
     fonts: [],
+    materials: [],
     nodes: [root, panel, accent, title],
     animation: createDefaultAnimation(),
   };
@@ -733,6 +742,9 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
 
   if ("material" in node) {
     node.material = normalizeMaterial(source.material, node.material);
+    if (typeof source.materialId === "string" && source.materialId.trim()) {
+      (node as { materialId?: string }).materialId = source.materialId.trim();
+    }
   }
 
   if (source.geometry && typeof source.geometry === "object") {
@@ -795,6 +807,8 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
   const importedFonts = normalizeFontLibrary(source.fonts);
   const availableFonts = getAvailableFonts(importedFonts);
   const availableFontIds = new Set(availableFonts.map((font) => font.id));
+  const importedMaterials = normalizeMaterialLibrary(source.materials);
+  const availableMaterialIds = new Set(importedMaterials.map((material) => material.id));
   const importedNodes = Array.isArray(source.nodes)
     ? source.nodes.map(normalizeImportedNode).filter((node): node is EditorNode => Boolean(node))
     : [];
@@ -830,6 +844,18 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     if (node.type === "text" && !availableFontIds.has(node.fontId)) {
       node.fontId = DEFAULT_FONT_ID;
     }
+
+    if (node.type !== "group") {
+      const candidate = (node as { materialId?: string }).materialId;
+      if (candidate && availableMaterialIds.has(candidate)) {
+        const asset = importedMaterials.find((entry) => entry.id === candidate);
+        if (asset) {
+          node.material = cloneMaterialSpec(asset.spec);
+        }
+      } else if (candidate) {
+        delete (node as { materialId?: string }).materialId;
+      }
+    }
   }
 
   const animation = normalizeAnimation(source.animation, new Set(importedNodes.map((node) => node.id)));
@@ -838,6 +864,7 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     version: 1,
     componentName: typeof source.componentName === "string" ? source.componentName : fallback.componentName,
     fonts: importedFonts,
+    materials: importedMaterials,
     nodes: importedNodes,
     animation,
   };
@@ -892,6 +919,10 @@ export class EditorStore extends EventTarget {
 
   get fonts(): FontAsset[] {
     return getAvailableFonts(this._blueprint.fonts);
+  }
+
+  get materials(): MaterialAsset[] {
+    return this._blueprint.materials;
   }
 
   get canUndo(): boolean {
@@ -1022,6 +1053,19 @@ export class EditorStore extends EventTarget {
 
   getFont(fontId: string): FontAsset | undefined {
     return this.fonts.find((font) => font.id === fontId);
+  }
+
+  getMaterial(materialId: string): MaterialAsset | undefined {
+    return this._blueprint.materials.find((material) => material.id === materialId);
+  }
+
+  getNodesUsingMaterial(materialId: string): EditorNode[] {
+    return this._blueprint.nodes.filter((node) => {
+      if (node.type === "group") {
+        return false;
+      }
+      return (node as { materialId?: string }).materialId === materialId;
+    });
   }
 
   isNodeSelected(nodeId: string): boolean {
@@ -2159,6 +2203,14 @@ export class EditorStore extends EventTarget {
       return;
     }
 
+    if (node.type !== "group" && definition.path.startsWith("material.")) {
+      const boundMaterialId = (node as { materialId?: string }).materialId;
+      if (boundMaterialId && this.getMaterial(boundMaterialId)) {
+        this.updateMaterialAsset(boundMaterialId, definition, rawValue, source);
+        return;
+      }
+    }
+
     const currentValue = getPropertyValue(node, definition.path);
     const parsedValue = parseInputValue(definition, rawValue, currentValue);
     if (Object.is(parsedValue, currentValue)) {
@@ -2177,12 +2229,22 @@ export class EditorStore extends EventTarget {
     source: EditorStoreChange["source"] = "ui",
   ): number {
     const uniqueNodeIds = [...new Set(nodeIds)];
+    const isMaterialPath = definition.path.startsWith("material.");
     const updates: Array<{ node: EditorNode; value: unknown }> = [];
+    const materialIdsToUpdate = new Set<string>();
 
     for (const nodeId of uniqueNodeIds) {
       const node = this.getNode(nodeId);
       if (!node) {
         continue;
+      }
+
+      if (isMaterialPath && node.type !== "group") {
+        const boundMaterialId = (node as { materialId?: string }).materialId;
+        if (boundMaterialId && this.getMaterial(boundMaterialId)) {
+          materialIdsToUpdate.add(boundMaterialId);
+          continue;
+        }
       }
 
       const currentValue = getPropertyValue(node, definition.path);
@@ -2198,8 +2260,16 @@ export class EditorStore extends EventTarget {
       updates.push({ node, value: parsedValue });
     }
 
+    let updated = 0;
+    for (const materialId of materialIdsToUpdate) {
+      const didUpdate = this.updateMaterialAsset(materialId, definition, rawValue, source);
+      if (didUpdate) {
+        updated += this.getNodesUsingMaterial(materialId).length;
+      }
+    }
+
     if (updates.length === 0) {
-      return 0;
+      return updated;
     }
 
     this.recordHistorySnapshot();
@@ -2208,7 +2278,7 @@ export class EditorStore extends EventTarget {
     }
 
     this.notify({ reason: "node", source, nodeId: updates[0].node.id });
-    return updates.length;
+    return updated + updates.length;
   }
 
   get propertyClipboard(): PropertyClipboard | null {
@@ -2530,6 +2600,194 @@ export class EditorStore extends EventTarget {
     });
     this.notify({ reason: "font", source });
     return font.id;
+  }
+
+  createMaterial(
+    options: { name?: string; spec?: MaterialSpec } = {},
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    const baseSpec = options.spec ? cloneMaterialSpec(options.spec) : createMaterialSpec();
+    const id = generateId("material");
+    const proposedName = (options.name ?? "").trim() || this.makeUniqueMaterialName("Material");
+    const name = this.makeUniqueMaterialName(proposedName);
+
+    this.recordHistorySnapshot();
+    this._blueprint.materials.push({ id, name, spec: baseSpec });
+    this.notify({ reason: "material", source });
+    return id;
+  }
+
+  createMaterialFromNode(
+    nodeId: string,
+    options: { name?: string; assignToNode?: boolean } = {},
+    source: EditorStoreChange["source"] = "ui",
+  ): string | null {
+    const node = this.getNode(nodeId);
+    if (!node || node.type === "group") {
+      return null;
+    }
+    const proposed = (options.name ?? "").trim() || `${node.name} Material`;
+    const id = generateId("material");
+    const name = this.makeUniqueMaterialName(proposed);
+
+    this.recordHistorySnapshot();
+    this._blueprint.materials.push({ id, name, spec: cloneMaterialSpec(node.material) });
+    if (options.assignToNode !== false) {
+      (node as { materialId?: string }).materialId = id;
+    }
+    this.notify({ reason: "material", source, nodeId });
+    return id;
+  }
+
+  renameMaterial(
+    materialId: string,
+    nextName: string,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const asset = this.getMaterial(materialId);
+    if (!asset) {
+      return false;
+    }
+    const proposed = nextName.trim();
+    if (!proposed || proposed === asset.name) {
+      return false;
+    }
+    const unique = this.makeUniqueMaterialName(proposed, materialId);
+
+    this.recordHistorySnapshot();
+    asset.name = unique;
+    this.notify({ reason: "material", source });
+    return true;
+  }
+
+  updateMaterialAsset(
+    materialId: string,
+    definition: NodePropertyDefinition,
+    rawValue: string | number | boolean,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const asset = this.getMaterial(materialId);
+    if (!asset) {
+      return false;
+    }
+    if (!definition.path.startsWith("material.")) {
+      return false;
+    }
+    const subPath = definition.path.slice("material.".length);
+    const specRecord = asset.spec as unknown as Record<string, unknown>;
+    const currentValue = specRecord[subPath];
+    const parsedValue = parseInputValue(definition, rawValue, currentValue);
+    if (Object.is(parsedValue, currentValue)) {
+      return false;
+    }
+
+    this.recordHistorySnapshot();
+    specRecord[subPath] = parsedValue;
+    for (const node of this.getNodesUsingMaterial(materialId)) {
+      if (node.type === "group") {
+        continue;
+      }
+      (node.material as unknown as Record<string, unknown>)[subPath] = parsedValue;
+    }
+    this.notify({ reason: "material", source });
+    return true;
+  }
+
+  assignMaterialToNodes(
+    nodeIds: string[],
+    materialId: string,
+    source: EditorStoreChange["source"] = "ui",
+  ): number {
+    const asset = this.getMaterial(materialId);
+    if (!asset) {
+      return 0;
+    }
+    const targets: Exclude<EditorNode, { type: "group" }>[] = [];
+    for (const nodeId of [...new Set(nodeIds)]) {
+      const node = this.getNode(nodeId);
+      if (!node || node.type === "group") {
+        continue;
+      }
+      targets.push(node);
+    }
+    if (targets.length === 0) {
+      return 0;
+    }
+
+    this.recordHistorySnapshot();
+    for (const node of targets) {
+      node.materialId = materialId;
+      node.material = cloneMaterialSpec(asset.spec);
+    }
+    this.notify({ reason: "material", source, nodeId: targets[0].id });
+    return targets.length;
+  }
+
+  unassignMaterialFromNodes(
+    nodeIds: string[],
+    source: EditorStoreChange["source"] = "ui",
+  ): number {
+    const targets: EditorNode[] = [];
+    for (const nodeId of [...new Set(nodeIds)]) {
+      const node = this.getNode(nodeId);
+      if (!node || node.type === "group") {
+        continue;
+      }
+      if ((node as { materialId?: string }).materialId === undefined) {
+        continue;
+      }
+      targets.push(node);
+    }
+    if (targets.length === 0) {
+      return 0;
+    }
+
+    this.recordHistorySnapshot();
+    for (const node of targets) {
+      delete (node as { materialId?: string }).materialId;
+    }
+    this.notify({ reason: "material", source, nodeId: targets[0].id });
+    return targets.length;
+  }
+
+  removeMaterial(
+    materialId: string,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const index = this._blueprint.materials.findIndex((material) => material.id === materialId);
+    if (index < 0) {
+      return false;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.materials.splice(index, 1);
+    for (const node of this._blueprint.nodes) {
+      if (node.type === "group") {
+        continue;
+      }
+      if ((node as { materialId?: string }).materialId === materialId) {
+        delete (node as { materialId?: string }).materialId;
+      }
+    }
+    this.notify({ reason: "material", source });
+    return true;
+  }
+
+  private makeUniqueMaterialName(proposed: string, excludeId: string | null = null): string {
+    const base = proposed.trim() || "Material";
+    const taken = new Set(
+      this._blueprint.materials
+        .filter((material) => material.id !== excludeId)
+        .map((material) => material.name),
+    );
+    if (!taken.has(base)) {
+      return base;
+    }
+    let counter = 2;
+    while (taken.has(`${base} ${counter}`)) {
+      counter += 1;
+    }
+    return `${base} ${counter}`;
   }
 
   setNodeTransformFromObject(nodeId: string, object: Object3D, source: EditorStoreChange["source"] = "scene"): void {
