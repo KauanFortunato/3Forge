@@ -1017,6 +1017,17 @@ export class SceneEditor {
   }
 
   private computeSelectionBounds(objects: Object3D[]): boolean {
+    if (objects.length === 0) {
+      this.selectionBounds.makeEmpty();
+      return false;
+    }
+
+    // Box3.setFromObject relies on each object's matrixWorld being current;
+    // after a rebuildScene the freshly created groups still hold identity
+    // world matrices until the next render tick. Propagate the matrices
+    // from the viewport root so the resulting bounds match the visible mesh.
+    this.viewportRoot.updateMatrixWorld(true);
+
     const bounds = new Box3();
     let hasBounds = false;
 
