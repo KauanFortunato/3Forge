@@ -267,4 +267,4 @@ export type EditorStoreChange = {
   nodeId?: string;
 };
 
-export type ViewMode = "rendered" | "solid";
+export type ViewMode = "rendered" | "solid" | "wireframe";

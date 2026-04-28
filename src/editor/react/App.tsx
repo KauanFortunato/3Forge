@@ -50,6 +50,8 @@ import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
 import type { ProjectImageAsset } from "./components/ImageAssetsPanel";
 import { MaterialAssetEditor } from "./components/MaterialAssetEditor";
 import { MaterialsPanel } from "./components/MaterialsPanel";
+import { PieMenu } from "./components/PieMenu";
+import type { PieMenuItem } from "./components/PieMenu";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -59,6 +61,7 @@ import {
   EyeIcon,
   FileIcon,
   FrameIcon,
+  GeometryIcon,
   InfoIcon,
   PlusIcon,
   TrashIcon,
@@ -447,6 +450,7 @@ export function App() {
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fontInputRef = useRef<HTMLInputElement | null>(null);
+  const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const blueprintSnapshot = useMemo(() => store.getSnapshot(), [store, storeView]);
   const blueprintJson = useMemo(() => exportBlueprintToJson(blueprintSnapshot), [blueprintSnapshot]);
@@ -639,7 +643,14 @@ export function App() {
 
     updateLayoutMode();
     window.addEventListener("resize", updateLayoutMode);
-    return () => window.removeEventListener("resize", updateLayoutMode);
+    const trackPointer = (event: PointerEvent) => {
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+    };
+    window.addEventListener("pointermove", trackPointer);
+    return () => {
+      window.removeEventListener("resize", updateLayoutMode);
+      window.removeEventListener("pointermove", trackPointer);
+    };
   }, []);
 
   useEffect(() => {
@@ -1873,6 +1884,103 @@ export function App() {
     store.clearSelection();
   }, [store]);
 
+  const [pieMenu, setPieMenu] = useState<
+    | { kind: "view"; x: number; y: number }
+    | { kind: "tool"; x: number; y: number }
+    | null
+  >(null);
+
+  const closePieMenu = useCallback(() => setPieMenu(null), []);
+
+  const handleOpenViewModePie = useCallback((event: KeyboardEvent) => {
+    if (pieMenu) {
+      return;
+    }
+    const x = lastPointerRef.current.x || window.innerWidth / 2;
+    const y = lastPointerRef.current.y || window.innerHeight / 2;
+    setPieMenu({ kind: "view", x, y });
+  }, [pieMenu]);
+
+  const handleOpenToolPie = useCallback((event: KeyboardEvent) => {
+    if (pieMenu) {
+      return;
+    }
+    const x = lastPointerRef.current.x || window.innerWidth / 2;
+    const y = lastPointerRef.current.y || window.innerHeight / 2;
+    setPieMenu({ kind: "tool", x, y });
+  }, [pieMenu]);
+
+  const viewModePieItems = useMemo<PieMenuItem[]>(() => [
+    {
+      id: "rendered",
+      label: "Rendered",
+      description: "Lit shading with shadows",
+      icon: <ViewRenderedIcon width={16} height={16} />,
+      isActive: storeView.viewMode === "rendered",
+      onSelect: () => {
+        store.setViewMode("rendered");
+        setTransientStatus("View: Rendered");
+      },
+    },
+    {
+      id: "solid",
+      label: "Solid",
+      description: "Flat shading, no shadows",
+      icon: <ViewSolidIcon width={16} height={16} />,
+      isActive: storeView.viewMode === "solid",
+      onSelect: () => {
+        store.setViewMode("solid");
+        setTransientStatus("View: Solid");
+      },
+    },
+    {
+      id: "wireframe",
+      label: "Wireframe",
+      description: "Edges only",
+      icon: <GeometryIcon width={16} height={16} />,
+      isActive: storeView.viewMode === "wireframe",
+      onSelect: () => {
+        store.setViewMode("wireframe");
+        setTransientStatus("View: Wireframe");
+      },
+    },
+  ], [setTransientStatus, store, storeView.viewMode]);
+
+  const toolPieItems = useMemo<PieMenuItem[]>(() => [
+    {
+      id: "select",
+      label: "Select",
+      description: "Pick objects",
+      icon: <CursorIcon width={16} height={16} />,
+      isActive: currentTool === "select",
+      onSelect: () => handleToolChange("select"),
+    },
+    {
+      id: "translate",
+      label: "Move",
+      description: "Translate position",
+      icon: <MoveIcon width={16} height={16} />,
+      isActive: currentTool === "translate",
+      onSelect: () => handleToolChange("translate"),
+    },
+    {
+      id: "rotate",
+      label: "Rotate",
+      description: "Rotate around axis",
+      icon: <RotateIcon width={16} height={16} />,
+      isActive: currentTool === "rotate",
+      onSelect: () => handleToolChange("rotate"),
+    },
+    {
+      id: "scale",
+      label: "Scale",
+      description: "Resize uniformly",
+      icon: <ScaleIcon width={16} height={16} />,
+      isActive: currentTool === "scale",
+      onSelect: () => handleToolChange("scale"),
+    },
+  ], [currentTool, handleToolChange]);
+
   useGlobalHotkeys({
     onUndo: () => {
       if (store.undo()) {
@@ -1902,6 +2010,8 @@ export function App() {
     onStopAnimation: handleAnimationStop,
     onSelectAll: handleSelectAllHotkey,
     onEscapeSelection: handleEscapeSelectionHotkey,
+    onOpenViewModePie: handleOpenViewModePie,
+    onOpenToolPie: handleOpenToolPie,
   });
 
   const menus = useMemo(() => [
@@ -2775,6 +2885,27 @@ export function App() {
       />
 
       <ContextMenu state={contextMenu} onClose={() => setContextMenu(null)} />
+
+      <PieMenu
+        open={pieMenu?.kind === "view"}
+        position={{ x: pieMenu?.kind === "view" ? pieMenu.x : 0, y: pieMenu?.kind === "view" ? pieMenu.y : 0 }}
+        items={viewModePieItems}
+        hotkey="z"
+        title="View Mode"
+        ariaLabel="View mode pie menu"
+        onClose={closePieMenu}
+      />
+
+      <PieMenu
+        open={pieMenu?.kind === "tool"}
+        position={{ x: pieMenu?.kind === "tool" ? pieMenu.x : 0, y: pieMenu?.kind === "tool" ? pieMenu.y : 0 }}
+        items={toolPieItems}
+        hotkey="q"
+        title="Transform Tool"
+        ariaLabel="Transform tool pie menu"
+        onClose={closePieMenu}
+      />
+
       {toast ? (
         <div
           role="status"

@@ -440,7 +440,9 @@ export class SceneEditor {
   }
 
   private updateViewMode(): void {
-    const isRendered = this.store.viewMode === "rendered";
+    const viewMode = this.store.viewMode;
+    const isRendered = viewMode === "rendered";
+    const isWireframe = viewMode === "wireframe";
 
     if (this.mainLight) {
       this.mainLight.castShadow = isRendered;
@@ -453,6 +455,10 @@ export class SceneEditor {
         const material = node && node.type !== "group" ? node.material : undefined;
         object.castShadow = isRendered && (material?.castShadow ?? true);
         object.receiveShadow = isRendered && (material?.receiveShadow ?? true);
+        const meshMaterial = object.material;
+        if (meshMaterial && !Array.isArray(meshMaterial) && "wireframe" in meshMaterial) {
+          (meshMaterial as { wireframe: boolean }).wireframe = isWireframe || Boolean(material?.wireframe);
+        }
       }
     });
   }

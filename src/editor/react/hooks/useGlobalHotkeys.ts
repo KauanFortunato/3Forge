@@ -21,6 +21,8 @@ interface HotkeyHandlers {
   onEscapeSelection?: () => void;
   onCopyProperties?: () => void;
   onPasteProperties?: () => void;
+  onOpenViewModePie?: (event: KeyboardEvent) => void;
+  onOpenToolPie?: (event: KeyboardEvent) => void;
 }
 
 function isOverlayOpen(): boolean {
@@ -208,6 +210,28 @@ export function useGlobalHotkeys(handlers: HotkeyHandlers): void {
       if (event.key.toLowerCase() === "f") {
         event.preventDefault();
         handlers.onFrame();
+        return;
+      }
+
+      if (
+        !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+        && !event.repeat
+        && event.key.toLowerCase() === "z"
+        && handlers.onOpenViewModePie
+      ) {
+        event.preventDefault();
+        handlers.onOpenViewModePie(event);
+        return;
+      }
+
+      if (
+        !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+        && !event.repeat
+        && event.key.toLowerCase() === "q"
+        && handlers.onOpenToolPie
+      ) {
+        event.preventDefault();
+        handlers.onOpenToolPie(event);
         return;
       }
 
