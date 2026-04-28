@@ -2261,38 +2261,45 @@ export function App() {
                       : storeView.animation.clips.length}
                   </span>
                   <div className="panel__hd-spacer" />
-                  {!isAssetsPanelCollapsed ? (
-                    <div className="ptabs" role="tablist" aria-label="Assets panel tabs">
-                      <button
-                        type="button"
-                        className={`ptab${runtimePanelTab === "animations" ? " is-active" : ""}`}
-                        onClick={() => setRuntimePanelTab("animations")}
-                        role="tab"
-                        aria-selected={runtimePanelTab === "animations"}
-                      >
-                        Animations
-                      </button>
-                      <button
-                        type="button"
-                        className={`ptab${runtimePanelTab === "images" ? " is-active" : ""}`}
-                        onClick={() => setRuntimePanelTab("images")}
-                        role="tab"
-                        aria-selected={runtimePanelTab === "images"}
-                      >
-                        Images
-                      </button>
-                      <button
-                        type="button"
-                        className={`ptab${runtimePanelTab === "materials" ? " is-active" : ""}`}
-                        onClick={() => setRuntimePanelTab("materials")}
-                        role="tab"
-                        aria-selected={runtimePanelTab === "materials"}
-                      >
-                        Materials
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
+
+                {!isAssetsPanelCollapsed ? (
+                  <div className="panel__subhd" role="tablist" aria-label="Assets panel tabs">
+                    <button
+                      type="button"
+                      className={`panel__subhd-tab${runtimePanelTab === "animations" ? " is-active" : ""}`}
+                      onClick={() => setRuntimePanelTab("animations")}
+                      role="tab"
+                      aria-selected={runtimePanelTab === "animations"}
+                      title="Animations"
+                    >
+                      <TimelineIcon width={12} height={12} />
+                      <span>Animations</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`panel__subhd-tab${runtimePanelTab === "images" ? " is-active" : ""}`}
+                      onClick={() => setRuntimePanelTab("images")}
+                      role="tab"
+                      aria-selected={runtimePanelTab === "images"}
+                      title="Images"
+                    >
+                      <ImagePropertyIcon width={12} height={12} />
+                      <span>Images</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`panel__subhd-tab${runtimePanelTab === "materials" ? " is-active" : ""}`}
+                      onClick={() => setRuntimePanelTab("materials")}
+                      role="tab"
+                      aria-selected={runtimePanelTab === "materials"}
+                      title="Materials"
+                    >
+                      <MaterialIcon width={12} height={12} />
+                      <span>Materials</span>
+                    </button>
+                  </div>
+                ) : null}
 
                 {!isAssetsPanelCollapsed ? (
                   <div className="panel__bd panel__bd--fields">
