@@ -29,8 +29,8 @@ interface PieMenuProps {
   title?: string;
 }
 
-const DEFAULT_RADIUS = 96;
-const DEAD_ZONE = 24;
+const DEFAULT_RADIUS = 128;
+const DEAD_ZONE = 56;
 
 export function PieMenu({
   open,

@@ -3454,8 +3454,8 @@ code {
   display: grid;
   place-items: center;
   gap: 2px;
-  width: 108px;
-  height: 108px;
+  width: 96px;
+  height: 96px;
   padding: var(--sp-3);
   border-radius: 50%;
   background:
@@ -3486,7 +3486,7 @@ code {
   font-weight: 600;
   letter-spacing: -0.005em;
   line-height: 1.2;
-  max-width: 86px;
+  max-width: 76px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;

@@ -417,7 +417,6 @@ export function App() {
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
-  const [isViewportToolsHudVisible, setIsViewportToolsHudVisible] = useState(true);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isAnimationPlaying, setIsAnimationPlaying] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
@@ -2519,120 +2518,6 @@ export function App() {
                   }}
                   onContextMenu={openViewportContextMenu}
                 />
-                <div className="vp-hud vp-hud--tc vp-hud--tools">
-                  {isViewportToolsHudVisible ? (
-                    <div className="hud-group hud-group--tools" role="group" aria-label="Viewport tools">
-                      <button
-                        type="button"
-                        className={`ibtn${currentTool === "select" ? " is-active" : ""}`}
-                        onClick={() => handleToolChange("select")}
-                        aria-pressed={currentTool === "select"}
-                        aria-label="Select"
-                        title="Select (1)"
-                        data-kbd="1"
-                      >
-                        <CursorIcon width={12} height={12} />
-                      </button>
-                      <button
-                        type="button"
-                        className={`ibtn${currentTool === "translate" ? " is-active" : ""}`}
-                        onClick={() => handleToolChange("translate")}
-                        aria-pressed={currentTool === "translate"}
-                        aria-label="Move"
-                        title="Move (2)"
-                        data-kbd="2"
-                      >
-                        <MoveIcon width={12} height={12} />
-                      </button>
-                      <button
-                        type="button"
-                        className={`ibtn${currentTool === "rotate" ? " is-active" : ""}`}
-                        onClick={() => handleToolChange("rotate")}
-                        aria-pressed={currentTool === "rotate"}
-                        aria-label="Rotate"
-                        title="Rotate (3)"
-                        data-kbd="3"
-                      >
-                        <RotateIcon width={12} height={12} />
-                      </button>
-                      <button
-                        type="button"
-                        className={`ibtn${currentTool === "scale" ? " is-active" : ""}`}
-                        onClick={() => handleToolChange("scale")}
-                        aria-pressed={currentTool === "scale"}
-                        aria-label="Scale"
-                        title="Scale (4)"
-                        data-kbd="4"
-                      >
-                        <ScaleIcon width={12} height={12} />
-                      </button>
-                      <button
-                        type="button"
-                        className="ibtn"
-                        onClick={handleFrameSelection}
-                        aria-label="Frame"
-                        title="Frame (F)"
-                        data-kbd="F"
-                      >
-                        <FrameIcon width={12} height={12} />
-                      </button>
-                      <span className="hud-group__sep" aria-hidden="true" />
-                      <button
-                        type="button"
-                        className="ibtn hud-close"
-                        onClick={() => setIsViewportToolsHudVisible(false)}
-                        aria-label="Hide viewport tools HUD"
-                        title="Hide viewport tools HUD"
-                      >
-                        <XIcon width={12} height={12} />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      className="ibtn hud-toggle"
-                      onClick={() => setIsViewportToolsHudVisible(true)}
-                      aria-label="Show viewport tools HUD"
-                      title="Show viewport tools HUD"
-                    >
-                      <EyeIcon width={12} height={12} />
-                    </button>
-                  )}
-                </div>
-                <div className="vp-hud vp-hud--tr">
-                  <div className="hud-group" role="group" aria-label="Viewport shading">
-                    <button
-                      type="button"
-                      className={`ibtn${storeView.viewMode === "solid" ? " is-active" : ""}`}
-                      onClick={() => store.setViewMode("solid")}
-                      aria-pressed={storeView.viewMode === "solid"}
-                      aria-label="Solid View"
-                      title="Solid View"
-                    >
-                      <ViewSolidIcon width={12} height={12} />
-                    </button>
-                    <button
-                      type="button"
-                      className={`ibtn${storeView.viewMode === "rendered" ? " is-active" : ""}`}
-                      onClick={() => store.setViewMode("rendered")}
-                      aria-pressed={storeView.viewMode === "rendered"}
-                      aria-label="Rendered View"
-                      title="Rendered View"
-                    >
-                      <ViewRenderedIcon width={12} height={12} />
-                    </button>
-                    <button
-                      type="button"
-                      className={`ibtn${storeView.viewMode === "wireframe" ? " is-active" : ""}`}
-                      onClick={() => store.setViewMode("wireframe")}
-                      aria-pressed={storeView.viewMode === "wireframe"}
-                      aria-label="Wireframe View"
-                      title="Wireframe View (Z)"
-                    >
-                      <GeometryIcon width={12} height={12} />
-                    </button>
-                  </div>
-                </div>
               </div>
 
               {showEditingTimeline ? (
