@@ -1,97 +1,122 @@
 <div align="center">
 
-<img src="./public/assets/web/logo_with_name.png" width="320" />
+<img src="./public/assets/web/logo_with_name.png" width="320" alt="3Forge" />
 
-<br/>
+<br />
+<br />
 
-<br/>
-
-<img src="https://img.shields.io/badge/Three.js-black?logo=three.js" />
-<img src="https://img.shields.io/badge/React-19-blue?logo=react" />
-<img src="https://img.shields.io/badge/TypeScript-blue?logo=typescript" />
-<img src="https://img.shields.io/badge/GSAP-green" />
+<img src="https://img.shields.io/badge/Three.js-black?logo=three.js" alt="Three.js" />
+<img src="https://img.shields.io/badge/React-19-blue?logo=react" alt="React 19" />
+<img src="https://img.shields.io/badge/TypeScript-blue?logo=typescript" alt="TypeScript" />
+<img src="https://img.shields.io/badge/GSAP-green" alt="GSAP" />
 
 </div>
-<br/>
-<br/>
+
+<br />
 
 <p align="center">
-  <img src="./documents/demo.gif" width="900" />
+  <img src="./documents/demo.gif" width="900" alt="3Forge demo" />
 </p>
 
 <p align="center">
-  <i>Visual scene editing, timeline animation, and TypeScript export</i>
+  <i>Visual 3D component editing, blueprint persistence, animation, and TypeScript export.</i>
 </p>
 
 # 3Forge
 
 3Forge is a desktop-first 3D authoring editor built with `Three.js`, `React`, and `TypeScript`.
 
-It lets you compose 3D scenes visually, organize them as reusable components, and export the result as:
+It lets you compose reusable 3D components visually, save them as serializable blueprints, and export production-ready TypeScript code for `three` runtimes.
 
-- a portable `blueprint` JSON file for saving and reopening projects
-- a generated TypeScript class that rebuilds the same scene in a `three` runtime
+## Why It Exists
 
-## Why 3Forge
+3Forge is designed for teams and developers who need a practical bridge between visual scene editing and code-driven 3D workflows.
 
-3Forge is designed for teams and developers who want a practical middle ground between a visual editor and code-driven 3D workflows.
-
-Instead of hand-authoring every mesh, material, transform, and asset pipeline step, you can assemble the scene in the editor and then ship the output as structured runtime code.
+Instead of hand-authoring every mesh, transform, material, image, font, binding, and animation track, you can assemble the component in the editor and export a structured runtime class that can be integrated into a `three` application.
 
 ## Current Capabilities
 
-- Scene graph editing with hierarchical nodes
-- Transform editing for position, rotation, and scale
-- Geometry authoring for common primitives
-- Material editing with runtime-editable bindings
-- 3D text support with local font assets
-- Image plane support with imported textures
-- JSON import/export for project persistence
-- TypeScript export for `three`
-- GSAP-based animation timeline preview and code export
-- Editable component options generated from blueprint bindings
-- Desktop-style editor UI with viewport, hierarchy, inspector, export panel, and timeline
+- Desktop-style editor shell with scene graph, viewport, inspector, assets, runtime fields, timeline, and toolbar.
+- Hierarchical scene graph editing with groups, child nesting, pivots, alignment helpers, and selection bounds.
+- Transform editing for position, rotation, and scale, including drag-adjustable numeric fields.
+- Geometry authoring for boxes, spheres, cylinders, planes, circles, images, and 3D text.
+- Reusable material registry with material assignment and right-column material editing.
+- Asset workflow for imported images, local fonts, reusable materials, and generated package assets.
+- Runtime-editable bindings for component options.
+- Blueprint JSON import/export for project persistence.
+- Export package generation with blueprint JSON, TypeScript, and referenced assets.
+- TypeScript export that rebuilds the scene in `three`.
+- GSAP-powered runtime animation API in exported TypeScript.
+- Editor animation preview with tracks, keyframes, channels, clip selection, seek/playback controls, and timeline zoom/scroll.
+- Blender-style pie menus for tool and view-mode selection.
+- Export runner playground for validating generated TypeScript exports outside the main editor.
+- PWA build support through Vite.
 
 ## How It Works
 
-At the center of the project is a serializable data model called a `blueprint`.
+The editor's source of truth is a serializable `blueprint`.
 
-A blueprint stores the component definition, including:
+A blueprint stores:
 
-- component name
-- fonts
+- component metadata
+- fonts and image assets
+- reusable material definitions
 - node hierarchy
-- transforms
-- geometry settings
-- material settings
+- transforms, pivots, geometry, and material assignments
 - editable runtime bindings
-- animation timeline data
+- animation clips, tracks, keyframes, easing, and timeline configuration
 
-The editor operates on that blueprint in memory. From there, 3Forge can:
-
-1. save the blueprint as JSON
-2. reopen the same blueprint later
-3. generate a TypeScript class that recreates the scene
-4. generate GSAP animation code that mirrors the editor timeline
+The React UI edits the blueprint. The Three.js scene reflects it. The export pipeline uses the same blueprint to generate persistence and runtime outputs.
 
 ## Export Model
 
 ### Blueprint JSON
 
-The JSON export is the project persistence format.
+Blueprint JSON is the persistence format.
 
 Use it to:
 
-- save work in progress
+- save and reopen projects
 - version scene definitions
-- reload projects in the editor
-- move assets and structures between environments
+- move components between environments
+- preserve editable state for later authoring
+
+### Export Package
+
+The package export creates a ZIP containing:
+
+- the generated TypeScript component
+- the blueprint JSON
+- referenced font assets
+- referenced image assets
+
+This is the preferred export format when the component uses external fonts or image files.
 
 ### Generated TypeScript
 
 The TypeScript export is the runtime integration format.
 
-The generated class rebuilds the component with `three` primitives and exposes a clean usage surface for application code. When animation data exists, the export also generates GSAP timeline methods so runtime playback matches the editor preview.
+The generated class:
+
+- creates a root `Group`
+- rebuilds the node hierarchy
+- instantiates geometries, materials, images, and text
+- applies transforms, pivots, visibility, and shadows
+- exposes runtime options from editable bindings
+- provides `build()` and `dispose()` lifecycle methods
+- exposes animation methods when animation clips exist
+
+Animation export continues to use GSAP so runtime playback remains portable and familiar:
+
+- `getClipNames()`
+- `createTimeline()`
+- `playClip()`
+- `play()`
+- `pause()`
+- `restart()`
+- `reverse()`
+- `stop()`
+- `seek()`
 
 ## Tech Stack
 
@@ -100,32 +125,47 @@ The generated class rebuilds the component with `three` primitives and exposes a
 - `TypeScript`
 - `GSAP`
 - `Vite`
+- `Vitest`
+- `React Testing Library`
+- `JSZip`
 
 ## Project Structure
 
 ```text
 .
-├── public/
-│   ├── assets/
-│   │   └── web/
-│   └── assets/fonts/
-├── scripts/
-│   └── vite-wrapper.mjs
-├── src/
-│   └── editor/
-│       ├── animation.ts
-│       ├── exports.ts
-│       ├── scene.ts
-│       ├── state.ts
-│       ├── types.ts
-│       └── react/
-│           ├── App.tsx
-│           ├── components/
-│           └── hooks/
-├── index.html
-├── package.json
-├── tsconfig.json
-└── vite.config.mjs
+|-- documents/
+|   |-- demo.gif
+|   `-- FEATURES/
+|-- playgrounds/
+|   `-- export-runner/
+|       |-- src/
+|       |   |-- generated/
+|       |   |-- ExportRunnerApp.tsx
+|       |   `-- runtime.ts
+|       `-- vite.config.mjs
+|-- public/
+|   `-- assets/
+|       |-- fonts/
+|       `-- web/
+|-- scripts/
+|   `-- vite-wrapper.mjs
+|-- src/
+|   `-- editor/
+|       |-- animation.ts
+|       |-- exportPackage.ts
+|       |-- exports.ts
+|       |-- scene.ts
+|       |-- state.ts
+|       |-- types.ts
+|       |-- workspace.ts
+|       `-- react/
+|           |-- App.tsx
+|           |-- components/
+|           `-- hooks/
+|-- index.html
+|-- package.json
+|-- tsconfig.json
+`-- vite.config.mjs
 ```
 
 ## Local Development
@@ -135,7 +175,7 @@ The generated class rebuilds the component with `three` primitives and exposes a
 - `Node.js >= 22.12.0`
 - `npm`
 
-This repository includes an `.nvmrc` file, so if you use `nvm`:
+This repository includes an `.nvmrc` file. If you use `nvm`, run:
 
 ```bash
 nvm use
@@ -147,25 +187,11 @@ nvm use
 npm install
 ```
 
-### Run the Editor
+### Run The Editor
 
 ```bash
 npm run dev
 ```
-
-### Run the TypeScript Export Runner
-
-```bash
-npm run dev:export-runner
-```
-
-Save one or more generated TypeScript exports into:
-
-```text
-playgrounds/export-runner/src/generated/*.ts
-```
-
-Then choose the file in the runner, build it, and test runtime animation methods if they exist.
 
 ### Production Build
 
@@ -173,87 +199,143 @@ Then choose the file in the runner, build it, and test runtime animation methods
 npm run build
 ```
 
-To build the export runner separately:
-
-```bash
-npm run build:export-runner
-```
-
-### Preview the Production Build
+### Preview The Production Build
 
 ```bash
 npm run preview
 ```
 
-### Run Tests
+### Tests And Validation
 
 ```bash
 npm run test
+npm run typecheck
+npm run validate
 ```
 
-For local iteration:
+For local test iteration:
 
 ```bash
 npm run test:watch
 ```
 
-For validation before changes are merged:
+## Export Runner Playground
+
+The export runner is a separate playground app for validating generated TypeScript exports without mixing that workflow into the main editor UI.
+
+Run it with:
 
 ```bash
-npm run validate
+npm run dev:export-runner
 ```
+
+Build it with:
+
+```bash
+npm run build:export-runner
+```
+
+Preview it with:
+
+```bash
+npm run preview:export-runner
+```
+
+Recommended workflow:
+
+1. Export a component package from the editor.
+2. Extract the ZIP into:
+
+```text
+playgrounds/export-runner/src/generated/
+```
+
+3. Keep the generated `.ts` file and its `assets/` directory together.
+4. Start or restart the runner.
+5. Choose the generated file, click `Build export`, and test runtime options or animation methods.
+
+The runner serves `src/generated` as its public asset root, so exports that reference `./assets/...` continue to work in the playground.
 
 ## Editor Workflow
 
-Typical usage looks like this:
+Typical usage:
 
-1. Create or load a project
-2. Build the scene in the viewport and scene graph
-3. Adjust transforms, geometry, materials, text, and images
-4. Mark selected properties as editable when runtime overrides are needed
-5. Animate supported transform channels in the timeline
-6. Export the result as JSON or TypeScript
+1. Create or load a project.
+2. Build the scene using the viewport and scene graph.
+3. Add primitives, images, text, groups, and reusable materials.
+4. Adjust transforms, pivots, geometry, material settings, shadows, and visibility.
+5. Mark properties as editable when runtime overrides are needed.
+6. Create animation clips and add tracks/keyframes in the timeline.
+7. Validate behavior in the editor.
+8. Export blueprint JSON, TypeScript, or a packaged ZIP.
+9. Optionally validate the generated TypeScript in the export runner.
 
 ## Animation System
 
-3Forge uses a blueprint-driven animation model and previews it through `GSAP`.
+Animation data is stored in the blueprint as serializable clips, tracks, and keyframes.
 
-That means the editor does not depend on opaque timeline state. Instead, animation data is stored as serializable tracks and keyframes, then:
+The editor preview applies animation directly to the Three.js scene for responsive playback. The TypeScript export emits GSAP timelines and animation control methods for runtime integration.
 
-- previewed inside the editor
-- persisted in JSON
-- exported as GSAP timeline code for runtime use
+Supported animated properties include:
 
-Current animation scope is focused on transform channels:
+- `transform.position.x/y/z`
+- `transform.rotation.x/y/z`
+- `transform.scale.x/y/z`
+- `visible`
 
-- `position.x/y/z`
-- `rotation.x/y/z`
-- `scale.x/y/z`
+Timeline behavior includes:
 
-## Design Direction
+- channel rows with property-specific icons
+- left-side channels and right-side keyframe lanes
+- ruler aligned to the keyframe lanes
+- vertical scrolling for many channels
+- horizontal scrolling for long timelines
+- `Ctrl/Cmd + wheel` zoom
+- `Shift + wheel` horizontal pan
 
-3Forge is intentionally not a marketing-style web app.
+## UI Direction
 
-The product direction is:
+3Forge follows a dense, dark, professional editor design language.
 
-- dark
-- technical
-- desktop-first
-- precise
-- productivity-oriented
+- The viewport is the primary workspace.
+- Side panels provide operational tooling around the scene.
+- Purple is the product accent and selection color.
+- Toolbar, pie menus, panels, custom selects, and numeric controls should stay compact and tool-like.
+- The editor is desktop-first, with responsive handling where supported.
 
-The viewport is treated as the primary workspace, while side panels act as operational tooling around it.
+Project-specific UI guidance for agents lives in:
 
-## State and Runtime Notes
+```text
+.agents/skills/3forge-ui-ux/
+```
 
-- Autosave is stored locally in the browser
-- Imported fonts and images are embedded into the project model
-- Exported components are designed for reuse in `three` applications
-- The editor and export pipeline share the same blueprint source of truth
+## Documentation
+
+Functional documentation is kept in:
+
+```text
+documents/FEATURES/
+```
+
+Important references:
+
+- `documents/PROJECT.md`
+- `documents/FEATURES/README.md`
+- `documents/FEATURES/EXPORT_OPTIMIZATION.md`
+- `documents/FEATURES/TYPESCRIPT_EXPORT_RUNNER.md`
+- `documents/FEATURES/EDITOR_UI_UX_REFINEMENT.md`
+
+## State And Runtime Notes
+
+- Autosave and recent project metadata are stored locally in the browser.
+- Imported fonts and images are represented in the blueprint and can be packaged with exports.
+- The editor and export pipeline share the same blueprint source of truth.
+- Generated TypeScript is intended for reuse in `three` applications.
+- Exported animation runtime uses GSAP; the editor preview runtime is optimized separately.
 
 ## Status
 
-3Forge is actively evolving as a code-oriented 3D editor. The current foundation already covers scene authoring, persistence, export, and timeline-based animation, but the project is still in active iteration.
+3Forge is actively evolving. The current foundation covers scene authoring, assets, reusable materials, persistence, export packages, runtime TypeScript output, animation authoring, and export validation.
 
 ## License
 
