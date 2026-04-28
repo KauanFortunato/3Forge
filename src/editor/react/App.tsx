@@ -610,6 +610,10 @@ export function App() {
   }, [effectiveToolMode]);
 
   useEffect(() => {
+    sceneRef.current?.setSelectionVisualsSuppressed(Boolean(editingMaterialId));
+  }, [editingMaterialId]);
+
+  useEffect(() => {
     return () => {
       if (statusTimerRef.current) {
         window.clearTimeout(statusTimerRef.current);
@@ -2257,6 +2261,7 @@ export function App() {
                     animationFrameUnsubscribeRef.current?.();
                     sceneRef.current = scene;
                     scene?.setTransformMode(effectiveToolMode);
+                    scene?.setSelectionVisualsSuppressed(Boolean(editingMaterialId));
                     if (scene) {
                       scene.seekAnimation(currentFrame);
                       animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);

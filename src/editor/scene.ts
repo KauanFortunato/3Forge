@@ -116,6 +116,7 @@ export class SceneEditor {
   private pointerDownY = 0;
   private mainLight: DirectionalLight | null = null;
   private selectionHelper: Box3Helper | null = null;
+  private selectionVisualsSuppressed = false;
   private currentMode: ToolMode = "select";
   private currentGizmoMode: GizmoMode = "translate";
   private isTransformDragging = false;
@@ -880,6 +881,15 @@ export class SceneEditor {
     this.selectedObjects.push(...selectedObjects);
     const primaryObject = this.objectMap.get(this.store.selectedNodeId);
 
+    if (this.selectionVisualsSuppressed) {
+      this.transformControls.detach();
+      this.transformHelper.visible = false;
+      this.selectionHelper?.removeFromParent();
+      this.selectionHelper = null;
+      this.selectionHelperDirty = false;
+      return;
+    }
+
     if (shouldAttachTransformGizmo(this.currentMode, selectedObjects.length, Boolean(primaryObject)) && primaryObject) {
       this.transformControls.attach(primaryObject);
       this.transformHelper.visible = true;
@@ -890,6 +900,14 @@ export class SceneEditor {
 
     this.updateSelectionHelper(selectedObjects);
     this.selectionHelperDirty = false;
+  }
+
+  setSelectionVisualsSuppressed(suppressed: boolean): void {
+    if (this.selectionVisualsSuppressed === suppressed) {
+      return;
+    }
+    this.selectionVisualsSuppressed = suppressed;
+    this.refreshSelection();
   }
 
   private applyDragAlignmentSnap(nodeId: string, object: Object3D): void {
