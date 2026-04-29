@@ -18,7 +18,59 @@ describe("material helpers", () => {
       wireframe: false,
       castShadow: true,
       receiveShadow: true,
+      ior: 1.5,
+      transmission: 0,
+      clearcoat: 0,
+      clearcoatRoughness: 0.1,
+      thickness: 0,
+      specular: "#111111",
+      shininess: 30,
     });
+  });
+
+  it("recognises every material type", () => {
+    expect(isMaterialType("physical")).toBe(true);
+    expect(isMaterialType("toon")).toBe(true);
+    expect(isMaterialType("lambert")).toBe(true);
+    expect(isMaterialType("phong")).toBe(true);
+    expect(isMaterialType("normal")).toBe(true);
+    expect(isMaterialType("depth")).toBe(true);
+    expect(isMaterialType("metallic")).toBe(false);
+
+    const physicalDefs = getMaterialPropertyDefinitions("physical").map((definition) => definition.path);
+    expect(physicalDefs).toContain("material.roughness");
+    expect(physicalDefs).toContain("material.transmission");
+
+    const phongDefs = getMaterialPropertyDefinitions("phong").map((definition) => definition.path);
+    expect(phongDefs).toContain("material.specular");
+    expect(phongDefs).toContain("material.shininess");
+    expect(phongDefs).not.toContain("material.roughness");
+
+    const lambertDefs = getMaterialPropertyDefinitions("lambert").map((definition) => definition.path);
+    expect(lambertDefs).toContain("material.emissive");
+    expect(lambertDefs).not.toContain("material.specular");
+
+    const normalDefs = getMaterialPropertyDefinitions("normal").map((definition) => definition.path);
+    expect(normalDefs).not.toContain("material.emissive");
+    expect(normalDefs).not.toContain("material.roughness");
+
+    const depthDefs = getMaterialPropertyDefinitions("depth").map((definition) => definition.path);
+    expect(depthDefs).not.toContain("material.emissive");
+    expect(depthDefs).not.toContain("material.roughness");
+  });
+
+  it("clamps physical-only fields through normalize", () => {
+    const fallback = createMaterialSpec();
+    const normalized = normalizeMaterialSpec(
+      { type: "physical", ior: 9, transmission: -2, clearcoat: 5, clearcoatRoughness: 1.5, thickness: -3 },
+      fallback,
+    );
+    expect(normalized.type).toBe("physical");
+    expect(normalized.ior).toBe(2.333);
+    expect(normalized.transmission).toBe(0);
+    expect(normalized.clearcoat).toBe(1);
+    expect(normalized.clearcoatRoughness).toBe(1);
+    expect(normalized.thickness).toBe(0);
   });
 
   it("normalizes material values and clamps numeric ranges", () => {

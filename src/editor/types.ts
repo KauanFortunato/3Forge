@@ -3,7 +3,15 @@ export type EditableFieldType = "number" | "color" | "boolean" | "string";
 export type PropertyGroup = "Object" | "Transform" | "Geometry" | "Material" | "Text";
 export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text" | "select";
 export type NodePropertyPath = string;
-export type MaterialType = "basic" | "standard";
+export type MaterialType =
+  | "basic"
+  | "standard"
+  | "physical"
+  | "toon"
+  | "lambert"
+  | "phong"
+  | "normal"
+  | "depth";
 export type NodeOriginHorizontal = "left" | "center" | "right";
 export type NodeOriginVertical = "top" | "center" | "bottom";
 export type NodeOriginDepth = "front" | "center" | "back";
@@ -61,6 +69,13 @@ export interface MaterialSpec {
   wireframe: boolean;
   castShadow: boolean;
   receiveShadow: boolean;
+  ior: number;
+  transmission: number;
+  clearcoat: number;
+  clearcoatRoughness: number;
+  thickness: number;
+  specular: string;
+  shininess: number;
 }
 
 export interface MaterialAsset {
