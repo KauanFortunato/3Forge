@@ -7,10 +7,11 @@ interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
   size?: "default" | "wide";
+  keepMounted?: boolean;
   children: ReactNode;
 }
 
-export function Modal({ title, isOpen, onClose, size = "default", children }: ModalProps) {
+export function Modal({ title, isOpen, onClose, size = "default", keepMounted = false, children }: ModalProps) {
   useEffect(() => {
     if (!isOpen) {
       return;
@@ -26,8 +27,15 @@ export function Modal({ title, isOpen, onClose, size = "default", children }: Mo
     return () => window.removeEventListener("keydown", handleEscape);
   }, [isOpen, onClose]);
 
-  if (!isOpen) {
+  if (!isOpen && !keepMounted) {
     return null;
+  }
+
+  if (!isOpen) {
+    return createPortal(
+      <div hidden>{children}</div>,
+      document.body,
+    );
   }
 
   return createPortal(

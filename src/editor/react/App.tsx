@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, parseAiSceneSpecJson } from "../aiBlueprint";
+import type { AiProvider } from "../aiBlueprint";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { createExportPackageZip } from "../exportPackage";
 import {
@@ -44,6 +46,8 @@ import type { ContextMenuState, ExportMode, MenuAction, RightPanelTab, ToolMode,
 import { useEditorStoreSnapshot } from "./hooks/useEditorStoreSnapshot";
 import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
 import { AnimationTimeline } from "./components/AnimationTimeline";
+import { AIGenerateDialog } from "./components/AIGenerateDialog";
+import type { AIGenerationMode, AiChatGenerationResult } from "./components/AIGenerateDialog";
 import { ContextMenu } from "./components/ContextMenu";
 import { FieldsPanel } from "./components/FieldsPanel";
 import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
@@ -91,7 +95,7 @@ import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { ViewportHost } from "./components/ViewportHost";
 
-const APP_VERSION = "v0.1.0";
+const APP_VERSION = "v0.2.1";
 
 interface NodeClipboard {
   sourceNodeIds: string[];
@@ -426,6 +430,7 @@ export function App() {
   const [toast, setToast] = useState<{ message: string; tone: "info" | "warning" } | null>(null);
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false);
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
+  const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(480);
@@ -1312,6 +1317,62 @@ export function App() {
     );
   }, [applyWorkspaceBlueprint, syncRecentProject]);
 
+  const handleGenerateWithAI = useCallback(async (
+    apiKey: string,
+    prompt: string,
+    provider: AiProvider,
+    model: string,
+    mode: AIGenerationMode,
+  ): Promise<AiChatGenerationResult> => {
+    setTransientStatus(mode === "edit" ? "Preparing AI edit..." : "Generating AI blueprint...");
+    const result = mode === "edit"
+      ? await editBlueprintWithAIResult({ apiKey, prompt, provider, model, currentBlueprint: blueprintSnapshot })
+      : await generateBlueprintResult({ apiKey, prompt, provider, model });
+    setTransientStatus("AI response ready.");
+    return {
+      content: mode === "edit"
+        ? `I prepared an edit for "${result.sceneSpec.componentName}". Review the JSON and apply it when ready.`
+        : `I generated "${result.sceneSpec.componentName}". Review the JSON and apply it when ready.`,
+      sceneSpecJson: result.sceneSpecJson,
+      rawText: result.rawText,
+    };
+  }, [blueprintSnapshot, setTransientStatus]);
+
+  const handleApplyAiScene = useCallback(async (sceneSpecJson: string, mode: AIGenerationMode) => {
+    const sceneSpec = parseAiSceneSpecJson(sceneSpecJson);
+    const generatedBlueprint = createBlueprintFromAiScene(sceneSpec);
+
+    if (mode === "edit") {
+      store.loadBlueprint(generatedBlueprint, "ui");
+      setCurrentFrame(0);
+      setIsAnimationPlaying(false);
+      setSelectedTrackId(null);
+      setSelectedKeyframeId(null);
+      setTransientStatus(`Applied AI edit to "${generatedBlueprint.componentName}".`);
+      showToast("AI edit applied.");
+      return;
+    }
+
+    const { recentProjectId } = await syncRecentProject(generatedBlueprint, {
+      fileName: null,
+      handle: null,
+      fileHandleId: null,
+    });
+
+    applyWorkspaceBlueprint(
+      generatedBlueprint,
+      createWorkspaceProjectContext({
+        source: "local",
+        fileName: null,
+        recentProjectId,
+        fileHandleId: null,
+        canOverwriteFile: false,
+      }),
+      `Generated "${generatedBlueprint.componentName}".`,
+    );
+    showToast("AI blueprint applied.");
+  }, [applyWorkspaceBlueprint, setTransientStatus, showToast, store, syncRecentProject]);
+
   const importFontFromFile = useCallback(async (file: File) => {
     const font = await fontFileToAsset(file);
     store.addFont(font);
@@ -2019,6 +2080,7 @@ export function App() {
       label: "File",
       items: [
         { id: "file-new", label: "New Project", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+N", onSelect: handleNewBlueprint },
+        { id: "file-generate-ai", label: "Generate with AI", icon: <GeometryIcon width={14} height={14} />, onSelect: () => setIsAiDialogOpen(true) },
         { id: "file-open", label: "Open File", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+O", onSelect: handleOpenFile },
         {
           id: "file-open-recent",
@@ -2237,6 +2299,9 @@ export function App() {
           onToggleTimeline={toggleTimelineVisibility}
           onSave={() => { void handleSaveProject(); }}
           onShortcuts={() => setIsShortcutDialogOpen(true)}
+          onGenerateWithAI={() => {
+            setIsAiDialogOpen(true);
+          }}
         />
       ) : (
         <PhoneViewerHeader
@@ -2371,7 +2436,7 @@ export function App() {
                       ? storeView.materials.length
                       : runtimePanelTab === "images"
                         ? imageAssets.length
-                      : storeView.animation.clips.length}
+                        : storeView.animation.clips.length}
                   </span>
                   <div className="panel__hd-spacer" />
                 </div>
@@ -2819,6 +2884,22 @@ export function App() {
       <Modal title="About 3Forge" isOpen={isAboutDialogOpen} onClose={() => setIsAboutDialogOpen(false)}>
         <p>3Forge is a standalone 3D component editor focused on building reusable Three.js pieces with runtime-editable fields.</p>
         <p>The viewport, history, export pipeline, fonts, images, and scene state stay in the editor core. React now handles the software-like shell, menus, panels, and scene graph workflow.</p>
+      </Modal>
+
+      <Modal
+        title="AI Chat"
+        isOpen={isAiDialogOpen}
+        onClose={() => setIsAiDialogOpen(false)}
+        size="wide"
+        keepMounted
+      >
+        <AIGenerateDialog
+          isOpen={isAiDialogOpen}
+          projectId={projectContext.recentProjectId ?? "local"}
+          onClose={() => setIsAiDialogOpen(false)}
+          onGenerate={handleGenerateWithAI}
+          onApplyScene={handleApplyAiScene}
+        />
       </Modal>
     </div>
   );
