@@ -20,6 +20,8 @@ import {
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   MeshToonMaterial,
+  PCFSoftShadowMap,
+  ShadowMaterial,
   Object3D,
   PerspectiveCamera,
   PlaneGeometry,
@@ -187,6 +189,7 @@ export class SceneEditor {
     this.renderer = new WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = PCFSoftShadowMap;
     this.renderer.setClearColor("#23252a", 1);
     this.renderer.domElement.style.touchAction = "none";
     this.renderer.domElement.style.display = "block";
@@ -531,7 +534,29 @@ export class SceneEditor {
     this.mainLight.position.set(5, 9, 6);
     this.mainLight.castShadow = true;
     this.mainLight.shadow.mapSize.set(2048, 2048);
+    const shadowCamera = this.mainLight.shadow.camera;
+    shadowCamera.left = -25;
+    shadowCamera.right = 25;
+    shadowCamera.top = 25;
+    shadowCamera.bottom = -25;
+    shadowCamera.near = 0.5;
+    shadowCamera.far = 80;
+    shadowCamera.updateProjectionMatrix();
+    this.mainLight.shadow.bias = -0.0005;
+    this.mainLight.shadow.normalBias = 0.02;
     this.scene.add(this.mainLight);
+    this.scene.add(this.mainLight.target);
+
+    const shadowPlane = new Mesh(
+      new PlaneGeometry(400, 400),
+      new ShadowMaterial({ opacity: 0.32, transparent: true, depthWrite: false }),
+    );
+    shadowPlane.rotation.x = -Math.PI / 2;
+    shadowPlane.position.y = -0.005;
+    shadowPlane.receiveShadow = true;
+    shadowPlane.renderOrder = -1;
+    shadowPlane.userData.isShadowReceiver = true;
+    this.scene.add(shadowPlane);
   }
 
   private createInfiniteGrid(): Mesh<PlaneGeometry, ShaderMaterial> {
