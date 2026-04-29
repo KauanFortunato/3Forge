@@ -66,6 +66,7 @@ import {
   PlusIcon,
   TrashIcon,
   ShortcutIcon,
+  SettingsIcon,
   GroupIcon,
   MeshIcon,
   ImagePropertyIcon,
@@ -90,7 +91,9 @@ import { SceneGraphPanel } from "./components/SceneGraphPanel";
 import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { runTask } from "./hooks/useAsyncTask";
+import { useTheme } from "./hooks/useTheme";
 import { ViewportHost } from "./components/ViewportHost";
 
 const APP_VERSION = "v0.1.0";
@@ -257,6 +260,7 @@ interface LandingPageProps {
   onOpenFile: () => void;
   onOpenRecent: (recentProjectId: string) => void;
   onRemoveRecent: (recentProjectId: string) => void;
+  onOpenSettings: () => void;
 }
 
 function LandingPage({
@@ -268,6 +272,7 @@ function LandingPage({
   onOpenFile,
   onOpenRecent,
   onRemoveRecent,
+  onOpenSettings,
 }: LandingPageProps) {
   const localProjectLabel = persistedWorkspace?.context.fileName
     ?? persistedWorkspace?.blueprint.componentName
@@ -287,6 +292,15 @@ function LandingPage({
 
   return (
     <div className={`landing-overlay landing-overlay--${layoutMode}`}>
+      <button
+        type="button"
+        className="settings-trigger settings-trigger--landing"
+        onClick={onOpenSettings}
+        aria-label="Open settings"
+        title="Theme & settings"
+      >
+        <SettingsIcon width={16} height={16} />
+      </button>
       <section className="landing-hero">
         <div className="landing-hero__grid" aria-hidden="true" />
         <div className="landing-hero__brand">
@@ -428,6 +442,8 @@ export function App() {
   const [toast, setToast] = useState<{ message: string; tone: "info" | "warning" } | null>(null);
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false);
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
+  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+  const { theme, setTheme } = useTheme();
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(480);
@@ -2152,6 +2168,7 @@ export function App() {
       label: "Help",
       items: [
         { id: "help-shortcuts", label: "Shortcuts", icon: <ShortcutIcon width={14} height={14} />, onSelect: () => setIsShortcutDialogOpen(true) },
+        { id: "help-settings", label: "Settings…", icon: <SettingsIcon width={14} height={14} />, onSelect: () => setIsSettingsDialogOpen(true) },
         { id: "help-about", label: "About 3Forge", icon: <InfoIcon width={14} height={14} />, onSelect: () => setIsAboutDialogOpen(true) },
         {
           id: "help-loading-preview",
@@ -2204,6 +2221,13 @@ export function App() {
           onOpenFile={() => { void handleOpenFile(); }}
           onOpenRecent={(recentProjectId) => { void handleOpenRecent(recentProjectId); }}
           onRemoveRecent={(recentProjectId) => { void handleRemoveRecent(recentProjectId); }}
+          onOpenSettings={() => setIsSettingsDialogOpen(true)}
+        />
+        <SettingsDialog
+          isOpen={isSettingsDialogOpen}
+          onClose={() => setIsSettingsDialogOpen(false)}
+          theme={theme}
+          onChangeTheme={setTheme}
         />
         <input
           ref={jsonInputRef}
@@ -2227,7 +2251,13 @@ export function App() {
 
   return (
     <div className={`app app--${layoutMode}`} data-status-tick={statusTick} style={shellStyle}>
-      {!isPhoneLayout ? <MenuBar menus={menus} appVersion={APP_VERSION} /> : null}
+      {!isPhoneLayout ? (
+        <MenuBar
+          menus={menus}
+          appVersion={APP_VERSION}
+          onOpenSettings={() => setIsSettingsDialogOpen(true)}
+        />
+      ) : null}
 
       {!isPhoneLayout ? (
         <SecondaryToolbar
@@ -2851,6 +2881,13 @@ export function App() {
         <p>3Forge is a standalone 3D component editor focused on building reusable Three.js pieces with runtime-editable fields.</p>
         <p>The viewport, history, export pipeline, fonts, images, and scene state stay in the editor core. React now handles the software-like shell, menus, panels, and scene graph workflow.</p>
       </Modal>
+
+      <SettingsDialog
+        isOpen={isSettingsDialogOpen}
+        onClose={() => setIsSettingsDialogOpen(false)}
+        theme={theme}
+        onChangeTheme={setTheme}
+      />
 
       <LoadingOverlay />
     </div>

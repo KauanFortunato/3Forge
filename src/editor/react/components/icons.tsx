@@ -595,3 +595,12 @@ export function ExportIcon(props: IconProps) {
     </Ico>
   );
 }
+
+export function SettingsIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="1.8" />
+      <path d="M7 1.4v1.4M7 11.2v1.4M2.4 7H1M13 7h-1.4M3.74 3.74l-.99-.99M11.25 11.25l-.99-.99M3.74 10.26l-.99.99M11.25 2.75l-.99.99" />
+    </Ico>
+  );
+}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuAction } from "../ui-types";
 import { MenuList } from "./ContextMenu";
+import { SettingsIcon } from "./icons";
 
 interface TopMenu {
   id: string;
@@ -11,9 +12,10 @@ interface TopMenu {
 interface MenuBarProps {
   menus: TopMenu[];
   appVersion?: string;
+  onOpenSettings?: () => void;
 }
 
-export function MenuBar({ menus, appVersion }: MenuBarProps) {
+export function MenuBar({ menus, appVersion, onOpenSettings }: MenuBarProps) {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -88,6 +90,17 @@ export function MenuBar({ menus, appVersion }: MenuBarProps) {
             auto-save
           </span>
           <span className="menubar__chip">{appVersion}</span>
+          {onOpenSettings ? (
+            <button
+              type="button"
+              className="settings-trigger"
+              onClick={onOpenSettings}
+              aria-label="Open settings"
+              title="Theme & settings"
+            >
+              <SettingsIcon width={14} height={14} />
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
