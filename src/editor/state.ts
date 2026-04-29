@@ -20,6 +20,7 @@ import {
   cloneMaterialSpec,
   createMaterialSpec,
   getMaterialPropertyDefinitions,
+  isMaterialType,
   MATERIAL_SHADOW_PROPERTY_DEFINITIONS,
   normalizeMaterialLibrary,
   normalizeMaterialSpec,
@@ -53,6 +54,7 @@ import type {
   ImageNode,
   MaterialAsset,
   MaterialSpec,
+  MaterialType,
   NodeOriginDepth,
   NodeOriginHorizontal,
   NodeOriginSpec,
@@ -3263,11 +3265,11 @@ const MATERIAL_PBR_DEPENDENT_PATHS: ReadonlySet<string> = new Set<string>([
 function projectTargetMaterialType(
   target: EditorNode,
   materialTypeValue: unknown,
-): "basic" | "standard" | null {
+): MaterialType | null {
   if (target.type === "group") {
     return null;
   }
-  if (typeof materialTypeValue === "string" && (materialTypeValue === "basic" || materialTypeValue === "standard")) {
+  if (isMaterialType(materialTypeValue)) {
     return materialTypeValue;
   }
   return target.material.type;

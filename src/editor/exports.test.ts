@@ -297,6 +297,92 @@ describe("exports", () => {
     const rotationTargetCount = (output.match(/target: "rotation"/g) ?? []).length;
     expect(rotationTargetCount).toBe(0);
   });
+
+  it("emits MeshPhysicalMaterial with physical-only options when a node uses type=physical", () => {
+    const blueprint = createBlueprintFixture();
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    expect(box).toBeTruthy();
+    if (box) {
+      box.material.type = "physical";
+      box.material.transmission = 0.6;
+      box.material.ior = 1.45;
+      box.material.clearcoat = 0.4;
+    }
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toMatch(/^import \{[^}]*MeshPhysicalMaterial[^}]*\} from "three";/m);
+    expect(output).toContain("new MeshPhysicalMaterial");
+    expect(output).toContain("transmission: 0.6");
+    expect(output).toContain("ior: 1.45");
+    expect(output).toContain("clearcoat: 0.4");
+  });
+
+  it("emits MeshToonMaterial with the emissive option when a node uses type=toon", () => {
+    const blueprint = createBlueprintFixture();
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    expect(box).toBeTruthy();
+    if (box) {
+      box.material.type = "toon";
+      box.material.emissive = "#112233";
+    }
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toMatch(/^import \{[^}]*MeshToonMaterial[^}]*\} from "three";/m);
+    expect(output).toContain("new MeshToonMaterial");
+    expect(output).toContain('emissive: "#112233"');
+    expect(output).not.toContain("transmission:");
+  });
+
+  it("emits MeshLambertMaterial when a node uses type=lambert", () => {
+    const blueprint = createBlueprintFixture();
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    if (box) {
+      box.material.type = "lambert";
+    }
+    const output = generateTypeScriptComponent(blueprint);
+    expect(output).toMatch(/^import \{[^}]*MeshLambertMaterial[^}]*\} from "three";/m);
+    expect(output).toContain("new MeshLambertMaterial");
+    expect(output).not.toContain("specular:");
+  });
+
+  it("emits MeshPhongMaterial with specular and shininess when a node uses type=phong", () => {
+    const blueprint = createBlueprintFixture();
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    if (box) {
+      box.material.type = "phong";
+      box.material.specular = "#ff8800";
+      box.material.shininess = 65;
+    }
+    const output = generateTypeScriptComponent(blueprint);
+    expect(output).toMatch(/^import \{[^}]*MeshPhongMaterial[^}]*\} from "three";/m);
+    expect(output).toContain("new MeshPhongMaterial");
+    expect(output).toContain('specular: "#ff8800"');
+    expect(output).toContain("shininess: 65");
+  });
+
+  it("emits MeshNormalMaterial when a node uses type=normal", () => {
+    const blueprint = createBlueprintFixture();
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    if (box) {
+      box.material.type = "normal";
+    }
+    const output = generateTypeScriptComponent(blueprint);
+    expect(output).toMatch(/^import \{[^}]*MeshNormalMaterial[^}]*\} from "three";/m);
+    expect(output).toContain("new MeshNormalMaterial");
+  });
+
+  it("emits MeshDepthMaterial when a node uses type=depth", () => {
+    const blueprint = createBlueprintFixture();
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    if (box) {
+      box.material.type = "depth";
+    }
+    const output = generateTypeScriptComponent(blueprint);
+    expect(output).toMatch(/^import \{[^}]*MeshDepthMaterial[^}]*\} from "three";/m);
+    expect(output).toContain("new MeshDepthMaterial");
+  });
 });
 
 describe("export after property clipboard", () => {

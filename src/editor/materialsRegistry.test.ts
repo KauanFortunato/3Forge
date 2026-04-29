@@ -117,6 +117,13 @@ describe("materials registry", () => {
           wireframe: false,
           castShadow: true,
           receiveShadow: true,
+          ior: 1.5,
+          transmission: 0,
+          clearcoat: 0,
+          clearcoatRoughness: 0.1,
+          thickness: 0,
+          specular: "#111111",
+          shininess: 30,
         },
       },
     ];

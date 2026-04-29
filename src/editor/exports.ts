@@ -397,19 +397,33 @@ function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<
   const hasRenderableNodes = nodes.some((node) => node.type !== "group");
   const materialNodes = nodes.filter((node): node is Exclude<EditorNode, { type: "group" }> => node.type !== "group");
   const hasRuntimeMaterialType = materialNodes.some((node) => Boolean(node.editable["material.type"]));
-  const usesBasicMaterial = hasRuntimeMaterialType || materialNodes.some((node) => node.material.type === "basic");
-  const usesStandardMaterial = hasRuntimeMaterialType || materialNodes.some((node) => node.material.type === "standard");
+  const materialClassFor: Record<string, string> = {
+    basic: "MeshBasicMaterial",
+    lambert: "MeshLambertMaterial",
+    phong: "MeshPhongMaterial",
+    standard: "MeshStandardMaterial",
+    physical: "MeshPhysicalMaterial",
+    toon: "MeshToonMaterial",
+    normal: "MeshNormalMaterial",
+    depth: "MeshDepthMaterial",
+  };
+  const usedMaterialTypes = new Set<string>();
+  if (hasRuntimeMaterialType) {
+    Object.keys(materialClassFor).forEach((key) => usedMaterialTypes.add(key));
+  } else {
+    materialNodes.forEach((node) => usedMaterialTypes.add(node.material.type));
+  }
 
   if (types.has("box")) imports.add("BoxGeometry");
   if (types.has("circle")) imports.add("CircleGeometry");
   if (types.has("sphere")) imports.add("SphereGeometry");
   if (types.has("cylinder")) imports.add("CylinderGeometry");
   if (types.has("plane") || types.has("image")) imports.add("PlaneGeometry");
-  if (usesBasicMaterial) {
-    imports.add("MeshBasicMaterial");
-  }
-  if (usesStandardMaterial) {
-    imports.add("MeshStandardMaterial");
+  for (const used of usedMaterialTypes) {
+    const cls = materialClassFor[used];
+    if (cls) {
+      imports.add(cls);
+    }
   }
   if (types.has("image")) {
     imports.add("TextureLoader");
@@ -631,30 +645,77 @@ function emitMaterialCreationLines(
     sharedOptions.push(`map: ${textureVariable}`);
   }
 
+  const emissiveOption = `emissive: ${propertyExpression(node, "material.emissive", bindingAccessor)}`;
   const standardOnlyOptions = [
-    `emissive: ${propertyExpression(node, "material.emissive", bindingAccessor)}`,
+    emissiveOption,
     `roughness: ${propertyExpression(node, "material.roughness", bindingAccessor)}`,
     `metalness: ${propertyExpression(node, "material.metalness", bindingAccessor)}`,
   ];
+  const physicalOnlyOptions = [
+    `ior: ${propertyExpression(node, "material.ior", bindingAccessor)}`,
+    `transmission: ${propertyExpression(node, "material.transmission", bindingAccessor)}`,
+    `thickness: ${propertyExpression(node, "material.thickness", bindingAccessor)}`,
+    `clearcoat: ${propertyExpression(node, "material.clearcoat", bindingAccessor)}`,
+    `clearcoatRoughness: ${propertyExpression(node, "material.clearcoatRoughness", bindingAccessor)}`,
+  ];
+  const phongOnlyOptions = [
+    emissiveOption,
+    `specular: ${propertyExpression(node, "material.specular", bindingAccessor)}`,
+    `shininess: ${propertyExpression(node, "material.shininess", bindingAccessor)}`,
+  ];
 
   if (hasDynamicMaterialType) {
-    const basicConfigVariable = `${materialVariable}BasicConfig`;
-    const standardConfigVariable = `${materialVariable}StandardConfig`;
-    lines.push(`const ${basicConfigVariable} = { ${sharedOptions.join(", ")} };`);
-    lines.push(`const ${standardConfigVariable} = { ...${basicConfigVariable}, ${standardOnlyOptions.join(", ")} };`);
+    const basicConfig = `${materialVariable}BasicConfig`;
+    const standardConfig = `${materialVariable}StandardConfig`;
+    const physicalConfig = `${materialVariable}PhysicalConfig`;
+    const toonConfig = `${materialVariable}ToonConfig`;
+    const lambertConfig = `${materialVariable}LambertConfig`;
+    const phongConfig = `${materialVariable}PhongConfig`;
+    lines.push(`const ${basicConfig} = { ${sharedOptions.join(", ")} };`);
+    lines.push(`const ${standardConfig} = { ...${basicConfig}, ${standardOnlyOptions.join(", ")} };`);
+    lines.push(`const ${physicalConfig} = { ...${standardConfig}, ${physicalOnlyOptions.join(", ")} };`);
+    lines.push(`const ${toonConfig} = { ...${basicConfig}, ${emissiveOption} };`);
+    lines.push(`const ${lambertConfig} = { ...${basicConfig}, ${emissiveOption} };`);
+    lines.push(`const ${phongConfig} = { ...${basicConfig}, ${phongOnlyOptions.join(", ")} };`);
     lines.push(
-      `const ${materialVariable} = ${materialTypeExpression} === "basic" ? new MeshBasicMaterial(${basicConfigVariable}) : new MeshStandardMaterial(${standardConfigVariable});`,
+      `const ${materialVariable} = ${materialTypeExpression} === "basic" ? new MeshBasicMaterial(${basicConfig})`
+      + ` : ${materialTypeExpression} === "lambert" ? new MeshLambertMaterial(${lambertConfig})`
+      + ` : ${materialTypeExpression} === "phong" ? new MeshPhongMaterial(${phongConfig})`
+      + ` : ${materialTypeExpression} === "physical" ? new MeshPhysicalMaterial(${physicalConfig})`
+      + ` : ${materialTypeExpression} === "toon" ? new MeshToonMaterial(${toonConfig})`
+      + ` : ${materialTypeExpression} === "normal" ? new MeshNormalMaterial(${basicConfig})`
+      + ` : ${materialTypeExpression} === "depth" ? new MeshDepthMaterial(${basicConfig})`
+      + ` : new MeshStandardMaterial(${standardConfig});`,
     );
     return lines;
   }
 
-  if (node.material.type === "basic") {
-    lines.push(`const ${materialVariable} = new MeshBasicMaterial({ ${sharedOptions.join(", ")} });`);
-    return lines;
+  switch (node.material.type) {
+    case "basic":
+      lines.push(`const ${materialVariable} = new MeshBasicMaterial({ ${sharedOptions.join(", ")} });`);
+      return lines;
+    case "lambert":
+      lines.push(`const ${materialVariable} = new MeshLambertMaterial({ ${[...sharedOptions, emissiveOption].join(", ")} });`);
+      return lines;
+    case "phong":
+      lines.push(`const ${materialVariable} = new MeshPhongMaterial({ ${[...sharedOptions, ...phongOnlyOptions].join(", ")} });`);
+      return lines;
+    case "toon":
+      lines.push(`const ${materialVariable} = new MeshToonMaterial({ ${[...sharedOptions, emissiveOption].join(", ")} });`);
+      return lines;
+    case "physical":
+      lines.push(`const ${materialVariable} = new MeshPhysicalMaterial({ ${[...sharedOptions, ...standardOnlyOptions, ...physicalOnlyOptions].join(", ")} });`);
+      return lines;
+    case "normal":
+      lines.push(`const ${materialVariable} = new MeshNormalMaterial({ ${sharedOptions.join(", ")} });`);
+      return lines;
+    case "depth":
+      lines.push(`const ${materialVariable} = new MeshDepthMaterial({ ${sharedOptions.join(", ")} });`);
+      return lines;
+    default:
+      lines.push(`const ${materialVariable} = new MeshStandardMaterial({ ${[...sharedOptions, ...standardOnlyOptions].join(", ")} });`);
+      return lines;
   }
-
-  lines.push(`const ${materialVariable} = new MeshStandardMaterial({ ${[...sharedOptions, ...standardOnlyOptions].join(", ")} });`);
-  return lines;
 }
 
 function collectAnimationClips(blueprint: ComponentBlueprint, nodes: EditorNode[]): CollectedAnimationClip[] {

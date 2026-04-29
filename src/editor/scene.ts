@@ -11,8 +11,15 @@ import {
   Group,
   HemisphereLight,
   Mesh,
+  Material,
   MeshBasicMaterial,
+  MeshDepthMaterial,
+  MeshLambertMaterial,
+  MeshNormalMaterial,
+  MeshPhongMaterial,
+  MeshPhysicalMaterial,
   MeshStandardMaterial,
+  MeshToonMaterial,
   Object3D,
   PerspectiveCamera,
   PlaneGeometry,
@@ -47,11 +54,61 @@ import type {
   EditorNode,
   EditorStoreChange,
   ImageNode,
+  MaterialSpec,
   NodeOriginSpec,
   TextNode,
 } from "./types";
 
 type GizmoMode = "translate" | "rotate" | "scale";
+
+type MaterialBaseOptions = ConstructorParameters<typeof MeshBasicMaterial>[0];
+
+function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialSpec): Material {
+  switch (spec.type) {
+    case "basic":
+      return new MeshBasicMaterial(baseOptions);
+    case "lambert":
+      return new MeshLambertMaterial({
+        ...baseOptions,
+        emissive: spec.emissive,
+      });
+    case "phong":
+      return new MeshPhongMaterial({
+        ...baseOptions,
+        emissive: spec.emissive,
+        specular: spec.specular,
+        shininess: spec.shininess,
+      });
+    case "toon":
+      return new MeshToonMaterial({
+        ...baseOptions,
+        emissive: spec.emissive,
+      });
+    case "physical":
+      return new MeshPhysicalMaterial({
+        ...baseOptions,
+        emissive: spec.emissive,
+        roughness: spec.roughness,
+        metalness: spec.metalness,
+        ior: spec.ior,
+        transmission: spec.transmission,
+        thickness: spec.thickness,
+        clearcoat: spec.clearcoat,
+        clearcoatRoughness: spec.clearcoatRoughness,
+      });
+    case "normal":
+      return new MeshNormalMaterial(baseOptions);
+    case "depth":
+      return new MeshDepthMaterial(baseOptions);
+    default:
+      return new MeshStandardMaterial({
+        ...baseOptions,
+        emissive: spec.emissive,
+        roughness: spec.roughness,
+        metalness: spec.metalness,
+      });
+  }
+}
 export type ToolMode = "select" | GizmoMode;
 
 const DRAG_SNAP_THRESHOLD = 0.18;
@@ -777,7 +834,7 @@ export class SceneEditor {
     return mesh;
   }
 
-  private createTextMesh(node: TextNode, material: MeshBasicMaterial | MeshStandardMaterial): Mesh {
+  private createTextMesh(node: TextNode, material: Material): Mesh {
     const font = this.resolveFont(node.fontId);
     const geometry = new TextGeometry(node.geometry.text || " ", {
       font,
@@ -807,18 +864,8 @@ export class SceneEditor {
     );
   }
 
-  private createNodeMaterial(node: Exclude<EditorNode, { type: "group" }>): MeshBasicMaterial | MeshStandardMaterial {
-    const baseOptions = this.createBaseMaterialOptions(node);
-    if (node.material.type === "basic") {
-      return new MeshBasicMaterial(baseOptions);
-    }
-
-    return new MeshStandardMaterial({
-      ...baseOptions,
-      emissive: node.material.emissive,
-      roughness: node.material.roughness,
-      metalness: node.material.metalness,
-    });
+  private createNodeMaterial(node: Exclude<EditorNode, { type: "group" }>): Material {
+    return buildMaterialFromSpec(this.createBaseMaterialOptions(node), node.material);
   }
 
   private createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" }>): ConstructorParameters<typeof MeshBasicMaterial>[0] {
@@ -841,15 +888,7 @@ export class SceneEditor {
       ...this.createBaseMaterialOptions(node),
       map: texture,
     };
-    const material = node.material.type === "basic"
-      ? new MeshBasicMaterial(baseOptions)
-      : new MeshStandardMaterial({
-        ...baseOptions,
-        emissive: node.material.emissive,
-        roughness: node.material.roughness,
-        metalness: node.material.metalness,
-      });
-
+    const material = buildMaterialFromSpec(baseOptions, node.material);
     return new Mesh(geometry, material);
   }
 
