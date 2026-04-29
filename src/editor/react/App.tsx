@@ -2170,15 +2170,6 @@ export function App() {
         { id: "help-shortcuts", label: "Shortcuts", icon: <ShortcutIcon width={14} height={14} />, onSelect: () => setIsShortcutDialogOpen(true) },
         { id: "help-settings", label: "Settings…", icon: <SettingsIcon width={14} height={14} />, onSelect: () => setIsSettingsDialogOpen(true) },
         { id: "help-about", label: "About 3Forge", icon: <InfoIcon width={14} height={14} />, onSelect: () => setIsAboutDialogOpen(true) },
-        {
-          id: "help-loading-preview",
-          label: "Preview loading animation",
-          icon: <InfoIcon width={14} height={14} />,
-          onSelect: () => {
-            void runTask("Previewing blocking overlay…", () => new Promise((resolve) => setTimeout(resolve, 2200)), { blocking: true })
-              .then(() => runTask("Previewing status progress…", () => new Promise((resolve) => setTimeout(resolve, 3000))));
-          },
-        },
       ],
     },
   ], [
