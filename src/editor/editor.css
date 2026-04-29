@@ -3796,6 +3796,7 @@ code {
 }
 
 .image-assets-panel__thumb {
+  position: relative;
   display: grid;
   place-items: center;
   width: 36px;
@@ -3818,6 +3819,45 @@ code {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+.image-assets-panel__thumb-loading {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  width: 12px;
+  height: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(14, 15, 17, 0.85);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.55);
+  pointer-events: none;
+  animation: imageAssetThumbBadgeIn 160ms ease;
+}
+
+.image-assets-panel__thumb-spinner {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(139, 92, 246, 0.25);
+  border-top-color: var(--c-accent);
+  animation: imageAssetThumbSpin 0.85s linear infinite;
+}
+
+@keyframes imageAssetThumbSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes imageAssetThumbBadgeIn {
+  from { opacity: 0; transform: scale(0.6); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-assets-panel__thumb-spinner {
+    animation-duration: 2.4s;
+  }
 }
 
 .image-assets-panel__meta {

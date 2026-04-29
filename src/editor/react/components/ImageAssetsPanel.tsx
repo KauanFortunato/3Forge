@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { MouseEvent } from "react";
 import type { ImageAsset } from "../../types";
 import { AssignIcon, ImageIcon, PlusIcon, TrashIcon, DownloadIcon } from "./icons";
@@ -35,8 +36,14 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
     canRemoveImage,
   } = props;
 
+  const [loadedSrcById, setLoadedSrcById] = useState<Record<string, string>>({});
+
   const stop = (event: MouseEvent) => {
     event.stopPropagation();
+  };
+
+  const markLoaded = (id: string, src: string) => {
+    setLoadedSrcById((prev) => (prev[id] === src ? prev : { ...prev, [id]: src }));
   };
 
   return (
@@ -81,7 +88,17 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                   title={`Select ${image.name}`}
                 >
                   <span className="image-assets-panel__thumb" aria-hidden="true">
-                    <img src={image.src} alt="" />
+                    <img
+                      src={image.src}
+                      alt=""
+                      onLoad={() => markLoaded(image.id, image.src)}
+                      onError={() => markLoaded(image.id, image.src)}
+                    />
+                    {loadedSrcById[image.id] === image.src ? null : (
+                      <span className="image-assets-panel__thumb-loading" aria-label="Loading image" role="status">
+                        <span className="image-assets-panel__thumb-spinner" aria-hidden="true" />
+                      </span>
+                    )}
                   </span>
                   <span className="image-assets-panel__meta">
                     <span className="image-assets-panel__name">{image.name}</span>
