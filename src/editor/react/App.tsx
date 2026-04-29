@@ -89,6 +89,8 @@ import { PhonePlaybackBar, PhoneViewerHeader } from "./components/PhoneViewerChr
 import { SceneGraphPanel } from "./components/SceneGraphPanel";
 import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
+import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
+import { runTask } from "./hooks/useAsyncTask";
 import { ViewportHost } from "./components/ViewportHost";
 
 const APP_VERSION = "v0.1.0";
@@ -1284,7 +1286,7 @@ export function App() {
 
   const downloadExportPackage = useCallback(async () => {
     try {
-      const archive = await createExportPackageZip(blueprintSnapshot);
+      const archive = await runTask("Packaging export ZIP…", () => createExportPackageZip(blueprintSnapshot));
       downloadBlobFile(archive.blob, archive.fileName);
       setTransientStatus(`Downloaded ${archive.fileName}.`);
     } catch {
@@ -1293,27 +1295,29 @@ export function App() {
   }, [blueprintSnapshot, setTransientStatus]);
 
   const importJsonFromFile = useCallback(async (file: File) => {
-    const rawBlueprint = await readBlueprintFromFile(file);
-    const blueprint = rawBlueprint as ComponentBlueprint;
-    const { recentProjectId } = await syncRecentProject(blueprint, {
-      fileName: file.name,
-    });
-
-    applyWorkspaceBlueprint(
-      rawBlueprint,
-      createWorkspaceProjectContext({
-        source: "imported-file",
+    await runTask(`Importing ${file.name}…`, async () => {
+      const rawBlueprint = await readBlueprintFromFile(file);
+      const blueprint = rawBlueprint as ComponentBlueprint;
+      const { recentProjectId } = await syncRecentProject(blueprint, {
         fileName: file.name,
-        recentProjectId,
-        fileHandleId: null,
-        canOverwriteFile: false,
-      }),
-      `Imported ${file.name}.`,
-    );
+      });
+
+      applyWorkspaceBlueprint(
+        rawBlueprint,
+        createWorkspaceProjectContext({
+          source: "imported-file",
+          fileName: file.name,
+          recentProjectId,
+          fileHandleId: null,
+          canOverwriteFile: false,
+        }),
+        `Imported ${file.name}.`,
+      );
+    }, { blocking: true });
   }, [applyWorkspaceBlueprint, syncRecentProject]);
 
   const importFontFromFile = useCallback(async (file: File) => {
-    const font = await fontFileToAsset(file);
+    const font = await runTask(`Importing font ${file.name}…`, () => fontFileToAsset(file));
     store.addFont(font);
     setTransientStatus(`Imported font "${font.name}".`);
   }, [setTransientStatus, store]);
@@ -1436,29 +1440,38 @@ export function App() {
       return;
     }
 
+    let result: Awaited<ReturnType<typeof openBlueprintWithPicker>>;
     try {
-      const result = await openBlueprintWithPicker();
-      if (!result) {
-        return;
-      }
+      result = await openBlueprintWithPicker();
+    } catch {
+      setTransientStatus("Unable to open file.");
+      return;
+    }
+    if (!result) {
+      return;
+    }
 
-      const blueprint = result.blueprint as ComponentBlueprint;
-      const { recentProjectId, fileHandleId } = await syncRecentProject(blueprint, {
-        fileName: result.fileName,
-        handle: result.handle,
-      });
+    const picked = result;
+    try {
+      await runTask(`Opening ${picked.fileName}…`, async () => {
+        const blueprint = picked.blueprint as ComponentBlueprint;
+        const { recentProjectId, fileHandleId } = await syncRecentProject(blueprint, {
+          fileName: picked.fileName,
+          handle: picked.handle,
+        });
 
-      applyWorkspaceBlueprint(
-        result.blueprint,
-        createWorkspaceProjectContext({
-          source: fileHandleId ? "file-handle" : "imported-file",
-          fileName: result.fileName,
-          recentProjectId,
-          fileHandleId,
-          canOverwriteFile: true,
-        }),
-        `Opened ${result.fileName}.`,
-      );
+        applyWorkspaceBlueprint(
+          picked.blueprint,
+          createWorkspaceProjectContext({
+            source: fileHandleId ? "file-handle" : "imported-file",
+            fileName: picked.fileName,
+            recentProjectId,
+            fileHandleId,
+            canOverwriteFile: true,
+          }),
+          `Opened ${picked.fileName}.`,
+        );
+      }, { blocking: true });
     } catch {
       setTransientStatus("Unable to open file.");
     }
@@ -1471,51 +1484,53 @@ export function App() {
       return;
     }
 
-    let handle: BrowserFileSystemFileHandle | null = null;
-    let rawBlueprint: unknown | null = null;
-    let openedFromSnapshot = false;
+    await runTask(`Opening "${entry.label}"…`, async () => {
+      let handle: BrowserFileSystemFileHandle | null = null;
+      let rawBlueprint: unknown | null = null;
+      let openedFromSnapshot = false;
 
-    if (entry.fileHandleId) {
-      handle = activeFileHandleRef.current && projectContext.fileHandleId === entry.fileHandleId
-        ? activeFileHandleRef.current
-        : await readRecentFileHandle(entry.fileHandleId);
-      if (handle) {
-        try {
-          rawBlueprint = await readBlueprintFromFile(await handle.getFile());
-          activeFileHandleRef.current = handle;
-        } catch {
-          handle = null;
+      if (entry.fileHandleId) {
+        handle = activeFileHandleRef.current && projectContext.fileHandleId === entry.fileHandleId
+          ? activeFileHandleRef.current
+          : await readRecentFileHandle(entry.fileHandleId);
+        if (handle) {
+          try {
+            rawBlueprint = await readBlueprintFromFile(await handle.getFile());
+            activeFileHandleRef.current = handle;
+          } catch {
+            handle = null;
+          }
         }
       }
-    }
 
-    if (!rawBlueprint) {
-      rawBlueprint = readRecentSnapshot(entry.id);
-      openedFromSnapshot = true;
-    }
-
-    if (!rawBlueprint) {
-      if (entry.fileHandleId) {
-        await removeRecentFileHandle(entry.fileHandleId);
+      if (!rawBlueprint) {
+        rawBlueprint = readRecentSnapshot(entry.id);
+        openedFromSnapshot = true;
       }
-      setRecentProjects(removeRecentProject(entry.id));
-      setTransientStatus("Recent project is no longer available.");
-      return;
-    }
 
-    applyWorkspaceBlueprint(
-      rawBlueprint,
-      createWorkspaceProjectContext({
-        source: handle ? "file-handle" : "imported-file",
-        fileName: entry.fileName,
-        recentProjectId: entry.id,
-        fileHandleId: handle ? entry.fileHandleId : null,
-        canOverwriteFile: Boolean(handle),
-      }),
-      openedFromSnapshot
-        ? `Opened recent "${entry.label}" from local snapshot.`
-        : `Opened recent "${entry.label}".`,
-    );
+      if (!rawBlueprint) {
+        if (entry.fileHandleId) {
+          await removeRecentFileHandle(entry.fileHandleId);
+        }
+        setRecentProjects(removeRecentProject(entry.id));
+        setTransientStatus("Recent project is no longer available.");
+        return;
+      }
+
+      applyWorkspaceBlueprint(
+        rawBlueprint,
+        createWorkspaceProjectContext({
+          source: handle ? "file-handle" : "imported-file",
+          fileName: entry.fileName,
+          recentProjectId: entry.id,
+          fileHandleId: handle ? entry.fileHandleId : null,
+          canOverwriteFile: Boolean(handle),
+        }),
+        openedFromSnapshot
+          ? `Opened recent "${entry.label}" from local snapshot.`
+          : `Opened recent "${entry.label}".`,
+      );
+    }, { blocking: true });
   }, [applyWorkspaceBlueprint, projectContext.fileHandleId, recentProjects, setTransientStatus]);
 
   const handleRemoveRecent = useCallback(async (recentProjectId: string) => {
@@ -1537,18 +1552,20 @@ export function App() {
     const result = await saveBlueprintAs(blueprintSnapshot, suggestedName);
 
     if (result.status === "saved") {
-      const { recentProjectId, fileHandleId } = await syncRecentProject(blueprintSnapshot, {
-        fileName: result.handle.name,
-        handle: result.handle,
-      });
-      setProjectContext(createWorkspaceProjectContext({
-        source: fileHandleId ? "file-handle" : "imported-file",
-        fileName: result.handle.name,
-        recentProjectId,
-        fileHandleId,
-        canOverwriteFile: true,
-      }));
-      setTransientStatus(`Saved ${result.handle.name}.`);
+      await runTask(`Saving ${result.handle.name}…`, async () => {
+        const { recentProjectId, fileHandleId } = await syncRecentProject(blueprintSnapshot, {
+          fileName: result.handle.name,
+          handle: result.handle,
+        });
+        setProjectContext(createWorkspaceProjectContext({
+          source: fileHandleId ? "file-handle" : "imported-file",
+          fileName: result.handle.name,
+          recentProjectId,
+          fileHandleId,
+          canOverwriteFile: true,
+        }));
+        setTransientStatus(`Saved ${result.handle.name}.`);
+      }, { blocking: true });
       return;
     }
 
@@ -1582,7 +1599,11 @@ export function App() {
     }
 
     activeFileHandleRef.current = linkedHandle;
-    const result = await saveBlueprintToExistingHandle(blueprintSnapshot, linkedHandle);
+    const result = await runTask(
+      `Saving ${linkedHandle.name}…`,
+      () => saveBlueprintToExistingHandle(blueprintSnapshot, linkedHandle),
+      { blocking: true },
+    );
 
     if (result.status === "saved") {
       const { recentProjectId, fileHandleId } = await syncRecentProject(blueprintSnapshot, {
@@ -2132,6 +2153,15 @@ export function App() {
       items: [
         { id: "help-shortcuts", label: "Shortcuts", icon: <ShortcutIcon width={14} height={14} />, onSelect: () => setIsShortcutDialogOpen(true) },
         { id: "help-about", label: "About 3Forge", icon: <InfoIcon width={14} height={14} />, onSelect: () => setIsAboutDialogOpen(true) },
+        {
+          id: "help-loading-preview",
+          label: "Preview loading animation",
+          icon: <InfoIcon width={14} height={14} />,
+          onSelect: () => {
+            void runTask("Previewing blocking overlay…", () => new Promise((resolve) => setTimeout(resolve, 2200)), { blocking: true })
+              .then(() => runTask("Previewing status progress…", () => new Promise((resolve) => setTimeout(resolve, 3000))));
+          },
+        },
       ],
     },
   ], [
@@ -2704,6 +2734,7 @@ export function App() {
         <div className="statusbar__left">
           <span className="statusbar__dot" aria-hidden="true" />
           <span>{statusText}</span>
+          <StatusBarProgress />
         </div>
         <div className="statusbar__right">
           {isPhoneLayout ? (
@@ -2754,7 +2785,7 @@ export function App() {
           }
 
           try {
-            const image = await imageFileToAsset(file);
+            const image = await runTask(`Importing ${file.name}…`, () => imageFileToAsset(file));
             applyImageImport(image);
           } catch {
             pendingImageImportRef.current = null;
@@ -2820,6 +2851,8 @@ export function App() {
         <p>3Forge is a standalone 3D component editor focused on building reusable Three.js pieces with runtime-editable fields.</p>
         <p>The viewport, history, export pipeline, fonts, images, and scene state stay in the editor core. React now handles the software-like shell, menus, panels, and scene graph workflow.</p>
       </Modal>
+
+      <LoadingOverlay />
     </div>
   );
 }
