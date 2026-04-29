@@ -89,7 +89,7 @@ import { PhonePlaybackBar, PhoneViewerHeader } from "./components/PhoneViewerChr
 import { SceneGraphPanel } from "./components/SceneGraphPanel";
 import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
-import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
+import { LoadingOverlay, LoadingPreviewDock, StatusBarProgress } from "./components/LoadingOverlay";
 import { runTask } from "./hooks/useAsyncTask";
 import { ViewportHost } from "./components/ViewportHost";
 
@@ -2853,6 +2853,7 @@ export function App() {
       </Modal>
 
       <LoadingOverlay />
+      <LoadingPreviewDock />
     </div>
   );
 }
