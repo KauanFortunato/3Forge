@@ -43,6 +43,29 @@ export interface AiBlueprintResult {
   sceneSpec: AiSceneSpec;
   sceneSpecJson: string;
   rawText: string;
+  executedModel?: string;
+}
+
+interface ParsedAiSceneSpec {
+  sceneSpec: AiSceneSpec;
+  rawText: string;
+  executedModel?: string;
+}
+
+export class AiBlueprintDebugError extends Error {
+  readonly rawText: string;
+  readonly executedModel?: string;
+
+  constructor(message: string, rawText: string, executedModel?: string) {
+    super(message);
+    this.name = "AiBlueprintDebugError";
+    this.rawText = rawText;
+    this.executedModel = executedModel;
+  }
+}
+
+export function isAiBlueprintDebugError(error: unknown): error is AiBlueprintDebugError {
+  return error instanceof AiBlueprintDebugError;
 }
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -117,8 +140,8 @@ export async function generateBlueprint({ apiKey, prompt, provider = "openrouter
 
 export async function generateBlueprintResult({ apiKey, prompt, provider = "openrouter", model }: GenerateBlueprintOptions): Promise<AiBlueprintResult> {
   const selectedModel = model?.trim() || getDefaultModel(provider);
-  const scene = await generateSceneSpec({ apiKey, prompt, provider, model: selectedModel });
-  return createAiBlueprintResult(scene);
+  const result = await generateSceneSpec({ apiKey, prompt, provider, model: selectedModel });
+  return createAiBlueprintResult(result.sceneSpec, result.rawText, result.executedModel);
 }
 
 export async function editBlueprintWithAI({ apiKey, prompt, provider = "openrouter", model, currentBlueprint }: GenerateBlueprintOptions): Promise<ComponentBlueprint> {
@@ -144,15 +167,15 @@ export async function editBlueprintWithAIResult({ apiKey, prompt, provider = "op
     "User edit request:",
     prompt,
   ].join("\n");
-  const scene = await generateSceneSpec({ apiKey, prompt: editPrompt, provider, model: selectedModel });
-  return createAiBlueprintResult(scene);
+  const result = await generateSceneSpec({ apiKey, prompt: editPrompt, provider, model: selectedModel });
+  return createAiBlueprintResult(result.sceneSpec, result.rawText, result.executedModel);
 }
 
 export async function generateBlueprintWithOpenAI(options: Omit<GenerateBlueprintOptions, "provider">): Promise<ComponentBlueprint> {
   return generateBlueprint({ ...options, provider: "openai" });
 }
 
-async function generateSceneSpec(options: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "provider" | "model">>): Promise<AiSceneSpec> {
+async function generateSceneSpec(options: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "provider" | "model">>): Promise<ParsedAiSceneSpec> {
   if (options.provider === "openai") {
     return generateOpenAiSceneSpec(options);
   }
@@ -164,7 +187,7 @@ async function generateSceneSpec(options: Required<Pick<GenerateBlueprintOptions
   return generateChatCompletionsSceneSpec(options);
 }
 
-async function generateOpenAiSceneSpec({ apiKey, prompt, model }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "model">>): Promise<AiSceneSpec> {
+async function generateOpenAiSceneSpec({ apiKey, prompt, model }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "model">>): Promise<ParsedAiSceneSpec> {
   const response = await fetch(OPENAI_RESPONSES_URL, {
     method: "POST",
     headers: {
@@ -212,7 +235,7 @@ async function generateOpenAiSceneSpec({ apiKey, prompt, model }: Required<Pick<
   return parseAiSceneSpec(payload);
 }
 
-async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, model }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "provider" | "model">>): Promise<AiSceneSpec> {
+async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, model }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "provider" | "model">>): Promise<ParsedAiSceneSpec> {
   const response = await fetch(provider === "groq" ? GROQ_CHAT_URL : OPENROUTER_CHAT_URL, {
     method: "POST",
     headers: {
@@ -258,7 +281,7 @@ async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, mode
   return parseAiSceneSpec(payload);
 }
 
-async function generateGeminiSceneSpec({ apiKey, prompt, model }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "model">>): Promise<AiSceneSpec> {
+async function generateGeminiSceneSpec({ apiKey, prompt, model }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "model">>): Promise<ParsedAiSceneSpec> {
   const response = await fetch(`${GEMINI_BASE_URL}/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: {
@@ -334,12 +357,13 @@ export function createBlueprintFromAiScene(spec: AiSceneSpec): ComponentBlueprin
   };
 }
 
-export function createAiBlueprintResult(sceneSpec: AiSceneSpec, rawText = JSON.stringify(sceneSpec, null, 2)): AiBlueprintResult {
+export function createAiBlueprintResult(sceneSpec: AiSceneSpec, rawText = JSON.stringify(sceneSpec, null, 2), executedModel?: string): AiBlueprintResult {
   return {
     blueprint: createBlueprintFromAiScene(sceneSpec),
     sceneSpec,
     sceneSpecJson: JSON.stringify(sceneSpec, null, 2),
     rawText,
+    executedModel,
   };
 }
 
@@ -402,26 +426,74 @@ export function createAiSceneFromBlueprint(blueprint: ComponentBlueprint): AiSce
   };
 }
 
-function parseAiSceneSpec(payload: unknown): AiSceneSpec {
+function parseAiSceneSpec(payload: unknown): ParsedAiSceneSpec {
   const outputText = extractOutputText(payload);
+  const executedModel = extractExecutedModel(payload);
   if (!outputText) {
-    throw new Error("The model did not return a scene specification.");
+    throw new AiBlueprintDebugError(
+      "The model did not return a scene specification.",
+      stringifyDebugPayload(payload),
+      executedModel,
+    );
   }
 
-  const parsed = JSON.parse(outputText) as Partial<AiSceneSpec>;
+  const jsonText = normalizeAiJsonText(outputText);
+  let parsed: Partial<AiSceneSpec>;
+  try {
+    parsed = JSON.parse(jsonText) as Partial<AiSceneSpec>;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown JSON parse error.";
+    throw new AiBlueprintDebugError(
+      `The model returned invalid JSON. ${detail}`,
+      outputText,
+      executedModel,
+    );
+  }
+
   if (!parsed.componentName || !Array.isArray(parsed.objects) || parsed.objects.length === 0) {
-    throw new Error("The model returned an incomplete scene specification.");
+    throw new AiBlueprintDebugError(
+      "The model returned an incomplete scene specification.",
+      outputText,
+      executedModel,
+    );
   }
 
-  return parsed as AiSceneSpec;
+  return {
+    sceneSpec: parsed as AiSceneSpec,
+    rawText: outputText,
+    executedModel,
+  };
+}
+
+function normalizeAiJsonText(value: string): string {
+  const trimmed = value.trim();
+  const fencedMatch = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  return fencedMatch?.[1]?.trim() ?? trimmed;
 }
 
 export function parseAiSceneSpecJson(sceneSpecJson: string): AiSceneSpec {
-  const parsed = JSON.parse(sceneSpecJson) as Partial<AiSceneSpec>;
+  const parsed = JSON.parse(normalizeAiJsonText(sceneSpecJson)) as Partial<AiSceneSpec>;
   if (!parsed.componentName || !Array.isArray(parsed.objects) || parsed.objects.length === 0) {
     throw new Error("Invalid AI scene JSON.");
   }
   return parsed as AiSceneSpec;
+}
+
+export function isAiSceneSpec(value: unknown): value is AiSceneSpec {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<AiSceneSpec>;
+  return typeof candidate.componentName === "string"
+    && Array.isArray(candidate.objects)
+    && candidate.objects.length > 0
+    && candidate.objects.every((object) => (
+      Boolean(object)
+      && typeof object === "object"
+      && typeof (object as Partial<AiPrimitiveSpec>).type === "string"
+      && typeof (object as Partial<AiPrimitiveSpec>).name === "string"
+    ));
 }
 
 function extractOutputText(payload: unknown): string {
@@ -479,6 +551,42 @@ function extractOutputText(payload: unknown): string {
   }
 
   return "";
+}
+
+function extractExecutedModel(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+
+  const direct = (payload as { model?: unknown }).model;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+
+  const modelVersion = (payload as { modelVersion?: unknown }).modelVersion;
+  if (typeof modelVersion === "string" && modelVersion.trim()) {
+    return modelVersion.trim();
+  }
+
+  const choices = (payload as { choices?: unknown }).choices;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      const choiceModel = (choice as { model?: unknown }).model;
+      if (typeof choiceModel === "string" && choiceModel.trim()) {
+        return choiceModel.trim();
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function stringifyDebugPayload(payload: unknown): string {
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
 }
 
 function createSystemPrompt(): string {

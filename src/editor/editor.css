@@ -3386,6 +3386,16 @@ code {
   font-size: 10px;
 }
 
+.ai-chat-message__meta span {
+  min-width: 0;
+}
+
+.ai-chat-message__meta span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ai-chat-json {
   margin-top: 8px;
   border: 1px solid var(--c-border);

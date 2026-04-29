@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AiBlueprintDebugError } from "../../aiBlueprint";
 import { AIGenerateDialog } from "./AIGenerateDialog";
 import type { AiChatGenerationResult } from "./AIGenerateDialog";
 
@@ -32,6 +33,7 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof AIGenerateD
     content: "I prepared a project update.",
     sceneSpecJson,
     rawText: sceneSpecJson,
+    executedModel: "google/gemini-2.5-flash-lite",
   }));
   const onApplyScene = vi.fn();
   const onClose = vi.fn();
@@ -74,6 +76,7 @@ describe("AIGenerateDialog", () => {
     ));
 
     expect(await screen.findByText("I prepared a project update.")).not.toBeNull();
+    expect(screen.getByText("google/gemini-2.5-flash-lite")).not.toBeNull();
     expect(window.localStorage.getItem("3forge-ai-chat-history-v1:project-a")).toContain("make it sharper");
 
     await user.click(screen.getByText("View JSON"));
@@ -126,6 +129,7 @@ describe("AIGenerateDialog", () => {
       content: "Background response ready.",
       sceneSpecJson,
       rawText: sceneSpecJson,
+      executedModel: "meta-llama/llama-3.3-70b-instruct",
     });
 
     await waitFor(() => {
@@ -134,5 +138,31 @@ describe("AIGenerateDialog", () => {
 
     rerender(<AIGenerateDialog isOpen {...props} />);
     expect(await screen.findByText("Background response ready.")).not.toBeNull();
+    expect(screen.getByText("meta-llama/llama-3.3-70b-instruct")).not.toBeNull();
+  });
+
+  it("shows raw model output when generation fails validation", async () => {
+    const user = userEvent.setup();
+    const onGenerate = vi.fn(async () => {
+      throw new AiBlueprintDebugError(
+        "The model returned invalid JSON. Expected property name.",
+        "{ invalid json",
+        "openai/gpt-oss-120b:free",
+      );
+    });
+    renderDialog({ onGenerate });
+
+    await user.click(screen.getByText("AI settings"));
+    await user.type(screen.getByLabelText("OpenRouter API key"), "sk-or-test");
+    await user.clear(screen.getByPlaceholderText("Write a request..."));
+    await user.type(screen.getByPlaceholderText("Write a request..."), "make a lamp");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("The model returned invalid JSON. Expected property name.")).not.toBeNull();
+    expect(screen.getByText("openai/gpt-oss-120b:free")).not.toBeNull();
+
+    await user.click(screen.getByText("View raw response"));
+    expect(screen.getByText("{ invalid json")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
   });
 });

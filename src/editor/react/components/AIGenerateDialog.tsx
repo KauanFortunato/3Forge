@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AI_PROVIDER_OPTIONS } from "../../aiBlueprint";
+import { AI_PROVIDER_OPTIONS, isAiBlueprintDebugError } from "../../aiBlueprint";
 import type { AiProvider } from "../../aiBlueprint";
 
 export type AIGenerationMode = "new" | "edit";
@@ -8,6 +8,7 @@ export interface AiChatGenerationResult {
   content: string;
   sceneSpecJson: string;
   rawText: string;
+  executedModel?: string;
 }
 
 interface AIGenerateDialogProps {
@@ -24,6 +25,7 @@ interface AiChatMessage {
   createdAt: number;
   provider: AiProvider;
   model: string;
+  executedModel?: string;
   mode: AIGenerationMode;
   content: string;
   sceneSpecJson?: string;
@@ -127,6 +129,19 @@ function formatMessageTime(timestamp: number): string {
   }
 }
 
+function getMessageModelLabel(message: AiChatMessage): string {
+  if (message.role !== "assistant") {
+    return message.model;
+  }
+
+  return message.executedModel?.trim() || "Executed model unavailable";
+}
+
+function shouldShowRawResponse(message: AiChatMessage): boolean {
+  return Boolean(message.rawText)
+    && (message.status === "error" || message.rawText !== message.sceneSpecJson);
+}
+
 export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApplyScene }: AIGenerateDialogProps) {
   const initialProvider = useMemo(() => readStoredProvider(), []);
   const initialProviderOption = AI_PROVIDER_OPTIONS.find((entry) => entry.provider === initialProvider) ?? AI_PROVIDER_OPTIONS[0];
@@ -211,6 +226,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         createdAt: Date.now(),
         provider,
         model: model.trim(),
+        executedModel: result.executedModel,
         mode,
         content: result.content,
         sceneSpecJson: result.sceneSpecJson,
@@ -226,8 +242,10 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         createdAt: Date.now(),
         provider,
         model: model.trim(),
+        executedModel: isAiBlueprintDebugError(error) ? error.executedModel : undefined,
         mode,
         content,
+        rawText: isAiBlueprintDebugError(error) ? error.rawText : undefined,
         status: "error",
       }]);
     } finally {
@@ -374,6 +392,12 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
                   <pre>{message.sceneSpecJson}</pre>
                 </details>
               ) : null}
+              {shouldShowRawResponse(message) ? (
+                <details className="ai-chat-json">
+                  <summary>View raw response</summary>
+                  <pre>{message.rawText}</pre>
+                </details>
+              ) : null}
               {message.sceneSpecJson ? (
                 <div className="ai-chat-message__actions">
                   <button
@@ -389,6 +413,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
               <footer className="ai-chat-message__meta">
                 <span>{formatMessageTime(message.createdAt)}</span>
                 {message.role === "assistant" ? <span>{AI_PROVIDER_OPTIONS.find((entry) => entry.provider === message.provider)?.label ?? message.provider}</span> : null}
+                {message.role === "assistant" ? <span title={`Requested: ${message.model}`}>{getMessageModelLabel(message)}</span> : null}
               </footer>
             </article>
           </div>

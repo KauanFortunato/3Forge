@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
-import { createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, parseAiSceneSpecJson } from "../aiBlueprint";
+import { createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, isAiSceneSpec, parseAiSceneSpecJson } from "../aiBlueprint";
 import type { AiProvider } from "../aiBlueprint";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { createExportPackageZip } from "../exportPackage";
@@ -236,6 +236,20 @@ function resolveSelectionMaterialId(nodes: EditorNode[]): string | null {
     }
   }
   return materialId;
+}
+
+function resolveImportedBlueprint(rawBlueprint: unknown): { blueprint: ComponentBlueprint; convertedFromAiScene: boolean } {
+  if (isAiSceneSpec(rawBlueprint)) {
+    return {
+      blueprint: createBlueprintFromAiScene(rawBlueprint),
+      convertedFromAiScene: true,
+    };
+  }
+
+  return {
+    blueprint: rawBlueprint as ComponentBlueprint,
+    convertedFromAiScene: false,
+  };
 }
 
 function resolveLayoutMode(width: number): LayoutMode {
@@ -1299,13 +1313,13 @@ export function App() {
 
   const importJsonFromFile = useCallback(async (file: File) => {
     const rawBlueprint = await readBlueprintFromFile(file);
-    const blueprint = rawBlueprint as ComponentBlueprint;
+    const { blueprint, convertedFromAiScene } = resolveImportedBlueprint(rawBlueprint);
     const { recentProjectId } = await syncRecentProject(blueprint, {
       fileName: file.name,
     });
 
     applyWorkspaceBlueprint(
-      rawBlueprint,
+      blueprint,
       createWorkspaceProjectContext({
         source: "imported-file",
         fileName: file.name,
@@ -1313,7 +1327,7 @@ export function App() {
         fileHandleId: null,
         canOverwriteFile: false,
       }),
-      `Imported ${file.name}.`,
+      convertedFromAiScene ? `Imported AI scene ${file.name}.` : `Imported ${file.name}.`,
     );
   }, [applyWorkspaceBlueprint, syncRecentProject]);
 
@@ -1335,6 +1349,7 @@ export function App() {
         : `I generated "${result.sceneSpec.componentName}". Review the JSON and apply it when ready.`,
       sceneSpecJson: result.sceneSpecJson,
       rawText: result.rawText,
+      executedModel: result.executedModel,
     };
   }, [blueprintSnapshot, setTransientStatus]);
 
@@ -1503,22 +1518,22 @@ export function App() {
         return;
       }
 
-      const blueprint = result.blueprint as ComponentBlueprint;
+      const { blueprint, convertedFromAiScene } = resolveImportedBlueprint(result.blueprint);
       const { recentProjectId, fileHandleId } = await syncRecentProject(blueprint, {
         fileName: result.fileName,
-        handle: result.handle,
+        handle: convertedFromAiScene ? null : result.handle,
       });
 
       applyWorkspaceBlueprint(
-        result.blueprint,
+        blueprint,
         createWorkspaceProjectContext({
-          source: fileHandleId ? "file-handle" : "imported-file",
+          source: !convertedFromAiScene && fileHandleId ? "file-handle" : "imported-file",
           fileName: result.fileName,
           recentProjectId,
-          fileHandleId,
-          canOverwriteFile: true,
+          fileHandleId: convertedFromAiScene ? null : fileHandleId,
+          canOverwriteFile: !convertedFromAiScene && Boolean(fileHandleId),
         }),
-        `Opened ${result.fileName}.`,
+        convertedFromAiScene ? `Opened AI scene ${result.fileName}.` : `Opened ${result.fileName}.`,
       );
     } catch {
       setTransientStatus("Unable to open file.");
@@ -1564,18 +1579,23 @@ export function App() {
       return;
     }
 
+    const { blueprint, convertedFromAiScene } = resolveImportedBlueprint(rawBlueprint);
+    const effectiveHandle = convertedFromAiScene ? null : handle;
+
     applyWorkspaceBlueprint(
-      rawBlueprint,
+      blueprint,
       createWorkspaceProjectContext({
-        source: handle ? "file-handle" : "imported-file",
+        source: effectiveHandle ? "file-handle" : "imported-file",
         fileName: entry.fileName,
         recentProjectId: entry.id,
-        fileHandleId: handle ? entry.fileHandleId : null,
-        canOverwriteFile: Boolean(handle),
+        fileHandleId: effectiveHandle ? entry.fileHandleId : null,
+        canOverwriteFile: Boolean(effectiveHandle),
       }),
       openedFromSnapshot
         ? `Opened recent "${entry.label}" from local snapshot.`
-        : `Opened recent "${entry.label}".`,
+        : convertedFromAiScene
+          ? `Opened recent AI scene "${entry.label}".`
+          : `Opened recent "${entry.label}".`,
     );
   }, [applyWorkspaceBlueprint, projectContext.fileHandleId, recentProjects, setTransientStatus]);
 
