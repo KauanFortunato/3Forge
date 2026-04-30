@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { MouseEvent } from "react";
+import { isVideoMimeType } from "../../images";
 import type { ImageAsset } from "../../types";
 import { AssignIcon, ImageIcon, PlusIcon, TrashIcon, DownloadIcon } from "./icons";
 
@@ -49,14 +50,14 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
   return (
     <div className="image-assets-panel">
       <div className="image-assets-panel__head">
-        <span>Images</span>
+        <span>Media</span>
         <div className="image-assets-panel__head-actions">
           <button
             type="button"
             className="ibtn"
             onClick={onImport}
-            aria-label="Import image asset"
-            title="Import image asset"
+            aria-label="Import media asset"
+            title="Import media asset"
           >
             <PlusIcon width={11} height={11} />
           </button>
@@ -65,7 +66,7 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
 
       {images.length === 0 ? (
         <div className="panel__empty">
-          No reusable images yet. Import an image asset to place it in the scene.
+          No reusable media yet. Import an image or video to place it in the scene.
         </div>
       ) : (
         <div className="image-assets-panel__list">
@@ -74,6 +75,8 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
             const isActive = image.id === selectedImageId;
             const canApply = selectedImageNodeCount > 0;
             const canRemove = canRemoveImage(image.id);
+            const isVideo = isVideoMimeType(image.mimeType);
+            const kindLabel = isVideo ? "video" : "image";
 
             return (
               <div
@@ -88,20 +91,35 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                   title={`Select ${image.name}`}
                 >
                   <span className="image-assets-panel__thumb" aria-hidden="true">
-                    <img
-                      src={image.src}
-                      alt=""
-                      onLoad={() => markLoaded(image.id, image.src)}
-                      onError={() => markLoaded(image.id, image.src)}
-                    />
+                    {isVideo ? (
+                      <video
+                        src={image.src}
+                        muted
+                        loop
+                        autoPlay
+                        playsInline
+                        onLoadedData={() => markLoaded(image.id, image.src)}
+                        onError={() => markLoaded(image.id, image.src)}
+                      />
+                    ) : (
+                      <img
+                        src={image.src}
+                        alt=""
+                        onLoad={() => markLoaded(image.id, image.src)}
+                        onError={() => markLoaded(image.id, image.src)}
+                      />
+                    )}
                     {loadedSrcById[image.id] === image.src ? null : (
-                      <span className="image-assets-panel__thumb-loading" aria-label="Loading image" role="status">
+                      <span className="image-assets-panel__thumb-loading" aria-label={`Loading ${kindLabel}`} role="status">
                         <span className="image-assets-panel__thumb-spinner" aria-hidden="true" />
                       </span>
                     )}
                   </span>
                   <span className="image-assets-panel__meta">
-                    <span className="image-assets-panel__name">{image.name}</span>
+                    <span className="image-assets-panel__name">
+                      {image.name}
+                      {isVideo ? <span className="image-assets-panel__badge">VIDEO</span> : null}
+                    </span>
                     <span className="image-assets-panel__sub">
                       {image.width} x {image.height}px - {usage} use{usage === 1 ? "" : "s"}
                     </span>
@@ -116,10 +134,10 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                     className="ibtn"
                     onClick={() => onApplyToSelection(image)}
                     disabled={!canApply}
-                    aria-label="Apply image asset to selected image nodes"
+                    aria-label={`Apply ${kindLabel} asset to selected media nodes`}
                     title={canApply
-                      ? "Apply to selected image nodes"
-                      : "Select an image node to apply this asset"}
+                      ? `Apply to selected media nodes`
+                      : `Select a media node to apply this asset`}
                   >
                     <AssignIcon width={11} height={11} />
                   </button>
@@ -127,8 +145,8 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                     type="button"
                     className="ibtn"
                     onClick={() => onCreateNode(image)}
-                    aria-label="Create image node from asset"
-                    title="Create image node from asset"
+                    aria-label={`Create media node from ${kindLabel} asset`}
+                    title={`Create media node from ${kindLabel} asset`}
                   >
                     <PlusIcon width={11} height={11} />
                   </button>
@@ -136,8 +154,8 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                     type="button"
                     className="ibtn"
                     onClick={() => onReplace(image.id)}
-                    aria-label="Replace image asset"
-                    title="Replace image asset"
+                    aria-label={`Replace ${kindLabel} asset`}
+                    title={`Replace ${kindLabel} asset`}
                   >
                     <DownloadIcon width={11} height={11} />
                   </button>
@@ -146,10 +164,10 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                     className="ibtn ibtn--danger"
                     onClick={() => onRemove(image.id)}
                     disabled={!canRemove}
-                    aria-label="Remove image asset"
+                    aria-label={`Remove ${kindLabel} asset`}
                     title={canRemove
-                      ? "Remove image asset"
-                      : "Image asset is in use"}
+                      ? `Remove ${kindLabel} asset`
+                      : `${kindLabel === "video" ? "Video" : "Image"} asset is in use`}
                   >
                     <TrashIcon width={11} height={11} />
                   </button>

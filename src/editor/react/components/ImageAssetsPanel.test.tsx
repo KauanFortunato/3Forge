@@ -35,9 +35,9 @@ describe("ImageAssetsPanel", () => {
   it("renders the empty state and import action", () => {
     const props = renderPanel();
 
-    expect(screen.getByText("No reusable images yet. Import an image asset to place it in the scene.")).toBeTruthy();
+    expect(screen.getByText("No reusable media yet. Import an image or video to place it in the scene.")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Import image asset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import media asset" }));
 
     expect(props.onImport).toHaveBeenCalledTimes(1);
   });
@@ -62,8 +62,8 @@ describe("ImageAssetsPanel", () => {
       selectedImageNodeCount: 1,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Apply image asset to selected image nodes" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create image node from asset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply image asset to selected media nodes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create media node from image asset" }));
     fireEvent.click(screen.getByRole("button", { name: "Replace image asset" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove image asset" }));
 
@@ -80,7 +80,7 @@ describe("ImageAssetsPanel", () => {
       canRemoveImage: vi.fn(() => false),
     });
 
-    expect(screen.getByRole("button", { name: "Apply image asset to selected image nodes" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Apply image asset to selected media nodes" })).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "Remove image asset" })).toHaveProperty("disabled", true);
   });
 });

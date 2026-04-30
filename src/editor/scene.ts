@@ -23,7 +23,9 @@ import {
   PCFSoftShadowMap,
   ShadowMaterial,
   Object3D,
+  OrthographicCamera,
   PerspectiveCamera,
+  Plane,
   PlaneGeometry,
   Raycaster,
   Scene,
@@ -32,6 +34,7 @@ import {
   SphereGeometry,
   Texture,
   TextureLoader,
+  VideoTexture,
   Vector2,
   Vector3,
   WebGLRenderer,
@@ -133,7 +136,8 @@ export class SceneEditor {
   private readonly store: EditorStore;
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
-  private readonly camera: PerspectiveCamera;
+  private camera: PerspectiveCamera | OrthographicCamera;
+  private currentSceneMode: "2d" | "3d";
   private readonly orientationRenderer: WebGLRenderer;
   private readonly orientationScene: Scene;
   private readonly orientationCamera: PerspectiveCamera;
@@ -157,6 +161,7 @@ export class SceneEditor {
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribe: () => void;
   private readonly textureCache = new Map<string, Texture>();
+  private readonly videoTextureCache = new Map<string, VideoTexture>();
   private readonly animationFrameListeners = new Set<(frame: number) => void>();
 
   private animationFrame = 0;
@@ -190,6 +195,9 @@ export class SceneEditor {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
+    // Per-material clippingPlanes (used by W3D-style masks) need this enabled
+    // so each masked node's planes apply only to that node's draw call.
+    this.renderer.localClippingEnabled = true;
     this.renderer.setClearColor("#23252a", 1);
     this.renderer.domElement.style.touchAction = "none";
     this.renderer.domElement.style.display = "block";
@@ -198,8 +206,8 @@ export class SceneEditor {
     this.scene = new Scene();
     this.scene.background = new Color("#25272c");
 
-    this.camera = new PerspectiveCamera(45, 1, 0.01, 2000);
-    this.camera.position.set(6, 5, 8);
+    this.currentSceneMode = (store.blueprint.sceneMode ?? "3d") === "2d" ? "2d" : "3d";
+    this.camera = this.buildCameraForMode(this.currentSceneMode);
 
     this.orientationRenderer = new WebGLRenderer({ antialias: true, alpha: true });
     this.orientationRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -223,9 +231,7 @@ export class SceneEditor {
 
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
-    this.orbitControls.target.set(0, 1, 0);
-    this.orbitControls.maxDistance = 80;
-    this.orbitControls.minDistance = 1;
+    this.applyOrbitControlsForMode(this.currentSceneMode);
 
     this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
     this.transformHelper = this.transformControls.getHelper();
@@ -483,6 +489,11 @@ export class SceneEditor {
     }
 
     if (change.reason === "editable" || change.reason === "meta") {
+      // The only "meta" change that affects rendering is sceneMode flips.
+      const desired = (this.store.blueprint.sceneMode ?? "3d") === "2d" ? "2d" : "3d";
+      if (desired !== this.currentSceneMode) {
+        this.applySceneMode(desired);
+      }
       return;
     }
 
@@ -770,6 +781,12 @@ export class SceneEditor {
   }
 
   private rebuildScene(): void {
+    // A new blueprint may carry a different sceneMode (e.g. opening a W3D
+    // import sets it to "2d"); align the camera before mounting nodes.
+    const desired = (this.store.blueprint.sceneMode ?? "3d") === "2d" ? "2d" : "3d";
+    if (desired !== this.currentSceneMode) {
+      this.applySceneMode(desired);
+    }
     this.clearViewportRoot();
     this.objectMap.clear();
     this.childContainerMap.clear();
@@ -791,9 +808,105 @@ export class SceneEditor {
       }
     }
 
+    try {
+      this.applyMasks();
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("[scene] applyMasks failed (skipping masks):", error);
+    }
+    this.applyPainterOrderForW3D();
     this.updateViewMode();
     this.refreshSelection();
     this.rebuildAnimationTimeline();
+  }
+
+  private isMissingTextureNode(nodeId: string): boolean {
+    const w3d = this.store.blueprint.metadata?.w3d as
+      | { missingTextureNodeIds?: string[] }
+      | undefined;
+    return Array.isArray(w3d?.missingTextureNodeIds) && w3d.missingTextureNodeIds.includes(nodeId);
+  }
+
+  private applyPainterOrderForW3D(): void {
+    // Broadcast scenes (R3 / W3D) stack many quads at near-identical Z (e.g.
+    // -0.001 / -0.01 / -1). Three.js's depth buffer can't reliably resolve
+    // those tiny separations, causing visible z-fighting between siblings.
+    // The fix: ignore depth and render strictly in node-tree order (painter's
+    // algorithm) — which is what R3 does internally. We gate on the W3D shadow
+    // marker so non-imported 3D content keeps real depth testing.
+    if (!this.store.blueprint.metadata?.w3d) return;
+    this.store.blueprint.nodes.forEach((node, index) => {
+      const wrapper = this.objectMap.get(node.id);
+      if (!wrapper) return;
+      wrapper.traverse((child) => {
+        if (!(child instanceof Mesh)) return;
+        child.renderOrder = index;
+        const setDepth = (m: Material) => {
+          m.depthWrite = false;
+        };
+        if (Array.isArray(child.material)) {
+          for (const m of child.material) setDepth(m);
+        } else if (child.material) {
+          setDepth(child.material);
+        }
+      });
+    });
+  }
+
+  private applyMasks(): void {
+    // World-space rectangular clipping for nodes that reference an `isMask`
+    // sibling (R3 MaskId convention). Mask geometry is treated as an axis-
+    // aligned rectangle in the XY plane after world transform — sufficient for
+    // broadcast text-clip cases. Animated masks aren't tracked yet.
+    this.viewportRoot.updateMatrixWorld(true);
+    for (const node of this.store.blueprint.nodes) {
+      if (!node.maskId) continue;
+      const targetWrapper = this.objectMap.get(node.id);
+      const maskWrapper = this.objectMap.get(node.maskId);
+      if (!targetWrapper || !maskWrapper) continue;
+      const planes = this.computeMaskPlanes(maskWrapper);
+      if (!planes) continue;
+      this.applyClippingToMaterials(targetWrapper, planes);
+    }
+  }
+
+  private computeMaskPlanes(maskWrapper: Object3D): Plane[] | null {
+    let mesh: Mesh | null = null;
+    maskWrapper.traverse((child) => {
+      if (!mesh && child instanceof Mesh) {
+        mesh = child;
+      }
+    });
+    if (!mesh) return null;
+    const meshObj: Mesh = mesh;
+    if (!meshObj.geometry.boundingBox) {
+      meshObj.geometry.computeBoundingBox();
+    }
+    const bbox = meshObj.geometry.boundingBox;
+    if (!bbox) return null;
+    const worldBox = bbox.clone().applyMatrix4(meshObj.matrixWorld);
+    return [
+      new Plane(new Vector3(1, 0, 0), -worldBox.min.x),
+      new Plane(new Vector3(-1, 0, 0), worldBox.max.x),
+      new Plane(new Vector3(0, 1, 0), -worldBox.min.y),
+      new Plane(new Vector3(0, -1, 0), worldBox.max.y),
+    ];
+  }
+
+  private applyClippingToMaterials(target: Object3D, planes: Plane[]): void {
+    target.traverse((child) => {
+      if (!(child instanceof Mesh)) return;
+      const material = child.material;
+      const apply = (m: Material) => {
+        m.clippingPlanes = planes;
+        m.clipShadows = true;
+      };
+      if (Array.isArray(material)) {
+        for (const m of material) apply(m);
+      } else if (material) {
+        apply(material);
+      }
+    });
   }
 
   private createObject(node: EditorNode): Object3D {
@@ -801,7 +914,11 @@ export class SceneEditor {
       ? this.buildGroupObject(node)
       : this.buildWrappedNodeObject(node);
     object.name = node.name;
-    object.visible = node.visible;
+    // Mask nodes contribute their bounds for clipping but are themselves never
+    // rendered (R3 treats them as invisible stencil shapes).
+    // Quads whose texture wasn't in the imported folder are also hidden so
+    // they don't render as solid-white placeholders — see W3DShadowData.
+    object.visible = node.visible && !node.isMask && !this.isMissingTextureNode(node.id);
     object.userData.nodeId = node.id;
     object.userData.nodeType = node.type;
     object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
@@ -908,13 +1025,33 @@ export class SceneEditor {
 
   private createImageMesh(node: ImageNode): Mesh {
     const geometry = new PlaneGeometry(node.geometry.width, node.geometry.height);
-    const texture = this.getTexture(node.image.src);
+    const isVideo = typeof node.image.mimeType === "string" && node.image.mimeType.startsWith("video/");
+    const texture = isVideo ? this.getVideoTexture(node.image.src) : this.getTexture(node.image.src);
     const baseOptions = {
       ...this.createBaseMaterialOptions(node),
       map: texture,
     };
     const material = buildMaterialFromSpec(baseOptions, node.material);
     return new Mesh(geometry, material);
+  }
+
+  private getVideoTexture(src: string): VideoTexture {
+    const cached = this.videoTextureCache.get(src);
+    if (cached) return cached;
+    const video = document.createElement("video");
+    video.src = src;
+    video.crossOrigin = "anonymous";
+    video.loop = true;
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    // Autoplay may be blocked until a user gesture; ignore the rejection — the
+    // browser will start the video on the next interaction with the page.
+    video.play().catch(() => {});
+    const texture = new VideoTexture(video);
+    texture.colorSpace = SRGBColorSpace;
+    this.videoTextureCache.set(src, texture);
+    return texture;
   }
 
   private resolveFont(fontId: string): ReturnType<typeof parseFontAsset> {
@@ -1163,12 +1300,76 @@ export class SceneEditor {
   private resize(): void {
     const width = Math.max(this.container.clientWidth, 1);
     const height = Math.max(this.container.clientHeight, 1);
-    this.camera.aspect = width / height;
+    if (this.camera instanceof PerspectiveCamera) {
+      this.camera.aspect = width / height;
+    } else {
+      // Orthographic: keep half-extent of 5 world units; scale horizontally
+      // by aspect so a 2D layout fits in either window orientation.
+      const halfHeight = 5;
+      const aspect = width / height;
+      this.camera.left = -halfHeight * aspect;
+      this.camera.right = halfHeight * aspect;
+      this.camera.top = halfHeight;
+      this.camera.bottom = -halfHeight;
+    }
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
     this.orientationCamera.aspect = 1;
     this.orientationCamera.updateProjectionMatrix();
     this.orientationRenderer.setSize(this.ORIENTATION_SIZE, this.ORIENTATION_SIZE, false);
+  }
+
+  private buildCameraForMode(mode: "2d" | "3d"): PerspectiveCamera | OrthographicCamera {
+    if (mode === "2d") {
+      // Half-extent 5: covers most broadcast layouts (~10 units wide). The
+      // resize() pass updates the aspect-driven left/right immediately.
+      const camera = new OrthographicCamera(-5, 5, 5, -5, 0.01, 2000);
+      camera.position.set(0, 0, 10);
+      camera.lookAt(0, 0, 0);
+      camera.up.set(0, 1, 0);
+      return camera;
+    }
+    const camera = new PerspectiveCamera(45, 1, 0.01, 2000);
+    camera.position.set(6, 5, 8);
+    return camera;
+  }
+
+  private applyOrbitControlsForMode(mode: "2d" | "3d"): void {
+    if (mode === "2d") {
+      // SketchUp-style parallel projection: orbit is still free (so you can
+      // peek at depth or roll the layout), pan keeps the axes parallel to the
+      // screen for canvas-style editing, and zoom drives camera.zoom on the
+      // OrthographicCamera (OrbitControls handles that automatically).
+      this.orbitControls.enableRotate = true;
+      this.orbitControls.screenSpacePanning = true;
+      this.orbitControls.target.set(0, 0, 0);
+      this.orbitControls.maxDistance = 200;
+      this.orbitControls.minDistance = 0.1;
+    } else {
+      this.orbitControls.enableRotate = true;
+      this.orbitControls.screenSpacePanning = false;
+      this.orbitControls.target.set(0, 1, 0);
+      this.orbitControls.maxDistance = 80;
+      this.orbitControls.minDistance = 1;
+    }
+    this.orbitControls.update();
+  }
+
+  /**
+   * Hot-swap the camera/orbit-controls when the blueprint's sceneMode changes.
+   * TransformControls is bound to a camera too — recreated lazily by callers
+   * via a full scene rebuild.
+   */
+  applySceneMode(mode: "2d" | "3d"): void {
+    if (mode === this.currentSceneMode) return;
+    this.currentSceneMode = mode;
+    const next = this.buildCameraForMode(mode);
+    // Preserve the renderer size on the new camera.
+    this.camera = next;
+    this.orbitControls.object = this.camera;
+    this.transformControls.camera = this.camera;
+    this.applyOrbitControlsForMode(mode);
+    this.resize();
   }
 
   private startLoop(): void {
@@ -1329,14 +1530,15 @@ export class SceneEditor {
         continue;
       }
 
-      object.visible = node.visible;
+      const renderable = node.visible && !node.isMask && !this.isMissingTextureNode(node.id);
+      object.visible = renderable;
       object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
       object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
       object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
 
       const mesh = this.getAnimatedVisibilityMeshTarget(object);
       if (mesh) {
-        mesh.visible = node.visible;
+        mesh.visible = renderable;
       }
     }
   }

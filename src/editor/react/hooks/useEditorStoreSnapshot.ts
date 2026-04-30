@@ -11,6 +11,7 @@ export function useEditorStoreSnapshot(store: EditorStore): EditorStoreView {
   return useMemo(
     () => ({
       blueprintComponentName: store.blueprint.componentName,
+      blueprintSceneMode: store.blueprint.sceneMode === "2d" ? "2d" : "3d",
       blueprintNodes: store.blueprint.nodes,
       selectedNodeId: store.selectedNodeId,
       selectedNodeIds: store.selectedNodeIds,

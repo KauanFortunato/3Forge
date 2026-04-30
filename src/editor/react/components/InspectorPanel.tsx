@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import { isVideoMimeType } from "../../images";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
 import { getSharedPropertyDefinitions } from "../../sharedProperties";
 import type { SharedPropertyResult } from "../../sharedProperties";
@@ -429,11 +430,23 @@ export function InspectorPanel(props: InspectorPanelProps) {
       ) : null}
 
       {showImage && primaryNode?.type === "image" ? (
-        <Sec title="Image" icon={<ImagePropertyIcon width={12} height={12} />}>
+        <Sec title="Media" icon={<ImagePropertyIcon width={12} height={12} />}>
           <div className="insp-image-preview">
-            <img src={primaryNode.image.src} alt={primaryNode.image.name} />
+            {isVideoMimeType(primaryNode.image.mimeType) ? (
+              <video
+                src={primaryNode.image.src}
+                muted
+                loop
+                autoPlay
+                playsInline
+                aria-label={primaryNode.image.name}
+              />
+            ) : (
+              <img src={primaryNode.image.src} alt={primaryNode.image.name} />
+            )}
           </div>
           <p className="row__hint" style={{ marginTop: "var(--sp-3)" }}>
+            {isVideoMimeType(primaryNode.image.mimeType) ? "Video - " : ""}
             {primaryNode.image.name} | {primaryNode.image.width} x {primaryNode.image.height} px
           </p>
           {images.length > 0 ? (

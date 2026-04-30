@@ -92,6 +92,8 @@ import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { collectFilesFromDirectory, parseW3DFromFolder } from "../import/w3dFolder";
+import { exportToW3D } from "../export/w3d";
 import { runTask } from "./hooks/useAsyncTask";
 import { useTheme } from "./hooks/useTheme";
 import { ViewportHost } from "./components/ViewportHost";
@@ -467,6 +469,7 @@ export function App() {
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fontInputRef = useRef<HTMLInputElement | null>(null);
+  const w3dFolderInputRef = useRef<HTMLInputElement | null>(null);
   const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const blueprintSnapshot = useMemo(() => store.getSnapshot(), [store, storeView]);
@@ -1209,7 +1212,7 @@ export function App() {
       { id: "add-plane", label: "Plane", icon: <MeshIcon {...iconSize} />, onSelect: createNodeAction("plane") },
       {
         id: "add-image",
-        label: "Image",
+        label: "Media",
         icon: <ImagePropertyIcon {...iconSize} />,
         onSelect: () => {
           const target = resolveTarget();
@@ -1309,6 +1312,103 @@ export function App() {
       setTransientStatus("Unable to build ZIP package.");
     }
   }, [blueprintSnapshot, setTransientStatus]);
+
+  const downloadW3DExport = useCallback(() => {
+    try {
+      const result = exportToW3D(blueprintSnapshot);
+      const fileName = `${blueprintSnapshot.componentName || "scene"}.w3d`;
+      downloadTextFile(result.xml, fileName, "application/xml");
+      if (result.warnings.length > 0) {
+        for (const warning of result.warnings) {
+          // eslint-disable-next-line no-console
+          console.warn(`[w3d export] ${warning}`);
+        }
+        showToast(`Exported ${fileName} (${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"} — see console).`, "info");
+      } else {
+        setTransientStatus(`Downloaded ${fileName}.`);
+      }
+    } catch (error) {
+      setTransientStatus("Unable to export W3D scene.");
+      // eslint-disable-next-line no-console
+      console.error(error);
+    }
+  }, [blueprintSnapshot, setTransientStatus, showToast]);
+
+  const importW3DFromFolder = useCallback(async (files: FileList | File[]) => {
+    await runTask(`Importing W3D scene…`, async (setLabel) => {
+      const result = await parseW3DFromFolder(files, {
+        onProgress: (label) => setLabel(label),
+      });
+      // eslint-disable-next-line no-console
+      console.info(
+        `[w3d folder import] parsed: scene="${result.sceneFileName}" nodes=${result.blueprint.nodes.length} images=${result.blueprint.images.length} clips=${result.blueprint.animation.clips.length} warnings=${result.warnings.length}`,
+      );
+      const componentName = result.blueprint.componentName || result.sceneFileName.replace(/\.w3d$/i, "");
+      const { recentProjectId } = await syncRecentProject(result.blueprint, {
+        fileName: result.sceneFileName,
+      });
+      applyWorkspaceBlueprint(
+        result.blueprint,
+        createWorkspaceProjectContext({
+          source: "imported-file",
+          fileName: result.sceneFileName,
+          recentProjectId,
+          fileHandleId: null,
+          canOverwriteFile: false,
+        }),
+        result.warnings.length > 0
+          ? `Imported ${componentName} (${result.warnings.length} warning${result.warnings.length === 1 ? "" : "s"}).`
+          : `Imported ${componentName}.`,
+      );
+      if (result.warnings.length > 0) {
+        showToast(`${result.warnings.length} feature${result.warnings.length === 1 ? "" : "s"} skipped — see console for details.`, "info");
+        for (const warning of result.warnings) {
+          // eslint-disable-next-line no-console
+          console.warn(`[w3d folder import] ${warning}`);
+        }
+      }
+    }, { blocking: true });
+  }, [applyWorkspaceBlueprint, showToast, syncRecentProject]);
+
+  const pickW3DFolder = useCallback(async () => {
+    // Prefer File System Access API (Chrome/Edge) — the `<input webkitdirectory>`
+    // path occasionally returns 0 files because React's attribute pipeline
+    // doesn't reliably forward `webkitdirectory` to the DOM.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const showDirectoryPicker = (window as any).showDirectoryPicker as
+      | ((options?: { mode?: "read" | "readwrite" }) => Promise<FileSystemDirectoryHandle>)
+      | undefined;
+    if (typeof showDirectoryPicker === "function") {
+      try {
+        const handle = await showDirectoryPicker({ mode: "read" });
+        const collected = await collectFilesFromDirectory(handle);
+        // eslint-disable-next-line no-console
+        console.info(`[w3d folder import] showDirectoryPicker collected ${collected.length} files from "${handle.name}"`);
+        if (collected.length === 0) {
+          showToast("Selected folder is empty.", "warning");
+          return;
+        }
+        try {
+          await importW3DFromFolder(collected);
+        } catch (error) {
+          const message = error instanceof Error && error.message ? error.message : "Unable to import W3D folder.";
+          showToast(`W3D import failed: ${message}`, "warning");
+          // eslint-disable-next-line no-console
+          console.error("[w3d folder import] failed:", error);
+        }
+        return;
+      } catch (error) {
+        // AbortError = user cancelled the dialog; fall through silently.
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+        // eslint-disable-next-line no-console
+        console.warn("[w3d folder import] showDirectoryPicker failed, falling back to <input>:", error);
+      }
+    }
+    // Fallback for browsers without showDirectoryPicker (Firefox, Safari).
+    w3dFolderInputRef.current?.click();
+  }, [importW3DFromFolder, showToast]);
 
   const importJsonFromFile = useCallback(async (file: File) => {
     await runTask(`Importing ${file.name}…`, async () => {
@@ -2073,6 +2173,7 @@ export function App() {
         { id: "file-save-as", label: "Save As", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+Shift+S", onSelect: () => void handleSaveAsProject() },
         { id: "file-divider-2", separator: true },
         { id: "file-import-json", label: "Import JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
+        { id: "file-import-w3d-folder", label: "Import W3D Scene", icon: <FileIcon width={14} height={14} />, onSelect: () => void pickW3DFolder() },
         { id: "file-import-image", label: "Import Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
         { id: "file-import-font", label: "Import Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
         { id: "file-divider-3", separator: true },
@@ -2083,6 +2184,7 @@ export function App() {
             { id: "file-export-ts", label: "TypeScript", onSelect: () => downloadExportFile("typescript") },
             { id: "file-export-json", label: "Blueprint", onSelect: () => downloadExportFile("json") },
             { id: "file-export-zip", label: "ZIP file", onSelect: () => void downloadExportPackage() },
+            { id: "file-export-w3d", label: "W3D Scene", onSelect: () => downloadW3DExport() },
           ],
         },
         { id: "file-divider-4", separator: true },
@@ -2159,6 +2261,34 @@ export function App() {
       ],
     },
     {
+      id: "view",
+      label: "View",
+      items: [
+        {
+          id: "view-scene-mode",
+          label: "Scene Mode",
+          children: [
+            {
+              id: "view-scene-mode-3d",
+              label: `${storeView.blueprintSceneMode === "3d" ? "● " : "○ "}3D (Perspective)`,
+              onSelect: () => {
+                store.setSceneMode("3d");
+                setTransientStatus("Scene mode: 3D (Perspective).");
+              },
+            },
+            {
+              id: "view-scene-mode-2d",
+              label: `${storeView.blueprintSceneMode === "2d" ? "● " : "○ "}2D (Orthographic)`,
+              onSelect: () => {
+                store.setSceneMode("2d");
+                setTransientStatus("Scene mode: 2D (Orthographic).");
+              },
+            },
+          ],
+        },
+      ],
+    },
+    {
       id: "add",
       label: "Add",
       items: createAddMenuActions(resolveSelectionInsertTarget),
@@ -2198,6 +2328,8 @@ export function App() {
     storeView.canRedo,
     storeView.canUndo,
     storeView.propertyClipboard,
+    storeView.blueprintSceneMode,
+    setTransientStatus,
   ]);
 
   if (!isStarted) {
@@ -2233,6 +2365,38 @@ export function App() {
               await importJsonFromFile(file);
             } catch {
               setTransientStatus("Unable to import JSON.");
+            }
+          }}
+        />
+        <input
+          ref={(el) => {
+            w3dFolderInputRef.current = el;
+            if (el) {
+              // React's attribute pipeline sometimes drops these, so set them
+              // directly on the DOM node (browser feature-detects on read).
+              el.setAttribute("webkitdirectory", "");
+              el.setAttribute("directory", "");
+            }
+          }}
+          className="app__hidden-input"
+          type="file"
+          multiple
+          onChange={async (event) => {
+            const files = event.target.files;
+            event.currentTarget.value = "";
+            // eslint-disable-next-line no-console
+            console.info(`[w3d folder import] picker returned ${files?.length ?? 0} files`);
+            if (!files || files.length === 0) {
+              showToast("No files received from folder picker.", "warning");
+              return;
+            }
+            try {
+              await importW3DFromFolder(files);
+            } catch (error) {
+              const message = error instanceof Error && error.message ? error.message : "Unable to import W3D folder.";
+              showToast(`W3D import failed: ${message}`, "warning");
+              // eslint-disable-next-line no-console
+              console.error("[w3d folder import] failed:", error);
             }
           }}
         />
@@ -2446,10 +2610,10 @@ export function App() {
                       onClick={() => setRuntimePanelTab("images")}
                       role="tab"
                       aria-selected={runtimePanelTab === "images"}
-                      title="Images"
+                      title="Media"
                     >
                       <ImagePropertyIcon width={12} height={12} />
-                      <span>Images</span>
+                      <span>Media</span>
                     </button>
                     <button
                       type="button"
@@ -2788,6 +2952,37 @@ export function App() {
             await importJsonFromFile(file);
           } catch {
             setTransientStatus("Unable to import JSON.");
+          }
+        }}
+      />
+
+      <input
+        ref={(el) => {
+          w3dFolderInputRef.current = el;
+          if (el) {
+            el.setAttribute("webkitdirectory", "");
+            el.setAttribute("directory", "");
+          }
+        }}
+        className="app__hidden-input"
+        type="file"
+        multiple
+        onChange={async (event) => {
+          const files = event.target.files;
+          event.currentTarget.value = "";
+          // eslint-disable-next-line no-console
+          console.info(`[w3d folder import] picker returned ${files?.length ?? 0} files`);
+          if (!files || files.length === 0) {
+            showToast("No files received from folder picker.", "warning");
+            return;
+          }
+          try {
+            await importW3DFromFolder(files);
+          } catch (error) {
+            const message = error instanceof Error && error.message ? error.message : "Unable to import W3D folder.";
+            showToast(`W3D import failed: ${message}`, "warning");
+            // eslint-disable-next-line no-console
+            console.error("[w3d folder import] failed:", error);
           }
         }}
       />

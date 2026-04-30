@@ -48,6 +48,65 @@ interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
+  readonly length?: number;
+  key?(index: number): string | null;
+}
+
+function isQuotaError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  // Different browsers throw different DOMException names / codes for quota.
+  const dom = error as DOMException;
+  return (
+    dom.name === "QuotaExceededError" ||
+    dom.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+    dom.code === 22 ||
+    dom.code === 1014
+  );
+}
+
+function evictRecentSnapshots(storage: StorageLike, keepKey: string): number {
+  if (typeof storage.length !== "number" || typeof storage.key !== "function") {
+    return 0;
+  }
+  const keysToDelete: string[] = [];
+  for (let i = 0; i < storage.length; i += 1) {
+    const k = storage.key(i);
+    if (k && k.startsWith(RECENT_SNAPSHOT_PREFIX) && k !== keepKey) {
+      keysToDelete.push(k);
+    }
+  }
+  for (const k of keysToDelete) {
+    storage.removeItem(k);
+  }
+  return keysToDelete.length;
+}
+
+/**
+ * setItem with one retry after evicting other recent-snapshot entries when the
+ * quota fires. Final fallback: warn + skip silently rather than crashing the
+ * caller (an import succeeded, the recent-list entry is just expendable).
+ */
+function safeSetItem(storage: StorageLike, key: string, value: string): boolean {
+  try {
+    storage.setItem(key, value);
+    return true;
+  } catch (error) {
+    if (!isQuotaError(error)) throw error;
+    const evicted = evictRecentSnapshots(storage, key);
+    if (evicted > 0) {
+      try {
+        storage.setItem(key, value);
+        // eslint-disable-next-line no-console
+        console.warn(`[workspace] localStorage quota hit; evicted ${evicted} old recent-snapshot entr${evicted === 1 ? "y" : "ies"} and retried "${key}".`);
+        return true;
+      } catch (retryError) {
+        if (!isQuotaError(retryError)) throw retryError;
+      }
+    }
+    // eslint-disable-next-line no-console
+    console.warn(`[workspace] localStorage quota exceeded; skipping persist of "${key}".`);
+    return false;
+  }
 }
 
 export function createWorkspaceProjectContext(
@@ -136,8 +195,8 @@ export function persistWorkspace(
     return;
   }
 
-  localStorageObject.setItem(EDITOR_AUTOSAVE_KEY, JSON.stringify(blueprint));
-  localStorageObject.setItem(WORKSPACE_CONTEXT_KEY, JSON.stringify({
+  safeSetItem(localStorageObject, EDITOR_AUTOSAVE_KEY, JSON.stringify(blueprint));
+  safeSetItem(localStorageObject, WORKSPACE_CONTEXT_KEY, JSON.stringify({
     ...context,
     updatedAt: Date.now(),
   }));
@@ -256,7 +315,8 @@ export function persistRecentSnapshot(
   blueprint: ComponentBlueprint,
   localStorageObject: StorageLike | null = canUseBrowserStorage() ? window.localStorage : null,
 ): void {
-  localStorageObject?.setItem(getRecentSnapshotStorageKey(recentProjectId), JSON.stringify(blueprint));
+  if (!localStorageObject) return;
+  safeSetItem(localStorageObject, getRecentSnapshotStorageKey(recentProjectId), JSON.stringify(blueprint));
 }
 
 export function readRecentSnapshot(

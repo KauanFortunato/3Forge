@@ -3436,7 +3436,8 @@ code {
   background: var(--c-bg-3);
 }
 
-.insp-image-preview img {
+.insp-image-preview img,
+.insp-image-preview video {
   display: block;
   width: 100%;
   height: auto;
@@ -3922,11 +3923,25 @@ code {
   overflow: hidden;
 }
 
-.image-assets-panel__thumb img {
+.image-assets-panel__thumb img,
+.image-assets-panel__thumb video {
   display: block;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+.image-assets-panel__badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  background: var(--accent-soft, rgba(120, 160, 230, 0.18));
+  color: var(--accent, #7aa3e0);
+  vertical-align: middle;
 }
 
 .image-assets-panel__thumb-loading {

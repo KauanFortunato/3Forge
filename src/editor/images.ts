@@ -72,6 +72,58 @@ export async function imageFileToAsset(file: File): Promise<ImageAsset> {
   };
 }
 
+const VIDEO_EXT_PATTERN = /\.(mov|mp4|webm|m4v)$/i;
+
+export function isVideoMimeType(mimeType: string): boolean {
+  return mimeType.startsWith("video/");
+}
+
+export function isVideoFileName(fileName: string): boolean {
+  return VIDEO_EXT_PATTERN.test(fileName);
+}
+
+/**
+ * Wrap a video file as an ImageAsset using a session-scoped object URL.
+ * Note: object URLs do NOT survive a page reload; videos must be re-imported
+ * from the source folder. They are also too big to data-URL into localStorage.
+ */
+export async function videoFileToAsset(file: File): Promise<ImageAsset> {
+  const src = URL.createObjectURL(file);
+  const dimensions = await readVideoDimensions(src);
+  return {
+    name: file.name || "Video",
+    mimeType: file.type || inferVideoMimeType(file.name),
+    src,
+    width: dimensions.width,
+    height: dimensions.height,
+  };
+}
+
+function readVideoDimensions(src: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.onloadedmetadata = () => {
+      resolve({
+        width: video.videoWidth || 1,
+        height: video.videoHeight || 1,
+      });
+      video.src = "";
+    };
+    video.onerror = () => reject(new Error("Failed to read video metadata."));
+    video.src = src;
+  });
+}
+
+function inferVideoMimeType(fileName: string): string {
+  const normalized = fileName.toLowerCase();
+  if (normalized.endsWith(".mov")) return "video/quicktime";
+  if (normalized.endsWith(".mp4") || normalized.endsWith(".m4v")) return "video/mp4";
+  if (normalized.endsWith(".webm")) return "video/webm";
+  return "application/octet-stream";
+}
+
 export function fitImageToMaxSize(width: number, height: number, maxSize = 2): { width: number; height: number } {
   const safeWidth = Math.max(width, 1);
   const safeHeight = Math.max(height, 1);

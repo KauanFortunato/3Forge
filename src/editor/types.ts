@@ -144,6 +144,10 @@ export interface BaseEditorNode {
   transform: TransformSpec;
   origin: NodeOriginSpec;
   editable: Record<NodePropertyPath, EditableBinding>;
+  /** When set, the node's children/contents are clipped to this node's plane bounds. */
+  isMask?: boolean;
+  /** When set, this node's rendering is clipped to the mask node referenced by id. */
+  maskId?: string;
 }
 
 export interface GroupNode extends BaseEditorNode {
@@ -237,11 +241,19 @@ export type EditorNode = GroupNode | BoxNode | CircleNode | SphereNode | Cylinde
 export interface ComponentBlueprint {
   version: 1;
   componentName: string;
+  /** Engine rendering mode. Absent = "3d" for backwards compatibility. */
+  sceneMode?: SceneMode;
   fonts: FontAsset[];
   materials: MaterialAsset[];
   images: ImageAsset[];
   nodes: EditorNode[];
   animation: ComponentAnimation;
+  /**
+   * Free-form, non-typed side-channel for importer/exporter scaffolding (e.g.
+   * W3D shadow XML and id maps). Always optional; serializers should ignore
+   * unknown keys but preserve them on round-trip.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 export interface NodePropertyDefinition {
@@ -283,3 +295,11 @@ export type EditorStoreChange = {
 };
 
 export type ViewMode = "rendered" | "solid" | "wireframe";
+
+/**
+ * Engine-level rendering mode.
+ * - `3d` (default): PerspectiveCamera, free orbit. For spatial scenes.
+ * - `2d`: OrthographicCamera, locked rotation, pan/zoom only. For broadcast
+ *   layouts, UI cards, anything authored in the XY plane.
+ */
+export type SceneMode = "2d" | "3d";

@@ -18,6 +18,7 @@ export type ToolMode = "select" | "translate" | "rotate" | "scale";
 
 export interface EditorStoreView {
   blueprintComponentName: string;
+  blueprintSceneMode: "2d" | "3d";
   blueprintNodes: EditorNode[];
   selectedNodeId: string;
   selectedNodeIds: string[];

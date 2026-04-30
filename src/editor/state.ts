@@ -1143,6 +1143,14 @@ export class EditorStore extends EventTarget {
     this.notify({ reason: "meta", source });
   }
 
+  setSceneMode(mode: "2d" | "3d", source: EditorStoreChange["source"] = "ui"): void {
+    const current = this._blueprint.sceneMode ?? "3d";
+    if (current === mode) return;
+    this.recordHistorySnapshot();
+    this._blueprint.sceneMode = mode;
+    this.notify({ reason: "meta", source });
+  }
+
   updateAnimationConfig(
     patch: Partial<Pick<AnimationClip, "fps" | "durationFrames">>,
     source: EditorStoreChange["source"] = "ui",

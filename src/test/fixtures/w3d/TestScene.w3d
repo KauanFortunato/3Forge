@@ -1,0 +1,55 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Scene Id="72c05cd2-8185-40a8-aea8-d7ecea3af843" Name="TestScene" Version="3.6.0.*" Is2DScene="False" IsChroma="False" ConvertedScene="False">
+  <SceneLayer Name="Default" Id="c6ca6856-88ce-4611-b7ef-c9752f77210d" BackgroundColor="-16777216" RenderOrder="1">
+    <CameraManager>
+      <Camera Id="58b00587-96d2-4f56-ad13-4f5fd6802b79" Name="Camera" TrackingCamera="Cam0">
+        <Extensions />
+      </Camera>
+    </CameraManager>
+    <SceneNode Id="9aedc4fd-fdf8-4786-8b8d-abb7edfa601c" Name="RootNode" SpeedScale="1" DisplayColor="11119017">
+      <Extensions />
+      <Children>
+        <DirectionalLight Id="2999964c-6d50-4289-94bb-030f21b09ff2" Name="DirectionalLight" SpeedScale="1" DisplayColor="11119017">
+          <GeometryOptions>
+            <BaseMaterial Name="BaseMaterial" FolderPath="" Id="abaad35d-cf95-4b0d-9a52-e8e8b67c71c2" HasAmbient="False" HasEmissive="False" HasSpecular="False" HasDiffuse="True" Ambient="ffffff" Diffuse="ffffff" Emissive="ffffff" Specular="ffffff" Alpha="1" SpecularPower="50" Lock="False" />
+          </GeometryOptions>
+          <Extensions />
+        </DirectionalLight>
+        <Disk Id="e294f0ae-dc07-49ee-b1cc-d417be6c6af7" Name="Disk1" DisplayColor="11119017">
+          <GeometryOptions InnerHeight="0" InnerRadius="0" Flip="False" Invert="False" NormalsInvert="False" OuterHeight="0" OuterRadius="0.5" Segments="45" StartAngle="0" StopAngle="360" />
+          <Primitive>
+            <FaceMappingList>
+              <NamedBaseFaceMapping SurfaceName="All Faces" MaterialId="DE1A3E3C-AE85-4B7B-BA86-056463611630" TextureLayerId="Standard" BaseMaterialInherited="False" TextureInherited="False" />
+            </FaceMappingList>
+          </Primitive>
+          <NodeTransform>
+            <Position X="-4.19" />
+          </NodeTransform>
+          <Extensions />
+        </Disk>
+      </Children>
+    </SceneNode>
+  </SceneLayer>
+  <DataContextSceneLocator />
+  <Resources />
+  <ExportManagerProperties />
+  <Timelines SelectedTimelineId="0d305bc2-33c3-4233-b6eb-0b2b1d0dc706" Format="HD1080i50">
+    <Timeline Name="In" Id="a8b199eb-11de-421a-8621-25f72aaf1f1c" IsLoop="False" IsSynchronizedPlay="False" MaxFrames="200" DefaultMarker="0" PreviewMarker="-1" TakeOfflineOnTimelineEnd="False" UnloadSceneOnTimelineEnd="False">
+      <KeyFrameAnimationController AnimatedProperty="Transform.Position.XProp" ControllableId="e294f0ae-dc07-49ee-b1cc-d417be6c6af7">
+        <KeyFrame FrameNumber="0" Id="122bf74d-aaed-441e-a6be-35db90d9677e" Value="-4.19" LeftType="Linear" RightType="Linear" LeftControlPointX="0.5" LeftControlPointY="0.5" RightControlPointX="0.5" RightControlPointY="0.5" />
+        <KeyFrame FrameNumber="50" Id="41d22730-5e9b-4071-8abb-86ee520f9263" Value="0" LeftType="Linear" RightType="Linear" LeftControlPointX="0.5" LeftControlPointY="0.5" RightControlPointX="0.5" RightControlPointY="0.5" />
+      </KeyFrameAnimationController>
+    </Timeline>
+    <Timeline Name="Out" Id="0d305bc2-33c3-4233-b6eb-0b2b1d0dc706" IsLoop="False" IsSynchronizedPlay="False" MaxFrames="200" DefaultMarker="-1" PreviewMarker="-1" TakeOfflineOnTimelineEnd="False" UnloadSceneOnTimelineEnd="False">
+      <KeyFrameAnimationController AnimatedProperty="Transform.Position.XProp" ControllableId="e294f0ae-dc07-49ee-b1cc-d417be6c6af7">
+        <KeyFrame FrameNumber="0" Id="efa33976-f8c9-44d2-8f87-fa7f7710fe63" Value="0" LeftType="Linear" RightType="Linear" LeftControlPointX="0.5" LeftControlPointY="0.5" RightControlPointX="0.5" RightControlPointY="0.5" />
+        <KeyFrame FrameNumber="50" Id="3e51ab9d-b123-4643-90a7-2048d9b2f62b" Value="-4.19" LeftType="Linear" RightType="Linear" LeftControlPointX="0.5" LeftControlPointY="0.5" RightControlPointX="0.5" RightControlPointY="0.5" />
+      </KeyFrameAnimationController>
+    </Timeline>
+    <TimelineListener />
+  </Timelines>
+  <ExportManager />
+  <LinksManager />
+  <Variables />
+  <SceneTriggerManager />
+</Scene>

@@ -48,10 +48,28 @@ export function endTask(id: string): void {
   emit();
 }
 
-export async function runTask<T>(label: string, fn: () => Promise<T> | T, options: TaskOptions = {}): Promise<T> {
+export function updateTask(id: string, label: string): void {
+  let changed = false;
+  active = active.map((task) => {
+    if (task.id !== id || task.label === label) {
+      return task;
+    }
+    changed = true;
+    return { ...task, label };
+  });
+  if (changed) {
+    emit();
+  }
+}
+
+export async function runTask<T>(
+  label: string,
+  fn: (setLabel: (next: string) => void) => Promise<T> | T,
+  options: TaskOptions = {},
+): Promise<T> {
   const id = startTask(label, options);
   try {
-    return await fn();
+    return await fn((next) => updateTask(id, next));
   } finally {
     endTask(id);
   }
