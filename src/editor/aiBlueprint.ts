@@ -28,14 +28,21 @@ export interface AiSceneSpec {
   objects: AiPrimitiveSpec[];
 }
 
-export type AiProvider = "openai" | "openrouter" | "gemini" | "groq";
+export type AiProvider = "openai" | "openrouter" | "local" | "gemini" | "groq";
 
 export interface GenerateBlueprintOptions {
   apiKey: string;
   prompt: string;
   provider?: AiProvider;
   model?: string;
+  localUrl?: string;
+  chatContext?: AiChatContext;
   currentBlueprint?: ComponentBlueprint;
+}
+
+export interface AiChatContext {
+  lastSceneSpecJson?: string;
+  diffSummaries?: string[];
 }
 
 export interface AiBlueprintResult {
@@ -72,10 +79,12 @@ const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+export const DEFAULT_LOCAL_CHAT_URL = "http://localhost:8080/v1/chat/completions";
 const MAX_OBJECTS = 28;
 
 export const AI_PROVIDER_OPTIONS: Array<{ provider: AiProvider; label: string; defaultModel: string; keyLabel: string; keyPlaceholder: string }> = [
   { provider: "openrouter", label: "OpenRouter Free", defaultModel: "openrouter/free", keyLabel: "OpenRouter API key", keyPlaceholder: "sk-or-..." },
+  { provider: "local", label: "Local OpenAI-Compatible", defaultModel: "local-model", keyLabel: "Local API key (optional)", keyPlaceholder: "optional" },
   { provider: "gemini", label: "Gemini Free", defaultModel: "gemini-2.5-flash", keyLabel: "Gemini API key", keyPlaceholder: "AIza..." },
   { provider: "groq", label: "Groq Free", defaultModel: "openai/gpt-oss-20b", keyLabel: "Groq API key", keyPlaceholder: "gsk_..." },
   { provider: "openai", label: "OpenAI", defaultModel: "gpt-4.1-mini", keyLabel: "OpenAI API key", keyPlaceholder: "sk-..." },
@@ -138,9 +147,9 @@ export async function generateBlueprint({ apiKey, prompt, provider = "openrouter
   return result.blueprint;
 }
 
-export async function generateBlueprintResult({ apiKey, prompt, provider = "openrouter", model }: GenerateBlueprintOptions): Promise<AiBlueprintResult> {
+export async function generateBlueprintResult({ apiKey, prompt, provider = "openrouter", model, localUrl, chatContext }: GenerateBlueprintOptions): Promise<AiBlueprintResult> {
   const selectedModel = model?.trim() || getDefaultModel(provider);
-  const result = await generateSceneSpec({ apiKey, prompt, provider, model: selectedModel });
+  const result = await generateSceneSpec({ apiKey, prompt: createPromptWithChatContext(prompt, chatContext), provider, model: selectedModel, localUrl });
   return createAiBlueprintResult(result.sceneSpec, result.rawText, result.executedModel);
 }
 
@@ -149,13 +158,14 @@ export async function editBlueprintWithAI({ apiKey, prompt, provider = "openrout
   return result.blueprint;
 }
 
-export async function editBlueprintWithAIResult({ apiKey, prompt, provider = "openrouter", model, currentBlueprint }: GenerateBlueprintOptions): Promise<AiBlueprintResult> {
+export async function editBlueprintWithAIResult({ apiKey, prompt, provider = "openrouter", model, localUrl, chatContext, currentBlueprint }: GenerateBlueprintOptions): Promise<AiBlueprintResult> {
   if (!currentBlueprint) {
-    return generateBlueprintResult({ apiKey, prompt, provider, model });
+    return generateBlueprintResult({ apiKey, prompt, provider, model, localUrl, chatContext });
   }
 
   const selectedModel = model?.trim() || getDefaultModel(provider);
   const currentScene = createAiSceneFromBlueprint(currentBlueprint);
+  const contextualPrompt = createPromptWithChatContext(prompt, chatContext);
   const editPrompt = [
     "Edit the current 3Forge scene according to the user request.",
     "Keep existing objects, colors, names, and composition unless the request asks to change them.",
@@ -165,9 +175,9 @@ export async function editBlueprintWithAIResult({ apiKey, prompt, provider = "op
     JSON.stringify(currentScene),
     "",
     "User edit request:",
-    prompt,
+    contextualPrompt,
   ].join("\n");
-  const result = await generateSceneSpec({ apiKey, prompt: editPrompt, provider, model: selectedModel });
+  const result = await generateSceneSpec({ apiKey, prompt: editPrompt, provider, model: selectedModel, localUrl });
   return createAiBlueprintResult(result.sceneSpec, result.rawText, result.executedModel);
 }
 
@@ -175,7 +185,7 @@ export async function generateBlueprintWithOpenAI(options: Omit<GenerateBlueprin
   return generateBlueprint({ ...options, provider: "openai" });
 }
 
-async function generateSceneSpec(options: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "provider" | "model">>): Promise<ParsedAiSceneSpec> {
+async function generateSceneSpec(options: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "provider" | "model">> & Pick<GenerateBlueprintOptions, "localUrl">): Promise<ParsedAiSceneSpec> {
   if (options.provider === "openai") {
     return generateOpenAiSceneSpec(options);
   }
@@ -235,12 +245,13 @@ async function generateOpenAiSceneSpec({ apiKey, prompt, model }: Required<Pick<
   return parseAiSceneSpec(payload);
 }
 
-async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, model }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "provider" | "model">>): Promise<ParsedAiSceneSpec> {
-  const response = await fetch(provider === "groq" ? GROQ_CHAT_URL : OPENROUTER_CHAT_URL, {
+async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, model, localUrl }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "provider" | "model">> & Pick<GenerateBlueprintOptions, "localUrl">): Promise<ParsedAiSceneSpec> {
+  const isLocalProvider = provider === "local";
+  const response = await fetch(getChatCompletionsUrl(provider, localUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      ...(!isLocalProvider || apiKey.trim() ? { Authorization: `Bearer ${apiKey}` } : {}),
       ...(provider === "openrouter" ? {
         "HTTP-Referer": window.location.origin,
         "X-Title": "3Forge",
@@ -249,8 +260,7 @@ async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, mode
     body: JSON.stringify({
       model,
       messages: [
-        { role: "system", content: createSystemPrompt() },
-        { role: "system", content: `Attached 3Forge guide:\n\n${aiBlueprintGuide}` },
+        { role: "system", content: createChatSystemPrompt() },
         { role: "user", content: prompt },
       ],
       response_format: {
@@ -272,6 +282,7 @@ async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, mode
         prompt,
         provider,
         model: "openrouter/free",
+        localUrl,
       });
     }
     throw new Error(`${getProviderLabel(provider)} request failed (${response.status}). ${detail}`);
@@ -279,6 +290,40 @@ async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, mode
 
   const payload = await response.json() as unknown;
   return parseAiSceneSpec(payload);
+}
+
+function getChatCompletionsUrl(provider: AiProvider, localUrl?: string): string {
+  if (provider === "groq") {
+    return GROQ_CHAT_URL;
+  }
+  if (provider === "local") {
+    return localUrl?.trim() || DEFAULT_LOCAL_CHAT_URL;
+  }
+  return OPENROUTER_CHAT_URL;
+}
+
+function createPromptWithChatContext(prompt: string, chatContext?: AiChatContext): string {
+  if (!chatContext?.lastSceneSpecJson && (!chatContext?.diffSummaries || chatContext.diffSummaries.length === 0)) {
+    return prompt;
+  }
+
+  return [
+    "Use this compact recent chat context only when it helps resolve references in the user request.",
+    "Do not copy the previous JSON blindly; the current scene spec remains the source of truth.",
+    chatContext.diffSummaries && chatContext.diffSummaries.length > 0 ? [
+      "",
+      "Recent diff summaries:",
+      ...chatContext.diffSummaries.map((summary, index) => `${index + 1}. ${summary}`),
+    ].join("\n") : "",
+    chatContext.lastSceneSpecJson ? [
+      "",
+      "Last generated JSON:",
+      chatContext.lastSceneSpecJson,
+    ].join("\n") : "",
+    "",
+    "Current user request:",
+    prompt,
+  ].filter(Boolean).join("\n");
 }
 
 async function generateGeminiSceneSpec({ apiKey, prompt, model }: Required<Pick<GenerateBlueprintOptions, "apiKey" | "prompt" | "model">>): Promise<ParsedAiSceneSpec> {
@@ -599,6 +644,15 @@ function createSystemPrompt(): string {
     "Follow the attached Markdown guide as the source of truth for composition, rotations, colors, naming, and JSON shape.",
     "Return only JSON matching the provided schema.",
   ].join(" ");
+}
+
+function createChatSystemPrompt(): string {
+  return [
+    createSystemPrompt(),
+    "",
+    "Attached 3Forge guide:",
+    aiBlueprintGuide,
+  ].join("\n");
 }
 
 function createVec3Schema() {

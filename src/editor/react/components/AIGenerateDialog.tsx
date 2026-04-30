@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AI_PROVIDER_OPTIONS, isAiBlueprintDebugError } from "../../aiBlueprint";
-import type { AiProvider } from "../../aiBlueprint";
+import { AI_PROVIDER_OPTIONS, DEFAULT_LOCAL_CHAT_URL, isAiBlueprintDebugError } from "../../aiBlueprint";
+import type { AiChatContext, AiProvider } from "../../aiBlueprint";
 
 export type AIGenerationMode = "new" | "edit";
 
@@ -9,13 +9,57 @@ export interface AiChatGenerationResult {
   sceneSpecJson: string;
   rawText: string;
   executedModel?: string;
+  changes?: AiChangeSummaryInput;
+}
+
+export type AiChangeKind = "added" | "changed" | "removed";
+
+export interface AiChangeSummaryItem {
+  kind: AiChangeKind;
+  label: string;
+  detail?: string;
+}
+
+export interface AiChangeSummary {
+  added: number;
+  changed: number;
+  removed: number;
+  items: AiChangeSummaryItem[];
+}
+
+export type AiChangeSummaryInput = AiChangeSummary | {
+  counts?: Partial<Record<AiChangeKind, number>>;
+  added?: number | AiChangeSummaryItem[];
+  changed?: number | AiChangeSummaryItem[];
+  removed?: number | AiChangeSummaryItem[];
+  items?: AiChangeSummaryItem[];
+  summary?: AiChangeSummaryItem[];
+  changes?: AiChangeSummaryItem[];
+  entries?: AiChangeSummaryItem[];
+  list?: AiChangeSummaryItem[];
+  descriptions?: string[];
+  labels?: string[];
+  preview?: string[];
+  sample?: string[];
+  addedLabels?: string[];
+  changedLabels?: string[];
+  removedLabels?: string[];
+  addedItems?: AiChangeSummaryItem[];
+  changedItems?: AiChangeSummaryItem[];
+  removedItems?: AiChangeSummaryItem[];
+  addedPaths?: string[];
+  changedPaths?: string[];
+  removedPaths?: string[];
+  addedNames?: string[];
+  changedNames?: string[];
+  removedNames?: string[];
 }
 
 interface AIGenerateDialogProps {
   isOpen: boolean;
   projectId: string;
   onClose: () => void;
-  onGenerate: (apiKey: string, prompt: string, provider: AiProvider, model: string, mode: AIGenerationMode) => Promise<AiChatGenerationResult>;
+  onGenerate: (apiKey: string, prompt: string, provider: AiProvider, model: string, mode: AIGenerationMode, localUrl?: string, chatContext?: AiChatContext) => Promise<AiChatGenerationResult>;
   onApplyScene: (sceneSpecJson: string, mode: AIGenerationMode) => Promise<void> | void;
 }
 
@@ -30,6 +74,7 @@ interface AiChatMessage {
   content: string;
   sceneSpecJson?: string;
   rawText?: string;
+  changes?: AiChangeSummary;
   status?: "ready" | "applied" | "error";
 }
 
@@ -38,6 +83,7 @@ const DEFAULT_EDIT_PROMPT = "Make the current model more polished with stronger 
 const AI_KEY_STORAGE_PREFIX = "3forge-ai-api-key";
 const AI_PROVIDER_STORAGE_KEY = "3forge-ai-provider";
 const AI_MODEL_STORAGE_PREFIX = "3forge-ai-model";
+const AI_LOCAL_URL_STORAGE_KEY = "3forge-ai-local-url";
 const AI_CHAT_STORAGE_PREFIX = "3forge-ai-chat-history-v1";
 
 function canUseLocalStorage(): boolean {
@@ -73,6 +119,10 @@ function readStoredModel(provider: AiProvider, fallback: string): string {
   return canUseLocalStorage() ? window.localStorage.getItem(getProviderModelStorageKey(provider)) ?? fallback : fallback;
 }
 
+function readStoredLocalUrl(): string {
+  return canUseLocalStorage() ? window.localStorage.getItem(AI_LOCAL_URL_STORAGE_KEY) ?? DEFAULT_LOCAL_CHAT_URL : DEFAULT_LOCAL_CHAT_URL;
+}
+
 function readStoredMessages(projectId: string): AiChatMessage[] {
   if (!canUseLocalStorage()) {
     return [];
@@ -84,7 +134,9 @@ function readStoredMessages(projectId: string): AiChatMessage[] {
       return [];
     }
     const parsed = JSON.parse(raw) as AiChatMessage[];
-    return Array.isArray(parsed) ? parsed.filter(isChatMessage) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter(isChatMessage).map(normalizeStoredMessage)
+      : [];
   } catch {
     return [];
   }
@@ -101,6 +153,131 @@ function isChatMessage(value: unknown): value is AiChatMessage {
     && typeof message.content === "string";
 }
 
+function normalizeStoredMessage(message: AiChatMessage): AiChatMessage {
+  return {
+    ...message,
+    changes: normalizeChangeSummary(message.changes),
+  };
+}
+
+function isChangeKind(value: unknown): value is AiChangeKind {
+  return value === "added" || value === "changed" || value === "removed";
+}
+
+function normalizeCount(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
+function normalizeChangeItem(value: unknown, fallbackKind: AiChangeKind): AiChangeSummaryItem | null {
+  if (typeof value === "string") {
+    const label = value.trim();
+    return label ? { kind: fallbackKind, label } : null;
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const entry = value as Partial<AiChangeSummaryItem> & {
+    name?: unknown;
+    path?: unknown;
+    title?: unknown;
+    description?: unknown;
+  };
+  const labelValue = typeof entry.label === "string"
+    ? entry.label
+    : typeof entry.name === "string"
+      ? entry.name
+      : typeof entry.path === "string"
+        ? entry.path
+        : typeof entry.title === "string"
+          ? entry.title
+          : typeof entry.description === "string"
+            ? entry.description
+            : "";
+  const label = labelValue.trim();
+  if (!label) {
+    return null;
+  }
+
+  return {
+    kind: isChangeKind(entry.kind) ? entry.kind : fallbackKind,
+    label,
+    detail: typeof entry.detail === "string" && entry.detail.trim() ? entry.detail.trim() : undefined,
+  };
+}
+
+function normalizeChangeItems(values: unknown, fallbackKind: AiChangeKind): AiChangeSummaryItem[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values
+    .map((entry) => normalizeChangeItem(entry, fallbackKind))
+    .filter((entry): entry is AiChangeSummaryItem => Boolean(entry));
+}
+
+function getArrayCount(value: unknown): number | null {
+  return Array.isArray(value) ? value.length : null;
+}
+
+function normalizeChangeSummary(value: unknown): AiChangeSummary | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const summary = value as AiChangeSummaryInput & Record<string, unknown> & {
+    counts?: Partial<Record<AiChangeKind, number>>;
+  };
+  const counts = "counts" in summary ? summary.counts : undefined;
+  const addedItems = [
+    ...normalizeChangeItems(summary.added, "added"),
+    ...normalizeChangeItems(summary.addedItems, "added"),
+    ...normalizeChangeItems(summary.addedLabels, "added"),
+    ...normalizeChangeItems(summary.addedPaths, "added"),
+    ...normalizeChangeItems(summary.addedNames, "added"),
+  ];
+  const changedItems = [
+    ...normalizeChangeItems(summary.changed, "changed"),
+    ...normalizeChangeItems(summary.changedItems, "changed"),
+    ...normalizeChangeItems(summary.changedLabels, "changed"),
+    ...normalizeChangeItems(summary.changedPaths, "changed"),
+    ...normalizeChangeItems(summary.changedNames, "changed"),
+  ];
+  const removedItems = [
+    ...normalizeChangeItems(summary.removed, "removed"),
+    ...normalizeChangeItems(summary.removedItems, "removed"),
+    ...normalizeChangeItems(summary.removedLabels, "removed"),
+    ...normalizeChangeItems(summary.removedPaths, "removed"),
+    ...normalizeChangeItems(summary.removedNames, "removed"),
+  ];
+  const items = [
+    ...normalizeChangeItems(summary.items, "changed"),
+    ...normalizeChangeItems(summary.summary, "changed"),
+    ...normalizeChangeItems(summary.changes, "changed"),
+    ...normalizeChangeItems(summary.entries, "changed"),
+    ...normalizeChangeItems(summary.list, "changed"),
+    ...normalizeChangeItems(summary.descriptions, "changed"),
+    ...normalizeChangeItems(summary.labels, "changed"),
+    ...normalizeChangeItems(summary.preview, "changed"),
+    ...normalizeChangeItems(summary.sample, "changed"),
+    ...addedItems,
+    ...changedItems,
+    ...removedItems,
+  ].slice(0, 5);
+  const added = normalizeCount(counts?.added ?? (typeof summary.added === "number" ? summary.added : getArrayCount(summary.added)) ?? addedItems.length);
+  const changed = normalizeCount(counts?.changed ?? (typeof summary.changed === "number" ? summary.changed : getArrayCount(summary.changed)) ?? changedItems.length);
+  const removed = normalizeCount(counts?.removed ?? (typeof summary.removed === "number" ? summary.removed : getArrayCount(summary.removed)) ?? removedItems.length);
+
+  if (added + changed + removed === 0 && items.length === 0) {
+    return undefined;
+  }
+
+  return { added, changed, removed, items };
+}
+
 function createMessageId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -112,6 +289,8 @@ function getProviderInitials(provider: AiProvider): string {
   switch (provider) {
     case "openrouter":
       return "OR";
+    case "local":
+      return "LC";
     case "gemini":
       return "G";
     case "groq":
@@ -142,6 +321,37 @@ function shouldShowRawResponse(message: AiChatMessage): boolean {
     && (message.status === "error" || message.rawText !== message.sceneSpecJson);
 }
 
+function createChatContext(messages: AiChatMessage[]): AiChatContext | undefined {
+  const readyAssistantMessages = messages.filter((message) => message.role === "assistant" && message.status !== "error");
+  const lastSceneSpecJson = [...readyAssistantMessages].reverse().find((message) => message.sceneSpecJson)?.sceneSpecJson;
+  const diffSummaries = readyAssistantMessages
+    .filter((message) => message.changes)
+    .slice(-4)
+    .map((message) => formatChangeSummary(message))
+    .filter((summary) => summary.length > 0);
+
+  if (!lastSceneSpecJson && diffSummaries.length === 0) {
+    return undefined;
+  }
+
+  return {
+    lastSceneSpecJson,
+    diffSummaries,
+  };
+}
+
+function formatChangeSummary(message: AiChatMessage): string {
+  if (!message.changes) {
+    return "";
+  }
+
+  const counts = `added ${message.changes.added}, changed ${message.changes.changed}, removed ${message.changes.removed}`;
+  const items = message.changes.items
+    .map((item) => `${item.kind}: ${item.label}${item.detail ? ` (${item.detail})` : ""}`)
+    .join("; ");
+  return items ? `${counts}; ${items}` : counts;
+}
+
 export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApplyScene }: AIGenerateDialogProps) {
   const initialProvider = useMemo(() => readStoredProvider(), []);
   const initialProviderOption = AI_PROVIDER_OPTIONS.find((entry) => entry.provider === initialProvider) ?? AI_PROVIDER_OPTIONS[0];
@@ -151,11 +361,17 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
   const [model, setModel] = useState(() => readStoredModel(initialProvider, initialProviderOption.defaultModel));
   const [mode, setMode] = useState<AIGenerationMode>("edit");
   const [draft, setDraft] = useState(DEFAULT_EDIT_PROMPT);
+  const [localUrl, setLocalUrl] = useState(readStoredLocalUrl);
   const [shouldSaveKey, setShouldSaveKey] = useState(() => apiKey.trim().length > 0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [messages, setMessages] = useState<AiChatMessage[]>(() => readStoredMessages(projectId));
   const historyRef = useRef<HTMLDivElement | null>(null);
-  const canSend = apiKey.trim().length > 0 && draft.trim().length > 0 && model.trim().length > 0 && !isGenerating;
+  const isLocalProvider = provider === "local";
+  const canSend = (isLocalProvider || apiKey.trim().length > 0)
+    && draft.trim().length > 0
+    && model.trim().length > 0
+    && (!isLocalProvider || localUrl.trim().length > 0)
+    && !isGenerating;
 
   useEffect(() => {
     setMessages(readStoredMessages(projectId));
@@ -190,6 +406,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
 
     window.localStorage.setItem(AI_PROVIDER_STORAGE_KEY, provider);
     window.localStorage.setItem(getProviderModelStorageKey(provider), model.trim());
+    window.localStorage.setItem(AI_LOCAL_URL_STORAGE_KEY, localUrl.trim() || DEFAULT_LOCAL_CHAT_URL);
 
     if (shouldSaveKey) {
       window.localStorage.setItem(getProviderKeyStorageKey(provider), apiKey.trim());
@@ -205,6 +422,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
 
     persistPreferences();
     const prompt = draft.trim();
+    const chatContext = createChatContext(messages);
     const userMessage: AiChatMessage = {
       id: createMessageId(),
       role: "user",
@@ -219,7 +437,15 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
     setIsGenerating(true);
 
     try {
-      const result = await onGenerate(apiKey.trim(), prompt, provider, model.trim(), mode);
+      const result = await onGenerate(
+        apiKey.trim(),
+        prompt,
+        provider,
+        model.trim(),
+        mode,
+        isLocalProvider ? localUrl.trim() : undefined,
+        chatContext,
+      );
       const assistantMessage: AiChatMessage = {
         id: createMessageId(),
         role: "assistant",
@@ -231,6 +457,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         content: result.content,
         sceneSpecJson: result.sceneSpecJson,
         rawText: result.rawText,
+        changes: normalizeChangeSummary(result.changes),
         status: "ready",
       };
       setMessages((current) => [...current, assistantMessage]);
@@ -351,6 +578,20 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
             />
           </label>
 
+          {isLocalProvider ? (
+            <label className="ai-field ai-field--wide">
+              <span className="ai-field__label">Local API URL</span>
+              <input
+                className="ai-field__input"
+                type="url"
+                value={localUrl}
+                onChange={(event) => setLocalUrl(event.target.value)}
+                placeholder={DEFAULT_LOCAL_CHAT_URL}
+                autoComplete="off"
+              />
+            </label>
+          ) : null}
+
           <label className="ai-save-key">
             <input
               type="checkbox"
@@ -386,6 +627,29 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
           <div key={message.id} className={`ai-chat-row ai-chat-row--${message.role}`}>
             <article className={`ai-chat-message ai-chat-message--${message.role}${message.status === "error" ? " is-error" : ""}`}>
               <div className="ai-chat-message__text">{message.content}</div>
+              {message.changes ? (
+                <section className="ai-change-summary" aria-label="Changes">
+                  <div className="ai-change-summary__header">
+                    <span className="ai-change-summary__title">Changes</span>
+                    <span className="ai-change-summary__counts">
+                      {renderChangeCount("added", message.changes.added)}
+                      {renderChangeCount("changed", message.changes.changed)}
+                      {renderChangeCount("removed", message.changes.removed)}
+                    </span>
+                  </div>
+                  {message.changes.items.length > 0 ? (
+                    <ul className="ai-change-summary__list">
+                      {message.changes.items.map((item, index) => (
+                        <li key={`${item.kind}-${item.label}-${index}`} className={`ai-change-summary__item ai-change-summary__item--${item.kind}`}>
+                          <span className="ai-change-summary__item-kind">{item.kind}</span>
+                          <span className="ai-change-summary__item-label">{item.label}</span>
+                          {item.detail ? <span className="ai-change-summary__item-detail">{item.detail}</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </section>
+              ) : null}
               {message.sceneSpecJson ? (
                 <details className="ai-chat-json">
                   <summary>View JSON</summary>
@@ -461,5 +725,14 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         </button>
       </form>
     </div>
+  );
+}
+
+function renderChangeCount(label: AiChangeKind, value: number) {
+  return (
+    <span className={`ai-change-summary__count ai-change-summary__count--${label}`}>
+      <strong>{value}</strong>
+      {label}
+    </span>
   );
 }

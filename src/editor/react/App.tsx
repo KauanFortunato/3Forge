@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, isAiSceneSpec, parseAiSceneSpecJson } from "../aiBlueprint";
-import type { AiProvider } from "../aiBlueprint";
+import type { AiChatContext, AiProvider } from "../aiBlueprint";
+import { compareComponentBlueprints } from "../blueprintDiff";
+import type { BlueprintDiffChangedObject, BlueprintDiffSummary } from "../blueprintDiff";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { createExportPackageZip } from "../exportPackage";
 import {
@@ -47,7 +49,7 @@ import { useEditorStoreSnapshot } from "./hooks/useEditorStoreSnapshot";
 import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
 import { AnimationTimeline } from "./components/AnimationTimeline";
 import { AIGenerateDialog } from "./components/AIGenerateDialog";
-import type { AIGenerationMode, AiChatGenerationResult } from "./components/AIGenerateDialog";
+import type { AIGenerationMode, AiChangeKind, AiChangeSummaryInput, AiChatGenerationResult } from "./components/AIGenerateDialog";
 import { ContextMenu } from "./components/ContextMenu";
 import { FieldsPanel } from "./components/FieldsPanel";
 import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
@@ -100,6 +102,52 @@ const APP_VERSION = "v0.2.1";
 interface NodeClipboard {
   sourceNodeIds: string[];
   subtrees: EditorNode[][];
+}
+
+function createAiChangeSummary(diff: BlueprintDiffSummary): AiChangeSummaryInput | undefined {
+  const changes: AiChangeSummaryInput = {
+    added: diff.added.length,
+    changed: diff.changed.length,
+    removed: diff.removed.length,
+    items: [
+      ...diff.added.map((entry) => ({ kind: "added" as AiChangeKind, label: entry.name })),
+      ...diff.changed.map((entry) => ({
+        kind: "changed" as AiChangeKind,
+        label: entry.name,
+        detail: summarizeChangedFields(entry),
+      })),
+      ...diff.removed.map((entry) => ({ kind: "removed" as AiChangeKind, label: entry.name })),
+    ],
+  };
+
+  return diff.added.length + diff.changed.length + diff.removed.length > 0 ? changes : undefined;
+}
+
+function summarizeChangedFields(entry: BlueprintDiffChangedObject): string {
+  const labels = new Set(entry.changes.map((change) => getDiffFieldLabel(change.path)));
+  return Array.from(labels).slice(0, 4).join(", ");
+}
+
+function getDiffFieldLabel(path: string): string {
+  if (path === "visible") {
+    return "visibility";
+  }
+  if (path.startsWith("transform.")) {
+    return path.replace("transform.", "");
+  }
+  if (path === "material.color") {
+    return "color";
+  }
+  if (path === "material.opacity") {
+    return "opacity";
+  }
+  if (path === "geometry.text") {
+    return "text";
+  }
+  if (path.startsWith("geometry.")) {
+    return path.replace("geometry.", "");
+  }
+  return path;
 }
 
 type RuntimePanelTab = "animations" | "images" | "materials";
@@ -1337,11 +1385,14 @@ export function App() {
     provider: AiProvider,
     model: string,
     mode: AIGenerationMode,
+    localUrl?: string,
+    chatContext?: AiChatContext,
   ): Promise<AiChatGenerationResult> => {
     setTransientStatus(mode === "edit" ? "Preparing AI edit..." : "Generating AI blueprint...");
     const result = mode === "edit"
-      ? await editBlueprintWithAIResult({ apiKey, prompt, provider, model, currentBlueprint: blueprintSnapshot })
-      : await generateBlueprintResult({ apiKey, prompt, provider, model });
+      ? await editBlueprintWithAIResult({ apiKey, prompt, provider, model, localUrl, chatContext, currentBlueprint: blueprintSnapshot })
+      : await generateBlueprintResult({ apiKey, prompt, provider, model, localUrl, chatContext });
+    const changes = createAiChangeSummary(compareComponentBlueprints(blueprintSnapshot, result.blueprint));
     setTransientStatus("AI response ready.");
     return {
       content: mode === "edit"
@@ -1350,6 +1401,7 @@ export function App() {
       sceneSpecJson: result.sceneSpecJson,
       rawText: result.rawText,
       executedModel: result.executedModel,
+      changes,
     };
   }, [blueprintSnapshot, setTransientStatus]);
 

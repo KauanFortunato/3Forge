@@ -175,6 +175,168 @@ describe("aiBlueprint", () => {
     expect(result.sceneSpec.componentName).toBe("OpenRouter Scene");
   });
 
+  it("sends a single leading system message for chat-completion providers", async () => {
+    const sceneSpec = {
+      componentName: "Local Scene",
+      objects: [
+        {
+          type: "box",
+          name: "Panel",
+          color: "#7c3aed",
+          opacity: 1,
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          width: 1,
+          height: 1,
+          depth: 1,
+          radius: null,
+          radiusTop: null,
+          radiusBottom: null,
+          text: null,
+          size: null,
+        },
+      ],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        model: "local-model",
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(sceneSpec),
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    await generateBlueprintResult({
+      apiKey: "local",
+      prompt: "make a panel",
+      provider: "openrouter",
+      model: "local-model",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(fetchMock.mock.calls[0][0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
+    expect(body.messages.map((message) => message.role)).toEqual(["system", "user"]);
+    expect(body.messages[0].content).toContain("Attached 3Forge guide:");
+  });
+
+  it("uses a custom local chat-completions URL without OpenRouter headers", async () => {
+    const sceneSpec = {
+      componentName: "Local Scene",
+      objects: [
+        {
+          type: "box",
+          name: "Panel",
+          color: "#7c3aed",
+          opacity: 1,
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          width: 1,
+          height: 1,
+          depth: 1,
+          radius: null,
+          radiusTop: null,
+          radiusBottom: null,
+          text: null,
+          size: null,
+        },
+      ],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        model: "qwen-local",
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(sceneSpec),
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    const result = await generateBlueprintResult({
+      apiKey: "",
+      prompt: "make a panel",
+      provider: "local",
+      model: "qwen-local",
+      localUrl: "http://127.0.0.1:8001/v1/chat/completions",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init?.headers as Record<string, string>;
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8001/v1/chat/completions");
+    expect(headers.Authorization).toBeUndefined();
+    expect(headers["HTTP-Referer"]).toBeUndefined();
+    expect(headers["X-Title"]).toBeUndefined();
+    expect(result.executedModel).toBe("qwen-local");
+  });
+
+  it("includes compact chat context in chat-completion prompts", async () => {
+    const sceneSpec = {
+      componentName: "Context Scene",
+      objects: [
+        {
+          type: "box",
+          name: "Panel",
+          color: "#7c3aed",
+          opacity: 1,
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          width: 1,
+          height: 1,
+          depth: 1,
+          radius: null,
+          radiusTop: null,
+          radiusBottom: null,
+          text: null,
+          size: null,
+        },
+      ],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        model: "openrouter/free",
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(sceneSpec),
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    await generateBlueprintResult({
+      apiKey: "sk-or-test",
+      prompt: "make that warmer",
+      provider: "openrouter",
+      model: "openrouter/free",
+      chatContext: {
+        lastSceneSpecJson: "{\"componentName\":\"Previous Scene\",\"objects\":[]}",
+        diffSummaries: ["added 1, changed 2, removed 0; changed: Shade (color)"],
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
+    expect(body.messages[1].content).toContain("Recent diff summaries:");
+    expect(body.messages[1].content).toContain("added 1, changed 2, removed 0");
+    expect(body.messages[1].content).toContain("Last generated JSON:");
+    expect(body.messages[1].content).toContain("Previous Scene");
+    expect(body.messages[1].content).toContain("Current user request:\nmake that warmer");
+  });
+
   it("keeps the raw model output when generated JSON is invalid", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

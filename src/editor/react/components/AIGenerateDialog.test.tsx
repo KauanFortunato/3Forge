@@ -34,6 +34,15 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof AIGenerateD
     sceneSpecJson,
     rawText: sceneSpecJson,
     executedModel: "google/gemini-2.5-flash-lite",
+    changes: {
+      added: 1,
+      changed: 2,
+      removed: 0,
+      items: [
+        { kind: "added", label: "Violet accent light" },
+        { kind: "changed", label: "Main Body", detail: "color and scale" },
+      ],
+    },
   }));
   const onApplyScene = vi.fn();
   const onClose = vi.fn();
@@ -73,11 +82,19 @@ describe("AIGenerateDialog", () => {
       "openrouter",
       "openrouter/free",
       "edit",
+      undefined,
+      undefined,
     ));
 
     expect(await screen.findByText("I prepared a project update.")).not.toBeNull();
     expect(screen.getByText("google/gemini-2.5-flash-lite")).not.toBeNull();
-    expect(window.localStorage.getItem("3forge-ai-chat-history-v1:project-a")).toContain("make it sharper");
+    expect(screen.getByLabelText("Changes")).not.toBeNull();
+    expect(screen.getByText("Violet accent light")).not.toBeNull();
+    expect(screen.getByText("Main Body")).not.toBeNull();
+    const storedHistory = window.localStorage.getItem("3forge-ai-chat-history-v1:project-a");
+    expect(storedHistory).toContain("make it sharper");
+    expect(storedHistory).toContain("\"changes\"");
+    expect(storedHistory).toContain("Violet accent light");
 
     await user.click(screen.getByText("View JSON"));
     expect(screen.getByText(/Edited Starter/)).not.toBeNull();
@@ -97,6 +114,94 @@ describe("AIGenerateDialog", () => {
     expect(screen.getAllByText("Gemini Free").length).toBeGreaterThan(0);
     expect(screen.getByText("gemini-2.5-flash")).not.toBeNull();
     expect(screen.getByText(/Tell me what to change in this project/)).not.toBeNull();
+  });
+
+  it("allows a local OpenAI-compatible provider with a custom URL and optional key", async () => {
+    const user = userEvent.setup();
+    const { onGenerate } = renderDialog();
+
+    await user.click(screen.getByText("AI settings"));
+    await user.selectOptions(screen.getByLabelText("Provider"), "local");
+    await user.clear(screen.getByLabelText("Model"));
+    await user.type(screen.getByLabelText("Model"), "qwen-local");
+    await user.clear(screen.getByLabelText("Local API URL"));
+    await user.type(screen.getByLabelText("Local API URL"), "http://127.0.0.1:8001/v1/chat/completions");
+    await user.clear(screen.getByPlaceholderText("Write a request..."));
+    await user.type(screen.getByPlaceholderText("Write a request..."), "make a lamp");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onGenerate).toHaveBeenCalledWith(
+      "",
+      "make a lamp",
+      "local",
+      "qwen-local",
+      "edit",
+      "http://127.0.0.1:8001/v1/chat/completions",
+      undefined,
+    ));
+    expect(window.localStorage.getItem("3forge-ai-local-url")).toBe("http://127.0.0.1:8001/v1/chat/completions");
+  });
+
+  it("restores persisted change summaries with chat history", () => {
+    window.localStorage.setItem("3forge-ai-chat-history-v1:project-a", JSON.stringify([
+      {
+        id: "assistant-1",
+        role: "assistant",
+        createdAt: 1,
+        provider: "openrouter",
+        model: "openrouter/free",
+        executedModel: "openrouter/free",
+        mode: "edit",
+        content: "Stored response ready.",
+        sceneSpecJson,
+        rawText: sceneSpecJson,
+        status: "ready",
+        changes: {
+          counts: { added: 2, changed: 1, removed: 1 },
+          preview: ["Added antenna array", "Changed shell material", "Removed placeholder cube"],
+        },
+      },
+    ]));
+
+    renderDialog();
+
+    expect(screen.getByText("Stored response ready.")).not.toBeNull();
+    expect(screen.getByLabelText("Changes")).not.toBeNull();
+    expect(screen.getByText("Added antenna array")).not.toBeNull();
+    expect(screen.getByText("Changed shell material")).not.toBeNull();
+    expect(screen.getByText("Removed placeholder cube")).not.toBeNull();
+  });
+
+  it("sends the last JSON and recent diff summaries as compact chat context", async () => {
+    const user = userEvent.setup();
+    const { onGenerate } = renderDialog();
+
+    await user.click(screen.getByText("AI settings"));
+    await user.type(screen.getByLabelText("OpenRouter API key"), "sk-or-test");
+    await user.clear(screen.getByPlaceholderText("Write a request..."));
+    await user.type(screen.getByPlaceholderText("Write a request..."), "first edit");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("I prepared a project update.")).not.toBeNull();
+
+    await user.clear(screen.getByPlaceholderText("Write a request..."));
+    await user.type(screen.getByPlaceholderText("Write a request..."), "make that warmer");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onGenerate).toHaveBeenCalledTimes(2));
+    expect(onGenerate).toHaveBeenLastCalledWith(
+      "sk-or-test",
+      "make that warmer",
+      "openrouter",
+      "openrouter/free",
+      "edit",
+      undefined,
+      {
+        lastSceneSpecJson: sceneSpecJson,
+        diffSummaries: [
+          "added 1, changed 2, removed 0; added: Violet accent light; changed: Main Body (color and scale)",
+        ],
+      },
+    );
   });
 
   it("keeps a pending generation when the dialog is hidden and shows the response when reopened", async () => {

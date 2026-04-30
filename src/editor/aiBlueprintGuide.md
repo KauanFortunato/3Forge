@@ -142,6 +142,180 @@ Common mistakes to avoid:
 - Wheels or eyes at different heights unless intentional.
 - Text placed at `z = 0` when the front surface is at `z = 0.5`.
 
+## General Connected Geometry Rules
+
+Use these rules for any model with connected pieces, including arms, rods, supports, handles, legs, frames, cables, antennas, tools, machines, vehicles, characters, and furniture.
+
+Do not place connected parts by visual guessing. Build connected parts from explicit connection points.
+
+### Connection Points First
+
+Before positioning any connected object, silently choose the exact points it must connect.
+
+Use this method for any part that connects two pieces:
+
+1. Choose start point `A`.
+2. Choose end point `B`.
+3. Place the connecting object at the midpoint between `A` and `B`.
+4. Set the object length to the distance between `A` and `B`, plus a small overlap.
+5. Add or align joint/detail objects at `A` and `B` when useful.
+6. Check that the connected object touches or slightly overlaps both endpoints.
+
+For any connector between two points:
+
+```text
+center.x = (A.x + B.x) / 2
+center.y = (A.y + B.y) / 2
+center.z = (A.z + B.z) / 2
+```
+
+Small overlap is preferred over visible gaps. Use overlap around `0.02` to `0.08`.
+
+### Rotated Cylinders And Bars
+
+A cylinder's `position` is its center, not its endpoint. This is the most common source of floating or disconnected arms, rods, supports, and bars.
+
+For any cylinder used as a connector:
+
+- Treat the cylinder's `height` as the connector length.
+- Choose endpoint `A` and endpoint `B` first.
+- Put the cylinder center at the midpoint between `A` and `B`.
+- Set `height` to the endpoint distance plus a small overlap.
+- Rotate the cylinder so its local Y axis points along the direction from `A` to `B`.
+
+For a connector in the X/Y plane:
+
+```text
+dx = B.x - A.x
+dy = B.y - A.y
+length = sqrt(dx * dx + dy * dy)
+center = midpoint(A, B)
+rotation.z = atan2(-dx, dy)
+height = length + overlap
+```
+
+For a connector in the Y/Z plane:
+
+```text
+dy = B.y - A.y
+dz = B.z - A.z
+length = sqrt(dy * dy + dz * dz)
+center = midpoint(A, B)
+rotation.x = atan2(dz, dy)
+height = length + overlap
+```
+
+For a connector in the X/Z plane, prefer using a box if possible. If a cylinder is required, rotate it carefully and verify the endpoints after rotation.
+
+Do not rotate connected cylinders randomly on multiple axes. Use one main rotation axis whenever possible.
+
+### Sign And Direction Rules
+
+Do not use only positive coordinates by habit. Coordinate signs must match the intended direction from the anchor.
+
+Use anchor-relative thinking:
+
+```text
+object.position.axis = anchor.position.axis + signedOffset
+```
+
+Sign meanings:
+
+- `+x`: right of the anchor.
+- `-x`: left of the anchor.
+- `+y`: above the anchor.
+- `-y`: below the anchor.
+- `+z`: in front of the anchor.
+- `-z`: behind the anchor.
+
+Before returning JSON, check every connected part:
+
+- If a part should extend left, its target endpoint or offset must usually use negative `x`.
+- If a part should extend right, its target endpoint or offset must usually use positive `x`.
+- If a part should extend downward, its target endpoint or offset must usually use negative `y`.
+- If a part should extend upward, its target endpoint or offset must usually use positive `y`.
+- If a part should sit behind another part, use negative `z`.
+- If a part should sit on the visible front, use positive `z`.
+
+For mirrored or opposite-side objects, the mirrored axis must change sign:
+
+```text
+left.x = -right.x
+top.y = -bottom.y, when mirrored vertically
+front.z = -back.z, when mirrored in depth
+```
+
+If the shape is correct but appears on the wrong side, the problem is usually the sign of the position or endpoint on one axis. Fix the sign before changing size, scale, or unrelated rotations.
+
+### Endpoint Validation For Connected Parts
+
+After placing a connected part, mentally compute its approximate endpoints and compare them to the intended contact points.
+
+For a cylinder in the X/Y plane with center `C`, length `L`, and rotation `theta = rotation.z`:
+
+```text
+endpointA.x = C.x - sin(theta) * L / 2
+endpointA.y = C.y - cos(theta) * L / 2
+
+endpointB.x = C.x + sin(theta) * L / 2
+endpointB.y = C.y + cos(theta) * L / 2
+```
+
+These endpoints should touch or slightly overlap the intended joints or surfaces.
+
+If either endpoint is not touching its target, do not leave the object floating. Recalculate the center from the endpoints.
+
+### Surface-Based Detail Placement
+
+Do not place text, labels, buttons, lights, panels, decals, or small details inside solid objects.
+
+Place details using the surface position, not the object center.
+
+For a box:
+
+```text
+frontSurfaceZ = position.z + depth / 2
+backSurfaceZ = position.z - depth / 2
+rightSurfaceX = position.x + width / 2
+leftSurfaceX = position.x - width / 2
+topSurfaceY = position.y + height / 2
+bottomSurfaceY = position.y - height / 2
+```
+
+For a sphere:
+
+```text
+frontSurfaceZ = position.z + radius
+backSurfaceZ = position.z - radius
+rightSurfaceX = position.x + radius
+leftSurfaceX = position.x - radius
+topSurfaceY = position.y + radius
+bottomSurfaceY = position.y - radius
+```
+
+For a cylinder with no rotation and height along Y:
+
+```text
+topSurfaceY = position.y + height / 2
+bottomSurfaceY = position.y - height / 2
+frontSurfaceZ = position.z + max(radiusTop, radiusBottom)
+backSurfaceZ = position.z - max(radiusTop, radiusBottom)
+rightSurfaceX = position.x + max(radiusTop, radiusBottom)
+leftSurfaceX = position.x - max(radiusTop, radiusBottom)
+```
+
+For front-facing text or small front details:
+
+```text
+detail.position.z = frontSurfaceZ + 0.03 to 0.12
+```
+
+If the detail has visible depth, use a larger offset such as `0.06` to `0.14`.
+
+If a surface is curved or unclear, create a small flat plate or panel slightly in front of the object, then place the text or detail slightly in front of that plate.
+
+Never put readable text at the same `z` as the solid object center unless the object is a flat plane intended to hold the text.
+
 ## Rotation Rules
 
 Rotations are in radians, not degrees.
@@ -396,8 +570,10 @@ Before returning JSON, check every item:
 - The whole scene fits within about `4 x 4 x 3` units.
 - The scene is centered near the origin.
 - All connected parts touch or slightly overlap.
+- Connected cylinders, arms, rods, supports, and bars were positioned from endpoints, not guessed from their centers.
+- Endpoint signs are correct: left/right, above/below, and front/back use the correct positive or negative axis values.
 - Symmetric parts are mirrored correctly.
-- Front details and text are on positive `z`, not hidden inside objects.
+- Front details and text are placed using the front surface position, not hidden inside solid objects.
 - Colors have contrast.
 - Every object has a useful unique name.
 - Rotations are radians.
