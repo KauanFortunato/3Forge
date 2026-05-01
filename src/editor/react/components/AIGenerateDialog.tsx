@@ -58,7 +58,6 @@ export type AiChangeSummaryInput = AiChangeSummary | {
 interface AIGenerateDialogProps {
   isOpen: boolean;
   projectId: string;
-  onClose: () => void;
   onGenerate: (apiKey: string, prompt: string, provider: AiProvider, model: string, mode: AIGenerationMode, localUrl?: string, chatContext?: AiChatContext) => Promise<AiChatGenerationResult>;
   onApplyScene: (sceneSpecJson: string, mode: AIGenerationMode) => Promise<void> | void;
 }
@@ -75,7 +74,7 @@ interface AiChatMessage {
   sceneSpecJson?: string;
   rawText?: string;
   changes?: AiChangeSummary;
-  status?: "ready" | "applied" | "error";
+  status?: "ready" | "applied" | "error" | "streaming";
 }
 
 const DEFAULT_PROMPT = "A small futuristic drone with violet accent lights and four propellers";
@@ -85,6 +84,10 @@ const AI_PROVIDER_STORAGE_KEY = "3forge-ai-provider";
 const AI_MODEL_STORAGE_PREFIX = "3forge-ai-model";
 const AI_LOCAL_URL_STORAGE_KEY = "3forge-ai-local-url";
 const AI_CHAT_STORAGE_PREFIX = "3forge-ai-chat-history-v1";
+const AI_STREAM_CHUNK_SIZE = 10;
+const AI_STREAM_INTERVAL_MS = 18;
+const AI_COPY_FEEDBACK_MS = 1200;
+const AI_COMPOSER_MAX_HEIGHT = 132;
 
 function canUseLocalStorage(): boolean {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
@@ -156,6 +159,7 @@ function isChatMessage(value: unknown): value is AiChatMessage {
 function normalizeStoredMessage(message: AiChatMessage): AiChatMessage {
   return {
     ...message,
+    status: message.status === "streaming" ? "streaming" : message.status,
     changes: normalizeChangeSummary(message.changes),
   };
 }
@@ -322,7 +326,9 @@ function shouldShowRawResponse(message: AiChatMessage): boolean {
 }
 
 function createChatContext(messages: AiChatMessage[]): AiChatContext | undefined {
-  const readyAssistantMessages = messages.filter((message) => message.role === "assistant" && message.status !== "error");
+  const readyAssistantMessages = messages.filter((message) => (
+    message.role === "assistant" && (message.status === "ready" || message.status === "applied")
+  ));
   const lastSceneSpecJson = [...readyAssistantMessages].reverse().find((message) => message.sceneSpecJson)?.sceneSpecJson;
   const diffSummaries = readyAssistantMessages
     .filter((message) => message.changes)
@@ -352,7 +358,30 @@ function formatChangeSummary(message: AiChatMessage): string {
   return items ? `${counts}; ${items}` : counts;
 }
 
-export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApplyScene }: AIGenerateDialogProps) {
+function waitForAiStreamFrame() {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, AI_STREAM_INTERVAL_MS);
+  });
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
+export function AIGenerateDialog({ isOpen, projectId, onGenerate, onApplyScene }: AIGenerateDialogProps) {
   const initialProvider = useMemo(() => readStoredProvider(), []);
   const initialProviderOption = AI_PROVIDER_OPTIONS.find((entry) => entry.provider === initialProvider) ?? AI_PROVIDER_OPTIONS[0];
   const [provider, setProvider] = useState<AiProvider>(initialProvider);
@@ -364,8 +393,12 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
   const [localUrl, setLocalUrl] = useState(readStoredLocalUrl);
   const [shouldSaveKey, setShouldSaveKey] = useState(() => apiKey.trim().length > 0);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [messages, setMessages] = useState<AiChatMessage[]>(() => readStoredMessages(projectId));
+  const [copiedJsonMessageId, setCopiedJsonMessageId] = useState<string | null>(null);
   const historyRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const copyFeedbackTimerRef = useRef<number | null>(null);
   const isLocalProvider = provider === "local";
   const canSend = (isLocalProvider || apiKey.trim().length > 0)
     && draft.trim().length > 0
@@ -390,7 +423,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
     } else {
       historyElement.scrollTop = historyElement.scrollHeight;
     }
-  }, [isOpen, messages.length, isGenerating]);
+  }, [isOpen, messages.length, isGenerating, messages]);
 
   useEffect(() => {
     if (!canUseLocalStorage()) {
@@ -398,6 +431,39 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
     }
     window.localStorage.setItem(getChatStorageKey(projectId), JSON.stringify(messages));
   }, [messages, projectId]);
+
+  useEffect(() => {
+    const input = composerInputRef.current;
+    if (!input) {
+      return;
+    }
+
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, AI_COMPOSER_MAX_HEIGHT)}px`;
+    input.style.overflowY = input.scrollHeight > AI_COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
+  }, [draft, isOpen]);
+
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+  }, []);
+
+  async function revealAssistantMessage(messageId: string, message: AiChatMessage) {
+    const content = message.content || "Done.";
+
+    for (let length = AI_STREAM_CHUNK_SIZE; length < content.length; length += AI_STREAM_CHUNK_SIZE) {
+      await waitForAiStreamFrame();
+      setMessages((current) => current.map((entry) => (
+        entry.id === messageId ? { ...entry, content: content.slice(0, length), status: "streaming" } : entry
+      )));
+    }
+
+    await waitForAiStreamFrame();
+    setMessages((current) => current.map((entry) => (
+      entry.id === messageId ? { ...message, id: messageId } : entry
+    )));
+  }
 
   function persistPreferences() {
     if (!canUseLocalStorage()) {
@@ -432,7 +498,18 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
       mode,
       content: prompt,
     };
-    setMessages((current) => [...current, userMessage]);
+    const assistantMessageId = createMessageId();
+    const pendingAssistantMessage: AiChatMessage = {
+      id: assistantMessageId,
+      role: "assistant",
+      createdAt: Date.now(),
+      provider,
+      model: model.trim(),
+      mode,
+      content: "",
+      status: "streaming",
+    };
+    setMessages((current) => [...current, userMessage, pendingAssistantMessage]);
     setDraft("");
     setIsGenerating(true);
 
@@ -447,7 +524,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         chatContext,
       );
       const assistantMessage: AiChatMessage = {
-        id: createMessageId(),
+        id: assistantMessageId,
         role: "assistant",
         createdAt: Date.now(),
         provider,
@@ -460,11 +537,11 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         changes: normalizeChangeSummary(result.changes),
         status: "ready",
       };
-      setMessages((current) => [...current, assistantMessage]);
+      await revealAssistantMessage(assistantMessageId, assistantMessage);
     } catch (error) {
       const content = error instanceof Error ? error.message : "Unable to generate a response.";
-      setMessages((current) => [...current, {
-        id: createMessageId(),
+      await revealAssistantMessage(assistantMessageId, {
+        id: assistantMessageId,
         role: "assistant",
         createdAt: Date.now(),
         provider,
@@ -474,7 +551,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         content,
         rawText: isAiBlueprintDebugError(error) ? error.rawText : undefined,
         status: "error",
-      }]);
+      });
     } finally {
       setIsGenerating(false);
     }
@@ -504,6 +581,22 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
     return null;
   }
 
+  async function handleCopyJson(message: AiChatMessage) {
+    if (!message.sceneSpecJson) {
+      return;
+    }
+
+    await copyTextToClipboard(message.sceneSpecJson);
+    setCopiedJsonMessageId(message.id);
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+    }
+    copyFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopiedJsonMessageId((current) => current === message.id ? null : current);
+      copyFeedbackTimerRef.current = null;
+    }, AI_COPY_FEEDBACK_MS);
+  }
+
   return (
     <div className="ai-chat-window">
       <header className="ai-chat-header">
@@ -517,102 +610,112 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         <div className="ai-chat-header__mode">
           {mode === "edit" ? "Editing current project" : "Creating new model"}
         </div>
+        <button
+          type="button"
+          className={`ai-chat-header__config${isSettingsOpen ? " is-active" : ""}`}
+          onClick={() => setIsSettingsOpen((value) => !value)}
+          aria-expanded={isSettingsOpen}
+          aria-controls="ai-settings-panel"
+        >
+          Config
+        </button>
       </header>
 
-      <details className="ai-settings">
-        <summary>
-          <span>AI settings</span>
-          <span className="ai-settings__meta">{`${selectedProvider.label} / ${model || "No model"}`}</span>
-        </summary>
-
-        <div className="ai-dialog__grid">
-          <div className="ai-mode" role="tablist" aria-label="AI generation mode">
-            <button
-              type="button"
-              className={`ai-mode__option${mode === "edit" ? " is-active" : ""}`}
-              onClick={() => {
-                setMode("edit");
-                setDraft(DEFAULT_EDIT_PROMPT);
-              }}
-              role="tab"
-              aria-selected={mode === "edit"}
-            >
-              Edit Current
-            </button>
-            <button
-              type="button"
-              className={`ai-mode__option${mode === "new" ? " is-active" : ""}`}
-              onClick={() => {
-                setMode("new");
-                setDraft(DEFAULT_PROMPT);
-              }}
-              role="tab"
-              aria-selected={mode === "new"}
-            >
-              New Model
-            </button>
+      {isSettingsOpen ? (
+        <section id="ai-settings-panel" className="ai-settings-panel" aria-label="AI configuration">
+          <div className="ai-settings-panel__hd">
+            <span>AI configuration</span>
+            <span className="ai-settings-panel__meta">{`${selectedProvider.label} / ${model || "No model"}`}</span>
           </div>
+          <div className="ai-dialog__grid">
+            <div className="ai-mode" role="tablist" aria-label="AI generation mode">
+              <button
+                type="button"
+                className={`ai-mode__option${mode === "edit" ? " is-active" : ""}`}
+                onClick={() => {
+                  setMode("edit");
+                  setDraft(DEFAULT_EDIT_PROMPT);
+                }}
+                role="tab"
+                aria-selected={mode === "edit"}
+              >
+                Edit Current
+              </button>
+              <button
+                type="button"
+                className={`ai-mode__option${mode === "new" ? " is-active" : ""}`}
+                onClick={() => {
+                  setMode("new");
+                  setDraft(DEFAULT_PROMPT);
+                }}
+                role="tab"
+                aria-selected={mode === "new"}
+              >
+                New Model
+              </button>
+            </div>
 
-          <label className="ai-field">
-            <span className="ai-field__label">Provider</span>
-            <select
-              className="ai-field__input"
-              value={provider}
-              onChange={(event) => handleProviderChange(event.target.value as AiProvider)}
-            >
-              {AI_PROVIDER_OPTIONS.map((entry) => (
-                <option key={entry.provider} value={entry.provider}>{entry.label}</option>
-              ))}
-            </select>
-          </label>
+            <label className="ai-field">
+              <span className="ai-field__label">Provider</span>
+              <select
+                className="ai-field__input"
+                value={provider}
+                onChange={(event) => handleProviderChange(event.target.value as AiProvider)}
+              >
+                {AI_PROVIDER_OPTIONS.map((entry) => (
+                  <option key={entry.provider} value={entry.provider}>{entry.label}</option>
+                ))}
+              </select>
+            </label>
 
-          <label className="ai-field">
-            <span className="ai-field__label">{selectedProvider.keyLabel}</span>
-            <input
-              className="ai-field__input"
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder={selectedProvider.keyPlaceholder}
-              autoComplete="off"
-            />
-          </label>
-
-          {isLocalProvider ? (
-            <label className="ai-field ai-field--wide">
-              <span className="ai-field__label">Local API URL</span>
+            <label className="ai-field">
+              <span className="ai-field__label">{selectedProvider.keyLabel}</span>
               <input
                 className="ai-field__input"
-                type="url"
-                value={localUrl}
-                onChange={(event) => setLocalUrl(event.target.value)}
-                placeholder={DEFAULT_LOCAL_CHAT_URL}
+                type="password"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder={selectedProvider.keyPlaceholder}
                 autoComplete="off"
               />
             </label>
-          ) : null}
 
-          <label className="ai-save-key">
-            <input
-              type="checkbox"
-              checked={shouldSaveKey}
-              onChange={(event) => setShouldSaveKey(event.target.checked)}
-            />
-            <span>Save this API key locally on this browser</span>
-          </label>
+            {isLocalProvider ? (
+              <label className="ai-field ai-field--wide">
+                <span className="ai-field__label">Local API URL</span>
+                <input
+                  className="ai-field__input"
+                  type="url"
+                  value={localUrl}
+                  onChange={(event) => setLocalUrl(event.target.value)}
+                  placeholder={DEFAULT_LOCAL_CHAT_URL}
+                  autoComplete="off"
+                />
+              </label>
+            ) : null}
 
-          <label className="ai-field">
-            <span className="ai-field__label">Model</span>
-            <input
-              className="ai-field__input"
-              type="text"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              autoComplete="off"
-            />
-          </label>
-        </div>
-      </details>
+            <label className="ai-save-key">
+              <input
+                type="checkbox"
+                checked={shouldSaveKey}
+                onChange={(event) => setShouldSaveKey(event.target.checked)}
+              />
+              <span>Save this API key locally on this browser</span>
+            </label>
+
+            <label className="ai-field">
+              <span className="ai-field__label">Model</span>
+              <input
+                className="ai-field__input"
+                type="text"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+          </div>
+        </section>
+      ) : null}
 
       <div ref={historyRef} className="ai-chat-history" aria-label="AI chat history">
         <div className="ai-chat-row ai-chat-row--assistant">
@@ -625,8 +728,18 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
 
         {messages.map((message) => (
           <div key={message.id} className={`ai-chat-row ai-chat-row--${message.role}`}>
-            <article className={`ai-chat-message ai-chat-message--${message.role}${message.status === "error" ? " is-error" : ""}`}>
+            <article
+              className={`ai-chat-message ai-chat-message--${message.role}${message.status === "error" ? " is-error" : ""}${message.status === "streaming" ? " is-streaming" : ""}`}
+              data-status={message.status}
+            >
               <div className="ai-chat-message__text">{message.content}</div>
+              {message.status === "streaming" && !message.content ? (
+                <div className="ai-chat-typing" aria-label="AI is typing">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              ) : null}
               {message.changes ? (
                 <section className="ai-change-summary" aria-label="Changes">
                   <div className="ai-change-summary__header">
@@ -653,6 +766,15 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
               {message.sceneSpecJson ? (
                 <details className="ai-chat-json">
                   <summary>View JSON</summary>
+                  <div className="ai-chat-json__toolbar">
+                    <button
+                      type="button"
+                      className="tbtn"
+                      onClick={() => { void handleCopyJson(message); }}
+                    >
+                      {copiedJsonMessageId === message.id ? "Copied" : "Copy JSON"}
+                    </button>
+                  </div>
                   <pre>{message.sceneSpecJson}</pre>
                 </details>
               ) : null}
@@ -676,6 +798,7 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
               ) : null}
               <footer className="ai-chat-message__meta">
                 <span>{formatMessageTime(message.createdAt)}</span>
+                {message.status === "streaming" ? <span>writing</span> : null}
                 {message.role === "assistant" ? <span>{AI_PROVIDER_OPTIONS.find((entry) => entry.provider === message.provider)?.label ?? message.provider}</span> : null}
                 {message.role === "assistant" ? <span title={`Requested: ${message.model}`}>{getMessageModelLabel(message)}</span> : null}
               </footer>
@@ -683,9 +806,10 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
           </div>
         ))}
 
-        {isGenerating ? (
+        {isGenerating && !messages.some((message) => message.status === "streaming") ? (
           <div className="ai-chat-row ai-chat-row--assistant">
             <div className="ai-chat-message ai-chat-message--assistant">
+              <div className="ai-chat-status">Thinking through scene changes</div>
               <div className="ai-chat-typing" aria-label="AI is typing">
                 <span />
                 <span />
@@ -704,11 +828,12 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         }}
       >
         <textarea
+          ref={composerInputRef}
           className="ai-chat-composer__input"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           placeholder="Write a request..."
-          rows={2}
+          rows={1}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
@@ -719,9 +844,6 @@ export function AIGenerateDialog({ isOpen, projectId, onClose, onGenerate, onApp
         />
         <button type="submit" className="ai-chat-composer__send" disabled={!canSend}>
           Send
-        </button>
-        <button type="button" className="ai-chat-composer__close" onClick={onClose}>
-          Close
         </button>
       </form>
     </div>

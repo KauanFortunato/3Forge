@@ -2968,7 +2968,6 @@ export function App() {
         <AIGenerateDialog
           isOpen={isAiDialogOpen}
           projectId={projectContext.recentProjectId ?? "local"}
-          onClose={() => setIsAiDialogOpen(false)}
           onGenerate={handleGenerateWithAI}
           onApplyScene={handleApplyAiScene}
         />

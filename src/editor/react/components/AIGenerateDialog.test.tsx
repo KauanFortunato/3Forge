@@ -45,20 +45,18 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof AIGenerateD
     },
   }));
   const onApplyScene = vi.fn();
-  const onClose = vi.fn();
 
-  render(
+  const result = render(
     <AIGenerateDialog
       isOpen
       projectId="project-a"
-      onClose={onClose}
       onGenerate={onGenerate}
       onApplyScene={onApplyScene}
       {...overrides}
     />,
   );
 
-  return { onGenerate, onApplyScene, onClose };
+  return { onGenerate, onApplyScene, ...result };
 }
 
 describe("AIGenerateDialog", () => {
@@ -68,9 +66,15 @@ describe("AIGenerateDialog", () => {
 
   it("sends chat prompts, stores history, and applies returned JSON", async () => {
     const user = userEvent.setup();
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     const { onGenerate, onApplyScene } = renderDialog();
 
-    await user.click(screen.getByText("AI settings"));
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Config" }));
     await user.type(screen.getByLabelText("OpenRouter API key"), "sk-or-test");
     await user.clear(screen.getByPlaceholderText("Write a request..."));
     await user.type(screen.getByPlaceholderText("Write a request..."), "make it sharper");
@@ -98,6 +102,9 @@ describe("AIGenerateDialog", () => {
 
     await user.click(screen.getByText("View JSON"));
     expect(screen.getByText(/Edited Starter/)).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Copy JSON" }));
+    expect(writeText).toHaveBeenCalledWith(sceneSpecJson);
+    expect(screen.getByRole("button", { name: "Copied" })).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(onApplyScene).toHaveBeenCalledWith(sceneSpecJson, "edit");
@@ -120,7 +127,7 @@ describe("AIGenerateDialog", () => {
     const user = userEvent.setup();
     const { onGenerate } = renderDialog();
 
-    await user.click(screen.getByText("AI settings"));
+    await user.click(screen.getByRole("button", { name: "Config" }));
     await user.selectOptions(screen.getByLabelText("Provider"), "local");
     await user.clear(screen.getByLabelText("Model"));
     await user.type(screen.getByLabelText("Model"), "qwen-local");
@@ -176,7 +183,7 @@ describe("AIGenerateDialog", () => {
     const user = userEvent.setup();
     const { onGenerate } = renderDialog();
 
-    await user.click(screen.getByText("AI settings"));
+    await user.click(screen.getByRole("button", { name: "Config" }));
     await user.type(screen.getByLabelText("OpenRouter API key"), "sk-or-test");
     await user.clear(screen.getByPlaceholderText("Write a request..."));
     await user.type(screen.getByPlaceholderText("Write a request..."), "first edit");
@@ -204,6 +211,47 @@ describe("AIGenerateDialog", () => {
     );
   });
 
+  it("reveals assistant responses progressively before enabling apply", async () => {
+    const user = userEvent.setup();
+    const streamedContent = [
+      "I am checking the current scene structure, material palette, and object hierarchy before preparing a valid update.",
+      "The generated scene will stay unavailable until the full JSON result is ready.",
+      "I will keep writing this response progressively so the user can see active work in the chat surface.",
+      "Only after the final validated scene result is ready should the JSON preview and Apply action become available.",
+      "This keeps the editor interaction clear while preserving the existing generation and apply workflow.",
+    ].join(" ");
+    let resolveGeneration: (result: AiChatGenerationResult) => void = () => {};
+    const onGenerate = vi.fn(() => new Promise<AiChatGenerationResult>((resolve) => {
+      resolveGeneration = resolve;
+    }));
+    const { container } = renderDialog({ onGenerate });
+
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Config" }));
+    await user.type(screen.getByLabelText("OpenRouter API key"), "sk-or-test");
+    await user.clear(screen.getByPlaceholderText("Write a request..."));
+    await user.type(screen.getByPlaceholderText("Write a request..."), "make the UI feel like a chat");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByLabelText("AI is typing")).not.toBeNull();
+
+    resolveGeneration({
+      content: streamedContent,
+      sceneSpecJson,
+      rawText: sceneSpecJson,
+      executedModel: "google/gemini-2.5-flash-lite",
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".ai-chat-message.is-streaming[data-status='streaming']")).not.toBeNull();
+      expect(screen.getByText("writing")).not.toBeNull();
+      expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+    });
+
+    expect(await screen.findByText(streamedContent, undefined, { timeout: 3000 })).not.toBeNull();
+    expect(await screen.findByRole("button", { name: "Apply" }, { timeout: 3000 })).not.toBeNull();
+  });
+
   it("keeps a pending generation when the dialog is hidden and shows the response when reopened", async () => {
     const user = userEvent.setup();
     let resolveGeneration: (result: AiChatGenerationResult) => void = () => {};
@@ -211,16 +259,14 @@ describe("AIGenerateDialog", () => {
       resolveGeneration = resolve;
     }));
     const onApplyScene = vi.fn();
-    const onClose = vi.fn();
     const props = {
       projectId: "project-a",
-      onClose,
       onGenerate,
       onApplyScene,
     };
     const { rerender } = render(<AIGenerateDialog isOpen {...props} />);
 
-    await user.click(screen.getByText("AI settings"));
+    await user.click(screen.getByRole("button", { name: "Config" }));
     await user.type(screen.getByLabelText("OpenRouter API key"), "sk-or-test");
     await user.clear(screen.getByPlaceholderText("Write a request..."));
     await user.type(screen.getByPlaceholderText("Write a request..."), "continue in background");
@@ -246,6 +292,41 @@ describe("AIGenerateDialog", () => {
     expect(screen.getByText("meta-llama/llama-3.3-70b-instruct")).not.toBeNull();
   });
 
+  it("persists pending assistant activity when the chat is reopened or restored", async () => {
+    const user = userEvent.setup();
+    const onGenerate = vi.fn(() => new Promise<AiChatGenerationResult>(() => {}));
+    const onApplyScene = vi.fn();
+    const props = {
+      projectId: "project-a",
+      onGenerate,
+      onApplyScene,
+    };
+    const { unmount, rerender } = render(<AIGenerateDialog isOpen {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "Config" }));
+    await user.type(screen.getByLabelText("OpenRouter API key"), "sk-or-test");
+    await user.clear(screen.getByPlaceholderText("Write a request..."));
+    await user.type(screen.getByPlaceholderText("Write a request..."), "keep working while hidden");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByLabelText("AI is typing")).not.toBeNull();
+    await waitFor(() => {
+      expect(window.localStorage.getItem("3forge-ai-chat-history-v1:project-a")).toContain("\"status\":\"streaming\"");
+    });
+
+    rerender(<AIGenerateDialog isOpen={false} {...props} />);
+    expect(screen.queryByLabelText("AI chat history")).toBeNull();
+
+    rerender(<AIGenerateDialog isOpen {...props} />);
+    expect(await screen.findByLabelText("AI is typing")).not.toBeNull();
+    expect(screen.getByText("writing")).not.toBeNull();
+
+    unmount();
+    render(<AIGenerateDialog isOpen {...props} />);
+    expect(await screen.findByLabelText("AI is typing")).not.toBeNull();
+    expect(screen.getByText("keep working while hidden")).not.toBeNull();
+  });
+
   it("shows raw model output when generation fails validation", async () => {
     const user = userEvent.setup();
     const onGenerate = vi.fn(async () => {
@@ -257,7 +338,7 @@ describe("AIGenerateDialog", () => {
     });
     renderDialog({ onGenerate });
 
-    await user.click(screen.getByText("AI settings"));
+    await user.click(screen.getByRole("button", { name: "Config" }));
     await user.type(screen.getByLabelText("OpenRouter API key"), "sk-or-test");
     await user.clear(screen.getByPlaceholderText("Write a request..."));
     await user.type(screen.getByPlaceholderText("Write a request..."), "make a lamp");
