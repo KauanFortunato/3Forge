@@ -1559,6 +1559,73 @@ export class EditorStore extends EventTarget {
     this.notify({ reason: "animation", source, nodeId: track.nodeId });
   }
 
+  insertOrUpdateKeyframeAtFrame(
+    nodeId: string,
+    property: AnimationPropertyPath,
+    frame: number,
+    value?: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    if (!this.getNode(nodeId)) {
+      return "";
+    }
+
+    this.beginHistoryTransaction();
+    const trackId = this.ensureAnimationTrack(nodeId, property, source);
+    if (!trackId) {
+      this.commitHistoryTransaction(source);
+      return "";
+    }
+    const keyframeId = this.addAnimationKeyframe(trackId, frame, value, DEFAULT_ANIMATION_EASE, source);
+    this.commitHistoryTransaction(source);
+    return keyframeId;
+  }
+
+  removeKeyframeAtFrame(
+    nodeId: string,
+    property: AnimationPropertyPath,
+    frame: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const track = this.getAnimationTrackForProperty(nodeId, property);
+    if (!track) {
+      return false;
+    }
+    const target = Math.max(0, Math.round(frame));
+    const keyframe = track.keyframes.find((entry) => entry.frame === target);
+    if (!keyframe) {
+      return false;
+    }
+    this.removeAnimationKeyframe(track.id, keyframe.id, source);
+    return true;
+  }
+
+  /**
+   * Returns true if the value was committed to a keyframe at the given frame
+   * (i.e. the active clip has a track for this property and a keyframe lives
+   * exactly at `frame`). When it returns false the caller should fall back to
+   * editing the base node property as usual.
+   */
+  commitAnimatableValueAtFrame(
+    nodeId: string,
+    property: AnimationPropertyPath,
+    value: number,
+    frame: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const track = this.getAnimationTrackForProperty(nodeId, property);
+    if (!track) {
+      return false;
+    }
+    const target = Math.max(0, Math.round(frame));
+    const keyframe = track.keyframes.find((entry) => entry.frame === target);
+    if (!keyframe) {
+      return false;
+    }
+    this.updateAnimationKeyframe(track.id, keyframe.id, { value }, source);
+    return true;
+  }
+
   shiftAnimationKeyframes(
     trackId: string,
     keyframeIds: string[],
