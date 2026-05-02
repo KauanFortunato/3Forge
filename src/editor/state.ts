@@ -2349,6 +2349,46 @@ export class EditorStore extends EventTarget {
     this.notify({ reason: "node", source, nodeId });
   }
 
+  /**
+   * Inspector edit hub: when the playhead is exactly on a keyframe for an
+   * animatable property, route the edit to that keyframe instead of the
+   * base value. Otherwise fall through to {@link updateNodeProperty} so
+   * non-keyed edits behave exactly as before.
+   */
+  updateNodePropertyAtFrame(
+    nodeId: string,
+    definition: NodePropertyDefinition,
+    rawValue: string | number | boolean,
+    frame: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    if (isAnimationPropertyPath(definition.path)) {
+      const node = this.getNode(nodeId);
+      if (node) {
+        const currentValue = getPropertyValue(node, definition.path);
+        const parsedValue = parseInputValue(definition, rawValue, currentValue);
+        const numeric = typeof parsedValue === "boolean"
+          ? (parsedValue ? 1 : 0)
+          : typeof parsedValue === "number"
+            ? parsedValue
+            : Number.NaN;
+        if (Number.isFinite(numeric)) {
+          const committed = this.commitAnimatableValueAtFrame(
+            nodeId,
+            definition.path,
+            numeric,
+            frame,
+            source,
+          );
+          if (committed) {
+            return;
+          }
+        }
+      }
+    }
+    this.updateNodeProperty(nodeId, definition, rawValue, source);
+  }
+
   updateNodesProperty(
     nodeIds: string[],
     definition: NodePropertyDefinition,

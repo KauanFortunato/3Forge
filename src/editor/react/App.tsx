@@ -2843,7 +2843,7 @@ export function App() {
                         onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
                         onGroupPivotPresetApply={handleApplyGroupPivotPreset}
                         getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
-                        onNodePropertyChange={(nodeId, definition, value) => store.updateNodeProperty(nodeId, definition, value)}
+                        onNodePropertyChange={(nodeId, definition, value) => store.updateNodePropertyAtFrame(nodeId, definition, value, currentFrame)}
                         onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
                         onPropertyEditStart={() => store.beginHistoryTransaction()}
                         onPropertyEditEnd={() => store.commitHistoryTransaction("ui")}
