@@ -102,7 +102,7 @@ import { runTask } from "./hooks/useAsyncTask";
 import { useTheme } from "./hooks/useTheme";
 import { ViewportHost } from "./components/ViewportHost";
 
-const APP_VERSION = "v2.2";
+const APP_VERSION = "v3.0.0";
 
 interface NodeClipboard {
   sourceNodeIds: string[];
