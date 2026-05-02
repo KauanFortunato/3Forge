@@ -108,6 +108,31 @@ function persistLocalWorkspace(componentName = "Fixture") {
   return blueprint;
 }
 
+function createAiSceneSpecFixture(componentName = "AI Lamp") {
+  return {
+    componentName,
+    objects: [
+      {
+        type: "box",
+        name: "Lamp Base",
+        color: "#7c3aed",
+        opacity: 1,
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        width: 1,
+        height: 0.2,
+        depth: 1,
+        radius: null,
+        radiusTop: null,
+        radiusBottom: null,
+        text: null,
+        size: null,
+      },
+    ],
+  };
+}
+
 async function openFileMenu() {
   fireEvent.click(screen.getByRole("button", { name: "File" }));
   await screen.findByText("Save As");
@@ -337,6 +362,19 @@ describe("App", () => {
 
     await screen.findByDisplayValue("Recent Fixture");
     expect(screen.getByTestId("viewport-host")).toBeTruthy();
+  });
+
+  it("imports an AI scene spec JSON as a real blueprint", async () => {
+    const { container } = render(<App />);
+    const jsonInput = container.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    const aiSceneSpec = createAiSceneSpecFixture("External AI Lamp");
+    const file = new File([JSON.stringify(aiSceneSpec)], "ai-lamp.json", { type: "application/json" });
+
+    fireEvent.change(jsonInput, { target: { files: [file] } });
+
+    await screen.findByDisplayValue("External AI Lamp");
+    expect(screen.getByText("Imported AI scene ai-lamp.json.")).toBeTruthy();
+    expect(screen.getByText("blueprint / 2 nodes")).toBeTruthy();
   });
 
   it("keeps a history of multiple recent projects instead of overwriting the current one", async () => {

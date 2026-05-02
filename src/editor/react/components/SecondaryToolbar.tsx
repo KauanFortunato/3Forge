@@ -68,6 +68,7 @@ interface SecondaryToolbarProps {
   onToggleTimeline: () => void;
   onSave?: () => void;
   onShortcuts?: () => void;
+  onGenerateWithAI?: () => void;
 }
 
 export function SecondaryToolbar(props: SecondaryToolbarProps) {
@@ -94,6 +95,7 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     onToggleTimeline,
     onSave,
     onShortcuts,
+    onGenerateWithAI,
   } = props;
 
   return (
@@ -241,6 +243,19 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
           >
             <ShortcutIcon />
             <span>Shortcuts</span>
+          </button>
+        ) : null}
+
+        {onGenerateWithAI ? (
+          <button
+            type="button"
+            className="tbtn is-ghost"
+            onClick={onGenerateWithAI}
+            aria-label="Generate with AI"
+            title="Generate with AI"
+          >
+            <GeometryIcon />
+            <span>AI</span>
           </button>
         ) : null}
 
