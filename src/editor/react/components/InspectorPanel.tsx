@@ -1,17 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
+import { hasKeyframeAtFrame, isAnimationPropertyPath, isPropertyAnimated } from "../../animation";
 import { getSharedPropertyDefinitions } from "../../sharedProperties";
 import type { SharedPropertyResult } from "../../sharedProperties";
-import type { EditorNode, FontAsset, GroupPivotPreset, ImageAsset, MaterialAsset, NodeOriginSpec, NodePropertyDefinition } from "../../types";
+import type {
+  AnimationClip,
+  AnimationPropertyPath,
+  EditorNode,
+  FontAsset,
+  GroupPivotPreset,
+  ImageAsset,
+  MaterialAsset,
+  NodeOriginSpec,
+  NodePropertyDefinition,
+} from "../../types";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
-  CircleFilledIcon,
-  CircleIcon,
+  CodeBracketsIcon,
   GeometryIcon,
   GroupIcon,
   ImagePropertyIcon,
+  KeyframeDiamondIcon,
   MaterialIcon,
   MeshIcon,
   ObjectDataIcon,
@@ -41,6 +52,10 @@ interface InspectorPanelProps {
   onPropertyEditEnd?: () => void;
   onPropertyEditCancel?: () => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
+  currentFrame?: number;
+  activeAnimationClip?: AnimationClip;
+  onInsertOrUpdateKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
+  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number) => void;
   onTextFontChange: (nodeId: string, fontId: string) => void;
   onImportFont: () => void;
   onReplaceImage: (nodeId: string) => void;
@@ -76,6 +91,10 @@ export function InspectorPanel(props: InspectorPanelProps) {
     onPropertyEditEnd,
     onPropertyEditCancel,
     onToggleEditable,
+    currentFrame,
+    activeAnimationClip,
+    onInsertOrUpdateKeyframe,
+    onRemoveKeyframe,
     onTextFontChange,
     onImportFont,
     onReplaceImage,
@@ -218,6 +237,10 @@ export function InspectorPanel(props: InspectorPanelProps) {
               definition={definition}
               onNodePropertyChange={onNodePropertyChange}
               onToggleEditable={onToggleEditable}
+              currentFrame={currentFrame}
+              activeAnimationClip={activeAnimationClip}
+              onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
+              onRemoveKeyframe={onRemoveKeyframe}
             />
           ))}
 
@@ -318,6 +341,10 @@ export function InspectorPanel(props: InspectorPanelProps) {
             onPropertyEditEnd={onPropertyEditEnd}
             onPropertyEditCancel={onPropertyEditCancel}
             onToggleEditable={onToggleEditable}
+            currentFrame={currentFrame}
+            activeAnimationClip={activeAnimationClip}
+            onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
+            onRemoveKeyframe={onRemoveKeyframe}
           />
 
           <TransformAxisGroup
@@ -331,6 +358,10 @@ export function InspectorPanel(props: InspectorPanelProps) {
             onPropertyEditEnd={onPropertyEditEnd}
             onPropertyEditCancel={onPropertyEditCancel}
             onToggleEditable={onToggleEditable}
+            currentFrame={currentFrame}
+            activeAnimationClip={activeAnimationClip}
+            onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
+            onRemoveKeyframe={onRemoveKeyframe}
           />
 
           <TransformAxisGroup
@@ -344,6 +375,10 @@ export function InspectorPanel(props: InspectorPanelProps) {
             onPropertyEditEnd={onPropertyEditEnd}
             onPropertyEditCancel={onPropertyEditCancel}
             onToggleEditable={onToggleEditable}
+            currentFrame={currentFrame}
+            activeAnimationClip={activeAnimationClip}
+            onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
+            onRemoveKeyframe={onRemoveKeyframe}
           />
         </Sec>
       ) : null}
@@ -788,6 +823,10 @@ interface TransformAxisGroupProps {
   onPropertyEditEnd?: () => void;
   onPropertyEditCancel?: () => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
+  currentFrame?: number;
+  activeAnimationClip?: AnimationClip;
+  onInsertOrUpdateKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
+  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number) => void;
 }
 
 function TransformAxisGroup(props: TransformAxisGroupProps) {
@@ -802,6 +841,10 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
     onPropertyEditEnd,
     onPropertyEditCancel,
     onToggleEditable,
+    currentFrame,
+    activeAnimationClip,
+    onInsertOrUpdateKeyframe,
+    onRemoveKeyframe,
   } = props;
   const isMultiSelection = nodes.length > 1;
   const primaryNode = nodes[0];
@@ -832,6 +875,13 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
             onNodePropertyChange(primaryNode.id, definition, value);
           };
 
+          const animatableProperty = !isMultiSelection && isAnimationPropertyPath(definition.path)
+            ? (definition.path as AnimationPropertyPath)
+            : null;
+          const numericValue = typeof getDisplayValue(primaryNode, definition) === "number"
+            ? Number(getDisplayValue(primaryNode, definition))
+            : 0;
+
           return (
             <div
               key={definition.path}
@@ -856,14 +906,26 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                 step={definition.step ?? (definition.input === "degrees" ? 1 : 0.1)}
                 precision={definition.input === "degrees" ? 2 : 3}
               />
+              {animatableProperty ? (
+                <KeyframeButton
+                  nodeId={primaryNode.id}
+                  property={animatableProperty}
+                  currentValue={numericValue}
+                  currentFrame={currentFrame}
+                  activeClip={activeAnimationClip}
+                  onInsertOrUpdate={onInsertOrUpdateKeyframe}
+                  onRemove={onRemoveKeyframe}
+                  className="vec__keyframe"
+                />
+              ) : null}
               {isMultiSelection ? null : (
-                <label className={`vec__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
+                <label className={`vec__editable${isEditable ? " is-active" : ""}`} title="Expose field to generated code">
                   <input
                     type="checkbox"
                     checked={isEditable}
                     onChange={(event) => onToggleEditable(primaryNode.id, definition, event.target.checked)}
                   />
-                  {isEditable ? <CircleFilledIcon width={10} height={10} /> : <CircleIcon width={10} height={10} />}
+                  <CodeBracketsIcon width={10} height={10} active={isEditable} />
                 </label>
               )}
             </div>
@@ -871,6 +933,68 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
         })}
       </div>
     </div>
+  );
+}
+
+interface KeyframeButtonProps {
+  nodeId: string;
+  property: AnimationPropertyPath;
+  currentValue: number;
+  currentFrame: number | undefined;
+  activeClip: AnimationClip | undefined;
+  onInsertOrUpdate: ((nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void) | undefined;
+  onRemove: ((nodeId: string, property: AnimationPropertyPath, frame: number) => void) | undefined;
+  className?: string;
+}
+
+function KeyframeButton({
+  nodeId,
+  property,
+  currentValue,
+  currentFrame,
+  activeClip,
+  onInsertOrUpdate,
+  onRemove,
+  className = "row__keyframe",
+}: KeyframeButtonProps) {
+  const hasFrame = typeof currentFrame === "number" && Number.isFinite(currentFrame);
+  const animated = isPropertyAnimated(activeClip, nodeId, property);
+  const filled = hasFrame && hasKeyframeAtFrame(activeClip, nodeId, property, currentFrame ?? 0);
+
+  let title = "Insert keyframe";
+  if (filled) {
+    title = "Update keyframe (Alt-click to remove)";
+  } else if (animated) {
+    title = "Property is animated — insert keyframe at current frame";
+  }
+  if (!hasFrame) {
+    title = "No active clip";
+  }
+
+  const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (!hasFrame) {
+      return;
+    }
+    if (event.altKey && filled) {
+      onRemove?.(nodeId, property, currentFrame ?? 0);
+      return;
+    }
+    onInsertOrUpdate?.(nodeId, property, currentFrame ?? 0, currentValue);
+  };
+
+  const stateClass = filled ? " is-key" : animated ? " is-anim" : "";
+  return (
+    <button
+      type="button"
+      className={`${className}${stateClass}`}
+      title={title}
+      aria-pressed={filled}
+      aria-label={title}
+      disabled={!hasFrame}
+      onClick={handleClick}
+    >
+      <KeyframeDiamondIcon width={10} height={10} filled={filled} animated={animated} />
+    </button>
   );
 }
 
@@ -882,6 +1006,10 @@ interface PropertyRowProps {
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
   allowEditableToggle?: boolean;
+  currentFrame?: number;
+  activeAnimationClip?: AnimationClip;
+  onInsertOrUpdateKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
+  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number) => void;
 }
 
 function PropertyRow({
@@ -892,6 +1020,10 @@ function PropertyRow({
   onNodesPropertyChange,
   onToggleEditable,
   allowEditableToggle = true,
+  currentFrame,
+  activeAnimationClip,
+  onInsertOrUpdateKeyframe,
+  onRemoveKeyframe,
 }: PropertyRowProps) {
   const isMultiSelection = nodes.length > 1;
   const currentValues = nodes.map((node) => getDisplayValue(node, definition));
@@ -902,6 +1034,9 @@ function PropertyRow({
   const stringValue = String(currentValue);
   const editableLabel = `Editable ${definition.label}`;
   const checkboxRef = useRef<HTMLInputElement | null>(null);
+  const animatableProperty = !isMultiSelection && nodes[0] && isAnimationPropertyPath(definition.path)
+    ? (definition.path as AnimationPropertyPath)
+    : null;
 
   useEffect(() => {
     if (checkboxRef.current && definition.input === "checkbox") {
@@ -994,19 +1129,38 @@ function PropertyRow({
     );
   }
 
+  const numericValue = typeof currentValue === "number"
+    ? currentValue
+    : typeof currentValue === "boolean"
+      ? (currentValue ? 1 : 0)
+      : 0;
+
   return (
-    <div className="row">
+    <div className="row row--has-actions">
       <span className="row__lbl">{definition.label}</span>
       {control}
+      {animatableProperty && nodes[0] ? (
+        <KeyframeButton
+          nodeId={nodes[0].id}
+          property={animatableProperty}
+          currentValue={numericValue}
+          currentFrame={currentFrame}
+          activeClip={activeAnimationClip}
+          onInsertOrUpdate={onInsertOrUpdateKeyframe}
+          onRemove={onRemoveKeyframe}
+        />
+      ) : (
+        <span aria-hidden="true" />
+      )}
       {allowEditableToggle && nodes[0] ? (
-        <label className={`row__editable${isEditable ? " is-active" : ""}`} title="Editable at runtime">
+        <label className={`row__editable${isEditable ? " is-active" : ""}`} title="Expose field to generated code">
           <input
             type="checkbox"
             aria-label={editableLabel}
             checked={isEditable}
             onChange={(event) => onToggleEditable(nodes[0].id, definition, event.target.checked)}
           />
-          {isEditable ? <CircleFilledIcon width={10} height={10} /> : <CircleIcon width={10} height={10} />}
+          <CodeBracketsIcon width={10} height={10} active={isEditable} />
         </label>
       ) : (
         <span aria-hidden="true" />

@@ -1097,6 +1097,24 @@ export function App() {
     sceneRef.current?.seekAnimation(currentFrame);
   }, [currentFrame, store]);
 
+  const handleInspectorInsertKeyframe = useCallback((nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => {
+    const keyframeId = store.insertOrUpdateKeyframeAtFrame(nodeId, property, frame, value);
+    if (!keyframeId) {
+      return;
+    }
+    sceneRef.current?.seekAnimation(currentFrame);
+    setTransientStatus(`Keyed ${property} at ${frame}f.`);
+  }, [currentFrame, setTransientStatus, store]);
+
+  const handleInspectorRemoveKeyframe = useCallback((nodeId: string, property: AnimationPropertyPath, frame: number) => {
+    const removed = store.removeKeyframeAtFrame(nodeId, property, frame);
+    if (!removed) {
+      return;
+    }
+    sceneRef.current?.seekAnimation(currentFrame);
+    setTransientStatus(`Removed keyframe at ${frame}f.`);
+  }, [currentFrame, setTransientStatus, store]);
+
   const handleCopy = useCallback(() => {
     const targetRootIds = selectedRootIds.filter((nodeId) => nodeId !== ROOT_NODE_ID);
     if (targetRootIds.length === 0) {
@@ -2831,6 +2849,10 @@ export function App() {
                         onPropertyEditEnd={() => store.commitHistoryTransaction("ui")}
                         onPropertyEditCancel={() => store.cancelHistoryTransaction("ui")}
                         onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
+                        currentFrame={currentFrame}
+                        activeAnimationClip={activeClip}
+                        onInsertOrUpdateKeyframe={handleInspectorInsertKeyframe}
+                        onRemoveKeyframe={handleInspectorRemoveKeyframe}
                         onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}
                         onImportFont={() => fontInputRef.current?.click()}
                         onReplaceImage={(nodeId) => requestImageImport({ mode: "replace", nodeId })}

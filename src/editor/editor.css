@@ -1668,6 +1668,11 @@ code {
   width: 100%;
 }
 
+.row.row--has-actions {
+  grid-template-columns: 70px minmax(0, 1fr) 16px 16px;
+  gap: var(--sp-2);
+}
+
 .row:last-child {
   margin-bottom: 0;
 }
@@ -1713,6 +1718,46 @@ code {
 
 .row__editable.is-active {
   color: var(--c-accent);
+}
+
+.row__keyframe,
+.vec__keyframe {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  color: var(--c-text-faint);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 2px;
+}
+
+.row__keyframe:hover,
+.vec__keyframe:hover {
+  color: var(--c-text);
+}
+
+.row__keyframe.is-anim,
+.vec__keyframe.is-anim {
+  color: var(--c-warn);
+}
+
+.row__keyframe.is-key,
+.vec__keyframe.is-key {
+  color: var(--c-warn);
+}
+
+.row__keyframe[disabled],
+.vec__keyframe[disabled] {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.vec__keyframe {
+  width: 11px;
+  height: 11px;
 }
 
 .row__hint {
