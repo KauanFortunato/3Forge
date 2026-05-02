@@ -3,8 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createDefaultFontAsset } from "../../fonts";
 import { createTransparentImageAsset } from "../../images";
+import { createMaterialSpec } from "../../materials";
 import { createNode, ROOT_NODE_ID } from "../../state";
+import type { MaterialAsset } from "../../types";
 import { InspectorPanel } from "./InspectorPanel";
+import { MaterialAssetEditor } from "./MaterialAssetEditor";
 
 function createCommonProps() {
   const rootGroup = createNode("group", null, ROOT_NODE_ID);
@@ -53,7 +56,7 @@ describe("InspectorPanel", () => {
     const nameInput = screen.getByDisplayValue("Panel");
     await user.clear(nameInput);
     await user.type(nameInput, "Panel Copy");
-    await user.tab();
+    fireEvent.blur(nameInput);
 
     await selectCustomOption(user, "Parent Group", "Wrapper");
     await selectCustomOption(user, "Origin X", "Left");
@@ -68,7 +71,7 @@ describe("InspectorPanel", () => {
 
     await user.clear(positionXInput!);
     await user.type(positionXInput!, "3.5");
-    await user.tab();
+    fireEvent.blur(positionXInput!);
     await user.click(editableToggle!);
 
     expect(props.onNodeNameChange).toHaveBeenCalledWith("box-1", "Panel Copy");
@@ -201,6 +204,60 @@ describe("InspectorPanel", () => {
       materialCard.querySelectorAll(".sec__sub"),
     ).filter((el) => el.textContent?.trim() === "Shadows");
     expect(shadowSubHeaders).toHaveLength(1);
+  });
+
+  it("renders material side as a Base select in the inspector", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Side")).toBeTruthy();
+
+    await selectCustomOption(user, "Side", "Double");
+
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith(
+      "box-1",
+      expect.objectContaining({ path: "material.side" }),
+      "double",
+    );
+  });
+
+  it("renders reusable image assets as material texture options", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+    const texture = {
+      ...createTransparentImageAsset(),
+      id: "image-texture-1",
+      name: "Grid Texture",
+    };
+
+    render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        images={[texture]}
+      />,
+    );
+
+    expect(screen.getByLabelText("Texture")).toBeTruthy();
+
+    await selectCustomOption(user, "Texture", "Grid Texture");
+
+    expect(props.onNodePropertyChange).toHaveBeenCalledWith(
+      "box-1",
+      expect.objectContaining({ path: "material.mapImageId" }),
+      "image-texture-1",
+    );
   });
 
   it("buffers swatch color changes until the picker loses focus", () => {
@@ -768,5 +825,66 @@ describe("InspectorPanel", () => {
 
     expect(props.onNodePropertyChange).not.toHaveBeenCalled();
     expect(opacityInput.value).toBe("0.5");
+  });
+
+  it("renders and edits asset material boolean, number, and select definitions", async () => {
+    const user = userEvent.setup();
+    const material: MaterialAsset = {
+      id: "material-1",
+      name: "Studio Plastic",
+      spec: {
+        ...createMaterialSpec("#445566", "standard"),
+        side: "front",
+        wireframe: false,
+        alphaTest: 0.2,
+      },
+    };
+    const onUpdate = vi.fn();
+    const texture = {
+      ...createTransparentImageAsset(),
+      id: "asset-texture",
+      name: "Asset Texture",
+    };
+
+    render(
+      <MaterialAssetEditor
+        material={material}
+        images={[texture]}
+        usageCount={2}
+        onRename={vi.fn()}
+        onUpdate={onUpdate}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await selectCustomOption(user, "Side", "Back");
+    await selectCustomOption(user, "Texture", "Asset Texture");
+    await user.click(screen.getByLabelText("Wireframe"));
+
+    const alphaTest = screen.getByLabelText("Alpha Test") as HTMLInputElement;
+    await user.clear(alphaTest);
+    await user.type(alphaTest, "0.35");
+    await user.tab();
+
+    expect(onUpdate).toHaveBeenCalledWith(
+      "material-1",
+      expect.objectContaining({ path: "material.side" }),
+      "back",
+    );
+    expect(onUpdate).toHaveBeenCalledWith(
+      "material-1",
+      expect.objectContaining({ path: "material.wireframe" }),
+      true,
+    );
+    expect(onUpdate).toHaveBeenCalledWith(
+      "material-1",
+      expect.objectContaining({ path: "material.mapImageId" }),
+      "asset-texture",
+    );
+    expect(onUpdate).toHaveBeenCalledWith(
+      "material-1",
+      expect.objectContaining({ path: "material.alphaTest" }),
+      "0.35",
+    );
   });
 });

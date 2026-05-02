@@ -195,6 +195,27 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: "Exit project" })).toBeNull();
   });
 
+  it("shows material controls only in the Material inspector tab", () => {
+    persistLocalWorkspace("Material Tab");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    const heroRow = within(hierarchyTree).getByText("Hero Panel").closest('[role="treeitem"]') as HTMLElement;
+
+    fireEvent.click(heroRow);
+
+    expect(screen.getByRole("tab", { name: "Properties" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByTitle("Material")).toBeNull();
+    expect(screen.queryByLabelText("Side")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Material" }));
+
+    expect(screen.getByTitle("Material")).toBeTruthy();
+    expect(screen.getByLabelText("Side")).toBeTruthy();
+  });
+
   it("offers playback controls on phone layouts without mounting the editor timeline", () => {
     const blueprint = createDefaultBlueprint();
     blueprint.componentName = "Phone Motion";
@@ -640,9 +661,7 @@ describe("App", () => {
     fireEvent.click(accentRow, { shiftKey: true });
 
     expect(screen.getByText("2 objects")).toBeTruthy();
-    // Inspector now renders all applicable sections as an accordion open by
-    // default, so we no longer need to click a "Material" tab to reveal the
-    // Color field — just confirm the section header is present.
+    fireEvent.click(screen.getByRole("tab", { name: "Material" }));
     expect(screen.getByTitle("Material")).toBeTruthy();
     expect(screen.getByLabelText("Color").getAttribute("placeholder")).toBe("Mixed");
 
@@ -679,9 +698,8 @@ describe("App", () => {
     const toast = await screen.findByRole("status");
     expect(toast.textContent ?? "").toMatch(/applied/);
 
-    // Inspector renders Material accordion open by default — confirm color
-    // reflects Hero Panel's violet without needing a tab click.
     fireEvent.click(accentRow);
+    fireEvent.click(screen.getByRole("tab", { name: "Material" }));
 
     await waitFor(() => {
       const colorInput = screen.getByLabelText("Color") as HTMLInputElement;
@@ -810,6 +828,7 @@ describe("App", () => {
 
     // Accent Plate's material color should now match Hero Panel's violet.
     fireEvent.click(accentRow);
+    fireEvent.click(screen.getByRole("tab", { name: "Material" }));
 
     await waitFor(() => {
       const colorInput = screen.getByLabelText("Color") as HTMLInputElement;

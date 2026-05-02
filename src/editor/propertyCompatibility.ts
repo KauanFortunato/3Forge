@@ -68,6 +68,8 @@ const NODE_TOP_LEVEL_PATHS: ReadonlyArray<string> = ["visible"];
  */
 const MATERIAL_COMMON_PATHS: ReadonlyArray<string> = [
   "material.type",
+  "material.side",
+  "material.mapImageId",
   "material.color",
   "material.opacity",
   "material.transparent",
@@ -75,6 +77,7 @@ const MATERIAL_COMMON_PATHS: ReadonlyArray<string> = [
   "material.alphaTest",
   "material.depthTest",
   "material.depthWrite",
+  "material.toneMapped",
   "material.wireframe",
 ];
 
@@ -84,13 +87,27 @@ const MATERIAL_SHADOW_PATHS: ReadonlyArray<string> = [
 ];
 
 /**
- * PBR-only properties. Only applicable when both source and target material
- * types resolve to `standard`.
+ * Material paths whose availability depends on the selected material type.
  */
-const MATERIAL_PBR_PATHS: ReadonlyArray<string> = [
+const MATERIAL_STANDARD_PATHS: ReadonlyArray<string> = [
   "material.emissive",
+  "material.emissiveIntensity",
   "material.roughness",
   "material.metalness",
+  "material.envMapIntensity",
+];
+
+const MATERIAL_PHYSICAL_PATHS: ReadonlyArray<string> = [
+  "material.ior",
+  "material.transmission",
+  "material.thickness",
+  "material.clearcoat",
+  "material.clearcoatRoughness",
+];
+
+const MATERIAL_TYPE_ADVANCED_PATHS: ReadonlyArray<string> = [
+  "material.flatShading",
+  "material.fog",
 ];
 
 /**
@@ -179,17 +196,56 @@ function isTransformPath(path: string): boolean {
   return path.startsWith("transform.") || path.startsWith("origin.");
 }
 
-function classifyMaterialPath(path: string): "common" | "shadow" | "pbr" | "unknown" {
+function classifyMaterialPath(path: string): "common" | "shadow" | "typed" | "unknown" {
   if (hasPath(MATERIAL_COMMON_PATHS, path)) {
     return "common";
   }
   if (hasPath(MATERIAL_SHADOW_PATHS, path)) {
     return "shadow";
   }
-  if (hasPath(MATERIAL_PBR_PATHS, path)) {
-    return "pbr";
+  if (
+    hasPath(MATERIAL_STANDARD_PATHS, path)
+    || hasPath(MATERIAL_PHYSICAL_PATHS, path)
+    || hasPath(MATERIAL_TYPE_ADVANCED_PATHS, path)
+  ) {
+    return "typed";
   }
   return "unknown";
+}
+
+function materialTypeSupportsPath(materialType: MaterialType, path: string): boolean {
+  if (hasPath(MATERIAL_COMMON_PATHS, path) || hasPath(MATERIAL_SHADOW_PATHS, path)) {
+    return true;
+  }
+  if (hasPath(MATERIAL_PHYSICAL_PATHS, path)) {
+    return materialType === "physical";
+  }
+  if (path === "material.roughness" || path === "material.metalness" || path === "material.envMapIntensity") {
+    return materialType === "standard" || materialType === "physical";
+  }
+  if (path === "material.emissive" || path === "material.emissiveIntensity") {
+    return materialType === "standard"
+      || materialType === "physical"
+      || materialType === "toon"
+      || materialType === "lambert"
+      || materialType === "phong";
+  }
+  if (path === "material.flatShading") {
+    return materialType === "standard"
+      || materialType === "physical"
+      || materialType === "lambert"
+      || materialType === "phong"
+      || materialType === "normal";
+  }
+  if (path === "material.fog") {
+    return materialType === "basic"
+      || materialType === "standard"
+      || materialType === "physical"
+      || materialType === "toon"
+      || materialType === "lambert"
+      || materialType === "phong";
+  }
+  return false;
 }
 
 /**
@@ -238,19 +294,19 @@ export function isPathCompatible(
       return { status: "unsupported", reason: `unknown material path "${sourcePath}"` };
     }
 
-    if (classification === "pbr") {
+    if (classification === "typed") {
       const sourceMaterialType = context.sourceMaterialType ?? "standard";
       const targetMaterialType = context.targetMaterialType ?? "standard";
-      if (sourceMaterialType !== "standard") {
+      if (!materialTypeSupportsPath(sourceMaterialType, sourcePath)) {
         return {
           status: "unsupported",
-          reason: "source material is basic; PBR properties not available",
+          reason: "source material type does not expose this material property",
         };
       }
-      if (targetMaterialType !== "standard") {
+      if (!materialTypeSupportsPath(targetMaterialType, sourcePath)) {
         return {
           status: "unsupported",
-          reason: "target material is basic; PBR properties not applicable",
+          reason: "target material type does not expose this material property",
         };
       }
     }
@@ -330,8 +386,14 @@ function collectSourcePaths(
     paths.push(...MATERIAL_SHADOW_PATHS);
 
     const sourceMaterialType = context.sourceMaterialType ?? "standard";
-    if (sourceMaterialType === "standard") {
-      paths.push(...MATERIAL_PBR_PATHS);
+    for (const path of [
+      ...MATERIAL_STANDARD_PATHS,
+      ...MATERIAL_PHYSICAL_PATHS,
+      ...MATERIAL_TYPE_ADVANCED_PATHS,
+    ]) {
+      if (materialTypeSupportsPath(sourceMaterialType, path)) {
+        paths.push(path);
+      }
     }
 
     paths.push(...GEOMETRY_PATHS[sourceType]);

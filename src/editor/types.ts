@@ -12,6 +12,8 @@ export type MaterialType =
   | "phong"
   | "normal"
   | "depth";
+export type MaterialSide = "front" | "back" | "double";
+export type MaterialDepthPacking = "basic" | "rgba";
 export type NodeOriginHorizontal = "left" | "center" | "right";
 export type NodeOriginVertical = "top" | "center" | "bottom";
 export type NodeOriginDepth = "front" | "center" | "back";
@@ -57,7 +59,10 @@ export interface NodeOriginSpec {
 export interface MaterialSpec {
   type: MaterialType;
   color: string;
+  mapImageId?: string;
+  side: MaterialSide;
   emissive: string;
+  emissiveIntensity: number;
   roughness: number;
   metalness: number;
   opacity: number;
@@ -66,16 +71,42 @@ export interface MaterialSpec {
   alphaTest: number;
   depthTest: boolean;
   depthWrite: boolean;
+  colorWrite: boolean;
+  dithering: boolean;
+  flatShading: boolean;
+  fog: boolean;
+  toneMapped: boolean;
+  premultipliedAlpha: boolean;
+  polygonOffset: boolean;
+  polygonOffsetFactor: number;
+  polygonOffsetUnits: number;
   wireframe: boolean;
+  wireframeLinewidth: number;
   castShadow: boolean;
   receiveShadow: boolean;
+  envMapIntensity: number;
   ior: number;
   transmission: number;
   clearcoat: number;
   clearcoatRoughness: number;
   thickness: number;
+  reflectivity: number;
+  iridescence: number;
+  iridescenceIOR: number;
+  iridescenceThicknessRangeStart: number;
+  iridescenceThicknessRangeEnd: number;
+  sheen: number;
+  sheenRoughness: number;
+  sheenColor: string;
+  specularIntensity: number;
+  specularColor: string;
+  attenuationDistance: number;
+  attenuationColor: string;
+  dispersion: number;
+  anisotropy: number;
   specular: string;
   shininess: number;
+  depthPacking: MaterialDepthPacking;
 }
 
 export interface MaterialAsset {

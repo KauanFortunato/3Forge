@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import ts from "typescript";
-import { Group, Mesh } from "three";
+import { BackSide, Group, Mesh, MeshPhysicalMaterial } from "three";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack, createDefaultAnimation } from "./animation";
 import { generateTypeScriptComponent } from "./exports";
@@ -292,6 +292,75 @@ describe("exported component runtime", () => {
     const noShadowMesh = findMesh(findNode(instance.group, "No Shadow Box"));
     expect(noShadowMesh.castShadow).toBe(false);
     expect(noShadowMesh.receiveShadow).toBe(false);
+
+    instance.dispose();
+  });
+
+  it("applies exported physical material side and scalar options at runtime", async () => {
+    const root = createNode("group", null, ROOT_NODE_ID);
+    root.name = "Component Root";
+
+    const physicalBox = createNode("box", ROOT_NODE_ID, "physical-box");
+    physicalBox.name = "Physical Box";
+    physicalBox.material.type = "physical";
+    physicalBox.material.side = "back";
+    physicalBox.material.dithering = true;
+    physicalBox.material.flatShading = true;
+    physicalBox.material.polygonOffset = true;
+    physicalBox.material.polygonOffsetFactor = 2;
+    physicalBox.material.polygonOffsetUnits = -1;
+    physicalBox.material.emissiveIntensity = 1.7;
+    physicalBox.material.envMapIntensity = 0.8;
+    physicalBox.material.reflectivity = 0.65;
+    physicalBox.material.iridescence = 0.2;
+    physicalBox.material.iridescenceIOR = 1.75;
+    physicalBox.material.iridescenceThicknessRangeStart = 110;
+    physicalBox.material.iridescenceThicknessRangeEnd = 340;
+    physicalBox.material.sheen = 0.4;
+    physicalBox.material.sheenRoughness = 0.6;
+    physicalBox.material.sheenColor = "#224466";
+    physicalBox.material.specularIntensity = 0.55;
+    physicalBox.material.specularColor = "#abcdef";
+    physicalBox.material.attenuationDistance = 18;
+    physicalBox.material.attenuationColor = "#fedcba";
+    physicalBox.material.dispersion = 0.12;
+    physicalBox.material.anisotropy = 0.35;
+
+    const blueprint: ComponentBlueprint = {
+      version: 1,
+      componentName: "Physical Runtime Sample",
+      fonts: [],
+      materials: [],
+      images: [],
+      nodes: [root, physicalBox],
+      animation: createDefaultAnimation(),
+    };
+
+    const ExportedComponent = await loadExportedComponent(blueprint);
+    const instance = new ExportedComponent();
+    await instance.build();
+
+    const mesh = findMesh(findNode(instance.group, "Physical Box"));
+    expect(mesh.material).toBeInstanceOf(MeshPhysicalMaterial);
+    const material = mesh.material as MeshPhysicalMaterial;
+    expect(material.side).toBe(BackSide);
+    expect(material.dithering).toBe(true);
+    expect(material.flatShading).toBe(true);
+    expect(material.polygonOffset).toBe(true);
+    expect(material.polygonOffsetFactor).toBe(2);
+    expect(material.polygonOffsetUnits).toBe(-1);
+    expect(material.emissiveIntensity).toBeCloseTo(1.7, 5);
+    expect(material.envMapIntensity).toBeCloseTo(0.8, 5);
+    expect(material.reflectivity).toBeCloseTo(0.65, 5);
+    expect(material.iridescence).toBeCloseTo(0.2, 5);
+    expect(material.iridescenceIOR).toBeCloseTo(1.75, 5);
+    expect(material.iridescenceThicknessRange).toEqual([110, 340]);
+    expect(material.sheen).toBeCloseTo(0.4, 5);
+    expect(material.sheenRoughness).toBeCloseTo(0.6, 5);
+    expect(material.specularIntensity).toBeCloseTo(0.55, 5);
+    expect(material.attenuationDistance).toBeCloseTo(18, 5);
+    expect(material.dispersion).toBeCloseTo(0.12, 5);
+    expect(material.anisotropy).toBeCloseTo(0.35, 5);
 
     instance.dispose();
   });

@@ -1,6 +1,8 @@
 import {
   AmbientLight,
   AxesHelper,
+  BackSide,
+  BasicDepthPacking,
   Box3,
   BoxGeometry,
   Box3Helper,
@@ -8,6 +10,7 @@ import {
   CylinderGeometry,
   DirectionalLight,
   DoubleSide,
+  FrontSide,
   Group,
   HemisphereLight,
   Mesh,
@@ -21,6 +24,7 @@ import {
   MeshStandardMaterial,
   MeshToonMaterial,
   PCFSoftShadowMap,
+  RGBADepthPacking,
   ShadowMaterial,
   Object3D,
   PerspectiveCamera,
@@ -63,53 +67,109 @@ import type {
 
 type GizmoMode = "translate" | "rotate" | "scale";
 
-type MaterialBaseOptions = ConstructorParameters<typeof MeshBasicMaterial>[0];
+type MaterialBaseOptions = Record<string, unknown>;
 
 function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialSpec): Material {
   switch (spec.type) {
     case "basic":
-      return new MeshBasicMaterial(baseOptions);
+      return new MeshBasicMaterial({
+        ...baseOptions,
+        fog: spec.fog,
+      });
     case "lambert":
       return new MeshLambertMaterial({
         ...baseOptions,
         emissive: spec.emissive,
+        emissiveIntensity: spec.emissiveIntensity,
+        flatShading: spec.flatShading,
+        fog: spec.fog,
       });
     case "phong":
       return new MeshPhongMaterial({
         ...baseOptions,
         emissive: spec.emissive,
+        emissiveIntensity: spec.emissiveIntensity,
         specular: spec.specular,
         shininess: spec.shininess,
+        flatShading: spec.flatShading,
+        fog: spec.fog,
       });
     case "toon":
       return new MeshToonMaterial({
         ...baseOptions,
         emissive: spec.emissive,
+        emissiveIntensity: spec.emissiveIntensity,
+        fog: spec.fog,
       });
     case "physical":
       return new MeshPhysicalMaterial({
         ...baseOptions,
         emissive: spec.emissive,
+        emissiveIntensity: spec.emissiveIntensity,
         roughness: spec.roughness,
         metalness: spec.metalness,
+        envMapIntensity: spec.envMapIntensity,
+        flatShading: spec.flatShading,
+        fog: spec.fog,
         ior: spec.ior,
         transmission: spec.transmission,
         thickness: spec.thickness,
         clearcoat: spec.clearcoat,
         clearcoatRoughness: spec.clearcoatRoughness,
+        reflectivity: spec.reflectivity,
+        iridescence: spec.iridescence,
+        iridescenceIOR: spec.iridescenceIOR,
+        iridescenceThicknessRange: [
+          spec.iridescenceThicknessRangeStart,
+          spec.iridescenceThicknessRangeEnd,
+        ],
+        sheen: spec.sheen,
+        sheenRoughness: spec.sheenRoughness,
+        sheenColor: spec.sheenColor,
+        specularIntensity: spec.specularIntensity,
+        specularColor: spec.specularColor,
+        attenuationDistance: spec.attenuationDistance,
+        attenuationColor: spec.attenuationColor,
+        dispersion: spec.dispersion,
+        anisotropy: spec.anisotropy,
       });
     case "normal":
-      return new MeshNormalMaterial(baseOptions);
+      return new MeshNormalMaterial({
+        ...baseOptions,
+        flatShading: spec.flatShading,
+      });
     case "depth":
-      return new MeshDepthMaterial(baseOptions);
+      return new MeshDepthMaterial({
+        ...baseOptions,
+        depthPacking: resolveDepthPacking(spec.depthPacking),
+      });
     default:
       return new MeshStandardMaterial({
         ...baseOptions,
         emissive: spec.emissive,
+        emissiveIntensity: spec.emissiveIntensity,
         roughness: spec.roughness,
         metalness: spec.metalness,
+        envMapIntensity: spec.envMapIntensity,
+        flatShading: spec.flatShading,
+        fog: spec.fog,
       });
   }
+}
+
+function resolveMaterialSide(side: MaterialSpec["side"]) {
+  switch (side) {
+    case "back":
+      return BackSide;
+    case "double":
+      return DoubleSide;
+    default:
+      return FrontSide;
+  }
+}
+
+function resolveDepthPacking(depthPacking: MaterialSpec["depthPacking"]) {
+  return depthPacking === "rgba" ? RGBADepthPacking : BasicDepthPacking;
 }
 export type ToolMode = "select" | GizmoMode;
 
@@ -893,28 +953,46 @@ export class SceneEditor {
     return buildMaterialFromSpec(this.createBaseMaterialOptions(node), node.material);
   }
 
-  private createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" }>): ConstructorParameters<typeof MeshBasicMaterial>[0] {
+  private createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" }>): MaterialBaseOptions {
+    const materialTexture = this.getMaterialTexture(node.material);
     return {
       color: node.material.color,
+      side: resolveMaterialSide(node.material.side),
       opacity: node.material.opacity,
       transparent: node.material.transparent,
       alphaTest: node.material.alphaTest,
       depthTest: node.material.depthTest,
       depthWrite: node.material.depthWrite,
+      colorWrite: node.material.colorWrite,
+      dithering: node.material.dithering,
+      toneMapped: node.material.toneMapped,
+      premultipliedAlpha: node.material.premultipliedAlpha,
+      polygonOffset: node.material.polygonOffset,
+      polygonOffsetFactor: node.material.polygonOffsetFactor,
+      polygonOffsetUnits: node.material.polygonOffsetUnits,
       wireframe: node.material.wireframe,
-      ...((node.type === "plane" || node.type === "circle" || node.type === "image") ? { side: DoubleSide } : {}),
+      wireframeLinewidth: node.material.wireframeLinewidth,
+      ...(materialTexture ? { map: materialTexture } : {}),
     };
   }
 
   private createImageMesh(node: ImageNode): Mesh {
     const geometry = new PlaneGeometry(node.geometry.width, node.geometry.height);
-    const texture = this.getTexture(node.image.src);
+    const texture = this.getMaterialTexture(node.material) ?? this.getTexture(node.image.src);
     const baseOptions = {
       ...this.createBaseMaterialOptions(node),
       map: texture,
     };
     const material = buildMaterialFromSpec(baseOptions, node.material);
     return new Mesh(geometry, material);
+  }
+
+  private getMaterialTexture(material: MaterialSpec): Texture | null {
+    if (!material.mapImageId) {
+      return null;
+    }
+    const asset = this.store.getImageAsset(material.mapImageId);
+    return asset ? this.getTexture(asset.src) : null;
   }
 
   private resolveFont(fontId: string): ReturnType<typeof parseFontAsset> {

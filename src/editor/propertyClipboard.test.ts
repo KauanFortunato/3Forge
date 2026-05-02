@@ -54,6 +54,7 @@ describe("capturePropertiesFromNode", () => {
     expect(paths).toContain("material.type");
     expect(paths).toContain("material.color");
     expect(paths).toContain("material.opacity");
+    expect(paths).toContain("material.visible");
 
     // Shadow
     expect(paths).toContain("material.castShadow");
@@ -185,6 +186,7 @@ describe("resolveApplicableEntries", () => {
     expect(paths).toContain("material.type");
     expect(paths).toContain("material.color");
     expect(paths).toContain("material.opacity");
+    expect(paths).toContain("material.visible");
 
     // Shadow paths are a different scope — must NOT appear under scope "material".
     expect(paths).not.toContain("material.castShadow");

@@ -105,6 +105,14 @@ describe("isPathCompatible — material common & shadow", () => {
           status: "applicable",
           targetPath: "material.opacity",
         });
+        expect(isPathCompatible(source, target, "material.visible")).toEqual({
+          status: "applicable",
+          targetPath: "material.visible",
+        });
+        expect(isPathCompatible(source, target, "material.mapImageId")).toEqual({
+          status: "applicable",
+          targetPath: "material.mapImageId",
+        });
       }
     }
   });
@@ -128,7 +136,7 @@ describe("isPathCompatible — material common & shadow", () => {
   });
 });
 
-describe("isPathCompatible — PBR (standard-only) properties", () => {
+describe("isPathCompatible — material type-specific properties", () => {
   it("applies `material.emissive` from standard→standard", () => {
     const result = isPathCompatible("box", "sphere", "material.emissive", {
       sourceMaterialType: "standard",
@@ -144,7 +152,7 @@ describe("isPathCompatible — PBR (standard-only) properties", () => {
     });
     expect(result).toEqual({
       status: "unsupported",
-      reason: "target material is basic; PBR properties not applicable",
+      reason: "target material type does not expose this material property",
     });
   });
 
@@ -164,6 +172,17 @@ describe("isPathCompatible — PBR (standard-only) properties", () => {
       });
       expect(result.status).toBe("unsupported");
     }
+  });
+
+  it("applies physical essentials only between physical materials", () => {
+    expect(isPathCompatible("box", "sphere", "material.transmission", {
+      sourceMaterialType: "physical",
+      targetMaterialType: "physical",
+    })).toEqual({ status: "applicable", targetPath: "material.transmission" });
+    expect(isPathCompatible("box", "sphere", "material.transmission", {
+      sourceMaterialType: "physical",
+      targetMaterialType: "standard",
+    }).status).toBe("unsupported");
   });
 });
 
@@ -280,6 +299,7 @@ describe("getCompatiblePaths", () => {
     // material common
     expect(paths).toContain("material.color");
     expect(paths).toContain("material.opacity");
+    expect(paths).toContain("material.visible");
     expect(paths).toContain("material.type");
     // material shadow
     expect(paths).toContain("material.castShadow");
@@ -288,6 +308,8 @@ describe("getCompatiblePaths", () => {
     expect(paths).toContain("material.emissive");
     expect(paths).toContain("material.roughness");
     expect(paths).toContain("material.metalness");
+    expect(paths).toContain("material.fog");
+    expect(paths).not.toContain("material.transmission");
     // geometry
     expect(paths).toContain("geometry.width");
     expect(paths).toContain("geometry.height");
@@ -320,6 +342,7 @@ describe("getCompatiblePaths", () => {
     expect(paths).not.toContain("material.metalness");
     // Common material paths still present.
     expect(paths).toContain("material.color");
+    expect(paths).toContain("material.visible");
   });
 
   it("marks plane→image geometry matches as alias entries", () => {

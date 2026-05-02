@@ -394,6 +394,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           hasGroupSelection={hasGroupSelection}
           hasMixedMaterialTypes={hasMixedMaterialTypes}
           materials={materials}
+          images={images}
           onUnbindMaterial={onUnbindMaterial}
           onAssignMaterial={onAssignMaterial}
         />
@@ -560,6 +561,7 @@ interface MaterialDefinitionSectionProps {
   hasGroupSelection?: boolean;
   hasMixedMaterialTypes?: boolean;
   materials?: MaterialAsset[];
+  images?: Array<ImageAsset & { id: string }>;
   onUnbindMaterial?: (nodeIds: string[]) => void;
   onAssignMaterial?: (nodeIds: string[], materialId: string) => void;
 }
@@ -578,6 +580,7 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
     hasGroupSelection = false,
     hasMixedMaterialTypes = false,
     materials,
+    images = [],
     onUnbindMaterial,
     onAssignMaterial,
   } = props;
@@ -605,19 +608,31 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
     ? materials?.find((entry) => entry.id === bindingState.materialId) ?? null
     : null;
 
-  const basePaths = ["material.type", "material.color", "material.opacity", "material.transparent"];
-  const pbrPaths = ["material.emissive", "material.roughness", "material.metalness"];
+  const textureOptions = useMemo(
+    () => [
+      { label: "None", value: "" },
+      ...images.map((image) => ({ label: image.name, value: image.id })),
+    ],
+    [images],
+  );
+  const resolvedDefinitions = useMemo(
+    () => definitions.map((definition) => definition.path === "material.mapImageId"
+      ? { ...definition, options: textureOptions }
+      : definition),
+    [definitions, textureOptions],
+  );
+
+  const basePaths = ["material.type", "material.side", "material.mapImageId", "material.color", "material.opacity", "material.transparent"];
+  const pbrPaths = ["material.emissive", "material.emissiveIntensity", "material.roughness", "material.metalness", "material.envMapIntensity"];
+  const physicalPaths = ["material.transmission", "material.thickness", "material.clearcoat", "material.clearcoatRoughness", "material.ior"];
+  const advancedPaths = ["material.alphaTest", "material.depthTest", "material.depthWrite", "material.wireframe", "material.flatShading", "material.fog", "material.toneMapped"];
   const shadowPaths = ["material.castShadow", "material.receiveShadow"];
 
-  const baseProps = definitions.filter((definition) => basePaths.includes(definition.path));
-  const pbrProps = definitions.filter((definition) => pbrPaths.includes(definition.path));
-  const shadowProps = definitions.filter((definition) => shadowPaths.includes(definition.path));
-  const advancedProps = definitions.filter(
-    (definition) =>
-      !basePaths.includes(definition.path)
-      && !pbrPaths.includes(definition.path)
-      && !shadowPaths.includes(definition.path),
-  );
+  const baseProps = resolvedDefinitions.filter((definition) => basePaths.includes(definition.path));
+  const pbrProps = resolvedDefinitions.filter((definition) => pbrPaths.includes(definition.path));
+  const physicalProps = resolvedDefinitions.filter((definition) => physicalPaths.includes(definition.path));
+  const shadowProps = resolvedDefinitions.filter((definition) => shadowPaths.includes(definition.path));
+  const advancedProps = resolvedDefinitions.filter((definition) => advancedPaths.includes(definition.path));
 
   return (
     <Sec
@@ -691,6 +706,24 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
         <>
           <div className="sec__sub">Standard PBR</div>
           {pbrProps.map((definition) => (
+            <PropertyRow
+              key={definition.path}
+              nodes={nodes}
+              definition={definition}
+              mixedPaths={mixedPaths}
+              onNodePropertyChange={onNodePropertyChange}
+              onNodesPropertyChange={onNodesPropertyChange}
+              onToggleEditable={onToggleEditable}
+              allowEditableToggle={allowEditableToggle}
+            />
+          ))}
+        </>
+      ) : null}
+
+      {physicalProps.length > 0 ? (
+        <>
+          <div className="sec__sub">Physical</div>
+          {physicalProps.map((definition) => (
             <PropertyRow
               key={definition.path}
               nodes={nodes}

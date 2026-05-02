@@ -96,7 +96,7 @@ import { runTask } from "./hooks/useAsyncTask";
 import { useTheme } from "./hooks/useTheme";
 import { ViewportHost } from "./components/ViewportHost";
 
-const APP_VERSION = "v0.1.0";
+const APP_VERSION = "v2.2";
 
 interface NodeClipboard {
   sourceNodeIds: string[];
@@ -2422,7 +2422,7 @@ export function App() {
                       ? storeView.materials.length
                       : runtimePanelTab === "images"
                         ? imageAssets.length
-                      : storeView.animation.clips.length}
+                        : storeView.animation.clips.length}
                   </span>
                   <div className="panel__hd-spacer" />
                 </div>
@@ -2633,6 +2633,7 @@ export function App() {
                     <div className="panel__bd panel__bd--fields">
                       <MaterialAssetEditor
                         material={editingMaterial}
+                        images={imageAssets}
                         usageCount={totalMaterialUsage[editingMaterial.id] ?? 0}
                         onRename={(materialId, name) => store.renameMaterial(materialId, name)}
                         onUpdate={(materialId, definition, value) =>
@@ -2672,7 +2673,7 @@ export function App() {
                       <InspectorPanel
                         node={inspectorNode}
                         nodes={selectedNodes}
-                        mode={rightPanelTab === "material" ? "material" : "all"}
+                        mode={rightPanelTab === "material" ? "material" : "properties"}
                         emptyMessage={selectedNodeCount > 1 ? "No shared inspector controls are available for this selection." : undefined}
                         fonts={storeView.fonts}
                         materials={storeView.materials}

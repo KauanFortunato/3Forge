@@ -56,8 +56,8 @@ describe("exports", () => {
     };
     textNode!.fontId = createDefaultFontAsset().id;
     imageNode!.editable = {
-      "material.visible": {
-        path: "material.visible",
+      visible: {
+        path: "visible",
         key: "heroImageVisible",
         label: "Hero Image Visible",
         type: "boolean",
@@ -304,18 +304,97 @@ describe("exports", () => {
     expect(box).toBeTruthy();
     if (box) {
       box.material.type = "physical";
+      box.material.side = "back";
       box.material.transmission = 0.6;
       box.material.ior = 1.45;
       box.material.clearcoat = 0.4;
+      box.material.reflectivity = 0.7;
+      box.material.iridescence = 0.25;
+      box.material.iridescenceIOR = 1.8;
+      box.material.iridescenceThicknessRangeStart = 120;
+      box.material.iridescenceThicknessRangeEnd = 360;
+      box.material.sheen = 0.35;
+      box.material.sheenRoughness = 0.45;
+      box.material.sheenColor = "#223344";
+      box.material.specularIntensity = 0.55;
+      box.material.specularColor = "#abcdef";
+      box.material.attenuationDistance = 12;
+      box.material.attenuationColor = "#fedcba";
+      box.material.dispersion = 0.1;
+      box.material.anisotropy = 0.3;
     }
 
     const output = generateTypeScriptComponent(blueprint);
 
-    expect(output).toMatch(/^import \{[^}]*MeshPhysicalMaterial[^}]*\} from "three";/m);
+    expect(output).toMatch(/^import \{[^}]*BackSide[^}]*MeshPhysicalMaterial[^}]*type Side[^}]*\} from "three";/m);
+    expect(output).toContain("function resolveMaterialSide(side: string): Side");
     expect(output).toContain("new MeshPhysicalMaterial");
+    expect(output).toContain('side: resolveMaterialSide("back")');
     expect(output).toContain("transmission: 0.6");
     expect(output).toContain("ior: 1.45");
     expect(output).toContain("clearcoat: 0.4");
+    expect(output).toContain("reflectivity: 0.7");
+    expect(output).toContain("iridescence: 0.25");
+    expect(output).toContain("iridescenceIOR: 1.8");
+    expect(output).toContain("iridescenceThicknessRange: [120, 360]");
+    expect(output).toContain("sheen: 0.35");
+    expect(output).toContain("sheenRoughness: 0.45");
+    expect(output).toContain('sheenColor: "#223344"');
+    expect(output).toContain("specularIntensity: 0.55");
+    expect(output).toContain('specularColor: "#abcdef"');
+    expect(output).toContain("attenuationDistance: 12");
+    expect(output).toContain('attenuationColor: "#fedcba"');
+    expect(output).toContain("dispersion: 0.1");
+    expect(output).toContain("anisotropy: 0.3");
+  });
+
+  it("emits editable material.side bindings through a side resolver", () => {
+    const blueprint = createBlueprintFixture();
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    expect(box).toBeTruthy();
+    if (!box) {
+      throw new Error("Expected box node.");
+    }
+
+    box.material.side = "double";
+    box.editable["material.side"] = {
+      path: "material.side",
+      key: "panelSide",
+      label: "Panel Side",
+      type: "string",
+    };
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toContain("panelSide?: string;");
+    expect(output).toContain('panelSide: "double",');
+    expect(output).toContain("side: resolveMaterialSide(this.options.panelSide)");
+    expect(output).toMatch(/^import \{[^}]*BackSide[^}]*DoubleSide[^}]*FrontSide[^}]*type Side[^}]*\} from "three";/m);
+  });
+
+  it("emits material texture maps from reusable image assets", () => {
+    const blueprint = createBlueprintFixture();
+    blueprint.images.push({
+      id: "image-grid",
+      name: "Grid Texture",
+      mimeType: "image/png",
+      src: "data:image/png;base64,texture",
+      width: 16,
+      height: 16,
+    });
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    expect(box).toBeTruthy();
+    if (!box) {
+      throw new Error("Expected mesh node.");
+    }
+    box.material.mapImageId = "image-grid";
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toMatch(/^import \{[^}]*SRGBColorSpace[^}]*TextureLoader[^}]*\} from "three";/m);
+    expect(output).toContain('const gridTextureImageData = "data:image/png;base64,texture" as const;');
+    expect(output).toContain("textureLoader.loadAsync(gridTextureImageData)");
+    expect(output).toContain("map: gridTextureTexture");
   });
 
   it("emits MeshToonMaterial with the emissive option when a node uses type=toon", () => {
@@ -378,10 +457,13 @@ describe("exports", () => {
     const box = blueprint.nodes.find((node) => node.type === "box");
     if (box) {
       box.material.type = "depth";
+      box.material.depthPacking = "rgba";
     }
     const output = generateTypeScriptComponent(blueprint);
-    expect(output).toMatch(/^import \{[^}]*MeshDepthMaterial[^}]*\} from "three";/m);
+    expect(output).toMatch(/^import \{[^}]*BasicDepthPacking[^}]*MeshDepthMaterial[^}]*RGBADepthPacking[^}]*\} from "three";/m);
     expect(output).toContain("new MeshDepthMaterial");
+    expect(output).toContain("function resolveDepthPacking(depthPacking: string)");
+    expect(output).toContain('depthPacking: resolveDepthPacking("rgba")');
   });
 });
 

@@ -221,6 +221,13 @@ function createMaterial(color = "#5ad3ff"): MaterialSpec {
   return createMaterialSpec(color);
 }
 
+function createDoubleSidedMaterial(color = "#5ad3ff", type: MaterialType = "standard"): MaterialSpec {
+  return {
+    ...createMaterialSpec(color, type),
+    side: "double",
+  };
+}
+
 function generateId(prefix = "node"): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -258,7 +265,7 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
         ...base,
         type: "circle",
         geometry: { radius: 1, segments: 32, thetaStarts: 6.4, thetaLenght: 1 },
-        material: createMaterial("#ff8dcc"),
+        material: createDoubleSidedMaterial("#ff8dcc"),
       } as EditorNodeOfType<T>;
     case "sphere":
       return {
@@ -279,7 +286,7 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
         ...base,
         type: "plane",
         geometry: { width: 1.8, height: 1.2 },
-        material: createMaterial("#f7c84b"),
+        material: createDoubleSidedMaterial("#f7c84b"),
       } as EditorNodeOfType<T>;
     case "image":
       return {
@@ -287,7 +294,7 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
         type: "image",
         geometry: { width: 1.6, height: 1.6 },
         image: createTransparentImageAsset(),
-        material: createMaterialSpec("#ffffff", "basic"),
+        material: createDoubleSidedMaterial("#ffffff", "basic"),
       } as EditorNodeOfType<T>;
     case "text":
       return {
@@ -843,18 +850,28 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
       }
     }
 
-    if (node.type !== "group") {
-      const candidate = (node as { materialId?: string }).materialId;
-      if (candidate && availableMaterialIds.has(candidate)) {
-        const asset = importedMaterials.find((entry) => entry.id === candidate);
-        if (asset) {
-          node.material = cloneMaterialSpec(asset.spec);
+      if (node.type !== "group") {
+        const candidate = (node as { materialId?: string }).materialId;
+        if (candidate && availableMaterialIds.has(candidate)) {
+          const asset = importedMaterials.find((entry) => entry.id === candidate);
+          if (asset) {
+            node.material = cloneMaterialSpec(asset.spec);
+          }
+        } else if (candidate) {
+          delete (node as { materialId?: string }).materialId;
         }
-      } else if (candidate) {
-        delete (node as { materialId?: string }).materialId;
+
+        if (node.material.mapImageId && !availableImages.has(node.material.mapImageId)) {
+          delete node.material.mapImageId;
+        }
       }
     }
-  }
+
+    for (const material of importedMaterials) {
+      if (material.spec.mapImageId && !availableImages.has(material.spec.mapImageId)) {
+        delete material.spec.mapImageId;
+      }
+    }
 
   const animation = normalizeAnimation(source.animation, new Set(importedNodes.map((node) => node.id)));
 
@@ -2418,8 +2435,8 @@ export class EditorStore extends EventTarget {
       }
 
       // Determine the target's projected material type post-apply so that
-      // PBR entries (which depend on material.type) are not rejected at
-      // plan time for a target that will be promoted by this same apply.
+      // material-type-dependent entries are not rejected at plan time for a
+      // target that will be promoted by this same apply.
       const materialTypeEntry = resolved.find((item) => item.targetPath === "material.type");
       const projectedMaterialType = materialTypeEntry
         ? projectTargetMaterialType(target, materialTypeEntry.entry.value)
@@ -2433,15 +2450,15 @@ export class EditorStore extends EventTarget {
       for (const item of resolved) {
         const definition = definitions.find((def) => def.path === item.targetPath);
         if (!definition) {
-          // Target does not expose this path under its CURRENT state. If it
-          // is a PBR path and the projected material type after applying
-          // `material.type` will be `standard`, defer definition lookup to
-          // write time (by then material.type has already landed). Otherwise
-          // it is a genuine incompatibility.
+          // Target does not expose this path under its CURRENT state. If the
+          // projected material type after applying `material.type` exposes it,
+          // defer definition lookup to write time (by then material.type has
+          // already landed). Otherwise it is a genuine incompatibility.
           if (
-            MATERIAL_PBR_DEPENDENT_PATHS.has(item.targetPath) &&
-            projectedMaterialType === "standard" &&
-            target.type !== "group"
+            MATERIAL_TYPE_DEPENDENT_PATHS.has(item.targetPath)
+            && projectedMaterialType
+            && target.type !== "group"
+            && getMaterialPropertyDefinitions(projectedMaterialType).some((def) => def.path === item.targetPath)
           ) {
             writes.push({
               node: target,
@@ -2470,8 +2487,8 @@ export class EditorStore extends EventTarget {
       planByTarget.set(target.id, writes);
     }
 
-    // Material type changes must be applied first so subsequent PBR writes
-    // see the post-change definitions.
+    // Material type changes must be applied first so subsequent material
+    // writes see the post-change definitions.
     const orderedPlans: PlannedWrite[] = [];
     for (const target of targets) {
       const writes = planByTarget.get(target.id) ?? [];
@@ -2763,6 +2780,16 @@ export class EditorStore extends EventTarget {
     this._blueprint.images.splice(index, 1);
     for (const node of this.getNodesUsingImageAsset(imageId)) {
       delete node.imageId;
+    }
+    for (const material of this._blueprint.materials) {
+      if (material.spec.mapImageId === imageId) {
+        delete material.spec.mapImageId;
+      }
+    }
+    for (const node of this._blueprint.nodes) {
+      if (node.type !== "group" && node.material.mapImageId === imageId) {
+        delete node.material.mapImageId;
+      }
     }
     this.notify({ reason: "image", source });
     return true;
@@ -3246,15 +3273,24 @@ function isVec3Equal(
 }
 
 /**
- * PBR paths whose applicability depends on the resolved material type of
- * the target. When a `material.type` entry is in the plan for a target,
- * these paths must be re-evaluated against the projected post-apply type
- * rather than the target's current type (see `applyPropertiesToSelection`).
+ * Material paths whose applicability depends on the resolved material type.
+ * When a `material.type` entry is in the plan for a target, these paths must
+ * be re-evaluated against the projected post-apply type rather than the
+ * target's current type (see `applyPropertiesToSelection`).
  */
-const MATERIAL_PBR_DEPENDENT_PATHS: ReadonlySet<string> = new Set<string>([
+const MATERIAL_TYPE_DEPENDENT_PATHS: ReadonlySet<string> = new Set<string>([
   "material.emissive",
+  "material.emissiveIntensity",
   "material.roughness",
   "material.metalness",
+  "material.envMapIntensity",
+  "material.ior",
+  "material.transmission",
+  "material.thickness",
+  "material.clearcoat",
+  "material.clearcoatRoughness",
+  "material.flatShading",
+  "material.fog",
 ]);
 
 /**

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { getMaterialPropertyDefinitions } from "../../materials";
-import type { MaterialAsset, MaterialSpec, NodePropertyDefinition } from "../../types";
+import type { ImageAsset, MaterialAsset, MaterialSpec, NodePropertyDefinition } from "../../types";
 import { BufferedInput } from "./BufferedInput";
 import { CustomSelect } from "./CustomSelect";
 import { NumberDragInput } from "./NumberDragInput";
@@ -9,6 +9,7 @@ import { MaterialIcon, XIcon } from "./icons";
 
 interface MaterialAssetEditorProps {
   material: MaterialAsset;
+  images?: Array<ImageAsset & { id: string }>;
   usageCount: number;
   onRename: (materialId: string, name: string) => void;
   onUpdate: (
@@ -19,20 +20,31 @@ interface MaterialAssetEditorProps {
   onClose: () => void;
 }
 
-const ASSIGNABLE_PATHS: ReadonlyArray<string> = [
-  "material.type",
-  "material.color",
-  "material.opacity",
-  "material.roughness",
-  "material.metalness",
-  "material.emissive",
-];
+const SHADOW_PATHS = new Set(["material.castShadow", "material.receiveShadow"]);
+const BASE_PATHS = ["material.type", "material.side", "material.mapImageId", "material.color", "material.opacity", "material.transparent"];
+const PBR_PATHS = ["material.emissive", "material.emissiveIntensity", "material.roughness", "material.metalness", "material.envMapIntensity"];
+const PHYSICAL_PATHS = ["material.transmission", "material.thickness", "material.clearcoat", "material.clearcoatRoughness", "material.ior"];
+const ADVANCED_PATHS = ["material.alphaTest", "material.depthTest", "material.depthWrite", "material.wireframe", "material.flatShading", "material.fog", "material.toneMapped"];
 
-export function MaterialAssetEditor({ material, usageCount, onRename, onUpdate, onClose }: MaterialAssetEditorProps) {
+export function MaterialAssetEditor({ material, images = [], usageCount, onRename, onUpdate, onClose }: MaterialAssetEditorProps) {
   const definitions = useMemo(() => {
     const all = getMaterialPropertyDefinitions(material.spec.type);
-    return all.filter((definition) => ASSIGNABLE_PATHS.includes(definition.path));
+    return all.filter((definition) => !SHADOW_PATHS.has(definition.path));
   }, [material.spec.type]);
+  const textureOptions = useMemo(
+    () => [
+      { label: "None", value: "" },
+      ...images.map((image) => ({ label: image.name, value: image.id })),
+    ],
+    [images],
+  );
+  const resolvedDefinitions = useMemo(
+    () => definitions.map((definition) => definition.path === "material.mapImageId"
+      ? { ...definition, options: textureOptions }
+      : definition),
+    [definitions, textureOptions],
+  );
+  const groupedDefinitions = useMemo(() => groupMaterialDefinitions(resolvedDefinitions), [resolvedDefinitions]);
 
   return (
     <div className="material-asset-editor">
@@ -77,16 +89,84 @@ export function MaterialAssetEditor({ material, usageCount, onRename, onUpdate, 
           <span aria-hidden="true" />
         </div>
 
-        {definitions.map((definition) => (
-          <MaterialPropertyRow
-            key={definition.path}
-            definition={definition}
+        <MaterialPropertyGroup
+          title="Base"
+          definitions={groupedDefinitions.base}
+          spec={material.spec}
+          onCommit={(definition, value) => onUpdate(material.id, definition, value)}
+        />
+
+        {groupedDefinitions.pbr.length > 0 ? (
+          <MaterialPropertyGroup
+            title="Standard PBR"
+            definitions={groupedDefinitions.pbr}
             spec={material.spec}
-            onCommit={(value) => onUpdate(material.id, definition, value)}
+            onCommit={(definition, value) => onUpdate(material.id, definition, value)}
           />
-        ))}
+        ) : null}
+
+        {groupedDefinitions.physical.length > 0 ? (
+          <MaterialPropertyGroup
+            title="Physical"
+            definitions={groupedDefinitions.physical}
+            spec={material.spec}
+            onCommit={(definition, value) => onUpdate(material.id, definition, value)}
+          />
+        ) : null}
+
+        {groupedDefinitions.advanced.length > 0 ? (
+          <MaterialPropertyGroup
+            title="Advanced"
+            definitions={groupedDefinitions.advanced}
+            spec={material.spec}
+            onCommit={(definition, value) => onUpdate(material.id, definition, value)}
+          />
+        ) : null}
       </div>
     </div>
+  );
+}
+
+interface GroupedMaterialDefinitions {
+  base: NodePropertyDefinition[];
+  pbr: NodePropertyDefinition[];
+  physical: NodePropertyDefinition[];
+  advanced: NodePropertyDefinition[];
+}
+
+function groupMaterialDefinitions(definitions: NodePropertyDefinition[]): GroupedMaterialDefinitions {
+  return {
+    base: definitions.filter((definition) => BASE_PATHS.includes(definition.path)),
+    pbr: definitions.filter((definition) => PBR_PATHS.includes(definition.path)),
+    physical: definitions.filter((definition) => PHYSICAL_PATHS.includes(definition.path)),
+    advanced: definitions.filter((definition) => ADVANCED_PATHS.includes(definition.path)),
+  };
+}
+
+interface MaterialPropertyGroupProps {
+  title: string;
+  definitions: NodePropertyDefinition[];
+  spec: MaterialSpec;
+  onCommit: (definition: NodePropertyDefinition, value: string | number | boolean) => void;
+}
+
+function MaterialPropertyGroup({ title, definitions, spec, onCommit }: MaterialPropertyGroupProps) {
+  if (definitions.length === 0) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="sec__sub">{title}</div>
+      {definitions.map((definition) => (
+        <MaterialPropertyRow
+          key={definition.path}
+          definition={definition}
+          spec={spec}
+          onCommit={(value) => onCommit(definition, value)}
+        />
+      ))}
+    </>
   );
 }
 
@@ -99,6 +179,25 @@ interface MaterialPropertyRowProps {
 function MaterialPropertyRow({ definition, spec, onCommit }: MaterialPropertyRowProps) {
   const subPath = definition.path.slice("material.".length);
   const rawValue = (spec as unknown as Record<string, unknown>)[subPath];
+
+  if (definition.input === "checkbox") {
+    const checked = Boolean(rawValue);
+    return (
+      <div className="row">
+        <span className="row__lbl">{definition.label}</span>
+        <label className={`tog${checked ? " is-on" : ""}`} style={{ display: "inline-block" }}>
+          <input
+            type="checkbox"
+            aria-label={definition.label}
+            checked={checked}
+            onChange={(event) => onCommit(event.target.checked)}
+            style={{ position: "absolute", width: "100%", height: "100%", opacity: 0, margin: 0, top: 0, left: 0, cursor: "pointer" }}
+          />
+        </label>
+        <span aria-hidden="true" />
+      </div>
+    );
+  }
 
   if (definition.input === "select") {
     const stringValue = String(rawValue ?? definition.options?.[0]?.value ?? "");
@@ -127,7 +226,7 @@ function MaterialPropertyRow({ definition, spec, onCommit }: MaterialPropertyRow
     );
   }
 
-  if (definition.input === "number") {
+  if (definition.input === "number" || definition.input === "degrees") {
     const numericValue = typeof rawValue === "number" ? rawValue : 0;
     return (
       <div className="row">

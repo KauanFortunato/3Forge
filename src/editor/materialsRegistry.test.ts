@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createMaterialSpec } from "./materials";
 import { EditorStore, createDefaultBlueprint, createNode, getPropertyDefinitions } from "./state";
 import type { BoxNode, ComponentBlueprint } from "./types";
 
@@ -103,27 +104,10 @@ describe("materials registry", () => {
         id: "mat-1",
         name: "Imported",
         spec: {
-          type: "standard",
+          ...createMaterialSpec("#abcdef", "standard"),
           color: "#abcdef",
-          emissive: "#000000",
           roughness: 0.5,
           metalness: 0.2,
-          opacity: 1,
-          transparent: true,
-          visible: true,
-          alphaTest: 0,
-          depthTest: true,
-          depthWrite: true,
-          wireframe: false,
-          castShadow: true,
-          receiveShadow: true,
-          ior: 1.5,
-          transmission: 0,
-          clearcoat: 0,
-          clearcoatRoughness: 0.1,
-          thickness: 0,
-          specular: "#111111",
-          shininess: 30,
         },
       },
     ];

@@ -15,7 +15,8 @@ interface CollectedFont {
 }
 
 interface CollectedImage {
-  node: ImageNode;
+  key: string;
+  image: ImageAsset;
   dataVariableName: string;
   textureVariableName: string;
 }
@@ -78,9 +79,13 @@ export function generateTypeScriptComponent(
   const variableNames = createVariableNames(nodes);
   const groupContentVariableNames = createGroupContentVariableNames(nodes, variableNames);
   const { bindings, fonts, images } = collectExportCollections(blueprint, nodes);
+  const materialNodes = nodes.filter((node): node is Exclude<EditorNode, { type: "group" }> => node.type !== "group");
+  const usesDepthPackingHelper = materialNodes.some((node) =>
+    node.material.type === "depth" || Boolean(node.editable["material.type"]) || Boolean(node.editable["material.depthPacking"]),
+  );
   const importNames = collectImports(nodes, bindings);
   const fontVariables = new Map(fonts.map((font) => [font.font.id, font.fontVariableName]));
-  const imageVariables = new Map(images.map((image) => [image.node.id, image.textureVariableName]));
+  const imageVariables = new Map(images.map((image) => [image.key, image.textureVariableName]));
   const fontAssetPathsById = options.fontAssetPathsById ?? {};
   const imageAssetPathsByNodeId = options.imageAssetPathsByNodeId ?? {};
   const imagesById = new Map((blueprint.images ?? []).map((image) => [image.id, image] as const));
@@ -135,6 +140,27 @@ export function generateTypeScriptComponent(
     lines.push("");
   }
 
+  if (materialNodes.length > 0) {
+    lines.push(`function resolveMaterialSide(side: string): Side {`);
+    lines.push(`  switch (side) {`);
+    lines.push(`    case "back":`);
+    lines.push(`      return BackSide;`);
+    lines.push(`    case "double":`);
+    lines.push(`      return DoubleSide;`);
+    lines.push(`    default:`);
+    lines.push(`      return FrontSide;`);
+    lines.push(`  }`);
+    lines.push(`}`);
+    lines.push("");
+  }
+
+  if (usesDepthPackingHelper) {
+    lines.push(`function resolveDepthPacking(depthPacking: string): typeof BasicDepthPacking | typeof RGBADepthPacking {`);
+    lines.push(`  return depthPacking === "rgba" ? RGBADepthPacking : BasicDepthPacking;`);
+    lines.push(`}`);
+    lines.push("");
+  }
+
   if (inlineFonts.length > 0) {
     for (const font of inlineFonts) {
       lines.push(`const ${font.dataVariableName} = ${getFontData(font.font)} as const;`);
@@ -149,7 +175,9 @@ export function generateTypeScriptComponent(
 
   if (images.length > 0) {
     for (const image of images) {
-      const imageSource = imageAssetPathsByNodeId[image.node.id] ?? resolveImageAssetForNode(image.node, imagesById).src;
+      const imageSource = image.key.startsWith("node:")
+        ? imageAssetPathsByNodeId[image.key.slice("node:".length)] ?? image.image.src
+        : image.image.src;
       lines.push(`const ${image.dataVariableName} = ${JSON.stringify(imageSource)} as const;`);
     }
     lines.push("");
@@ -320,8 +348,30 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNo
   const collectedFontIds = new Set<string>();
   const fontUsedNames = new Set<string>();
   const imageUsedNames = new Set<string>();
+  const collectedImageKeys = new Set<string>();
   const fonts: CollectedFont[] = [];
   const images: CollectedImage[] = [];
+
+  const collectImage = (key: string, image: ImageAsset, baseName: string) => {
+    if (collectedImageKeys.has(key)) {
+      return;
+    }
+    const base = toCamelCase(baseName || image.name) || "image";
+    let dataVariableName = `${base}ImageData`;
+    let textureVariableName = `${base}Texture`;
+    let suffix = 2;
+
+    while (imageUsedNames.has(dataVariableName) || imageUsedNames.has(textureVariableName)) {
+      dataVariableName = `${base}ImageData${suffix}`;
+      textureVariableName = `${base}Texture${suffix}`;
+      suffix += 1;
+    }
+
+    imageUsedNames.add(dataVariableName);
+    imageUsedNames.add(textureVariableName);
+    collectedImageKeys.add(key);
+    images.push({ key, image, dataVariableName, textureVariableName });
+  };
 
   for (const node of nodes) {
     const validPaths = new Set(getPropertyDefinitions(node).map((definition) => definition.path));
@@ -356,20 +406,14 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNo
 
     if (node.type === "image") {
       const image = resolveImageAssetForNode(node, imagesById);
-      const base = toCamelCase(node.name || image.name) || "image";
-      let dataVariableName = `${base}ImageData`;
-      let textureVariableName = `${base}Texture`;
-      let suffix = 2;
+      collectImage(`node:${node.id}`, image, node.name || image.name);
+    }
 
-      while (imageUsedNames.has(dataVariableName) || imageUsedNames.has(textureVariableName)) {
-        dataVariableName = `${base}ImageData${suffix}`;
-        textureVariableName = `${base}Texture${suffix}`;
-        suffix += 1;
+    if (node.type !== "group" && node.material.mapImageId) {
+      const image = imagesById.get(node.material.mapImageId);
+      if (image) {
+        collectImage(`material:${node.material.mapImageId}`, image, image.name);
       }
-
-      imageUsedNames.add(dataVariableName);
-      imageUsedNames.add(textureVariableName);
-      images.push({ node, dataVariableName, textureVariableName });
     }
   }
 
@@ -425,12 +469,22 @@ function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<
       imports.add(cls);
     }
   }
-  if (types.has("image")) {
+  if (types.has("image") || materialNodes.some((node) => Boolean(node.material.mapImageId))) {
     imports.add("TextureLoader");
     imports.add("SRGBColorSpace");
   }
-  if (types.has("plane") || types.has("image")) {
+  if (hasRenderableNodes) {
+    imports.add("BackSide");
     imports.add("DoubleSide");
+    imports.add("FrontSide");
+    imports.add("type Side");
+  }
+  if (
+    hasRuntimeMaterialType ||
+    materialNodes.some((node) => node.material.type === "depth" || Boolean(node.editable["material.depthPacking"]))
+  ) {
+    imports.add("BasicDepthPacking");
+    imports.add("RGBADepthPacking");
   }
   if (bindings.some(({ binding }) => binding.type === "color")) {
     imports.add("type ColorRepresentation");
@@ -579,7 +633,9 @@ function emitCreationLines(
       }
     }
 
-    for (const line of emitMaterialCreationLines(node, materialVariable, bindingAccessor, imageVariables.get(node.id))) {
+    const nodeTextureVariable = imageVariables.get(`node:${node.id}`);
+    const materialTextureVariable = node.material.mapImageId ? imageVariables.get(`material:${node.material.mapImageId}`) : undefined;
+    for (const line of emitMaterialCreationLines(node, materialVariable, bindingAccessor, materialTextureVariable ?? nodeTextureVariable, Boolean(materialTextureVariable))) {
       lines.push(line);
     }
     lines.push(`const ${meshVariable} = new Mesh(${geometryVariable}, ${materialVariable});`);
@@ -620,36 +676,50 @@ function emitMaterialCreationLines(
   materialVariable: string,
   bindingAccessor: string,
   textureVariable?: string,
+  hasMaterialTexture = false,
 ): string[] {
   const lines: string[] = [];
   const hasDynamicMaterialType = Boolean(node.editable["material.type"]);
   const materialTypeExpression = propertyExpression(node, "material.type", bindingAccessor);
   const sharedOptions = [
     `color: ${propertyExpression(node, "material.color", bindingAccessor)}`,
+    `side: resolveMaterialSide(${propertyExpression(node, "material.side", bindingAccessor)})`,
     `opacity: ${propertyExpression(node, "material.opacity", bindingAccessor)}`,
     `transparent: ${propertyExpression(node, "material.transparent", bindingAccessor)}`,
     `alphaTest: ${propertyExpression(node, "material.alphaTest", bindingAccessor)}`,
     `depthTest: ${propertyExpression(node, "material.depthTest", bindingAccessor)}`,
     `depthWrite: ${propertyExpression(node, "material.depthWrite", bindingAccessor)}`,
+    `colorWrite: ${propertyExpression(node, "material.colorWrite", bindingAccessor)}`,
+    `dithering: ${propertyExpression(node, "material.dithering", bindingAccessor)}`,
+    `toneMapped: ${propertyExpression(node, "material.toneMapped", bindingAccessor)}`,
+    `premultipliedAlpha: ${propertyExpression(node, "material.premultipliedAlpha", bindingAccessor)}`,
+    `polygonOffset: ${propertyExpression(node, "material.polygonOffset", bindingAccessor)}`,
+    `polygonOffsetFactor: ${propertyExpression(node, "material.polygonOffsetFactor", bindingAccessor)}`,
+    `polygonOffsetUnits: ${propertyExpression(node, "material.polygonOffsetUnits", bindingAccessor)}`,
     `wireframe: ${propertyExpression(node, "material.wireframe", bindingAccessor)}`,
+    `wireframeLinewidth: ${propertyExpression(node, "material.wireframeLinewidth", bindingAccessor)}`,
   ];
 
-  if (node.type === "plane" || node.type === "circle" || node.type === "image") {
-    sharedOptions.push("side: DoubleSide");
-  }
-
-  if (node.type === "image") {
+  if (textureVariable && (node.type === "image" || hasMaterialTexture)) {
+    sharedOptions.push(`map: ${textureVariable}`);
+  } else if (node.type === "image") {
     if (!textureVariable) {
       throw new Error(`Image texture not found for image node "${node.name}".`);
     }
-    sharedOptions.push(`map: ${textureVariable}`);
   }
 
   const emissiveOption = `emissive: ${propertyExpression(node, "material.emissive", bindingAccessor)}`;
+  const emissiveIntensityOption = `emissiveIntensity: ${propertyExpression(node, "material.emissiveIntensity", bindingAccessor)}`;
+  const fogOption = `fog: ${propertyExpression(node, "material.fog", bindingAccessor)}`;
+  const flatShadingOption = `flatShading: ${propertyExpression(node, "material.flatShading", bindingAccessor)}`;
   const standardOnlyOptions = [
     emissiveOption,
+    emissiveIntensityOption,
     `roughness: ${propertyExpression(node, "material.roughness", bindingAccessor)}`,
     `metalness: ${propertyExpression(node, "material.metalness", bindingAccessor)}`,
+    `envMapIntensity: ${propertyExpression(node, "material.envMapIntensity", bindingAccessor)}`,
+    flatShadingOption,
+    fogOption,
   ];
   const physicalOnlyOptions = [
     `ior: ${propertyExpression(node, "material.ior", bindingAccessor)}`,
@@ -657,11 +727,47 @@ function emitMaterialCreationLines(
     `thickness: ${propertyExpression(node, "material.thickness", bindingAccessor)}`,
     `clearcoat: ${propertyExpression(node, "material.clearcoat", bindingAccessor)}`,
     `clearcoatRoughness: ${propertyExpression(node, "material.clearcoatRoughness", bindingAccessor)}`,
+    `reflectivity: ${propertyExpression(node, "material.reflectivity", bindingAccessor)}`,
+    `iridescence: ${propertyExpression(node, "material.iridescence", bindingAccessor)}`,
+    `iridescenceIOR: ${propertyExpression(node, "material.iridescenceIOR", bindingAccessor)}`,
+    `iridescenceThicknessRange: [${propertyExpression(node, "material.iridescenceThicknessRangeStart", bindingAccessor)}, ${propertyExpression(node, "material.iridescenceThicknessRangeEnd", bindingAccessor)}]`,
+    `sheen: ${propertyExpression(node, "material.sheen", bindingAccessor)}`,
+    `sheenRoughness: ${propertyExpression(node, "material.sheenRoughness", bindingAccessor)}`,
+    `sheenColor: ${propertyExpression(node, "material.sheenColor", bindingAccessor)}`,
+    `specularIntensity: ${propertyExpression(node, "material.specularIntensity", bindingAccessor)}`,
+    `specularColor: ${propertyExpression(node, "material.specularColor", bindingAccessor)}`,
+    `attenuationDistance: ${propertyExpression(node, "material.attenuationDistance", bindingAccessor)}`,
+    `attenuationColor: ${propertyExpression(node, "material.attenuationColor", bindingAccessor)}`,
+    `dispersion: ${propertyExpression(node, "material.dispersion", bindingAccessor)}`,
+    `anisotropy: ${propertyExpression(node, "material.anisotropy", bindingAccessor)}`,
   ];
   const phongOnlyOptions = [
     emissiveOption,
+    emissiveIntensityOption,
     `specular: ${propertyExpression(node, "material.specular", bindingAccessor)}`,
     `shininess: ${propertyExpression(node, "material.shininess", bindingAccessor)}`,
+    flatShadingOption,
+    fogOption,
+  ];
+  const basicOnlyOptions = [
+    fogOption,
+  ];
+  const toonOnlyOptions = [
+    emissiveOption,
+    emissiveIntensityOption,
+    fogOption,
+  ];
+  const lambertOnlyOptions = [
+    emissiveOption,
+    emissiveIntensityOption,
+    flatShadingOption,
+    fogOption,
+  ];
+  const normalOnlyOptions = [
+    flatShadingOption,
+  ];
+  const depthOnlyOptions = [
+    `depthPacking: resolveDepthPacking(${propertyExpression(node, "material.depthPacking", bindingAccessor)})`,
   ];
 
   if (hasDynamicMaterialType) {
@@ -671,20 +777,24 @@ function emitMaterialCreationLines(
     const toonConfig = `${materialVariable}ToonConfig`;
     const lambertConfig = `${materialVariable}LambertConfig`;
     const phongConfig = `${materialVariable}PhongConfig`;
-    lines.push(`const ${basicConfig} = { ${sharedOptions.join(", ")} };`);
+    const normalConfig = `${materialVariable}NormalConfig`;
+    const depthConfig = `${materialVariable}DepthConfig`;
+    lines.push(`const ${basicConfig} = { ${[...sharedOptions, ...basicOnlyOptions].join(", ")} };`);
     lines.push(`const ${standardConfig} = { ...${basicConfig}, ${standardOnlyOptions.join(", ")} };`);
     lines.push(`const ${physicalConfig} = { ...${standardConfig}, ${physicalOnlyOptions.join(", ")} };`);
-    lines.push(`const ${toonConfig} = { ...${basicConfig}, ${emissiveOption} };`);
-    lines.push(`const ${lambertConfig} = { ...${basicConfig}, ${emissiveOption} };`);
+    lines.push(`const ${toonConfig} = { ...${basicConfig}, ${toonOnlyOptions.join(", ")} };`);
+    lines.push(`const ${lambertConfig} = { ...${basicConfig}, ${lambertOnlyOptions.join(", ")} };`);
     lines.push(`const ${phongConfig} = { ...${basicConfig}, ${phongOnlyOptions.join(", ")} };`);
+    lines.push(`const ${normalConfig} = { ${[...sharedOptions, ...normalOnlyOptions].join(", ")} };`);
+    lines.push(`const ${depthConfig} = { ${[...sharedOptions, ...depthOnlyOptions].join(", ")} };`);
     lines.push(
       `const ${materialVariable} = ${materialTypeExpression} === "basic" ? new MeshBasicMaterial(${basicConfig})`
       + ` : ${materialTypeExpression} === "lambert" ? new MeshLambertMaterial(${lambertConfig})`
       + ` : ${materialTypeExpression} === "phong" ? new MeshPhongMaterial(${phongConfig})`
       + ` : ${materialTypeExpression} === "physical" ? new MeshPhysicalMaterial(${physicalConfig})`
       + ` : ${materialTypeExpression} === "toon" ? new MeshToonMaterial(${toonConfig})`
-      + ` : ${materialTypeExpression} === "normal" ? new MeshNormalMaterial(${basicConfig})`
-      + ` : ${materialTypeExpression} === "depth" ? new MeshDepthMaterial(${basicConfig})`
+      + ` : ${materialTypeExpression} === "normal" ? new MeshNormalMaterial(${normalConfig})`
+      + ` : ${materialTypeExpression} === "depth" ? new MeshDepthMaterial(${depthConfig})`
       + ` : new MeshStandardMaterial(${standardConfig});`,
     );
     return lines;
@@ -692,25 +802,25 @@ function emitMaterialCreationLines(
 
   switch (node.material.type) {
     case "basic":
-      lines.push(`const ${materialVariable} = new MeshBasicMaterial({ ${sharedOptions.join(", ")} });`);
+      lines.push(`const ${materialVariable} = new MeshBasicMaterial({ ${[...sharedOptions, ...basicOnlyOptions].join(", ")} });`);
       return lines;
     case "lambert":
-      lines.push(`const ${materialVariable} = new MeshLambertMaterial({ ${[...sharedOptions, emissiveOption].join(", ")} });`);
+      lines.push(`const ${materialVariable} = new MeshLambertMaterial({ ${[...sharedOptions, ...lambertOnlyOptions].join(", ")} });`);
       return lines;
     case "phong":
       lines.push(`const ${materialVariable} = new MeshPhongMaterial({ ${[...sharedOptions, ...phongOnlyOptions].join(", ")} });`);
       return lines;
     case "toon":
-      lines.push(`const ${materialVariable} = new MeshToonMaterial({ ${[...sharedOptions, emissiveOption].join(", ")} });`);
+      lines.push(`const ${materialVariable} = new MeshToonMaterial({ ${[...sharedOptions, ...toonOnlyOptions].join(", ")} });`);
       return lines;
     case "physical":
       lines.push(`const ${materialVariable} = new MeshPhysicalMaterial({ ${[...sharedOptions, ...standardOnlyOptions, ...physicalOnlyOptions].join(", ")} });`);
       return lines;
     case "normal":
-      lines.push(`const ${materialVariable} = new MeshNormalMaterial({ ${sharedOptions.join(", ")} });`);
+      lines.push(`const ${materialVariable} = new MeshNormalMaterial({ ${[...sharedOptions, ...normalOnlyOptions].join(", ")} });`);
       return lines;
     case "depth":
-      lines.push(`const ${materialVariable} = new MeshDepthMaterial({ ${sharedOptions.join(", ")} });`);
+      lines.push(`const ${materialVariable} = new MeshDepthMaterial({ ${[...sharedOptions, ...depthOnlyOptions].join(", ")} });`);
       return lines;
     default:
       lines.push(`const ${materialVariable} = new MeshStandardMaterial({ ${[...sharedOptions, ...standardOnlyOptions].join(", ")} });`);
