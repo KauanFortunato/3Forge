@@ -153,6 +153,48 @@ export function CircleFilledIcon(props: IconProps) {
   );
 }
 
+type KeyframeDiamondIconProps = IconProps & { filled?: boolean; animated?: boolean };
+
+export function KeyframeDiamondIcon({ filled, animated, ...rest }: KeyframeDiamondIconProps) {
+  if (filled) {
+    return (
+      <svg
+        width={14}
+        height={14}
+        viewBox="0 0 14 14"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeWidth="1"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        {...rest}
+      >
+        <path d="M7 1.6 12.4 7 7 12.4 1.6 7Z" />
+      </svg>
+    );
+  }
+  return (
+    <Ico
+      strokeWidth={animated ? 1.6 : 1.3}
+      {...rest}
+    >
+      <path d="M7 1.6 12.4 7 7 12.4 1.6 7Z" />
+    </Ico>
+  );
+}
+
+export function CodeBracketsIcon({ active, ...rest }: IconProps & { active?: boolean }) {
+  return (
+    <Ico
+      strokeWidth={active ? 1.8 : 1.4}
+      {...rest}
+    >
+      <path d="m4.6 4.6-2.6 2.4 2.6 2.4" />
+      <path d="m9.4 4.6 2.6 2.4-2.6 2.4" />
+    </Ico>
+  );
+}
+
 export function FileIcon(props: IconProps) {
   return (
     <Ico {...props}>

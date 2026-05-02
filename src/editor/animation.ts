@@ -202,6 +202,46 @@ export function getTrackSegments(track: AnimationTrack): Array<{ from: Animation
   return segments;
 }
 
+export function findAnimationTrack(
+  clip: AnimationClip | undefined,
+  nodeId: string,
+  property: AnimationPropertyPath,
+): AnimationTrack | undefined {
+  if (!clip) {
+    return undefined;
+  }
+  return clip.tracks.find((track) => track.nodeId === nodeId && track.property === property);
+}
+
+export function findKeyframeAtFrame(
+  track: AnimationTrack | undefined,
+  frame: number,
+): AnimationKeyframe | undefined {
+  if (!track) {
+    return undefined;
+  }
+  const target = Math.max(0, Math.round(frame));
+  return track.keyframes.find((keyframe) => keyframe.frame === target);
+}
+
+export function isPropertyAnimated(
+  clip: AnimationClip | undefined,
+  nodeId: string,
+  property: AnimationPropertyPath,
+): boolean {
+  const track = findAnimationTrack(clip, nodeId, property);
+  return track !== undefined && track.keyframes.length > 0;
+}
+
+export function hasKeyframeAtFrame(
+  clip: AnimationClip | undefined,
+  nodeId: string,
+  property: AnimationPropertyPath,
+  frame: number,
+): boolean {
+  return findKeyframeAtFrame(findAnimationTrack(clip, nodeId, property), frame) !== undefined;
+}
+
 export function getAnimationValue(node: EditorNode, property: AnimationPropertyPath): number {
   const value = property.split(".").reduce<unknown>((current, segment) => {
     if (current && typeof current === "object" && segment in current) {
