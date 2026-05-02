@@ -4,13 +4,18 @@ import {
   animationValueToBoolean,
   assertKeyframesSorted,
   clampFrame,
+  createAnimationClip,
   createAnimationKeyframe,
   createAnimationTrack,
   createDefaultAnimation,
+  findAnimationTrack,
+  findKeyframeAtFrame,
   getAnimationValue,
   getTrackSegments,
+  hasKeyframeAtFrame,
   isAnimationEasePreset,
   isAnimationPropertyPath,
+  isPropertyAnimated,
   isTrackMuted,
   normalizeAnimation,
   normalizeAnimationValueForProperty,
@@ -205,5 +210,35 @@ describe("animation helpers", () => {
       createAnimationKeyframe(0, 0),
     ];
     expect(() => assertKeyframesSorted(outOfOrderTrack)).toThrow(/not sorted/);
+  });
+
+  it("looks up tracks and per-frame keyframes through the new helpers", () => {
+    const positionTrack = createAnimationTrack("node-1", "transform.position.x");
+    positionTrack.keyframes = [
+      createAnimationKeyframe(0, 0),
+      createAnimationKeyframe(12, 1.25),
+    ];
+    const visibleTrack = createAnimationTrack("node-1", "visible");
+    visibleTrack.keyframes = [createAnimationKeyframe(6, 1)];
+    const clip = createAnimationClip("main", { tracks: [positionTrack, visibleTrack] });
+
+    expect(findAnimationTrack(clip, "node-1", "transform.position.x")).toBe(positionTrack);
+    expect(findAnimationTrack(clip, "node-1", "transform.position.y")).toBeUndefined();
+    expect(findAnimationTrack(undefined, "node-1", "transform.position.x")).toBeUndefined();
+
+    expect(findKeyframeAtFrame(positionTrack, 0)?.value).toBe(0);
+    expect(findKeyframeAtFrame(positionTrack, 12)?.value).toBe(1.25);
+    expect(findKeyframeAtFrame(positionTrack, 7)).toBeUndefined();
+    expect(findKeyframeAtFrame(positionTrack, 12.4)?.value).toBe(1.25); // rounds to 12
+    expect(findKeyframeAtFrame(undefined, 0)).toBeUndefined();
+
+    expect(isPropertyAnimated(clip, "node-1", "transform.position.x")).toBe(true);
+    expect(isPropertyAnimated(clip, "node-1", "transform.position.y")).toBe(false);
+    expect(isPropertyAnimated(undefined, "node-1", "transform.position.x")).toBe(false);
+
+    expect(hasKeyframeAtFrame(clip, "node-1", "transform.position.x", 12)).toBe(true);
+    expect(hasKeyframeAtFrame(clip, "node-1", "transform.position.x", 7)).toBe(false);
+    expect(hasKeyframeAtFrame(clip, "node-1", "visible", 6)).toBe(true);
+    expect(hasKeyframeAtFrame(clip, "node-1", "transform.position.y", 0)).toBe(false);
   });
 });

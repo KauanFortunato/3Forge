@@ -888,3 +888,130 @@ describe("InspectorPanel", () => {
     );
   });
 });
+
+describe("InspectorPanel keyframe and runtime-field controls", () => {
+  it("renders a diamond on animatable rows only and keeps the <> toggle independent", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    node.name = "Panel";
+    const props = createCommonProps();
+    const onInsertOrUpdateKeyframe = vi.fn();
+    const onRemoveKeyframe = vi.fn();
+
+    const activeAnimationClip = {
+      id: "clip-1",
+      name: "main",
+      fps: 24,
+      durationFrames: 60,
+      tracks: [
+        {
+          id: "track-1",
+          nodeId: "box-1",
+          property: "transform.position.y" as const,
+          keyframes: [
+            { id: "k-0", frame: 12, value: 1.5, ease: "easeInOut" as const },
+          ],
+        },
+      ],
+    };
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        currentFrame={12}
+        activeAnimationClip={activeAnimationClip}
+        onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
+        onRemoveKeyframe={onRemoveKeyframe}
+      />,
+    );
+
+    // 1. Every transform axis cell renders a diamond button.
+    const diamondsInTransform = container.querySelectorAll(".vec__cell .vec__keyframe");
+    expect(diamondsInTransform.length).toBeGreaterThanOrEqual(9); // pos + rot + scale = 9 axes.
+
+    // 2. Material/geometry rows have no diamond — they aren't animatable.
+    const materialColorRow = Array.from(container.querySelectorAll(".row")).find((row) =>
+      row.querySelector(".row__lbl")?.textContent === "Color",
+    );
+    expect(materialColorRow).toBeTruthy();
+    expect(materialColorRow?.querySelector(".row__keyframe")).toBeNull();
+
+    // 3. The diamond on a keyed (transform.position.y at frame 12) cell reports filled / pressed.
+    const positionYCell = container.querySelector(".vec__cell[data-axis='y']");
+    const positionYDiamond = positionYCell?.querySelector(".vec__keyframe");
+    expect(positionYDiamond).toBeTruthy();
+    expect(positionYDiamond?.getAttribute("aria-pressed")).toBe("true");
+    expect(positionYDiamond?.classList.contains("is-key")).toBe(true);
+
+    // The unkeyed X cell is a plain (non-animated) diamond.
+    const positionXCell = container.querySelector(".vec__cell[data-axis='x']");
+    const positionXDiamond = positionXCell?.querySelector(".vec__keyframe");
+    expect(positionXDiamond?.getAttribute("aria-pressed")).toBe("false");
+
+    // 4. Clicking the diamond fires onInsertOrUpdateKeyframe with currentFrame and never the
+    //    runtime-editable toggle.
+    await user.click(positionXDiamond as HTMLButtonElement);
+    expect(onInsertOrUpdateKeyframe).toHaveBeenCalledTimes(1);
+    expect(onInsertOrUpdateKeyframe).toHaveBeenCalledWith(
+      "box-1",
+      "transform.position.x",
+      12,
+      expect.any(Number),
+    );
+    expect(props.onToggleEditable).not.toHaveBeenCalled();
+
+    // 5. Clicking the <> editable toggle fires onToggleEditable but NOT the keyframe handler.
+    const editableInputs = container.querySelectorAll(".vec__editable input[type='checkbox']");
+    expect(editableInputs.length).toBeGreaterThan(0);
+    await user.click(editableInputs[0] as HTMLInputElement);
+    expect(props.onToggleEditable).toHaveBeenCalledTimes(1);
+    expect(onInsertOrUpdateKeyframe).toHaveBeenCalledTimes(1); // unchanged.
+  });
+
+  it("Alt-click on a keyed diamond removes the keyframe instead of inserting", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+    const onInsertOrUpdateKeyframe = vi.fn();
+    const onRemoveKeyframe = vi.fn();
+
+    const activeAnimationClip = {
+      id: "clip-1",
+      name: "main",
+      fps: 24,
+      durationFrames: 60,
+      tracks: [
+        {
+          id: "track-1",
+          nodeId: "box-1",
+          property: "transform.position.x" as const,
+          keyframes: [{ id: "k-0", frame: 6, value: 0.5, ease: "easeInOut" as const }],
+        },
+      ],
+    };
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        currentFrame={6}
+        activeAnimationClip={activeAnimationClip}
+        onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
+        onRemoveKeyframe={onRemoveKeyframe}
+      />,
+    );
+
+    const xDiamond = container.querySelector(".vec__cell[data-axis='x'] .vec__keyframe") as HTMLButtonElement;
+    expect(xDiamond.getAttribute("aria-pressed")).toBe("true");
+
+    await user.keyboard("{Alt>}");
+    await user.click(xDiamond);
+    await user.keyboard("{/Alt}");
+
+    expect(onRemoveKeyframe).toHaveBeenCalledWith("box-1", "transform.position.x", 6);
+    expect(onInsertOrUpdateKeyframe).not.toHaveBeenCalled();
+  });
+});

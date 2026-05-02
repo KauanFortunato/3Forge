@@ -1583,3 +1583,128 @@ describe("property clipboard", () => {
     expect(materialColorOf(store, sphereTargetId)).toBe("#ff5500");
   });
 });
+
+describe("inspector keyframing", () => {
+    function setupBoxStore() {
+      const store = new EditorStore(createBlueprintFixture());
+      const box = store.blueprint.nodes.find((node) => node.type === "box");
+      if (!box) {
+        throw new Error("Expected box node in fixture.");
+      }
+      return { store, box };
+    }
+
+    it("insertOrUpdateKeyframeAtFrame creates the track on first call and uses the supplied value", () => {
+      const { store, box } = setupBoxStore();
+
+      const keyframeId = store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 12, 3.5);
+
+      expect(keyframeId).not.toBe("");
+      const track = store.getAnimationTrackForProperty(box.id, "transform.position.z");
+      expect(track?.keyframes.map((k) => ({ frame: k.frame, value: k.value }))).toEqual([
+        { frame: 12, value: 3.5 },
+      ]);
+    });
+
+    it("insertOrUpdateKeyframeAtFrame at the same frame replaces, never duplicates", () => {
+      const { store, box } = setupBoxStore();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 12, 1);
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 12, 5);
+
+      const track = store.getAnimationTrackForProperty(box.id, "transform.position.z");
+      expect(track?.keyframes.length).toBe(1);
+      expect(track?.keyframes[0]).toMatchObject({ frame: 12, value: 5 });
+    });
+
+    it("insertOrUpdateKeyframeAtFrame keeps separate keyframes per frame, sorted", () => {
+      const { store, box } = setupBoxStore();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 24, 2);
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 0, 0);
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 12, 1);
+
+      const track = store.getAnimationTrackForProperty(box.id, "transform.position.z");
+      expect(track?.keyframes.map((k) => k.frame)).toEqual([0, 12, 24]);
+    });
+
+    it("removeKeyframeAtFrame removes a key and reports success / failure", () => {
+      const { store, box } = setupBoxStore();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 6, 0.25);
+      expect(store.removeKeyframeAtFrame(box.id, "transform.position.z", 6)).toBe(true);
+      expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")?.keyframes).toEqual([]);
+      expect(store.removeKeyframeAtFrame(box.id, "transform.position.z", 6)).toBe(false);
+      expect(store.removeKeyframeAtFrame(box.id, "transform.position.y", 6)).toBe(false);
+    });
+
+    it("commitAnimatableValueAtFrame updates the keyframe when on a keyed frame", () => {
+      const { store, box } = setupBoxStore();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 8, 1);
+      const baseBefore = box.transform.position.z;
+
+      const committed = store.commitAnimatableValueAtFrame(box.id, "transform.position.z", 9.75, 8);
+
+      expect(committed).toBe(true);
+      expect(box.transform.position.z).toBe(baseBefore); // base untouched
+      const track = store.getAnimationTrackForProperty(box.id, "transform.position.z");
+      expect(track?.keyframes[0].value).toBe(9.75);
+    });
+
+    it("commitAnimatableValueAtFrame returns false when no key sits at the frame", () => {
+      const { store, box } = setupBoxStore();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 0, 0);
+
+      expect(store.commitAnimatableValueAtFrame(box.id, "transform.position.z", 2, 5)).toBe(false);
+      expect(store.commitAnimatableValueAtFrame(box.id, "transform.position.y", 2, 0)).toBe(false);
+    });
+
+    it("updateNodePropertyAtFrame writes the keyframe and leaves the base alone when on a keyframe", () => {
+      const { store, box } = setupBoxStore();
+      const definition = getPropertyDefinitions(box).find((entry) => entry.path === "transform.position.z");
+      expect(definition).toBeTruthy();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 4, 1);
+      const baseBefore = box.transform.position.z;
+
+      store.updateNodePropertyAtFrame(box.id, definition!, "8.5", 4);
+
+      expect(box.transform.position.z).toBe(baseBefore); // base untouched
+      const track = store.getAnimationTrackForProperty(box.id, "transform.position.z");
+      expect(track?.keyframes[0].value).toBe(8.5);
+    });
+
+    it("updateNodePropertyAtFrame falls through to base when no keyframe at the playhead", () => {
+      const { store, box } = setupBoxStore();
+      const definition = getPropertyDefinitions(box).find((entry) => entry.path === "transform.position.z");
+      expect(definition).toBeTruthy();
+
+      store.updateNodePropertyAtFrame(box.id, definition!, "7.25", 4);
+
+      expect(box.transform.position.z).toBe(7.25);
+      expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")).toBeUndefined();
+    });
+
+    it("insertOrUpdateKeyframeAtFrame produces a single undo entry per call", () => {
+      const { store, box } = setupBoxStore();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 5, 1);
+
+      // Undo once should remove BOTH the track and the keyframe.
+      expect(store.undo()).toBe(true);
+      expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")).toBeUndefined();
+    });
+
+    it("removing a keyframe and undoing restores it", () => {
+      const { store, box } = setupBoxStore();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 5, 2.5);
+      store.removeKeyframeAtFrame(box.id, "transform.position.z", 5);
+      expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")?.keyframes).toEqual([]);
+
+      expect(store.undo()).toBe(true);
+      expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")?.keyframes[0].value).toBe(2.5);
+    });
+});
