@@ -135,6 +135,35 @@ describe("exports", () => {
     expect(output).toContain('ease: "power2.inOut"');
   });
 
+  it("preserves frame 0 as the first exported animation keyframe", () => {
+    const blueprint = createBlueprintFixture();
+    const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
+    expect(panel).toBeTruthy();
+    if (!panel) {
+      throw new Error("Expected panel node.");
+    }
+
+    const clip = createAnimationClip("frame-zero", {
+      fps: 24,
+      durationFrames: 48,
+      tracks: [],
+    });
+    const track = createAnimationTrack(panel.id, "transform.position.x");
+    track.keyframes.push(createAnimationKeyframe(0, 2, "linear"));
+    track.keyframes.push(createAnimationKeyframe(24, 4, "easeOut"));
+    clip.tracks.push(track);
+    blueprint.animation = {
+      activeClipId: clip.id,
+      clips: [clip],
+    };
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toContain("firstKeyframeAt: 0");
+    expect(output).toContain("timeline.set(owner, { [track.key]: track.initialValue }, track.firstKeyframeAt);");
+    expect(output).toContain("at: 0");
+  });
+
   it("emits discrete visible animation tracks against wrapper node visibility", () => {
     const blueprint = createBlueprintFixture();
     const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");

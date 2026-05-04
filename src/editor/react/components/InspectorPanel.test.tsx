@@ -909,7 +909,7 @@ describe("InspectorPanel keyframe and runtime-field controls", () => {
           nodeId: "box-1",
           property: "transform.position.y" as const,
           keyframes: [
-            { id: "k-0", frame: 12, value: 1.5, ease: "easeInOut" as const },
+            { id: "k-0", frame: 0, value: 1.5, ease: "easeInOut" as const },
           ],
         },
       ],
@@ -920,7 +920,7 @@ describe("InspectorPanel keyframe and runtime-field controls", () => {
         {...props}
         node={node}
         fonts={[createDefaultFontAsset()]}
-        currentFrame={12}
+        currentFrame={0}
         activeAnimationClip={activeAnimationClip}
         onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
         onRemoveKeyframe={onRemoveKeyframe}
@@ -938,12 +938,13 @@ describe("InspectorPanel keyframe and runtime-field controls", () => {
     expect(materialColorRow).toBeTruthy();
     expect(materialColorRow?.querySelector(".row__keyframe")).toBeNull();
 
-    // 3. The diamond on a keyed (transform.position.y at frame 12) cell reports filled / pressed.
+    // 3. The diamond on a keyed (transform.position.y at frame 0) cell reports filled / pressed.
     const positionYCell = container.querySelector(".vec__cell[data-axis='y']");
     const positionYDiamond = positionYCell?.querySelector(".vec__keyframe");
     expect(positionYDiamond).toBeTruthy();
     expect(positionYDiamond?.getAttribute("aria-pressed")).toBe("true");
     expect(positionYDiamond?.classList.contains("is-key")).toBe(true);
+    expect((positionYCell?.querySelector("input") as HTMLInputElement | null)?.value).toBe("1.5");
 
     // The unkeyed X cell is a plain (non-animated) diamond.
     const positionXCell = container.querySelector(".vec__cell[data-axis='x']");
@@ -957,7 +958,7 @@ describe("InspectorPanel keyframe and runtime-field controls", () => {
     expect(onInsertOrUpdateKeyframe).toHaveBeenCalledWith(
       "box-1",
       "transform.position.x",
-      12,
+      0,
       expect.any(Number),
     );
     expect(props.onToggleEditable).not.toHaveBeenCalled();
@@ -970,7 +971,7 @@ describe("InspectorPanel keyframe and runtime-field controls", () => {
     expect(onInsertOrUpdateKeyframe).toHaveBeenCalledTimes(1); // unchanged.
   });
 
-  it("Alt-click on a keyed diamond removes the keyframe instead of inserting", async () => {
+  it("clicking a keyed diamond removes the keyframe instead of inserting", async () => {
     const user = userEvent.setup();
     const node = createNode("box", ROOT_NODE_ID, "box-1");
     const props = createCommonProps();
@@ -1007,11 +1008,167 @@ describe("InspectorPanel keyframe and runtime-field controls", () => {
     const xDiamond = container.querySelector(".vec__cell[data-axis='x'] .vec__keyframe") as HTMLButtonElement;
     expect(xDiamond.getAttribute("aria-pressed")).toBe("true");
 
-    await user.keyboard("{Alt>}");
     await user.click(xDiamond);
-    await user.keyboard("{/Alt}");
 
-    expect(onRemoveKeyframe).toHaveBeenCalledWith("box-1", "transform.position.x", 6);
+    expect(onRemoveKeyframe).toHaveBeenCalledWith("box-1", "transform.position.x", 6, 0.5);
     expect(onInsertOrUpdateKeyframe).not.toHaveBeenCalled();
+  });
+
+  it("clicking a keyed diamond with a temporary override updates the keyframe", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+    const onInsertOrUpdateKeyframe = vi.fn();
+    const onRemoveKeyframe = vi.fn();
+
+    const activeAnimationClip = {
+      id: "clip-1",
+      name: "main",
+      fps: 24,
+      durationFrames: 60,
+      tracks: [
+        {
+          id: "track-1",
+          nodeId: "box-1",
+          property: "transform.position.x" as const,
+          keyframes: [{ id: "k-0", frame: 6, value: 0.5, ease: "easeInOut" as const }],
+        },
+      ],
+    };
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        currentFrame={6}
+        activeAnimationClip={activeAnimationClip}
+        animationOverrides={{ "box-1:transform.position.x": { frame: 6, value: 2.75 } }}
+        onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
+        onRemoveKeyframe={onRemoveKeyframe}
+      />,
+    );
+
+    const xDiamond = container.querySelector(".vec__cell[data-axis='x'] .vec__keyframe") as HTMLButtonElement;
+    expect(xDiamond.getAttribute("aria-label")).toBe("Update keyframe");
+
+    await user.click(xDiamond);
+
+    expect(onInsertOrUpdateKeyframe).toHaveBeenCalledWith("box-1", "transform.position.x", 6, 2.75);
+    expect(onRemoveKeyframe).not.toHaveBeenCalled();
+  });
+
+  it("shows temporary animation overrides and commits that visible value with the diamond", async () => {
+    const user = userEvent.setup();
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+    const onInsertOrUpdateKeyframe = vi.fn();
+
+    const activeAnimationClip = {
+      id: "clip-1",
+      name: "main",
+      fps: 24,
+      durationFrames: 60,
+      tracks: [
+        {
+          id: "track-1",
+          nodeId: "box-1",
+          property: "transform.position.x" as const,
+          keyframes: [
+            { id: "k-0", frame: 1, value: 5, ease: "linear" as const },
+            { id: "k-1", frame: 10, value: 10, ease: "linear" as const },
+          ],
+        },
+      ],
+    };
+
+    const { container } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        currentFrame={5.5}
+        activeAnimationClip={activeAnimationClip}
+        animationOverrides={{ "box-1:transform.position.x": { frame: 5.5, value: 20 } }}
+        onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
+      />,
+    );
+
+    const positionXCell = container.querySelector(".vec__cell[data-axis='x']");
+    expect((positionXCell?.querySelector("input") as HTMLInputElement | null)?.value).toBe("20");
+
+    await user.click(positionXCell?.querySelector(".vec__keyframe") as HTMLButtonElement);
+    expect(onInsertOrUpdateKeyframe).toHaveBeenCalledWith("box-1", "transform.position.x", 5.5, 20);
+  });
+
+  it("updates animated numeric fields as the playhead moves and falls back after overrides are cleared", () => {
+    const node = createNode("box", ROOT_NODE_ID, "box-1");
+    const props = createCommonProps();
+    const activeAnimationClip = {
+      id: "clip-1",
+      name: "main",
+      fps: 24,
+      durationFrames: 60,
+      tracks: [
+        {
+          id: "track-1",
+          nodeId: "box-1",
+          property: "transform.position.x" as const,
+          keyframes: [
+            { id: "k-0", frame: 1, value: 5, ease: "linear" as const },
+            { id: "k-1", frame: 10, value: 10, ease: "linear" as const },
+          ],
+        },
+      ],
+    };
+
+    const { container, rerender } = render(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        currentFrame={1}
+        activeAnimationClip={activeAnimationClip}
+      />,
+    );
+
+    const getPositionXValue = () =>
+      (container.querySelector(".vec__cell[data-axis='x'] input") as HTMLInputElement | null)?.value;
+
+    expect(getPositionXValue()).toBe("5");
+
+    rerender(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        currentFrame={5.5}
+        activeAnimationClip={activeAnimationClip}
+      />,
+    );
+    expect(getPositionXValue()).toBe("7.5");
+
+    rerender(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        currentFrame={5.5}
+        activeAnimationClip={activeAnimationClip}
+        animationOverrides={{ "box-1:transform.position.x": { frame: 5.5, value: 20 } }}
+      />,
+    );
+    expect(getPositionXValue()).toBe("20");
+
+    rerender(
+      <InspectorPanel
+        {...props}
+        node={node}
+        fonts={[createDefaultFontAsset()]}
+        currentFrame={6}
+        activeAnimationClip={activeAnimationClip}
+      />,
+    );
+    expect(Number(getPositionXValue())).toBeCloseTo(7.7778);
   });
 });

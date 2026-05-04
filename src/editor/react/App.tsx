@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { Object3D } from "three";
 import { createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, isAiSceneSpec, parseAiSceneSpecJson } from "../aiBlueprint";
 import type { AiChatContext, AiProvider } from "../aiBlueprint";
 import { compareComponentBlueprints } from "../blueprintDiff";
@@ -24,6 +25,8 @@ import {
   EditorStore,
   ROOT_NODE_ID,
   getPropertyDefinitions,
+  getPropertyValue,
+  parseInputValue,
 } from "../state";
 import type { AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset } from "../types";
 import type { ComponentBlueprint } from "../types";
@@ -155,7 +158,81 @@ function getDiffFieldLabel(path: string): string {
   return path;
 }
 
+function getTemporaryAnimationOverrideKey(nodeId: string, property: AnimationPropertyPath): string {
+  return `${nodeId}:${property}`;
+}
+
+function splitTemporaryAnimationOverrideKey(key: string): [string, AnimationPropertyPath] | null {
+  const separatorIndex = key.indexOf(":");
+  if (separatorIndex <= 0) {
+    return null;
+  }
+  return [
+    key.slice(0, separatorIndex),
+    key.slice(separatorIndex + 1) as AnimationPropertyPath,
+  ];
+}
+
+function withoutTemporaryAnimationOverride(
+  overrides: TemporaryAnimationOverrideMap,
+  nodeId: string,
+  property: AnimationPropertyPath,
+): TemporaryAnimationOverrideMap {
+  const key = getTemporaryAnimationOverrideKey(nodeId, property);
+  if (!overrides[key]) {
+    return overrides;
+  }
+  const { [key]: _removed, ...next } = overrides;
+  return next;
+}
+
+function withTemporaryAnimationOverride(
+  overrides: TemporaryAnimationOverrideMap,
+  nodeId: string,
+  property: AnimationPropertyPath,
+  frame: number,
+  value: number,
+): TemporaryAnimationOverrideMap {
+  return {
+    ...overrides,
+    [getTemporaryAnimationOverrideKey(nodeId, property)]: {
+      frame: Math.max(0, Math.round(frame)),
+      value,
+    },
+  };
+}
+
+function toSceneAnimationPreviewOverrides(overrides: TemporaryAnimationOverrideMap) {
+  return Object.entries(overrides).flatMap(([key, override]) => {
+    const target = splitTemporaryAnimationOverrideKey(key);
+    if (!target) {
+      return [];
+    }
+    const [nodeId, property] = target;
+    return [{
+      nodeId,
+      property,
+      frame: override.frame,
+      value: override.value,
+    }];
+  });
+}
+
 type RuntimePanelTab = "animations" | "images" | "materials";
+type TemporaryAnimationOverride = { frame: number; value: number };
+type TemporaryAnimationOverrideMap = Record<string, TemporaryAnimationOverride>;
+
+const TRANSFORM_ANIMATION_PROPERTIES = [
+  "transform.position.x",
+  "transform.position.y",
+  "transform.position.z",
+  "transform.rotation.x",
+  "transform.rotation.y",
+  "transform.rotation.z",
+  "transform.scale.x",
+  "transform.scale.y",
+  "transform.scale.z",
+] as const satisfies readonly AnimationPropertyPath[];
 
 type PendingImageImport =
   | { mode: "asset" }
@@ -500,6 +577,7 @@ export function App() {
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
   const [currentFrame, setCurrentFrame] = useState(0);
+  const [temporaryAnimationOverrides, setTemporaryAnimationOverrides] = useState<TemporaryAnimationOverrideMap>({});
   const [isAnimationPlaying, setIsAnimationPlaying] = useState(false);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
@@ -525,6 +603,7 @@ export function App() {
   ));
 
   const sceneRef = useRef<SceneEditor | null>(null);
+  const temporaryAnimationOverridesRef = useRef<TemporaryAnimationOverrideMap>({});
   const clipboardRef = useRef<NodeClipboard | null>(null);
   const pendingImageImportRef = useRef<PendingImageImport | null>(null);
   const statusTimerRef = useRef<number | null>(null);
@@ -765,6 +844,20 @@ export function App() {
   }, [activeClip, currentFrame]);
 
   useEffect(() => {
+    const normalizedFrame = Math.max(0, Math.round(currentFrame));
+    setTemporaryAnimationOverrides((previous) => {
+      const nextEntries = Object.entries(previous).filter(([, override]) => override.frame === normalizedFrame);
+      if (nextEntries.length === Object.keys(previous).length) {
+        temporaryAnimationOverridesRef.current = previous;
+        return previous;
+      }
+      const next = Object.fromEntries(nextEntries);
+      temporaryAnimationOverridesRef.current = next;
+      return next;
+    });
+  }, [currentFrame]);
+
+  useEffect(() => {
     if (selectedTrackId && !activeClipTracks.some((track) => track.id === selectedTrackId)) {
       setSelectedTrackId(null);
       setSelectedKeyframeId(null);
@@ -879,6 +972,109 @@ export function App() {
     setTransientStatus("Framed selection.");
   }, [setTransientStatus]);
 
+  const replaceTemporaryAnimationOverrides = useCallback((next: TemporaryAnimationOverrideMap) => {
+    temporaryAnimationOverridesRef.current = next;
+    setTemporaryAnimationOverrides(next);
+    sceneRef.current?.setAnimationPreviewOverrides(toSceneAnimationPreviewOverrides(next));
+  }, []);
+
+  const applyTemporaryAnimationOverridesToScene = useCallback((
+    overrides: TemporaryAnimationOverrideMap = temporaryAnimationOverridesRef.current,
+  ) => {
+    const normalizedFrame = Math.max(0, Math.round(currentFrame));
+    for (const [key, override] of Object.entries(overrides)) {
+      if (override.frame !== normalizedFrame) {
+        continue;
+      }
+      const target = splitTemporaryAnimationOverrideKey(key);
+      if (!target) {
+        continue;
+      }
+      const [nodeId, property] = target;
+      sceneRef.current?.previewAnimationValue(nodeId, property, override.value);
+    }
+  }, [currentFrame]);
+
+  const seekAnimationPreservingTemporaryOverrides = useCallback((
+    frame: number,
+    overrides: TemporaryAnimationOverrideMap = temporaryAnimationOverridesRef.current,
+  ) => {
+    sceneRef.current?.seekAnimation(frame);
+    applyTemporaryAnimationOverridesToScene(overrides);
+  }, [applyTemporaryAnimationOverridesToScene]);
+
+  const clearTemporaryAnimationOverrides = useCallback(() => {
+    if (Object.keys(temporaryAnimationOverridesRef.current).length === 0) {
+      return;
+    }
+    replaceTemporaryAnimationOverrides({});
+  }, [replaceTemporaryAnimationOverrides]);
+
+  const setTemporaryAnimationOverride = useCallback((
+    nodeId: string,
+    property: AnimationPropertyPath,
+    frame: number,
+    value: number,
+  ) => {
+    if (!Number.isFinite(value)) {
+      return;
+    }
+    const normalizedFrame = Math.max(0, Math.round(frame));
+    const key = getTemporaryAnimationOverrideKey(nodeId, property);
+    const existing = temporaryAnimationOverridesRef.current[key];
+    if (!existing || existing.frame !== normalizedFrame || existing.value !== value) {
+      replaceTemporaryAnimationOverrides(
+        withTemporaryAnimationOverride(
+          temporaryAnimationOverridesRef.current,
+          nodeId,
+          property,
+          normalizedFrame,
+          value,
+        ),
+      );
+    }
+    sceneRef.current?.previewAnimationValue(nodeId, property, value);
+  }, [replaceTemporaryAnimationOverrides]);
+
+  const handleViewportTransformChange = useCallback((nodeId: string, object: Object3D): boolean => {
+    const animatedProperties = new Set(
+      activeClip?.tracks
+        .filter((track) =>
+          track.nodeId === nodeId &&
+          track.property.startsWith("transform.") &&
+          track.keyframes.length > 0)
+        .map((track) => track.property) ?? [],
+    );
+    if (animatedProperties.size === 0) {
+      return false;
+    }
+
+    const values: Record<(typeof TRANSFORM_ANIMATION_PROPERTIES)[number], number> = {
+      "transform.position.x": object.position.x,
+      "transform.position.y": object.position.y,
+      "transform.position.z": object.position.z,
+      "transform.rotation.x": object.rotation.x,
+      "transform.rotation.y": object.rotation.y,
+      "transform.rotation.z": object.rotation.z,
+      "transform.scale.x": object.scale.x,
+      "transform.scale.y": object.scale.y,
+      "transform.scale.z": object.scale.z,
+    };
+    const baseUpdates: Partial<Record<AnimationPropertyPath, number>> = {};
+
+    for (const property of TRANSFORM_ANIMATION_PROPERTIES) {
+      const value = values[property];
+      if (animatedProperties.has(property)) {
+        setTemporaryAnimationOverride(nodeId, property, currentFrame, value);
+      } else {
+        baseUpdates[property] = value;
+      }
+    }
+
+    store.setNodeTransformProperties(nodeId, baseUpdates, "scene");
+    return true;
+  }, [activeClip, currentFrame, setTemporaryAnimationOverride, store]);
+
   const handleApplyGroupPivotPreset = useCallback((nodeId: string, preset: GroupPivotPreset) => {
     const node = store.getNode(nodeId);
     if (!node || node.type !== "group") {
@@ -894,18 +1090,29 @@ export function App() {
     setTransientStatus(`Updated pivot for "${node.name}" from current content bounds.`);
   }, [setTransientStatus, store]);
 
+  useEffect(() => {
+    clearTemporaryAnimationOverrides();
+    sceneRef.current?.seekAnimation(currentFrame);
+  }, [clearTemporaryAnimationOverrides, selectedNode?.id]);
+
   const handleAnimationFrameChange = useCallback((frame: number) => {
     const durationFrames = store.getActiveAnimationClip()?.durationFrames ?? 0;
     const nextFrame = Math.max(0, Math.min(Math.round(frame), durationFrames));
-    setCurrentFrame((previousFrame) => previousFrame === nextFrame ? previousFrame : nextFrame);
-  }, [store]);
+    setCurrentFrame((previousFrame) => {
+      if (previousFrame !== nextFrame) {
+        clearTemporaryAnimationOverrides();
+      }
+      return previousFrame === nextFrame ? previousFrame : nextFrame;
+    });
+  }, [clearTemporaryAnimationOverrides, store]);
 
   const handleTimelineFrameChange = useCallback((frame: number) => {
     const nextFrame = Math.max(0, Math.min(Math.round(frame), store.getActiveAnimationClip()?.durationFrames ?? 0));
+    clearTemporaryAnimationOverrides();
     setCurrentFrame(nextFrame);
     setIsAnimationPlaying(false);
     sceneRef.current?.seekAnimation(nextFrame);
-  }, [store]);
+  }, [clearTemporaryAnimationOverrides, store]);
 
   const handleAnimationPlayToggle = useCallback(() => {
     if (isAnimationPlaying) {
@@ -1102,18 +1309,71 @@ export function App() {
     if (!keyframeId) {
       return;
     }
-    sceneRef.current?.seekAnimation(currentFrame);
+    const nextOverrides = withoutTemporaryAnimationOverride(temporaryAnimationOverridesRef.current, nodeId, property);
+    replaceTemporaryAnimationOverrides(nextOverrides);
+    seekAnimationPreservingTemporaryOverrides(currentFrame, nextOverrides);
     setTransientStatus(`Keyed ${property} at ${frame}f.`);
-  }, [currentFrame, setTransientStatus, store]);
+  }, [currentFrame, replaceTemporaryAnimationOverrides, seekAnimationPreservingTemporaryOverrides, setTransientStatus, store]);
 
-  const handleInspectorRemoveKeyframe = useCallback((nodeId: string, property: AnimationPropertyPath, frame: number) => {
+  const handleInspectorRemoveKeyframe = useCallback((nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => {
     const removed = store.removeKeyframeAtFrame(nodeId, property, frame);
     if (!removed) {
       return;
     }
-    sceneRef.current?.seekAnimation(currentFrame);
+    const nextOverrides = withTemporaryAnimationOverride(
+      temporaryAnimationOverridesRef.current,
+      nodeId,
+      property,
+      frame,
+      value,
+    );
+    replaceTemporaryAnimationOverrides(nextOverrides);
+    seekAnimationPreservingTemporaryOverrides(currentFrame, nextOverrides);
     setTransientStatus(`Removed keyframe at ${frame}f.`);
-  }, [currentFrame, setTransientStatus, store]);
+  }, [currentFrame, replaceTemporaryAnimationOverrides, seekAnimationPreservingTemporaryOverrides, setTransientStatus, store]);
+
+  const handleInspectorPropertyPreview = useCallback((
+    nodeId: string,
+    definition: ReturnType<typeof getPropertyDefinitions>[number],
+    value: string | number | boolean,
+  ) => {
+    if (!definition.path.startsWith("transform.") && definition.path !== "visible") {
+      return;
+    }
+    const currentNode = store.getNode(nodeId);
+    if (!currentNode) {
+      return;
+    }
+    const parsedValue = parseInputValue(definition, value, getPropertyValue(currentNode, definition.path));
+    const numericValue = typeof parsedValue === "boolean"
+      ? (parsedValue ? 1 : 0)
+      : typeof parsedValue === "number"
+        ? parsedValue
+        : Number.NaN;
+    if (!Number.isFinite(numericValue)) {
+      return;
+    }
+    setTemporaryAnimationOverride(nodeId, definition.path as AnimationPropertyPath, currentFrame, numericValue);
+  }, [currentFrame, setTemporaryAnimationOverride, store]);
+
+  const handleInspectorPropertyChange = useCallback((
+    nodeId: string,
+    definition: ReturnType<typeof getPropertyDefinitions>[number],
+    value: string | number | boolean,
+  ) => {
+    const property = definition.path as AnimationPropertyPath;
+    const isAnimatable = definition.path === "visible" || definition.path.startsWith("transform.");
+    const isAnimated = isAnimatable && activeClip?.tracks.some((track) =>
+      track.nodeId === nodeId &&
+      track.property === property &&
+      track.keyframes.length > 0);
+    if (isAnimated) {
+      handleInspectorPropertyPreview(nodeId, definition, value);
+      return;
+    }
+
+    store.updateNodePropertyAtFrame(nodeId, definition, value, currentFrame);
+  }, [activeClip, currentFrame, handleInspectorPropertyPreview, store]);
 
   const handleCopy = useCallback(() => {
     const targetRootIds = selectedRootIds.filter((nodeId) => nodeId !== ROOT_NODE_ID);
@@ -2468,6 +2728,7 @@ export function App() {
                 scene?.setTransformMode(effectiveToolMode);
                 if (scene) {
                   scene.seekAnimation(currentFrame);
+                  scene.setAnimationPreviewOverrides(toSceneAnimationPreviewOverrides(temporaryAnimationOverridesRef.current));
                   animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
                 } else {
                   animationFrameUnsubscribeRef.current = null;
@@ -2712,6 +2973,7 @@ export function App() {
               <div style={{ position: "relative", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
                 <ViewportHost
                   store={store}
+                  onTransformObjectChange={handleViewportTransformChange}
                   onSceneReady={(scene) => {
                     animationFrameUnsubscribeRef.current?.();
                     sceneRef.current = scene;
@@ -2719,6 +2981,7 @@ export function App() {
                     scene?.setSelectionVisualsSuppressed(Boolean(editingMaterialId));
                     if (scene) {
                       scene.seekAnimation(currentFrame);
+                      scene.setAnimationPreviewOverrides(toSceneAnimationPreviewOverrides(temporaryAnimationOverridesRef.current));
                       animationFrameUnsubscribeRef.current = scene.onAnimationFrameChange(handleAnimationFrameChange);
                     } else {
                       animationFrameUnsubscribeRef.current = null;
@@ -2843,14 +3106,22 @@ export function App() {
                         onNodeOriginChange={(nodeId, origin) => store.updateNodeOrigin(nodeId, origin)}
                         onGroupPivotPresetApply={handleApplyGroupPivotPreset}
                         getEligibleParents={(nodeId) => store.getEligibleParents(nodeId)}
-                        onNodePropertyChange={(nodeId, definition, value) => store.updateNodePropertyAtFrame(nodeId, definition, value, currentFrame)}
+                        onNodePropertyChange={handleInspectorPropertyChange}
+                        onNodePropertyPreview={handleInspectorPropertyPreview}
                         onNodesPropertyChange={(nodeIds, definition, value) => store.updateNodesProperty(nodeIds, definition, value)}
                         onPropertyEditStart={() => store.beginHistoryTransaction()}
-                        onPropertyEditEnd={() => store.commitHistoryTransaction("ui")}
-                        onPropertyEditCancel={() => store.cancelHistoryTransaction("ui")}
+                        onPropertyEditEnd={() => {
+                          store.commitHistoryTransaction("ui");
+                        }}
+                        onPropertyEditCancel={() => {
+                          store.cancelHistoryTransaction("ui");
+                          clearTemporaryAnimationOverrides();
+                          sceneRef.current?.seekAnimation(currentFrame);
+                        }}
                         onToggleEditable={(nodeId, definition, enabled) => store.toggleEditableProperty(nodeId, definition, enabled)}
                         currentFrame={currentFrame}
                         activeAnimationClip={activeClip}
+                        animationOverrides={temporaryAnimationOverrides}
                         onInsertOrUpdateKeyframe={handleInspectorInsertKeyframe}
                         onRemoveKeyframe={handleInspectorRemoveKeyframe}
                         onTextFontChange={(nodeId, fontId) => store.updateTextNodeFont(nodeId, fontId)}

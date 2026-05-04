@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
-import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions } from "../../state";
-import { hasKeyframeAtFrame, isAnimationPropertyPath, isPropertyAnimated } from "../../animation";
+import { ROOT_NODE_ID, getDisplayValue, getPropertyDefinitions, getPropertyValue } from "../../state";
+import { evaluateAnimationTrackValue, findAnimationTrack, hasKeyframeAtFrame, isAnimationPropertyPath, isPropertyAnimated } from "../../animation";
 import { getSharedPropertyDefinitions } from "../../sharedProperties";
 import type { SharedPropertyResult } from "../../sharedProperties";
 import type {
@@ -47,6 +47,7 @@ interface InspectorPanelProps {
   onGroupPivotPresetApply: (nodeId: string, preset: GroupPivotPreset) => void;
   getEligibleParents: (nodeId: string) => EditorNode[];
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
+  onNodePropertyPreview?: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onPropertyEditStart?: () => void;
   onPropertyEditEnd?: () => void;
@@ -54,8 +55,9 @@ interface InspectorPanelProps {
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
   currentFrame?: number;
   activeAnimationClip?: AnimationClip;
+  animationOverrides?: AnimationOverrideMap;
   onInsertOrUpdateKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
-  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number) => void;
+  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
   onTextFontChange: (nodeId: string, fontId: string) => void;
   onImportFont: () => void;
   onReplaceImage: (nodeId: string) => void;
@@ -66,9 +68,76 @@ interface InspectorPanelProps {
 }
 
 const NUMERIC_INPUT_TYPES = new Set<NodePropertyDefinition["input"]>(["number", "degrees"]);
+type AnimationOverrideMap = Record<string, { frame: number; value: number }>;
 
 function isNumericDefinition(definition: NodePropertyDefinition): boolean {
   return NUMERIC_INPUT_TYPES.has(definition.input);
+}
+
+function getEvaluatedAnimationRawValue(
+  node: EditorNode,
+  property: AnimationPropertyPath,
+  clip: AnimationClip | undefined,
+  frame: number | undefined,
+): number {
+  const rawBase = getPropertyValue(node, property);
+  const baseValue = typeof rawBase === "boolean"
+    ? (rawBase ? 1 : 0)
+    : typeof rawBase === "number" && Number.isFinite(rawBase)
+      ? rawBase
+      : 0;
+  const track = findAnimationTrack(clip, node.id, property);
+  return evaluateAnimationTrackValue(track, baseValue, frame ?? 0);
+}
+
+function getEvaluatedDisplayValue(
+  node: EditorNode,
+  definition: NodePropertyDefinition,
+  property: AnimationPropertyPath,
+  clip: AnimationClip | undefined,
+  frame: number | undefined,
+  overrides: AnimationOverrideMap | undefined,
+): number | string | boolean {
+  const evaluatedValue = getAnimationDisplayRawValue(node, property, clip, frame, overrides);
+  if (definition.input === "checkbox") {
+    return evaluatedValue >= 0.5;
+  }
+  if (definition.input === "degrees") {
+    return Number(((evaluatedValue * 180) / Math.PI).toFixed(2));
+  }
+  return Number(evaluatedValue.toFixed(4));
+}
+
+function getAnimationOverrideKey(nodeId: string, property: AnimationPropertyPath): string {
+  return `${nodeId}:${property}`;
+}
+
+function getAnimationDisplayRawValue(
+  node: EditorNode,
+  property: AnimationPropertyPath,
+  clip: AnimationClip | undefined,
+  frame: number | undefined,
+  overrides: AnimationOverrideMap | undefined,
+): number {
+  const normalizedFrame = Math.max(0, frame ?? 0);
+  const override = overrides?.[getAnimationOverrideKey(node.id, property)];
+  if (override && Math.max(0, override.frame) === normalizedFrame) {
+    return override.value;
+  }
+  return getEvaluatedAnimationRawValue(node, property, clip, normalizedFrame);
+}
+
+function hasAnimationOverrideAtFrame(
+  nodeId: string,
+  property: AnimationPropertyPath,
+  frame: number | undefined,
+  overrides: AnimationOverrideMap | undefined,
+): boolean {
+  if (typeof frame !== "number" || !Number.isFinite(frame)) {
+    return false;
+  }
+  const override = overrides?.[getAnimationOverrideKey(nodeId, property)];
+  return Boolean(override && Math.max(0, override.frame) === Math.max(0, Math.round(frame)));
 }
 
 export function InspectorPanel(props: InspectorPanelProps) {
@@ -86,6 +155,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
     onGroupPivotPresetApply,
     getEligibleParents,
     onNodePropertyChange,
+    onNodePropertyPreview,
     onNodesPropertyChange,
     onPropertyEditStart,
     onPropertyEditEnd,
@@ -93,6 +163,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
     onToggleEditable,
     currentFrame,
     activeAnimationClip,
+    animationOverrides,
     onInsertOrUpdateKeyframe,
     onRemoveKeyframe,
     onTextFontChange,
@@ -196,6 +267,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
               definition={definition}
               mixedPaths={sharedObject.mixedPaths}
               onNodePropertyChange={onNodePropertyChange}
+              onNodePropertyPreview={onNodePropertyPreview}
               onNodesPropertyChange={onNodesPropertyChange}
               onToggleEditable={onToggleEditable}
               allowEditableToggle={false}
@@ -236,9 +308,11 @@ export function InspectorPanel(props: InspectorPanelProps) {
               nodes={[primaryNode]}
               definition={definition}
               onNodePropertyChange={onNodePropertyChange}
+              onNodePropertyPreview={onNodePropertyPreview}
               onToggleEditable={onToggleEditable}
               currentFrame={currentFrame}
               activeAnimationClip={activeAnimationClip}
+              animationOverrides={animationOverrides}
               onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
               onRemoveKeyframe={onRemoveKeyframe}
             />
@@ -336,6 +410,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
             definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.position"))}
             mixedPaths={sharedTransform.mixedPaths}
             onNodePropertyChange={onNodePropertyChange}
+            onNodePropertyPreview={onNodePropertyPreview}
             onNodesPropertyChange={onNodesPropertyChange}
             onPropertyEditStart={onPropertyEditStart}
             onPropertyEditEnd={onPropertyEditEnd}
@@ -343,6 +418,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
             onToggleEditable={onToggleEditable}
             currentFrame={currentFrame}
             activeAnimationClip={activeAnimationClip}
+            animationOverrides={animationOverrides}
             onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
             onRemoveKeyframe={onRemoveKeyframe}
           />
@@ -353,6 +429,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
             definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.rotation"))}
             mixedPaths={sharedTransform.mixedPaths}
             onNodePropertyChange={onNodePropertyChange}
+            onNodePropertyPreview={onNodePropertyPreview}
             onNodesPropertyChange={onNodesPropertyChange}
             onPropertyEditStart={onPropertyEditStart}
             onPropertyEditEnd={onPropertyEditEnd}
@@ -360,6 +437,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
             onToggleEditable={onToggleEditable}
             currentFrame={currentFrame}
             activeAnimationClip={activeAnimationClip}
+            animationOverrides={animationOverrides}
             onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
             onRemoveKeyframe={onRemoveKeyframe}
           />
@@ -370,6 +448,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
             definitions={sharedTransform.definitions.filter((definition) => definition.path.startsWith("transform.scale"))}
             mixedPaths={sharedTransform.mixedPaths}
             onNodePropertyChange={onNodePropertyChange}
+            onNodePropertyPreview={onNodePropertyPreview}
             onNodesPropertyChange={onNodesPropertyChange}
             onPropertyEditStart={onPropertyEditStart}
             onPropertyEditEnd={onPropertyEditEnd}
@@ -377,6 +456,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
             onToggleEditable={onToggleEditable}
             currentFrame={currentFrame}
             activeAnimationClip={activeAnimationClip}
+            animationOverrides={animationOverrides}
             onInsertOrUpdateKeyframe={onInsertOrUpdateKeyframe}
             onRemoveKeyframe={onRemoveKeyframe}
           />
@@ -396,6 +476,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
               definition={definition}
               mixedPaths={sharedGeometry.mixedPaths}
               onNodePropertyChange={onNodePropertyChange}
+              onNodePropertyPreview={onNodePropertyPreview}
               onNodesPropertyChange={onNodesPropertyChange}
               onToggleEditable={onToggleEditable}
               allowEditableToggle={false}
@@ -818,6 +899,7 @@ interface TransformAxisGroupProps {
   definitions: NodePropertyDefinition[];
   mixedPaths?: Set<string>;
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
+  onNodePropertyPreview?: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onPropertyEditStart?: () => void;
   onPropertyEditEnd?: () => void;
@@ -825,8 +907,9 @@ interface TransformAxisGroupProps {
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
   currentFrame?: number;
   activeAnimationClip?: AnimationClip;
+  animationOverrides?: AnimationOverrideMap;
   onInsertOrUpdateKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
-  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number) => void;
+  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
 }
 
 function TransformAxisGroup(props: TransformAxisGroupProps) {
@@ -836,6 +919,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
     definitions,
     mixedPaths,
     onNodePropertyChange,
+    onNodePropertyPreview,
     onNodesPropertyChange,
     onPropertyEditStart,
     onPropertyEditEnd,
@@ -843,6 +927,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
     onToggleEditable,
     currentFrame,
     activeAnimationClip,
+    animationOverrides,
     onInsertOrUpdateKeyframe,
     onRemoveKeyframe,
   } = props;
@@ -861,7 +946,13 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
           const axis = definition.path.split(".").at(-1)?.toLowerCase() ?? "x";
           const axisLetter = axis.toUpperCase();
           const isMixed = mixedPaths?.has(definition.path) ?? false;
-          const displayValue = isMixed ? "" : String(getDisplayValue(primaryNode, definition));
+          const animatableProperty = !isMultiSelection && isAnimationPropertyPath(definition.path)
+            ? (definition.path as AnimationPropertyPath)
+            : null;
+          const displayRawValue = animatableProperty
+            ? getEvaluatedDisplayValue(primaryNode, definition, animatableProperty, activeAnimationClip, currentFrame, animationOverrides)
+            : getDisplayValue(primaryNode, definition);
+          const displayValue = isMixed ? "" : String(displayRawValue);
           const isEditable = !isMultiSelection && Boolean(primaryNode.editable[definition.path]);
 
           const commit = (value: string) => {
@@ -874,13 +965,18 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
             }
             onNodePropertyChange(primaryNode.id, definition, value);
           };
-
-          const animatableProperty = !isMultiSelection && isAnimationPropertyPath(definition.path)
-            ? (definition.path as AnimationPropertyPath)
-            : null;
-          const numericValue = typeof getDisplayValue(primaryNode, definition) === "number"
-            ? Number(getDisplayValue(primaryNode, definition))
-            : 0;
+          const preview = (value: string) => {
+            if (animatableProperty && isPropertyAnimated(activeAnimationClip, primaryNode.id, animatableProperty)) {
+              onNodePropertyPreview?.(primaryNode.id, definition, value);
+              return;
+            }
+            commit(value);
+          };
+          const numericValue = animatableProperty
+            ? getAnimationDisplayRawValue(primaryNode, animatableProperty, activeAnimationClip, currentFrame, animationOverrides)
+            : typeof displayRawValue === "number"
+              ? Number(displayRawValue)
+              : 0;
 
           return (
             <div
@@ -896,7 +992,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                 value={displayValue}
                 placeholder={isMixed ? "Mixed" : undefined}
                 onCommit={commit}
-                onPreview={commit}
+                onPreview={preview}
                 onEditStart={onPropertyEditStart}
                 onEditEnd={onPropertyEditEnd}
                 onEditCancel={onPropertyEditCancel}
@@ -913,6 +1009,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                   currentValue={numericValue}
                   currentFrame={currentFrame}
                   activeClip={activeAnimationClip}
+                  hasTemporaryOverride={hasAnimationOverrideAtFrame(primaryNode.id, animatableProperty, currentFrame, animationOverrides)}
                   onInsertOrUpdate={onInsertOrUpdateKeyframe}
                   onRemove={onRemoveKeyframe}
                   className="vec__keyframe"
@@ -942,8 +1039,9 @@ interface KeyframeButtonProps {
   currentValue: number;
   currentFrame: number | undefined;
   activeClip: AnimationClip | undefined;
+  hasTemporaryOverride?: boolean;
   onInsertOrUpdate: ((nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void) | undefined;
-  onRemove: ((nodeId: string, property: AnimationPropertyPath, frame: number) => void) | undefined;
+  onRemove: ((nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void) | undefined;
   className?: string;
 }
 
@@ -953,6 +1051,7 @@ function KeyframeButton({
   currentValue,
   currentFrame,
   activeClip,
+  hasTemporaryOverride = false,
   onInsertOrUpdate,
   onRemove,
   className = "row__keyframe",
@@ -962,8 +1061,10 @@ function KeyframeButton({
   const filled = hasFrame && hasKeyframeAtFrame(activeClip, nodeId, property, currentFrame ?? 0);
 
   let title = "Insert keyframe";
-  if (filled) {
-    title = "Update keyframe (Alt-click to remove)";
+  if (filled && hasTemporaryOverride) {
+    title = "Update keyframe";
+  } else if (filled) {
+    title = "Remove keyframe";
   } else if (animated) {
     title = "Property is animated — insert keyframe at current frame";
   }
@@ -975,8 +1076,8 @@ function KeyframeButton({
     if (!hasFrame) {
       return;
     }
-    if (event.altKey && filled) {
-      onRemove?.(nodeId, property, currentFrame ?? 0);
+    if (filled && !hasTemporaryOverride) {
+      onRemove?.(nodeId, property, currentFrame ?? 0, currentValue);
       return;
     }
     onInsertOrUpdate?.(nodeId, property, currentFrame ?? 0, currentValue);
@@ -1003,13 +1104,15 @@ interface PropertyRowProps {
   definition: NodePropertyDefinition;
   mixedPaths?: Set<string>;
   onNodePropertyChange: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
+  onNodePropertyPreview?: (nodeId: string, definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onNodesPropertyChange?: (nodeIds: string[], definition: NodePropertyDefinition, value: string | number | boolean) => void;
   onToggleEditable: (nodeId: string, definition: NodePropertyDefinition, enabled: boolean) => void;
   allowEditableToggle?: boolean;
   currentFrame?: number;
   activeAnimationClip?: AnimationClip;
+  animationOverrides?: AnimationOverrideMap;
   onInsertOrUpdateKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
-  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number) => void;
+  onRemoveKeyframe?: (nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => void;
 }
 
 function PropertyRow({
@@ -1017,16 +1120,23 @@ function PropertyRow({
   definition,
   mixedPaths,
   onNodePropertyChange,
+  onNodePropertyPreview,
   onNodesPropertyChange,
   onToggleEditable,
   allowEditableToggle = true,
   currentFrame,
   activeAnimationClip,
+  animationOverrides,
   onInsertOrUpdateKeyframe,
   onRemoveKeyframe,
 }: PropertyRowProps) {
   const isMultiSelection = nodes.length > 1;
-  const currentValues = nodes.map((node) => getDisplayValue(node, definition));
+  const animatableProperty = !isMultiSelection && nodes[0] && isAnimationPropertyPath(definition.path)
+    ? (definition.path as AnimationPropertyPath)
+    : null;
+  const currentValues = nodes.map((entry) => animatableProperty
+    ? getEvaluatedDisplayValue(entry, definition, animatableProperty, activeAnimationClip, currentFrame, animationOverrides)
+    : getDisplayValue(entry, definition));
   const currentValue = currentValues[0];
   const hasMixedValue = mixedPaths?.has(definition.path)
     ?? currentValues.some((value) => !Object.is(value, currentValue));
@@ -1034,9 +1144,6 @@ function PropertyRow({
   const stringValue = String(currentValue);
   const editableLabel = `Editable ${definition.label}`;
   const checkboxRef = useRef<HTMLInputElement | null>(null);
-  const animatableProperty = !isMultiSelection && nodes[0] && isAnimationPropertyPath(definition.path)
-    ? (definition.path as AnimationPropertyPath)
-    : null;
 
   useEffect(() => {
     if (checkboxRef.current && definition.input === "checkbox") {
@@ -1059,6 +1166,21 @@ function PropertyRow({
       return;
     }
     onNodePropertyChange(primaryNode.id, definition, value);
+  };
+
+  const previewValue = (value: string | number | boolean) => {
+    const primaryNode = nodes[0];
+    if (!primaryNode) {
+      return;
+    }
+    if (
+      animatableProperty &&
+      isPropertyAnimated(activeAnimationClip, primaryNode.id, animatableProperty)
+    ) {
+      onNodePropertyPreview?.(primaryNode.id, definition, value);
+      return;
+    }
+    commitValue(value);
   };
 
   let control: ReactNode;
@@ -1109,6 +1231,7 @@ function PropertyRow({
           value={hasMixedValue ? "" : stringValue}
           placeholder={hasMixedValue ? "Mixed" : undefined}
           onCommit={(value) => commitValue(value)}
+          onPreview={animatableProperty ? previewValue : undefined}
           step={definition.step ?? (definition.input === "degrees" ? 1 : 0.1)}
           precision={definition.input === "degrees" ? 2 : 3}
         />
@@ -1129,11 +1252,13 @@ function PropertyRow({
     );
   }
 
-  const numericValue = typeof currentValue === "number"
-    ? currentValue
-    : typeof currentValue === "boolean"
-      ? (currentValue ? 1 : 0)
-      : 0;
+  const numericValue = animatableProperty && nodes[0]
+    ? getAnimationDisplayRawValue(nodes[0], animatableProperty, activeAnimationClip, currentFrame, animationOverrides)
+    : typeof currentValue === "number"
+      ? currentValue
+      : typeof currentValue === "boolean"
+        ? (currentValue ? 1 : 0)
+        : 0;
 
   return (
     <div className="row row--has-actions">
@@ -1146,6 +1271,7 @@ function PropertyRow({
           currentValue={numericValue}
           currentFrame={currentFrame}
           activeClip={activeAnimationClip}
+          hasTemporaryOverride={hasAnimationOverrideAtFrame(nodes[0].id, animatableProperty, currentFrame, animationOverrides)}
           onInsertOrUpdate={onInsertOrUpdateKeyframe}
           onRemove={onRemoveKeyframe}
         />

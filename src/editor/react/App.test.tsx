@@ -21,6 +21,8 @@ const fakeScene = {
   pauseAnimation: vi.fn(),
   stopAnimation: vi.fn(),
   getNodeAnimationValue: vi.fn(() => null),
+  previewAnimationValue: vi.fn(),
+  setAnimationPreviewOverrides: vi.fn(),
 };
 
 const recentHandleStore = new Map<string, unknown>();
@@ -37,6 +39,13 @@ const exportPackageMocks = vi.hoisted(() => ({
     fileName: "fixture.zip",
     blob: new Blob(["zip-content"], { type: "application/zip" }),
   })),
+}));
+const viewportHostMocks = vi.hoisted(() => ({
+  onTransformObjectChange: null as null | ((nodeId: string, object: {
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number };
+    scale: { x: number; y: number; z: number };
+  }) => boolean),
 }));
 
 vi.mock("../fileAccess", async () => {
@@ -64,7 +73,14 @@ vi.mock("../recentFileHandles", () => ({
 }));
 
 vi.mock("./components/ViewportHost", () => ({
-  ViewportHost: ({ onSceneReady }: { onSceneReady: (scene: typeof fakeScene | null) => void }) => {
+  ViewportHost: ({
+    onSceneReady,
+    onTransformObjectChange,
+  }: {
+    onSceneReady: (scene: typeof fakeScene | null) => void;
+    onTransformObjectChange?: typeof viewportHostMocks.onTransformObjectChange;
+  }) => {
+    viewportHostMocks.onTransformObjectChange = onTransformObjectChange ?? null;
     useEffect(() => {
       onSceneReady(fakeScene);
       return () => onSceneReady(null);
@@ -150,6 +166,7 @@ describe("App", () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     recentHandleStore.clear();
+    viewportHostMocks.onTransformObjectChange = null;
     vi.clearAllMocks();
     mockNavigationType("navigate");
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fixture");
@@ -312,6 +329,94 @@ describe("App", () => {
       expect(screen.getByDisplayValue("Accent Plate")).toBeTruthy();
       expect(document.querySelector(".tl-kf.is-selected")).toBeTruthy();
     });
+  });
+
+  it("keeps viewport gizmo edits on animated transform channels as temporary overrides", () => {
+    const blueprint = createDefaultBlueprint();
+    const panelNode = blueprint.nodes.find((node) => node.name === "Hero Panel");
+    if (!panelNode) {
+      throw new Error("Hero Panel fixture node not found");
+    }
+
+    const positionYTrack = createAnimationTrack(panelNode.id, "transform.position.y");
+    positionYTrack.keyframes = [
+      createAnimationKeyframe(0, 0.8),
+      createAnimationKeyframe(10, 1.8),
+    ];
+    const rotationZTrack = createAnimationTrack(panelNode.id, "transform.rotation.z");
+    rotationZTrack.keyframes = [
+      createAnimationKeyframe(0, 0),
+      createAnimationKeyframe(10, 1),
+    ];
+    const clip = createAnimationClip("intro", { durationFrames: 24, tracks: [positionYTrack, rotationZTrack] });
+    blueprint.animation = {
+      activeClipId: clip.id,
+      clips: [clip],
+    };
+    persistWorkspace(blueprint, createWorkspaceProjectContext());
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+
+    expect(viewportHostMocks.onTransformObjectChange).toBeTruthy();
+    const handled = viewportHostMocks.onTransformObjectChange?.(panelNode.id, {
+      position: { x: 0.2, y: 2.25, z: 3.5 },
+      rotation: { x: 0, y: 0, z: 0.7 },
+      scale: { x: 1, y: 1, z: 1 },
+    });
+
+    expect(handled).toBe(true);
+    expect(fakeScene.previewAnimationValue).toHaveBeenCalledWith(panelNode.id, "transform.position.y", 2.25);
+    expect(fakeScene.previewAnimationValue).toHaveBeenCalledWith(panelNode.id, "transform.rotation.z", 0.7);
+    expect(fakeScene.previewAnimationValue).not.toHaveBeenCalledWith(panelNode.id, "transform.position.z", 3.5);
+  });
+
+  it("preserves other temporary channel overrides after committing one keyframe", async () => {
+    const blueprint = createDefaultBlueprint();
+    const panelNode = blueprint.nodes.find((node) => node.name === "Hero Panel");
+    if (!panelNode) {
+      throw new Error("Hero Panel fixture node not found");
+    }
+
+    const positionYTrack = createAnimationTrack(panelNode.id, "transform.position.y");
+    positionYTrack.keyframes = [createAnimationKeyframe(10, 1.8)];
+    const positionZTrack = createAnimationTrack(panelNode.id, "transform.position.z");
+    positionZTrack.keyframes = [createAnimationKeyframe(10, 0.5)];
+    const rotationZTrack = createAnimationTrack(panelNode.id, "transform.rotation.z");
+    rotationZTrack.keyframes = [createAnimationKeyframe(10, 1)];
+    const clip = createAnimationClip("intro", { durationFrames: 24, tracks: [positionYTrack, positionZTrack, rotationZTrack] });
+    blueprint.animation = {
+      activeClipId: clip.id,
+      clips: [clip],
+    };
+    persistWorkspace(blueprint, createWorkspaceProjectContext());
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    const { container } = render(<App />);
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    const heroRow = within(hierarchyTree).getByText("Hero Panel").closest('[role="treeitem"]') as HTMLElement;
+    fireEvent.click(heroRow);
+
+    viewportHostMocks.onTransformObjectChange?.(panelNode.id, {
+      position: { x: 0, y: 2.25, z: 3.5 },
+      rotation: { x: 0, y: 0, z: 0.7 },
+      scale: { x: 1, y: 1, z: 1 },
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Position Z") as HTMLInputElement).value).toBe("3.5");
+    });
+
+    fakeScene.previewAnimationValue.mockClear();
+    const positionKeyButtons = Array.from(container.querySelectorAll(".vec__keyframe")) as HTMLButtonElement[];
+    fireEvent.click(positionKeyButtons[2]);
+
+    expect(fakeScene.seekAnimation).toHaveBeenCalledWith(0);
+    expect(fakeScene.previewAnimationValue).toHaveBeenCalledWith(panelNode.id, "transform.position.y", 2.25);
+    expect(fakeScene.previewAnimationValue).toHaveBeenCalledWith(panelNode.id, "transform.rotation.z", 0.7);
+    expect(fakeScene.previewAnimationValue).not.toHaveBeenCalledWith(panelNode.id, "transform.position.z", 3.5);
   });
 
   it("continues from the persisted local project on demand", () => {

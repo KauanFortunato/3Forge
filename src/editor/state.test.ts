@@ -158,11 +158,11 @@ describe("EditorStore", () => {
     expect(text?.geometry.curveSegments).toBe(1);
     expect(store.animation.activeClipId).toBe("clip-1");
     expect(store.animation.clips[0]?.tracks).toHaveLength(2);
-    expect(store.animation.clips[0]?.tracks[0]?.keyframes.map((keyframe) => keyframe.frame)).toEqual([1, 12]);
+    expect(store.animation.clips[0]?.tracks[0]?.keyframes.map((keyframe) => keyframe.frame)).toEqual([0, 12]);
     expect(store.animation.clips[0]?.tracks[1]).toMatchObject({
       property: "visible",
       keyframes: [
-        { frame: 1, value: 1 },
+        { frame: 0, value: 1 },
         { frame: 18, value: 0 },
       ],
     });
@@ -1652,6 +1652,21 @@ describe("inspector keyframing", () => {
       expect(track?.keyframes[0].value).toBe(9.75);
     });
 
+    it("cancels an in-progress keyed edit without changing the previous keyframe value", () => {
+      const { store, box } = setupBoxStore();
+      const definition = getPropertyDefinitions(box).find((entry) => entry.path === "transform.position.z");
+      expect(definition).toBeTruthy();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 0, 2.5);
+      store.beginHistoryTransaction();
+      store.updateNodePropertyAtFrame(box.id, definition!, "8.5", 0);
+      store.cancelHistoryTransaction("ui");
+
+      const track = store.getAnimationTrackForProperty(box.id, "transform.position.z");
+      expect(track?.keyframes).toHaveLength(1);
+      expect(track?.keyframes[0]).toMatchObject({ frame: 0, value: 2.5 });
+    });
+
     it("commitAnimatableValueAtFrame returns false when no key sits at the frame", () => {
       const { store, box } = setupBoxStore();
 
@@ -1661,7 +1676,7 @@ describe("inspector keyframing", () => {
       expect(store.commitAnimatableValueAtFrame(box.id, "transform.position.y", 2, 0)).toBe(false);
     });
 
-    it("updateNodePropertyAtFrame writes the keyframe and leaves the base alone when on a keyframe", () => {
+    it("updateNodePropertyAtFrame does not update keyframes automatically when on a keyframe", () => {
       const { store, box } = setupBoxStore();
       const definition = getPropertyDefinitions(box).find((entry) => entry.path === "transform.position.z");
       expect(definition).toBeTruthy();
@@ -1673,10 +1688,10 @@ describe("inspector keyframing", () => {
 
       expect(box.transform.position.z).toBe(baseBefore); // base untouched
       const track = store.getAnimationTrackForProperty(box.id, "transform.position.z");
-      expect(track?.keyframes[0].value).toBe(8.5);
+      expect(track?.keyframes[0].value).toBe(1);
     });
 
-    it("updateNodePropertyAtFrame falls through to base when no keyframe at the playhead", () => {
+    it("updateNodePropertyAtFrame falls through to base when the property is not animated", () => {
       const { store, box } = setupBoxStore();
       const definition = getPropertyDefinitions(box).find((entry) => entry.path === "transform.position.z");
       expect(definition).toBeTruthy();
@@ -1685,6 +1700,71 @@ describe("inspector keyframing", () => {
 
       expect(box.transform.position.z).toBe(7.25);
       expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")).toBeUndefined();
+    });
+
+    it("setNodeTransformProperties only writes the transform axes supplied by the viewport", () => {
+      const { store, box } = setupBoxStore();
+      box.transform.position.y = 0.8;
+      box.transform.position.z = 0.1;
+      box.transform.rotation.z = 0.25;
+
+      store.setNodeTransformProperties(box.id, {
+        "transform.position.z": 3.5,
+      });
+
+      expect(box.transform.position.y).toBe(0.8);
+      expect(box.transform.position.z).toBe(3.5);
+      expect(box.transform.rotation.z).toBe(0.25);
+    });
+
+    it("updateNodePropertyAtFrame does not mutate base when animated between keyframes", () => {
+      const { store, box } = setupBoxStore();
+      const definition = getPropertyDefinitions(box).find((entry) => entry.path === "transform.position.z");
+      expect(definition).toBeTruthy();
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 0, 0);
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 12, 12);
+      const baseBefore = box.transform.position.z;
+
+      store.updateNodePropertyAtFrame(box.id, definition!, "7.25", 6);
+
+      expect(box.transform.position.z).toBe(baseBefore);
+      const track = store.getAnimationTrackForProperty(box.id, "transform.position.z");
+      expect(track?.keyframes.map((keyframe) => ({ frame: keyframe.frame, value: keyframe.value }))).toEqual([
+        { frame: 0, value: 0 },
+        { frame: 12, value: 12 },
+      ]);
+    });
+
+    it("evaluates animated properties without mutating base node state", () => {
+      const { store, box } = setupBoxStore();
+      box.transform.position.z = 5;
+
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 0, 0);
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 10, 10);
+
+      expect(store.getEvaluatedPropertyValue(box.id, "transform.position.z", 0)).toBe(0);
+      expect(store.getEvaluatedPropertyValue(box.id, "transform.position.z", 5)).toBe(5);
+      expect(box.transform.position.z).toBe(5);
+    });
+
+    it("keeps runtime editable bindings independent from animation keyframes", () => {
+      const { store, box } = setupBoxStore();
+      const definition = getPropertyDefinitions(box).find((entry) => entry.path === "transform.position.z");
+      expect(definition).toBeTruthy();
+
+      store.toggleEditableProperty(box.id, definition!, true);
+      store.insertOrUpdateKeyframeAtFrame(box.id, "transform.position.z", 0, 3);
+
+      expect(box.editable["transform.position.z"]).toBeTruthy();
+      expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")?.keyframes[0]).toMatchObject({
+        frame: 0,
+        value: 3,
+      });
+
+      store.toggleEditableProperty(box.id, definition!, false);
+      expect(box.editable["transform.position.z"]).toBeUndefined();
+      expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")?.keyframes).toHaveLength(1);
     });
 
     it("insertOrUpdateKeyframeAtFrame produces a single undo entry per call", () => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { MouseEvent } from "react";
+import type { Object3D } from "three";
 import { SceneEditor } from "../../scene";
 import { EditorStore } from "../../state";
 
@@ -9,11 +10,13 @@ interface ViewportHostProps {
   store: EditorStore;
   onSceneReady: (scene: SceneEditor | null) => void;
   onContextMenu: (event: MouseEvent<HTMLDivElement>) => void;
+  onTransformObjectChange?: (nodeId: string, object: Object3D) => boolean;
 }
 
-export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHostProps) {
+export function ViewportHost({ store, onSceneReady, onContextMenu, onTransformObjectChange }: ViewportHostProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onSceneReadyRef = useRef(onSceneReady);
+  const onTransformObjectChangeRef = useRef(onTransformObjectChange);
   const rightPointerStateRef = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
   const suppressContextMenuRef = useRef(false);
   const suppressContextMenuTimeoutRef = useRef<number | null>(null);
@@ -23,12 +26,19 @@ export function ViewportHost({ store, onSceneReady, onContextMenu }: ViewportHos
   }, [onSceneReady]);
 
   useEffect(() => {
+    onTransformObjectChangeRef.current = onTransformObjectChange;
+  }, [onTransformObjectChange]);
+
+  useEffect(() => {
     const container = containerRef.current;
     if (!container) {
       return;
     }
 
-    const scene = new SceneEditor(container, store);
+    const scene = new SceneEditor(container, store, {
+      onTransformObjectChange: (nodeId, object) =>
+        onTransformObjectChangeRef.current?.(nodeId, object) ?? false,
+    });
     onSceneReadyRef.current(scene);
 
     return () => {

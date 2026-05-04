@@ -69,6 +69,17 @@ type GizmoMode = "translate" | "rotate" | "scale";
 
 type MaterialBaseOptions = Record<string, unknown>;
 
+interface SceneEditorOptions {
+  onTransformObjectChange?: (nodeId: string, object: Object3D) => boolean;
+}
+
+interface AnimationPreviewOverride {
+  nodeId: string;
+  property: AnimationPropertyPath;
+  frame: number;
+  value: number;
+}
+
 function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialSpec): Material {
   switch (spec.type) {
     case "basic":
@@ -191,6 +202,7 @@ export class SceneEditor {
   private readonly textureLoader = new TextureLoader();
   private readonly container: HTMLElement;
   private readonly store: EditorStore;
+  private readonly onTransformObjectChange?: (nodeId: string, object: Object3D) => boolean;
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
@@ -221,6 +233,7 @@ export class SceneEditor {
 
   private animationFrame = 0;
   private animationTracks: CompiledAnimationTrack[] = [];
+  private readonly animationPreviewOverrides = new Map<string, AnimationPreviewOverride>();
   private animationRuntimeReady = false;
   private currentAnimationFrame = 0;
   private isAnimationPlaying = false;
@@ -242,9 +255,10 @@ export class SceneEditor {
   private skipNextSelectionPick = false;
   private readonly ORIENTATION_SIZE = 86;
 
-  constructor(container: HTMLElement, store: EditorStore) {
+  constructor(container: HTMLElement, store: EditorStore, options: SceneEditorOptions = {}) {
     this.container = container;
     this.store = store;
+    this.onTransformObjectChange = options.onTransformObjectChange;
 
     this.renderer = new WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -314,7 +328,10 @@ export class SceneEditor {
       }
 
       this.applyDragAlignmentSnap(nodeId, object);
-      this.store.setNodeTransformFromObject(nodeId, object);
+      const wasHandled = this.onTransformObjectChange?.(nodeId, object) ?? false;
+      if (!wasHandled) {
+        this.store.setNodeTransformFromObject(nodeId, object);
+      }
       this.updateSelectionHelper(
         this.store.selectedNodeIds
           .map((selectedNodeId) => this.objectMap.get(selectedNodeId))
@@ -424,6 +441,27 @@ export class SceneEditor {
       return value ? 1 : 0;
     }
     return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+
+  previewAnimationValue(nodeId: string, property: AnimationPropertyPath, value: number): void {
+    this.applyAnimationValueToObject(nodeId, property, value);
+  }
+
+  setAnimationPreviewOverrides(overrides: AnimationPreviewOverride[]): void {
+    this.animationPreviewOverrides.clear();
+    for (const override of overrides) {
+      if (!Number.isFinite(override.value)) {
+        continue;
+      }
+      this.animationPreviewOverrides.set(
+        `${override.nodeId}:${override.property}`,
+        {
+          ...override,
+          frame: Math.max(0, Math.round(override.frame)),
+        },
+      );
+    }
+    this.applyAnimationPreviewOverrides(this.getCurrentAnimationFrame());
   }
 
   playAnimation(): void {
@@ -1374,6 +1412,8 @@ export class SceneEditor {
     this.currentAnimationFrame = normalizedFrame;
     let selectedObjectWasAnimated = false;
 
+    this.resetAnimationTrackTargetsToBlueprintState();
+
     for (const track of this.animationTracks) {
       const value = evaluateCompiledTrack(track, normalizedFrame);
       if (isDiscreteAnimationProperty(track.propertyPath)) {
@@ -1398,6 +1438,44 @@ export class SceneEditor {
     if (selectedObjectWasAnimated) {
       this.selectionHelperDirty = true;
     }
+
+    this.applyAnimationPreviewOverrides(normalizedFrame);
+  }
+
+  private applyAnimationPreviewOverrides(frame: number): void {
+    const normalizedFrame = Math.max(0, Math.round(frame));
+    for (const override of this.animationPreviewOverrides.values()) {
+      if (override.frame !== normalizedFrame) {
+        continue;
+      }
+      this.applyAnimationValueToObject(override.nodeId, override.property, override.value);
+    }
+  }
+
+  private applyAnimationValueToObject(nodeId: string, property: AnimationPropertyPath, value: number): void {
+    const object = this.objectMap.get(nodeId);
+    if (!object || !Number.isFinite(value)) {
+      return;
+    }
+
+    if (property === "visible") {
+      const visible = animationValueToBoolean(property, value);
+      object.visible = visible;
+      const mesh = this.getAnimatedVisibilityMeshTarget(object);
+      if (mesh) {
+        mesh.visible = visible;
+      }
+      this.selectionHelperDirty = this.store.selectedNodeIds.includes(nodeId);
+      return;
+    }
+
+    const [owner, key] = resolveAnimationTarget(object, toObjectAnimationPath(property));
+    if (!owner || !key) {
+      return;
+    }
+
+    owner[key] = value;
+    this.selectionHelperDirty = this.store.selectedNodeIds.includes(nodeId);
   }
 
   private resetAnimatedObjectsToBlueprintState(): void {
@@ -1407,15 +1485,37 @@ export class SceneEditor {
         continue;
       }
 
-      object.visible = node.visible;
-      object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
-      object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
-      object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
+      this.applyNodeBaseStateToObject(node, object);
+    }
+  }
 
-      const mesh = this.getAnimatedVisibilityMeshTarget(object);
-      if (mesh) {
-        mesh.visible = node.visible;
+  private resetAnimationTrackTargetsToBlueprintState(): void {
+    const resetNodeIds = new Set<string>();
+    for (const track of this.animationTracks) {
+      const nodeId = String(track.target?.userData.nodeId ?? "");
+      if (!nodeId || resetNodeIds.has(nodeId)) {
+        continue;
       }
+
+      const node = this.store.getNode(nodeId);
+      if (!node || !track.target) {
+        continue;
+      }
+
+      this.applyNodeBaseStateToObject(node, track.target);
+      resetNodeIds.add(nodeId);
+    }
+  }
+
+  private applyNodeBaseStateToObject(node: EditorNode, object: Object3D): void {
+    object.visible = node.visible;
+    object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
+    object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
+    object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
+
+    const mesh = this.getAnimatedVisibilityMeshTarget(object);
+    if (mesh) {
+      mesh.visible = node.visible;
     }
   }
 

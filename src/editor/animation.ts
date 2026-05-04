@@ -224,6 +224,77 @@ export function findKeyframeAtFrame(
   return track.keyframes.find((keyframe) => keyframe.frame === target);
 }
 
+export function evaluateAnimationTrackValue(
+  track: AnimationTrack | undefined,
+  baseValue: number,
+  frame: number,
+): number {
+  if (!track || track.keyframes.length === 0) {
+    return baseValue;
+  }
+
+  const keyframes = sortTrackKeyframes(track.keyframes);
+  const targetFrame = Math.max(0, frame);
+  if (targetFrame < keyframes[0].frame) {
+    return baseValue;
+  }
+
+  let low = 0;
+  let high = keyframes.length - 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const candidate = keyframes[mid];
+    if (candidate.frame === targetFrame) {
+      return candidate.value;
+    }
+    if (candidate.frame < targetFrame) {
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  const previous = keyframes[Math.max(0, high)];
+  const next = keyframes[low];
+  if (!previous) {
+    return baseValue;
+  }
+  if (!next) {
+    return previous.value;
+  }
+  if (isDiscreteAnimationProperty(track.property)) {
+    return previous.value;
+  }
+
+  const span = Math.max(next.frame - previous.frame, 1);
+  const progress = applyAnimationEase(Math.max(0, Math.min((targetFrame - previous.frame) / span, 1)), next.ease);
+  return previous.value + (next.value - previous.value) * progress;
+}
+
+function applyAnimationEase(progress: number, ease: AnimationEasePreset): number {
+  const t = Math.max(0, Math.min(progress, 1));
+  switch (ease) {
+    case "linear":
+      return t;
+    case "easeIn":
+      return t * t;
+    case "easeOut":
+      return 1 - ((1 - t) * (1 - t));
+    case "backOut": {
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      return 1 + c3 * ((t - 1) ** 3) + c1 * ((t - 1) ** 2);
+    }
+    case "bounceOut":
+      if (t < 1 / 2.75) return 7.5625 * t * t;
+      if (t < 2 / 2.75) return 7.5625 * (t - 1.5 / 2.75) * (t - 1.5 / 2.75) + 0.75;
+      if (t < 2.5 / 2.75) return 7.5625 * (t - 2.25 / 2.75) * (t - 2.25 / 2.75) + 0.9375;
+      return 7.5625 * (t - 2.625 / 2.75) * (t - 2.625 / 2.75) + 0.984375;
+    case "easeInOut":
+      return t < 0.5 ? 2 * t * t : 1 - (((-2 * t) + 2) ** 2) / 2;
+  }
+}
+
 export function isPropertyAnimated(
   clip: AnimationClip | undefined,
   nodeId: string,
@@ -291,7 +362,7 @@ function normalizeTrackKeyframes(
     }
 
     const source = rawKeyframe as Record<string, unknown>;
-    const frame = clampFrame(normalizePositiveInteger(source.frame, 0), durationFrames);
+    const frame = clampFrame(normalizeNonNegativeInteger(source.frame, 0), durationFrames);
     const rawValue = typeof source.value === "boolean"
       ? (source.value ? 1 : 0)
       : typeof source.value === "number" && Number.isFinite(source.value)
@@ -426,6 +497,14 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
   }
 
   return Math.max(1, Math.round(value));
+}
+
+function normalizeNonNegativeInteger(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.round(value));
 }
 
 function generateAnimationId(prefix: string): string {

@@ -8,6 +8,7 @@ import {
   createAnimationKeyframe,
   createAnimationTrack,
   createDefaultAnimation,
+  evaluateAnimationTrackValue,
   getAnimationValue,
   isAnimationEasePreset,
   isAnimationPropertyPath,
@@ -1344,6 +1345,30 @@ export class EditorStore extends EventTarget {
     return this.getActiveAnimationClip()?.tracks.find((track) => track.nodeId === nodeId && track.property === property);
   }
 
+  getBasePropertyValue(nodeId: string, property: AnimationPropertyPath): number | null {
+    const node = this.getNode(nodeId);
+    return node ? getAnimationValue(node, property) : null;
+  }
+
+  getEvaluatedPropertyValue(nodeId: string, property: AnimationPropertyPath, frame: number): number | null {
+    const baseValue = this.getBasePropertyValue(nodeId, property);
+    if (baseValue === null) {
+      return null;
+    }
+
+    const track = this.getAnimationTrackForProperty(nodeId, property);
+    return normalizeAnimationValueForProperty(
+      property,
+      evaluateAnimationTrackValue(track, baseValue, Math.max(0, frame)),
+    );
+  }
+
+  hasKeyframeAtFrame(nodeId: string, property: AnimationPropertyPath, frame: number): boolean {
+    const track = this.getAnimationTrackForProperty(nodeId, property);
+    const target = Math.max(0, Math.round(frame));
+    return Boolean(track?.keyframes.some((entry) => entry.frame === target));
+  }
+
   ensureAnimationTrack(
     nodeId: string,
     property: AnimationPropertyPath,
@@ -2350,10 +2375,10 @@ export class EditorStore extends EventTarget {
   }
 
   /**
-   * Inspector edit hub: when the playhead is exactly on a keyframe for an
-   * animatable property, route the edit to that keyframe instead of the
-   * base value. Otherwise fall through to {@link updateNodeProperty} so
-   * non-keyed edits behave exactly as before.
+   * Inspector edit hub: animated properties are owned by animation tracks and
+   * should not be written to base state from normal numeric edits. The editor UI
+   * keeps animated edits in a temporary override layer until the keyframe
+   * diamond explicitly commits them.
    */
   updateNodePropertyAtFrame(
     nodeId: string,
@@ -2373,14 +2398,8 @@ export class EditorStore extends EventTarget {
             ? parsedValue
             : Number.NaN;
         if (Number.isFinite(numeric)) {
-          const committed = this.commitAnimatableValueAtFrame(
-            nodeId,
-            definition.path,
-            numeric,
-            frame,
-            source,
-          );
-          if (committed) {
+          const track = this.getAnimationTrackForProperty(nodeId, definition.path);
+          if (track && track.keyframes.length > 0) {
             return;
           }
         }
@@ -3168,6 +3187,42 @@ export class EditorStore extends EventTarget {
       z: object.scale.z,
     };
 
+    this.notify({ reason: "node", source, nodeId });
+  }
+
+  setNodeTransformProperties(
+    nodeId: string,
+    values: Partial<Record<AnimationPropertyPath, number>>,
+    source: EditorStoreChange["source"] = "scene",
+  ): void {
+    const node = this.getNode(nodeId);
+    if (!node) {
+      return;
+    }
+
+    const entries = Object.entries(values).filter((entry): entry is [AnimationPropertyPath, number] => {
+      const [property, value] = entry;
+      return property.startsWith("transform.") && Number.isFinite(value);
+    });
+    if (entries.length === 0) {
+      return;
+    }
+
+    let didChange = false;
+    for (const [property, value] of entries) {
+      if (!Object.is(getPropertyValue(node, property), value)) {
+        didChange = true;
+        break;
+      }
+    }
+    if (!didChange) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    for (const [property, value] of entries) {
+      setPropertyValue(node, property, value);
+    }
     this.notify({ reason: "node", source, nodeId });
   }
 

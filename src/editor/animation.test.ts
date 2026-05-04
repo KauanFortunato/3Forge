@@ -8,6 +8,7 @@ import {
   createAnimationKeyframe,
   createAnimationTrack,
   createDefaultAnimation,
+  evaluateAnimationTrackValue,
   findAnimationTrack,
   findKeyframeAtFrame,
   getAnimationValue,
@@ -115,11 +116,11 @@ describe("animation helpers", () => {
     expect(animation.activeClipId).toBe("clip-a");
     expect(animation.clips).toHaveLength(2);
     expect(animation.clips[0]?.tracks).toHaveLength(2);
-    expect(animation.clips[0]?.tracks[0]?.keyframes.map((keyframe) => keyframe.frame)).toEqual([1, 20]);
+    expect(animation.clips[0]?.tracks[0]?.keyframes.map((keyframe) => keyframe.frame)).toEqual([0, 20]);
     expect(animation.clips[0]?.tracks[1]).toMatchObject({
       property: "visible",
       keyframes: [
-        { frame: 1, value: 1 },
+        { frame: 0, value: 1 },
         { frame: 12, value: 0 },
       ],
     });
@@ -240,5 +241,17 @@ describe("animation helpers", () => {
     expect(hasKeyframeAtFrame(clip, "node-1", "transform.position.x", 7)).toBe(false);
     expect(hasKeyframeAtFrame(clip, "node-1", "visible", 6)).toBe(true);
     expect(hasKeyframeAtFrame(clip, "node-1", "transform.position.y", 0)).toBe(false);
+  });
+
+  it("evaluates interpolated numeric values between keyframes without touching base values", () => {
+    const track = createAnimationTrack("node-1", "transform.rotation.y");
+    track.keyframes = [
+      createAnimationKeyframe(1, 5, "linear"),
+      createAnimationKeyframe(10, 10, "linear"),
+    ];
+
+    expect(evaluateAnimationTrackValue(track, 0, 1)).toBe(5);
+    expect(evaluateAnimationTrackValue(track, 0, 5.5)).toBeCloseTo(7.5);
+    expect(evaluateAnimationTrackValue(track, 0, 10)).toBe(10);
   });
 });
