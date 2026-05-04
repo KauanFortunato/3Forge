@@ -4,12 +4,15 @@ import {
   Box3,
   BoxGeometry,
   Box3Helper,
+  ClampToEdgeWrapping,
   Color,
   CylinderGeometry,
   DirectionalLight,
   DoubleSide,
   Group,
   HemisphereLight,
+  LinearFilter,
+  LinearMipMapLinearFilter,
   Mesh,
   Material,
   MeshBasicMaterial,
@@ -20,7 +23,11 @@ import {
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   MeshToonMaterial,
+  MirroredRepeatWrapping,
+  NearestFilter,
+  NearestMipMapNearestFilter,
   PCFSoftShadowMap,
+  RepeatWrapping,
   ShadowMaterial,
   Object3D,
   OrthographicCamera,
@@ -62,6 +69,7 @@ import type {
   MaterialSpec,
   NodeOriginSpec,
   TextNode,
+  TextureSamplingOptions,
 } from "./types";
 
 type GizmoMode = "translate" | "rotate" | "scale";
@@ -178,6 +186,10 @@ export class SceneEditor {
   private isSnapModifierPressed = false;
   private pointerDownX = 0;
   private pointerDownY = 0;
+  /** Stringified blueprint.engine that we last applied — guards against
+   * re-applying author defaults during routine rebuilds (which would
+   * otherwise snap the user's camera back on every edit). */
+  private lastAppliedEngineKey: string | null = null;
   private mainLight: DirectionalLight | null = null;
   private selectionHelper: Box3Helper | null = null;
   private selectionVisualsSuppressed = false;
@@ -787,6 +799,12 @@ export class SceneEditor {
     if (desired !== this.currentSceneMode) {
       this.applySceneMode(desired);
     }
+    // Detect first apply BEFORE applying so we can frame after mount when no
+    // explicit camera pose was authored.
+    const engineKey = this.store.blueprint.engine ? JSON.stringify(this.store.blueprint.engine) : "";
+    const isFirstEngineApply = engineKey !== this.lastAppliedEngineKey;
+    const hasAuthoredCameraPose = Boolean(this.store.blueprint.engine?.camera?.position);
+    this.maybeApplyEngineSettings();
     this.clearViewportRoot();
     this.objectMap.clear();
     this.childContainerMap.clear();
@@ -818,37 +836,121 @@ export class SceneEditor {
     this.updateViewMode();
     this.refreshSelection();
     this.rebuildAnimationTimeline();
+
+    // Frame the imported content when this is the first time we see this
+    // blueprint and the asset didn't pin a camera pose. Skipping when the
+    // pose IS authored avoids overriding e.g. a tracked broadcast camera.
+    if (isFirstEngineApply && !hasAuthoredCameraPose) {
+      this.frameAllForCurrentMode();
+    }
+  }
+
+  /**
+   * Frame everything currently mounted on `viewportRoot`. The framing strategy
+   * differs by camera kind:
+   * - **Perspective**: pull back along an angled vector so depth reads cleanly.
+   * - **Orthographic**: centre on the content and size the half-extents to
+   *   the bounding box (with a small margin) so the layout fills the canvas.
+   */
+  private frameAllForCurrentMode(): void {
+    if (!this.computeSelectionBounds([this.viewportRoot])) return;
+    this.selectionBounds.getCenter(this.selectionCenter);
+    this.selectionBounds.getSize(this.selectionSize);
+
+    if (this.camera instanceof OrthographicCamera) {
+      const halfHeight = Math.max(this.selectionSize.y * 0.55, 1);
+      const aspect = (this.container.clientWidth || 1) / (this.container.clientHeight || 1);
+      this.camera.left = -halfHeight * aspect;
+      this.camera.right = halfHeight * aspect;
+      this.camera.top = halfHeight;
+      this.camera.bottom = -halfHeight;
+      this.camera.position.set(this.selectionCenter.x, this.selectionCenter.y, 10);
+      this.camera.lookAt(this.selectionCenter);
+      this.camera.updateProjectionMatrix();
+      this.orbitControls.target.copy(this.selectionCenter);
+    } else {
+      const radius = Math.max(this.selectionSize.length() * 0.5, 1);
+      const direction = new Vector3(0, 0.25, 1).normalize();
+      const distance = radius * 2.5;
+      this.camera.position.copy(this.selectionCenter).addScaledVector(direction, distance);
+      this.orbitControls.target.copy(this.selectionCenter);
+    }
+    this.orbitControls.update();
   }
 
   private isMissingTextureNode(nodeId: string): boolean {
+    // Also covers placeholder boxes for <Mesh>/<Model> primitives we couldn't
+    // load — both groups are kept in the tree for editing and round-trip but
+    // hidden from the viewport so they don't render as opaque white blocks.
     const w3d = this.store.blueprint.metadata?.w3d as
-      | { missingTextureNodeIds?: string[] }
+      | { missingTextureNodeIds?: string[]; meshPlaceholderNodeIds?: string[] }
       | undefined;
-    return Array.isArray(w3d?.missingTextureNodeIds) && w3d.missingTextureNodeIds.includes(nodeId);
+    if (Array.isArray(w3d?.missingTextureNodeIds) && w3d.missingTextureNodeIds.includes(nodeId)) {
+      return true;
+    }
+    if (Array.isArray(w3d?.meshPlaceholderNodeIds) && w3d.meshPlaceholderNodeIds.includes(nodeId)) {
+      return true;
+    }
+    return false;
   }
 
   private applyPainterOrderForW3D(): void {
     // Broadcast scenes (R3 / W3D) stack many quads at near-identical Z (e.g.
-    // -0.001 / -0.01 / -1). Three.js's depth buffer can't reliably resolve
-    // those tiny separations, causing visible z-fighting between siblings.
-    // The fix: ignore depth and render strictly in node-tree order (painter's
-    // algorithm) — which is what R3 does internally. We gate on the W3D shadow
-    // marker so non-imported 3D content keeps real depth testing.
+    // -0.001 / -0.01 / -1). The right fix depends on the camera:
+    //
+    // - **2D / orthographic** layouts have no real depth — painter's algorithm
+    //   matches what R3 does internally, so we render strictly in node-tree
+    //   order with depth writes off.
+    // - **3D / perspective** AR scenes legitimately need occlusion between
+    //   meshes that overlap in space; turning depth off would render the back
+    //   of a model in front of its face. We instead nudge transparent
+    //   materials with polygonOffset so coplanar UI overlays stop fighting
+    //   each other while opaque geometry keeps real depth testing.
     if (!this.store.blueprint.metadata?.w3d) return;
+    if (this.currentSceneMode === "2d") {
+      this.applyPainterOrderingForLegacyLayout();
+    } else {
+      this.applyCoplanarPolygonOffsetForLegacyLayout();
+    }
+  }
+
+  private applyPainterOrderingForLegacyLayout(): void {
     this.store.blueprint.nodes.forEach((node, index) => {
       const wrapper = this.objectMap.get(node.id);
       if (!wrapper) return;
       wrapper.traverse((child) => {
         if (!(child instanceof Mesh)) return;
         child.renderOrder = index;
-        const setDepth = (m: Material) => {
+        forEachMaterial(child, (m) => {
           m.depthWrite = false;
-        };
-        if (Array.isArray(child.material)) {
-          for (const m of child.material) setDepth(m);
-        } else if (child.material) {
-          setDepth(child.material);
-        }
+          m.polygonOffset = false;
+        });
+      });
+    });
+  }
+
+  private applyCoplanarPolygonOffsetForLegacyLayout(): void {
+    this.store.blueprint.nodes.forEach((node, index) => {
+      const wrapper = this.objectMap.get(node.id);
+      if (!wrapper) return;
+      wrapper.traverse((child) => {
+        if (!(child instanceof Mesh)) return;
+        // Stable secondary sort key for transparent materials — Three already
+        // sorts them back-to-front but ties (coplanar quads) collapse to
+        // insertion order, which can flicker. Tagging each mesh with a unique
+        // renderOrder per declaration removes the ambiguity.
+        child.renderOrder = index;
+        forEachMaterial(child, (m) => {
+          if (m.transparent) {
+            m.polygonOffset = true;
+            // Nudge transparent UI overlays a hair toward the camera so they
+            // don't fight with the opaque geometry sitting at the same Z.
+            m.polygonOffsetFactor = -1;
+            m.polygonOffsetUnits = -1;
+          } else {
+            m.polygonOffset = false;
+          }
+        });
       });
     });
   }
@@ -856,21 +958,38 @@ export class SceneEditor {
   private applyMasks(): void {
     // World-space rectangular clipping for nodes that reference an `isMask`
     // sibling (R3 MaskId convention). Mask geometry is treated as an axis-
-    // aligned rectangle in the XY plane after world transform — sufficient for
-    // broadcast text-clip cases. Animated masks aren't tracked yet.
+    // aligned rectangle in the XY plane after world transform — sufficient
+    // for broadcast text-clip cases. Multi-mask is intersected (AND); a
+    // node clipped by mask A AND mask B is only visible inside both. The
+    // `maskInverted` flag flips a mask's planes so the node is visible
+    // INSIDE the mask volume rather than outside the outer-clip default.
     this.viewportRoot.updateMatrixWorld(true);
     for (const node of this.store.blueprint.nodes) {
-      if (!node.maskId) continue;
+      // Prefer the multi-id list when present; fall back to the legacy
+      // single-id field. Either way, deduplicate so older blueprints whose
+      // exporter wrote both end up with one set of planes per mask.
+      const ids = node.maskIds && node.maskIds.length > 0
+        ? node.maskIds
+        : node.maskId
+          ? [node.maskId]
+          : null;
+      if (!ids) continue;
       const targetWrapper = this.objectMap.get(node.id);
-      const maskWrapper = this.objectMap.get(node.maskId);
-      if (!targetWrapper || !maskWrapper) continue;
-      const planes = this.computeMaskPlanes(maskWrapper);
-      if (!planes) continue;
-      this.applyClippingToMaterials(targetWrapper, planes);
+      if (!targetWrapper) continue;
+      const allPlanes: Plane[] = [];
+      for (const maskId of ids) {
+        const maskWrapper = this.objectMap.get(maskId);
+        if (!maskWrapper) continue;
+        const planes = this.computeMaskPlanes(maskWrapper, node.maskInverted === true);
+        if (planes) allPlanes.push(...planes);
+      }
+      if (allPlanes.length > 0) {
+        this.applyClippingToMaterials(targetWrapper, allPlanes);
+      }
     }
   }
 
-  private computeMaskPlanes(maskWrapper: Object3D): Plane[] | null {
+  private computeMaskPlanes(maskWrapper: Object3D, inverted: boolean): Plane[] | null {
     let mesh: Mesh | null = null;
     maskWrapper.traverse((child) => {
       if (!mesh && child instanceof Mesh) {
@@ -885,11 +1004,15 @@ export class SceneEditor {
     const bbox = meshObj.geometry.boundingBox;
     if (!bbox) return null;
     const worldBox = bbox.clone().applyMatrix4(meshObj.matrixWorld);
+    // Default (outer-clip): keep what's inside the four planes.
+    // Inverted: flip every normal so the half-spaces select the OUTSIDE of
+    // the mask volume — drawing is hidden inside the bbox, shown elsewhere.
+    const sign = inverted ? -1 : 1;
     return [
-      new Plane(new Vector3(1, 0, 0), -worldBox.min.x),
-      new Plane(new Vector3(-1, 0, 0), worldBox.max.x),
-      new Plane(new Vector3(0, 1, 0), -worldBox.min.y),
-      new Plane(new Vector3(0, -1, 0), worldBox.max.y),
+      new Plane(new Vector3(1 * sign, 0, 0), -worldBox.min.x * sign),
+      new Plane(new Vector3(-1 * sign, 0, 0), worldBox.max.x * sign),
+      new Plane(new Vector3(0, 1 * sign, 0), -worldBox.min.y * sign),
+      new Plane(new Vector3(0, -1 * sign, 0), worldBox.max.y * sign),
     ];
   }
 
@@ -1026,7 +1149,9 @@ export class SceneEditor {
   private createImageMesh(node: ImageNode): Mesh {
     const geometry = new PlaneGeometry(node.geometry.width, node.geometry.height);
     const isVideo = typeof node.image.mimeType === "string" && node.image.mimeType.startsWith("video/");
-    const texture = isVideo ? this.getVideoTexture(node.image.src) : this.getTexture(node.image.src);
+    const texture = isVideo
+      ? this.getVideoTexture(node.image.src)
+      : this.getTexture(node.image.src, node.material.textureOptions);
     const baseOptions = {
       ...this.createBaseMaterialOptions(node),
       map: texture,
@@ -1067,17 +1192,36 @@ export class SceneEditor {
     return parseFontAsset(fontAsset);
   }
 
-  private getTexture(src: string): Texture {
-    const cached = this.textureCache.get(src);
-    if (cached) {
-      return cached;
+  private getTexture(src: string, options?: TextureSamplingOptions): Texture {
+    // Without options the cache is keyed purely by src. Multiple meshes can
+    // share the same Texture instance, which is the cheapest path.
+    if (!options) {
+      const cached = this.textureCache.get(src);
+      if (cached) return cached;
+      const texture = this.textureLoader.load(src);
+      texture.colorSpace = SRGBColorSpace;
+      texture.needsUpdate = true;
+      this.textureCache.set(src, texture);
+      return texture;
     }
 
-    const texture = this.textureLoader.load(src);
-    texture.colorSpace = SRGBColorSpace;
-    texture.needsUpdate = true;
-    this.textureCache.set(src, texture);
-    return texture;
+    // With options the cache key composes src + a deterministic options
+    // signature — Three's Texture wrap/filter/offset are per-instance, so
+    // two quads using the same PNG with different sampling settings need
+    // distinct Texture objects.
+    const key = `${src}::${textureOptionsCacheKey(options)}`;
+    const cached = this.textureCache.get(key);
+    if (cached) return cached;
+    // Clone the canonical (no-options) texture so the underlying ImageBitmap
+    // is reused. clone() copies wrap/filter/offset slots which we then
+    // overwrite per W3D TextureMappingOption.
+    const base = this.getTexture(src);
+    const variant = base.clone();
+    variant.colorSpace = SRGBColorSpace;
+    applyTextureSamplingOptions(variant, options, this.renderer.capabilities.getMaxAnisotropy());
+    variant.needsUpdate = true;
+    this.textureCache.set(key, variant);
+    return variant;
   }
 
   private refreshSelection(): void {
@@ -1370,6 +1514,66 @@ export class SceneEditor {
     this.transformControls.camera = this.camera;
     this.applyOrbitControlsForMode(mode);
     this.resize();
+    // Forget the last applied engine snapshot so the next rebuildScene with a
+    // matching blueprint re-frames against the new camera.
+    this.lastAppliedEngineKey = null;
+  }
+
+  /**
+   * Apply blueprint.engine (background colour + camera framing) once per
+   * blueprint identity. Comparing the JSON serialisation is cheap (these
+   * objects are tiny) and it avoids stomping on the user's navigation when
+   * the same blueprint is rebuilt because of e.g. a node edit.
+   */
+  private maybeApplyEngineSettings(): void {
+    const engine = this.store.blueprint.engine;
+    const key = engine ? JSON.stringify(engine) : "";
+    if (key === this.lastAppliedEngineKey) {
+      return;
+    }
+    this.lastAppliedEngineKey = key;
+
+    if (engine?.background) {
+      if (engine.background.type === "color") {
+        const color = new Color(engine.background.color);
+        this.scene.background = color;
+        const alpha = engine.background.alpha ?? 1;
+        this.renderer.setClearColor(color, alpha);
+      } else {
+        this.scene.background = null;
+        this.renderer.setClearColor(0x000000, 0);
+      }
+    }
+
+    const cam = engine?.camera;
+    if (cam?.position) {
+      this.camera.position.set(cam.position.x, cam.position.y, cam.position.z);
+    }
+    if (cam?.target) {
+      this.orbitControls.target.set(cam.target.x, cam.target.y, cam.target.z);
+    } else if (cam?.position) {
+      // No explicit target — point at the world origin, which is where R3
+      // tracked broadcast cameras conventionally aim.
+      this.orbitControls.target.set(0, 0, 0);
+    }
+    if (cam?.fovY !== undefined && this.camera instanceof PerspectiveCamera) {
+      // Apply unconditionally — many R3 cameras only ship a FoV without an
+      // explicit position, and we still want the projection to match the
+      // authored field-of-view (the rest of the framing then comes from
+      // frameAllForCurrentMode).
+      this.camera.fov = cam.fovY;
+      this.camera.updateProjectionMatrix();
+    }
+    if (cam?.position || cam?.target || cam?.fovY !== undefined) {
+      this.orbitControls.update();
+    }
+    // Mirror broadcast metadata (IsTracked, TrackingCamera, RenderTarget,
+    // AspectRatio, FieldofViewX, sourceId/Name) onto the camera object so
+    // future broadcast plug-ins / runtime exports can read it back without
+    // having to traverse the blueprint.
+    if (cam?.metadata) {
+      this.camera.userData.w3d = { ...this.camera.userData.w3d, ...cam.metadata };
+    }
   }
 
   private startLoop(): void {
@@ -1572,6 +1776,30 @@ function toObjectAnimationPath(path: string): string {
 }
 
 function resolveAnimationTarget(target: Object3D, path: string): [Record<string, unknown> | null, string | null] {
+  // material.* paths target the first Mesh's material under the wrapper —
+  // wrappers are Groups so a generic property walk would fail to find
+  // `.material`. We pick the first Mesh and force material.transparent so
+  // opacity changes actually composite (Three skips the alpha sort path
+  // when transparent=false).
+  if (path.startsWith("material.")) {
+    let mesh: Mesh | null = null;
+    target.traverse((child) => {
+      if (!mesh && child instanceof Mesh) mesh = child;
+    });
+    if (!mesh) return [null, null];
+    const meshObj: Mesh = mesh;
+    const material = meshObj.material;
+    const owner = Array.isArray(material) ? material[0] : material;
+    if (!owner) return [null, null];
+    if (path === "material.opacity") {
+      forEachMaterial(meshObj, (m) => {
+        m.transparent = true;
+      });
+    }
+    const property = path.slice("material.".length);
+    return [owner as unknown as Record<string, unknown>, property];
+  }
+
   const segments = path.split(".");
   const property = segments.pop() ?? null;
   if (!property) {
@@ -1670,6 +1898,81 @@ function bounceOut(t: number): number {
   }
   const shifted = t - 2.625 / d1;
   return n1 * shifted * shifted + 0.984375;
+}
+
+function forEachMaterial(mesh: Mesh, fn: (material: Material) => void): void {
+  const material = mesh.material;
+  if (Array.isArray(material)) {
+    for (const m of material) fn(m);
+  } else if (material) {
+    fn(material);
+  }
+}
+
+/**
+ * Stable signature for cache lookups. Order matters: the same six fields
+ * always go into the key in the same order so two equivalent options
+ * objects produce identical strings.
+ */
+function textureOptionsCacheKey(options: TextureSamplingOptions): string {
+  return [
+    options.wrapU ?? "_",
+    options.wrapV ?? "_",
+    options.magFilter ?? "_",
+    options.minFilter ?? "_",
+    options.anisotropy ?? "_",
+    options.offsetU ?? "_",
+    options.offsetV ?? "_",
+    options.repeatU ?? "_",
+    options.repeatV ?? "_",
+  ].join("|");
+}
+
+function applyTextureSamplingOptions(
+  texture: Texture,
+  options: TextureSamplingOptions,
+  maxAnisotropy: number,
+): void {
+  if (options.wrapU) texture.wrapS = wrapToThree(options.wrapU);
+  if (options.wrapV) texture.wrapT = wrapToThree(options.wrapV);
+  if (options.magFilter) texture.magFilter = magFilterToThree(options.magFilter);
+  if (options.minFilter) texture.minFilter = minFilterToThree(options.minFilter);
+  if (options.anisotropy !== undefined) {
+    // Cap to GPU max so we don't request unsupported levels.
+    texture.anisotropy = Math.min(options.anisotropy, Math.max(1, maxAnisotropy));
+  }
+  if (options.offsetU !== undefined) texture.offset.x = options.offsetU;
+  if (options.offsetV !== undefined) texture.offset.y = options.offsetV;
+  if (options.repeatU !== undefined) texture.repeat.x = options.repeatU;
+  if (options.repeatV !== undefined) texture.repeat.y = options.repeatV;
+  // Switching to a wrap mode other than ClampToEdge requires repeat>0,
+  // which Three already enforces, but make sure offset/repeat changes are
+  // visible immediately.
+  texture.needsUpdate = true;
+}
+
+function wrapToThree(value: NonNullable<TextureSamplingOptions["wrapU"]>): Texture["wrapS"] {
+  switch (value) {
+    case "repeat": return RepeatWrapping;
+    case "mirror": return MirroredRepeatWrapping;
+    case "clamp":
+    default: return ClampToEdgeWrapping;
+  }
+}
+
+function magFilterToThree(value: NonNullable<TextureSamplingOptions["magFilter"]>): Texture["magFilter"] {
+  // MagFilter only has Nearest or Linear in WebGL — anisotropic falls back
+  // to Linear and the dedicated `anisotropy` field handles the upgrade.
+  return value === "nearest" ? NearestFilter : LinearFilter;
+}
+
+function minFilterToThree(value: NonNullable<TextureSamplingOptions["minFilter"]>): Texture["minFilter"] {
+  switch (value) {
+    case "nearest": return NearestMipMapNearestFilter;
+    case "anisotropic":
+    case "linear":
+    default: return LinearMipMapLinearFilter;
+  }
 }
 
 function resolveOriginOffset(
