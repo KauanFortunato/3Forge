@@ -858,7 +858,16 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
 
   const animation = normalizeAnimation(source.animation, new Set(importedNodes.map((node) => node.id)));
 
-  return {
+  const sceneMode = source.sceneMode === "2d" || source.sceneMode === "3d" ? source.sceneMode : undefined;
+  const engine = normalizeEngineSettings(source.engine);
+  const exposedProperties = normalizeExposedProperties(source.exposedProperties);
+  const importMetadata = normalizeImportMetadata(source.importMetadata);
+  const metadata =
+    source.metadata && typeof source.metadata === "object" && !Array.isArray(source.metadata)
+      ? (source.metadata as Record<string, unknown>)
+      : undefined;
+
+  const result: ComponentBlueprint = {
     version: 1,
     componentName: typeof source.componentName === "string" ? source.componentName : fallback.componentName,
     fonts: importedFonts,
@@ -867,6 +876,132 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     nodes: importedNodes,
     animation,
   };
+  if (sceneMode) result.sceneMode = sceneMode;
+  if (engine) result.engine = engine;
+  if (exposedProperties) result.exposedProperties = exposedProperties;
+  if (importMetadata) result.importMetadata = importMetadata;
+  if (metadata) result.metadata = metadata;
+  return result;
+}
+
+function normalizeExposedProperties(raw: unknown): ComponentBlueprint["exposedProperties"] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: NonNullable<ComponentBlueprint["exposedProperties"]> = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const obj = entry as Record<string, unknown>;
+    if (typeof obj.id !== "string" || obj.id.length === 0) continue;
+    const allowedTypes = new Set(["string", "number", "boolean", "color", "texture", "unknown"]);
+    const type = allowedTypes.has(obj.type as string) ? (obj.type as NonNullable<ComponentBlueprint["exposedProperties"]>[number]["type"]) : "unknown";
+    let defaultValue: string | number | boolean | null = null;
+    if (typeof obj.defaultValue === "string" || typeof obj.defaultValue === "number" || typeof obj.defaultValue === "boolean") {
+      defaultValue = obj.defaultValue;
+    }
+    const property: NonNullable<ComponentBlueprint["exposedProperties"]>[number] = {
+      id: obj.id,
+      label: typeof obj.label === "string" ? obj.label : obj.id,
+      type,
+      defaultValue,
+    };
+    if (typeof obj.controllableId === "string") property.controllableId = obj.controllableId;
+    if (typeof obj.updateMode === "string") property.updateMode = obj.updateMode;
+    if (obj.raw && typeof obj.raw === "object" && !Array.isArray(obj.raw)) {
+      const rawAttrs: Record<string, string> = {};
+      for (const [k, v] of Object.entries(obj.raw as Record<string, unknown>)) {
+        if (typeof v === "string") rawAttrs[k] = v;
+      }
+      if (Object.keys(rawAttrs).length > 0) property.raw = rawAttrs;
+    }
+    out.push(property);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeImportMetadata(raw: unknown): ComponentBlueprint["importMetadata"] | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Record<string, unknown>;
+  const out: NonNullable<ComponentBlueprint["importMetadata"]> = {
+    source: typeof obj.source === "string" ? obj.source : "unknown",
+  };
+  if (Array.isArray(obj.lights)) {
+    const lights: NonNullable<NonNullable<ComponentBlueprint["importMetadata"]>["lights"]> = [];
+    for (const entry of obj.lights) {
+      if (!entry || typeof entry !== "object") continue;
+      const lightObj = entry as Record<string, unknown>;
+      if (typeof lightObj.id !== "string" || typeof lightObj.name !== "string") continue;
+      const kind = lightObj.kind === "point" || lightObj.kind === "spot" || lightObj.kind === "ambient"
+        ? lightObj.kind
+        : "directional";
+      const light: NonNullable<NonNullable<ComponentBlueprint["importMetadata"]>["lights"]>[number] = {
+        id: lightObj.id,
+        name: lightObj.name,
+        kind,
+      };
+      if (typeof lightObj.intensity === "number") light.intensity = lightObj.intensity;
+      if (typeof lightObj.color === "string") light.color = lightObj.color;
+      const position = normalizeOptionalVec3(lightObj.position);
+      if (position) light.position = position;
+      const rotation = normalizeOptionalVec3(lightObj.rotation);
+      if (rotation) light.rotation = rotation;
+      lights.push(light);
+    }
+    if (lights.length > 0) out.lights = lights;
+  }
+  if (Array.isArray(obj.shaderFiles)) {
+    out.shaderFiles = obj.shaderFiles.filter((s): s is string => typeof s === "string");
+  }
+  if (Array.isArray(obj.notes)) {
+    out.notes = obj.notes.filter((s): s is string => typeof s === "string");
+  }
+  return out;
+}
+
+function normalizeEngineSettings(raw: unknown): ComponentBlueprint["engine"] | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Record<string, unknown>;
+  const out: NonNullable<ComponentBlueprint["engine"]> = {};
+
+  if (obj.background && typeof obj.background === "object") {
+    const bg = obj.background as Record<string, unknown>;
+    if (bg.type === "color" && typeof bg.color === "string") {
+      const alpha = typeof bg.alpha === "number" && Number.isFinite(bg.alpha) ? bg.alpha : undefined;
+      out.background = alpha !== undefined
+        ? { type: "color", color: bg.color, alpha }
+        : { type: "color", color: bg.color };
+    } else if (bg.type === "transparent") {
+      out.background = { type: "transparent" };
+    }
+  }
+
+  if (obj.camera && typeof obj.camera === "object") {
+    const cam = obj.camera as Record<string, unknown>;
+    const mode = cam.mode === "orthographic" ? "orthographic" : cam.mode === "perspective" ? "perspective" : undefined;
+    if (mode) {
+      const camera: NonNullable<NonNullable<ComponentBlueprint["engine"]>["camera"]> = { mode };
+      if (typeof cam.fovY === "number" && Number.isFinite(cam.fovY)) camera.fovY = cam.fovY;
+      const position = normalizeOptionalVec3(cam.position);
+      if (position) camera.position = position;
+      const rotation = normalizeOptionalVec3(cam.rotation);
+      if (rotation) camera.rotation = rotation;
+      const target = normalizeOptionalVec3(cam.target);
+      if (target) camera.target = target;
+      if (typeof cam.near === "number" && Number.isFinite(cam.near)) camera.near = cam.near;
+      if (typeof cam.far === "number" && Number.isFinite(cam.far)) camera.far = cam.far;
+      out.camera = camera;
+    }
+  }
+
+  return out.background || out.camera ? out : undefined;
+}
+
+function normalizeOptionalVec3(raw: unknown): { x: number; y: number; z: number } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Record<string, unknown>;
+  const x = typeof obj.x === "number" && Number.isFinite(obj.x) ? obj.x : undefined;
+  const y = typeof obj.y === "number" && Number.isFinite(obj.y) ? obj.y : undefined;
+  const z = typeof obj.z === "number" && Number.isFinite(obj.z) ? obj.z : undefined;
+  if (x === undefined && y === undefined && z === undefined) return undefined;
+  return { x: x ?? 0, y: y ?? 0, z: z ?? 0 };
 }
 
 interface EditorStoreSnapshot {

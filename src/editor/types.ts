@@ -33,7 +33,8 @@ export type AnimationPropertyPath =
   | "transform.rotation.z"
   | "transform.scale.x"
   | "transform.scale.y"
-  | "transform.scale.z";
+  | "transform.scale.z"
+  | "material.opacity";
 export type AnimationEasePreset = "linear" | "easeIn" | "easeOut" | "easeInOut" | "backOut" | "bounceOut";
 
 export interface Vec3Like {
@@ -76,6 +77,29 @@ export interface MaterialSpec {
   thickness: number;
   specular: string;
   shininess: number;
+  /**
+   * Optional texture sampling overrides — sourced from W3D
+   * TextureMappingOption (wrap mode, filtering, offset/repeat). Renderer
+   * applies them when the material has a `map`. Absent fields fall back to
+   * Three's defaults.
+   */
+  textureOptions?: TextureSamplingOptions;
+}
+
+export type TextureWrap = "clamp" | "repeat" | "mirror";
+export type TextureFilter = "nearest" | "linear" | "anisotropic";
+
+export interface TextureSamplingOptions {
+  wrapU?: TextureWrap;
+  wrapV?: TextureWrap;
+  magFilter?: TextureFilter;
+  minFilter?: TextureFilter;
+  /** Anisotropy level (1..16). Default 1; capped by GPU at runtime. */
+  anisotropy?: number;
+  offsetU?: number;
+  offsetV?: number;
+  repeatU?: number;
+  repeatV?: number;
 }
 
 export interface MaterialAsset {
@@ -146,8 +170,23 @@ export interface BaseEditorNode {
   editable: Record<NodePropertyPath, EditableBinding>;
   /** When set, the node's children/contents are clipped to this node's plane bounds. */
   isMask?: boolean;
-  /** When set, this node's rendering is clipped to the mask node referenced by id. */
+  /**
+   * When set, this node's rendering is clipped to the mask node referenced
+   * by id. Kept as the primary single-mask case for back-compat with
+   * blueprints written before multi-mask support landed.
+   */
   maskId?: string;
+  /**
+   * When set (length > 0), all listed masks are intersected (logical AND)
+   * before clipping. The first entry usually mirrors `maskId` — both stay
+   * in sync at write time.
+   */
+  maskIds?: string[];
+  /**
+   * Invert clipping — keep the inside of the mask volume rather than the
+   * outside. Maps W3D's `IsInvertedMask="True"`.
+   */
+  maskInverted?: boolean;
 }
 
 export interface GroupNode extends BaseEditorNode {
@@ -243,6 +282,27 @@ export interface ComponentBlueprint {
   componentName: string;
   /** Engine rendering mode. Absent = "3d" for backwards compatibility. */
   sceneMode?: SceneMode;
+  /**
+   * Engine/viewport defaults harvested at import time (background colour,
+   * authored camera pose, FOV). Consumed once when the blueprint is mounted —
+   * subsequent navigation belongs to the user, not the asset.
+   */
+  engine?: EngineViewportSettings;
+  /**
+   * Author-exposed parameters (R3 ExportList / ExportProperty) that an
+   * end-user is meant to tweak per playout — names, scores, photos, colours.
+   * Persisted on the blueprint for the inspector UI to render and for
+   * runtime exports to bind to. Empty/absent for blueprints that didn't
+   * come from W3D.
+   */
+  exposedProperties?: ExposedProperty[];
+  /**
+   * Lossy import side-channel: anything we recognised but don't fully render
+   * yet (lights, custom shaders, exotic primitives). Stored so a future
+   * version of the renderer can pick it up and so round-trip tools can
+   * surface it to the user.
+   */
+  importMetadata?: ImportMetadata;
   fonts: FontAsset[];
   materials: MaterialAsset[];
   images: ImageAsset[];
@@ -254,6 +314,90 @@ export interface ComponentBlueprint {
    * unknown keys but preserve them on round-trip.
    */
   metadata?: Record<string, unknown>;
+}
+
+export type ExposedPropertyType = "string" | "number" | "boolean" | "color" | "texture" | "unknown";
+
+export interface ExposedProperty {
+  /** Stable id used by exporters and runtime bindings — the W3D PropertyName. */
+  id: string;
+  /** Human-readable label shown in the inspector — the W3D Name attribute. */
+  label: string;
+  type: ExposedPropertyType;
+  defaultValue: string | number | boolean | null;
+  /** GUID (lower-cased) of the W3D object this property writes to. */
+  controllableId?: string;
+  /** Update strategy from R3 (e.g. "OnTake", "OnChange"). Stored verbatim. */
+  updateMode?: string;
+  /** All XML attributes preserved for forward-compat / round-trip. */
+  raw?: Record<string, string>;
+}
+
+export interface ImportMetadata {
+  source: "w3d" | string;
+  /** Lights captured from the W3D scene that we don't yet instantiate. */
+  lights?: ImportedLight[];
+  /** HLSL/CSO shader filenames discovered next to the scene. Not yet used. */
+  shaderFiles?: string[];
+  /** Anything else worth surfacing later — left open for forward-compat. */
+  notes?: string[];
+}
+
+export interface ImportedLight {
+  id: string;
+  name: string;
+  kind: "directional" | "point" | "spot" | "ambient";
+  intensity?: number;
+  color?: string;
+  position?: Vec3Like;
+  rotation?: Vec3Like;
+}
+
+/**
+ * Asset-authored viewport defaults. The renderer consumes these once on import
+ * to set the initial framing/background; the user's subsequent orbit/pan/zoom
+ * is not written back here.
+ */
+export interface EngineViewportSettings {
+  background?: EngineBackgroundSettings;
+  camera?: EngineCameraSettings;
+}
+
+export type EngineBackgroundSettings =
+  | { type: "color"; color: string; alpha?: number }
+  | { type: "transparent" };
+
+export interface EngineCameraSettings {
+  /** Mirrors `sceneMode` for convenience; importers should keep the two in sync. */
+  mode: "perspective" | "orthographic";
+  /** Vertical field-of-view in degrees. Perspective only. */
+  fovY?: number;
+  /** Authored camera position in editor (Three.js) space. */
+  position?: Vec3Like;
+  /** Authored camera Euler rotation in degrees, X/Y/Z. */
+  rotation?: Vec3Like;
+  /** Optional explicit look-at target. When absent, derived from rotation+position. */
+  target?: Vec3Like;
+  near?: number;
+  far?: number;
+  /**
+   * Source-engine camera flags worth keeping for broadcast integrations:
+   * tracked / tracking-channel / render-target / aspect / horizontal FOV.
+   * Renderer copies into camera.userData; not consumed for projection yet.
+   */
+  metadata?: EngineCameraMetadata;
+}
+
+export interface EngineCameraMetadata {
+  isTracked?: boolean;
+  trackingCamera?: string;
+  renderTarget?: string;
+  aspectRatio?: number;
+  fovX?: number;
+  /** Original W3D Camera Id GUID, lower-cased. */
+  sourceId?: string;
+  /** Camera name, preserved verbatim. */
+  sourceName?: string;
 }
 
 export interface NodePropertyDefinition {

@@ -24,6 +24,7 @@ export const ANIMATION_PROPERTIES: Array<{ path: AnimationPropertyPath; label: s
   { path: "transform.scale.x", label: "Scale X" },
   { path: "transform.scale.y", label: "Scale Y" },
   { path: "transform.scale.z", label: "Scale Z" },
+  { path: "material.opacity", label: "Opacity" },
 ];
 
 export const ANIMATION_EASE_OPTIONS: Array<{ value: AnimationEasePreset; label: string; gsap: string }> = [
