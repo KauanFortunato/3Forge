@@ -54,6 +54,7 @@ interface AnimationTimelineProps {
   onSetTrackMuted: (clipId: string, trackId: string, muted: boolean) => void;
   onRemoveKeyframes: (trackId: string, keyframeIds: string[]) => void;
   onShiftKeyframes: (trackId: string, keyframeIds: string[], frameDelta: number) => void;
+  onPasteKeyframes: (keyframes: KeyframeClipboardEntry[], frame: number) => SelectedKeyframeRef[];
 }
 
 interface DragState {
@@ -62,7 +63,7 @@ interface DragState {
   laneLeft: number;
   laneWidth: number;
   originFrame: number;
-  batchKeyframeIds: string[];
+  batchKeyframes: SelectedKeyframeRef[];
   batchOriginFrames: Map<string, number>;
   lastDelta: number;
 }
@@ -70,6 +71,29 @@ interface DragState {
 interface ScrubState {
   laneLeft: number;
   laneWidth: number;
+}
+
+interface AreaSelectState {
+  startContentX: number;
+  startContentY: number;
+  currentContentX: number;
+  currentContentY: number;
+  currentClientX: number;
+  currentClientY: number;
+  additive: boolean;
+  baseSelection: Set<string>;
+}
+
+interface SelectedKeyframeRef {
+  trackId: string;
+  keyframeId: string;
+}
+
+interface KeyframeClipboardEntry {
+  trackId: string;
+  frame: number;
+  value: number;
+  ease: AnimationEasePreset;
 }
 
 type TimelineViewMode = "selected" | "all";
@@ -103,18 +127,21 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     onSetTrackMuted,
     onRemoveKeyframes,
     onShiftKeyframes,
+    onPasteKeyframes,
   } = props;
 
   const [propertyToAdd, setPropertyToAdd] = useState<AnimationPropertyPath>("transform.position.x");
   const [viewMode, setViewMode] = useState<TimelineViewMode>("selected");
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [scrubState, setScrubState] = useState<ScrubState | null>(null);
+  const [areaSelectState, setAreaSelectState] = useState<AreaSelectState | null>(null);
   const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<Set<string>>(() => new Set());
   const [timelinePixelsPerFrame, setTimelinePixelsPerFrame] = useState(12);
   const timelineRootRef = useRef<HTMLElement | null>(null);
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const tracksScrollRef = useRef<HTMLDivElement | null>(null);
   const lanesScrollRef = useRef<HTMLDivElement | null>(null);
+  const keyframeClipboardRef = useRef<KeyframeClipboardEntry[]>([]);
 
   const activeClip = useMemo(
     () => animation.clips.find((clip) => clip.id === animation.activeClipId) ?? animation.clips[0],
@@ -139,6 +166,16 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   const visibleTrackCount = visibleTracks.length;
   const visibleSelectedTrack = visibleTracks.find((track) => track.id === selectedTrackId) ?? null;
   const visibleSelectedKeyframe = visibleSelectedTrack?.keyframes.find((keyframe) => keyframe.id === selectedKeyframeId) ?? null;
+  const durationFrames = activeClip?.durationFrames ?? 1;
+  const selectedKeyframeIdsRef = useRef(selectedKeyframeIds);
+  const resolvedTracksRef = useRef(resolvedTracks);
+  const currentFrameRef = useRef(currentFrame);
+
+  useEffect(() => {
+    selectedKeyframeIdsRef.current = selectedKeyframeIds;
+    resolvedTracksRef.current = resolvedTracks;
+    currentFrameRef.current = currentFrame;
+  }, [currentFrame, resolvedTracks, selectedKeyframeIds]);
   useEffect(() => {
     if (availableProperties.length > 0 && !availableProperties.some((entry) => entry.path === propertyToAdd)) {
       setPropertyToAdd(availableProperties[0].path);
@@ -152,13 +189,20 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
 
     const handlePointerMove = (event: PointerEvent) => {
       const frame = positionToFrame(event.clientX, dragState.laneLeft, dragState.laneWidth, activeClip?.durationFrames ?? 1);
-      if (dragState.batchKeyframeIds.length > 1) {
-        const delta = frame - dragState.originFrame;
+      if (dragState.batchKeyframes.length > 1) {
+        const rawDelta = frame - dragState.originFrame;
+        const delta = clampKeyframeDelta(
+          rawDelta,
+          Array.from(dragState.batchOriginFrames.values()),
+          activeClip?.durationFrames ?? 1,
+        );
         if (delta !== dragState.lastDelta) {
-          onShiftKeyframes(dragState.trackId, dragState.batchKeyframeIds, delta - dragState.lastDelta);
+          for (const batch of groupSelectedKeyframesByTrack(dragState.batchKeyframes)) {
+            onShiftKeyframes(batch.trackId, batch.keyframeIds, delta - dragState.lastDelta);
+          }
           dragState.lastDelta = delta;
         }
-        const primaryOrigin = dragState.batchOriginFrames.get(dragState.keyframeId) ?? dragState.originFrame;
+        const primaryOrigin = dragState.batchOriginFrames.get(getSelectionKey(dragState.trackId, dragState.keyframeId)) ?? dragState.originFrame;
         onFrameChange(Math.max(0, Math.min(activeClip?.durationFrames ?? 1, primaryOrigin + delta)));
       } else {
         onUpdateKeyframe(dragState.trackId, dragState.keyframeId, { frame });
@@ -289,33 +333,225 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         return new Set();
       }
 
-      if (previous.has(selectedKeyframeId)) {
+      const scopedKey = selectedTrackId ? getSelectionKey(selectedTrackId, selectedKeyframeId) : selectedKeyframeId;
+      if (previous.has(scopedKey)) {
         return previous;
       }
 
-      return new Set([selectedKeyframeId]);
+      return new Set([scopedKey]);
     });
-  }, [selectedKeyframeId]);
+  }, [selectedKeyframeId, selectedTrackId]);
 
   const handleKeyframePick = useCallback((trackId: string, keyframeId: string, additive: boolean) => {
+    const selectionKey = getSelectionKey(trackId, keyframeId);
     if (!additive) {
-      setSelectedKeyframeIds(new Set([keyframeId]));
+      setSelectedKeyframeIds(new Set([selectionKey]));
       onSelectKeyframe(trackId, keyframeId);
       return;
     }
 
     setSelectedKeyframeIds((previous) => {
       const next = new Set(previous);
-      if (next.has(keyframeId)) {
-        next.delete(keyframeId);
+      if (next.has(selectionKey)) {
+        next.delete(selectionKey);
       } else {
-        next.add(keyframeId);
+        next.add(selectionKey);
       }
-      const primary = next.has(keyframeId) ? keyframeId : (next.values().next().value ?? null);
-      onSelectKeyframe(trackId, primary);
+      const primary = next.has(selectionKey)
+        ? { trackId, keyframeId }
+        : findFirstSelectedKeyframe(next);
+      onSelectKeyframe(primary?.trackId ?? trackId, primary?.keyframeId ?? null);
       return next;
     });
   }, [onSelectKeyframe]);
+
+  const selectKeyframesInArea = useCallback((state: AreaSelectState) => {
+    const lanesRoot = lanesScrollRef.current;
+    if (!lanesRoot) {
+      return;
+    }
+
+    const hostRect = lanesRoot.getBoundingClientRect();
+    const bounds = normalizeRect(state.startContentX, state.startContentY, state.currentContentX, state.currentContentY);
+    const nextSelection = new Set(state.additive ? state.baseSelection : []);
+    let primary: SelectedKeyframeRef | null = null;
+
+    for (const lane of Array.from(lanesRoot.querySelectorAll<HTMLElement>("[data-track-lane-id]"))) {
+      const trackId = lane.dataset.trackLaneId;
+      const track = visibleTracks.find((entry) => entry.id === trackId);
+      if (!trackId || !track) {
+        continue;
+      }
+
+      const laneRect = lane.getBoundingClientRect();
+      const laneTop = laneRect.top - hostRect.top + lanesRoot.scrollTop;
+      const laneLeft = laneRect.left - hostRect.left + lanesRoot.scrollLeft;
+      const laneCenterY = laneTop + laneRect.height / 2;
+      if (laneCenterY < bounds.top || laneCenterY > bounds.bottom) {
+        continue;
+      }
+
+      for (const keyframe of track.keyframes) {
+        const keyframeX = laneLeft + (keyframe.frame / Math.max(durationFrames, 1)) * laneRect.width;
+        if (keyframeX < bounds.left || keyframeX > bounds.right) {
+          continue;
+        }
+
+        nextSelection.add(getSelectionKey(track.id, keyframe.id));
+        primary = { trackId: track.id, keyframeId: keyframe.id };
+      }
+    }
+
+    setSelectedKeyframeIds(nextSelection);
+    if (primary) {
+      onSelectKeyframe(primary.trackId, primary.keyframeId);
+    } else if (!state.additive) {
+      onSelectTrack(null);
+    }
+  }, [durationFrames, onSelectKeyframe, onSelectTrack, visibleTracks]);
+
+  const handleAreaSelectStart = useCallback((event: ReactPointerEvent<HTMLDivElement>, trackId: string) => {
+    if (event.button !== 0 || event.target !== event.currentTarget) {
+      return;
+    }
+
+    event.preventDefault();
+    onSelectTrack(trackId);
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+    const startPoint = getTimelineContentPoint(event.clientX, event.clientY, lanesScrollRef.current);
+    const nextState = {
+      startContentX: startPoint.x,
+      startContentY: startPoint.y,
+      currentContentX: startPoint.x,
+      currentContentY: startPoint.y,
+      currentClientX: event.clientX,
+      currentClientY: event.clientY,
+      additive,
+      baseSelection: new Set(selectedKeyframeIds),
+    };
+    setAreaSelectState(nextState);
+    selectKeyframesInArea(nextState);
+  }, [onSelectTrack, selectKeyframesInArea, selectedKeyframeIds]);
+
+  useEffect(() => {
+    if (!areaSelectState) {
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      setAreaSelectState((previous) => {
+        if (!previous) {
+          return previous;
+        }
+        const point = getTimelineContentPoint(event.clientX, event.clientY, lanesScrollRef.current);
+        const next = {
+          ...previous,
+          currentContentX: point.x,
+          currentContentY: point.y,
+          currentClientX: event.clientX,
+          currentClientY: event.clientY,
+        };
+        selectKeyframesInArea(next);
+        return next;
+      });
+    };
+
+    const handleScroll = () => {
+      setAreaSelectState((previous) => {
+        if (!previous) {
+          return previous;
+        }
+        const point = getTimelineContentPoint(previous.currentClientX, previous.currentClientY, lanesScrollRef.current);
+        const next = {
+          ...previous,
+          currentContentX: point.x,
+          currentContentY: point.y,
+        };
+        selectKeyframesInArea(next);
+        return next;
+      });
+    };
+
+    const handlePointerUp = () => {
+      setAreaSelectState(null);
+    };
+
+    const lanesRoot = lanesScrollRef.current;
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    lanesRoot?.addEventListener("scroll", handleScroll);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      lanesRoot?.removeEventListener("scroll", handleScroll);
+    };
+  }, [areaSelectState, selectKeyframesInArea]);
+
+  const handleCopySelectedKeyframes = useCallback(() => {
+    const selection = selectedKeyframeIdsRef.current;
+    if (selection.size === 0) {
+      return false;
+    }
+
+    const copied: KeyframeClipboardEntry[] = [];
+    for (const selected of selection) {
+      const { trackId, keyframeId } = parseSelectionKey(selected);
+      const track = resolvedTracksRef.current.find((entry) => entry.id === trackId);
+      const keyframe = track?.keyframes.find((entry) => entry.id === keyframeId);
+      if (!track || !keyframe) {
+        continue;
+      }
+      copied.push({
+        trackId: track.id,
+        frame: keyframe.frame,
+        value: keyframe.value,
+        ease: keyframe.ease,
+      });
+    }
+
+    if (copied.length === 0) {
+      return false;
+    }
+
+    keyframeClipboardRef.current = copied.sort((a, b) => a.frame - b.frame || a.trackId.localeCompare(b.trackId));
+    return true;
+  }, []);
+
+  const handlePasteCopiedKeyframes = useCallback(() => {
+    const clipboard = keyframeClipboardRef.current;
+    if (clipboard.length === 0) {
+      return false;
+    }
+
+    const pasted = onPasteKeyframes(clipboard, currentFrameRef.current);
+    if (pasted.length > 0) {
+      setSelectedKeyframeIds(new Set(pasted.map((entry) => getSelectionKey(entry.trackId, entry.keyframeId))));
+      const primary = pasted.at(-1);
+      if (primary) {
+        onSelectKeyframe(primary.trackId, primary.keyframeId);
+      }
+    }
+    return true;
+  }, [onPasteKeyframes, onSelectKeyframe]);
+
+  const handleDeleteSelectedKeyframes = useCallback(() => {
+    const selection = selectedKeyframeIdsRef.current;
+    if (selection.size === 0) {
+      return false;
+    }
+
+    const batches = groupSelectedKeysByTrack(selection);
+    if (batches.length === 0) {
+      return false;
+    }
+
+    for (const batch of batches) {
+      onRemoveKeyframes(batch.trackId, batch.keyframeIds);
+    }
+    setSelectedKeyframeIds(new Set());
+    onSelectKeyframe(batches[0].trackId, null);
+    return true;
+  }, [onRemoveKeyframes, onSelectKeyframe]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -323,33 +559,35 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
         return;
       }
 
-      const target = event.target as HTMLElement | null;
-      if (target) {
-        const tag = target.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) {
-          return;
-        }
-      }
-
-      if ((event.key !== "Delete" && event.key !== "Backspace") || !selectedTrackId) {
+      if (isKeyboardTargetEditable(event.target)) {
         return;
       }
 
-      if (selectedKeyframeIds.size < 2) {
+      const isCopy = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "c";
+      const isPaste = (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "v";
+      const isDelete = event.key === "Delete" || event.key === "Backspace";
+      let handled = false;
+
+      if (isCopy) {
+        handled = handleCopySelectedKeyframes();
+      } else if (isPaste) {
+        handled = handlePasteCopiedKeyframes();
+      } else if (isDelete) {
+        handled = handleDeleteSelectedKeyframes();
+      }
+
+      if (!handled) {
         return;
       }
 
       event.preventDefault();
-      onRemoveKeyframes(selectedTrackId, Array.from(selectedKeyframeIds));
-      setSelectedKeyframeIds(new Set());
-      onSelectKeyframe(selectedTrackId, null);
+      event.stopPropagation();
+      event.stopImmediatePropagation();
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onRemoveKeyframes, onSelectKeyframe, selectedKeyframeIds, selectedTrackId]);
-
-  const durationFrames = activeClip?.durationFrames ?? 1;
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [handleCopySelectedKeyframes, handleDeleteSelectedKeyframes, handlePasteCopiedKeyframes]);
 
   const rulerTicks: Array<{ frame: number; isMajor: boolean }> = [];
   const rulerStep = getRulerStep(timelinePixelsPerFrame);
@@ -697,7 +935,6 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                 <div className="tl-lane" />
                 {tracks.map((track) => {
                   const trackIsSelected = selectedTrackId === track.id;
-                  const selectedKeyframeIdsForTrack = trackIsSelected ? selectedKeyframeIds : null;
                   return (
                     <TrackLane
                       key={track.id}
@@ -706,35 +943,37 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                       currentFrame={currentFrame}
                       isSelected={trackIsSelected}
                       isMuted={isTrackMuted(track)}
-                      selectedKeyframeIds={selectedKeyframeIdsForTrack}
+                      selectedKeyframeIds={selectedKeyframeIds}
                       onSelectTrack={() => onSelectTrack(track.id)}
                       onPickKeyframe={(keyframeId, additive) => handleKeyframePick(track.id, keyframeId, additive)}
                       onFrameChange={onFrameChange}
-                      onScrubStart={(laneLeft, laneWidth) => setScrubState({ laneLeft, laneWidth })}
+                      onAreaSelectStart={(event) => handleAreaSelectStart(event, track.id)}
                       onStartKeyframeDrag={(event, keyframeId) => {
                         onBeginKeyframeDrag();
                         const laneElement = event.currentTarget.parentElement;
                         const rect = laneElement?.getBoundingClientRect();
                         const laneLeft = rect?.left ?? 0;
                         const laneWidth = rect?.width ?? 0;
-                        const batchIds = trackIsSelected && selectedKeyframeIds.has(keyframeId) && selectedKeyframeIds.size > 1
-                          ? Array.from(selectedKeyframeIds)
-                          : [keyframeId];
+                        const keySelection = getSelectionKey(track.id, keyframeId);
+                        const batchKeyframes = selectedKeyframeIds.has(keySelection) && selectedKeyframeIds.size > 1
+                          ? Array.from(selectedKeyframeIds).map(parseSelectionKey)
+                          : [{ trackId: track.id, keyframeId }];
                         const originMap = new Map<string, number>();
-                        for (const id of batchIds) {
-                          const match = track.keyframes.find((entry) => entry.id === id);
+                        for (const selection of batchKeyframes) {
+                          const batchTrack = visibleTracks.find((entry) => entry.id === selection.trackId);
+                          const match = batchTrack?.keyframes.find((entry) => entry.id === selection.keyframeId);
                           if (match) {
-                            originMap.set(id, match.frame);
+                            originMap.set(getSelectionKey(selection.trackId, selection.keyframeId), match.frame);
                           }
                         }
-                        const primaryOrigin = originMap.get(keyframeId) ?? track.keyframes.find((entry) => entry.id === keyframeId)?.frame ?? 0;
+                        const primaryOrigin = originMap.get(keySelection) ?? track.keyframes.find((entry) => entry.id === keyframeId)?.frame ?? 0;
                         setDragState({
                           trackId: track.id,
                           keyframeId,
                           laneLeft,
                           laneWidth,
                           originFrame: primaryOrigin,
-                          batchKeyframeIds: batchIds,
+                          batchKeyframes,
                           batchOriginFrames: originMap,
                           lastDelta: 0,
                         });
@@ -749,6 +988,12 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
               className="tl__playhead"
               style={{ left: framePercent(currentFrame, durationFrames) }}
             />
+            {areaSelectState ? (
+              <div
+                className="tl__marquee"
+                style={getMarqueeStyle(areaSelectState, lanesScrollRef.current)}
+              />
+            ) : null}
           </div>
         </div>
       </div>
@@ -862,7 +1107,7 @@ interface TrackLaneProps {
   onSelectTrack: () => void;
   onPickKeyframe: (keyframeId: string, additive: boolean) => void;
   onFrameChange: (frame: number) => void;
-  onScrubStart: (laneLeft: number, laneWidth: number) => void;
+  onAreaSelectStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onStartKeyframeDrag: (event: ReactPointerEvent<HTMLButtonElement>, keyframeId: string) => void;
 }
 
@@ -877,27 +1122,18 @@ function TrackLane(props: TrackLaneProps) {
     onSelectTrack,
     onPickKeyframe,
     onFrameChange,
-    onScrubStart,
+    onAreaSelectStart,
     onStartKeyframeDrag,
   } = props;
 
   return (
     <div
       className={`tl-lane${isSelected ? " is-selected" : ""}${isMuted ? " is-muted" : ""}`}
-      onPointerDown={(event) => {
-        if (event.target !== event.currentTarget) {
-          return;
-        }
-        const rect = event.currentTarget.getBoundingClientRect();
-        const laneLeft = rect.left;
-        const laneWidth = rect.width;
-        onSelectTrack();
-        onFrameChange(positionToFrame(event.clientX, laneLeft, laneWidth, durationFrames));
-        onScrubStart(laneLeft, laneWidth);
-      }}
+      data-track-lane-id={track.id}
+      onPointerDown={onAreaSelectStart}
     >
       {track.keyframes.map((keyframe) => {
-        const isKeyframeSelected = selectedKeyframeIds?.has(keyframe.id) ?? false;
+        const isKeyframeSelected = selectedKeyframeIds?.has(getSelectionKey(track.id, keyframe.id)) ?? false;
         return (
           <button
             key={keyframe.id}
@@ -968,6 +1204,101 @@ function positionToFrame(
   const safeDuration = Math.max(durationFrames, 1);
   const ratio = (clientX - laneLeft) / safeWidth;
   return Math.max(0, Math.min(safeDuration, Math.round(ratio * safeDuration)));
+}
+
+function getSelectionKey(trackId: string, keyframeId: string): string {
+  return `${trackId}:${keyframeId}`;
+}
+
+function parseSelectionKey(selectionKey: string): SelectedKeyframeRef {
+  const separator = selectionKey.indexOf(":");
+  if (separator < 0) {
+    return { trackId: "", keyframeId: selectionKey };
+  }
+
+  return {
+    trackId: selectionKey.slice(0, separator),
+    keyframeId: selectionKey.slice(separator + 1),
+  };
+}
+
+function findFirstSelectedKeyframe(selectionKeys: Set<string>): SelectedKeyframeRef | null {
+  const first = selectionKeys.values().next().value;
+  return typeof first === "string" ? parseSelectionKey(first) : null;
+}
+
+function groupSelectedKeysByTrack(selectionKeys: Set<string>): Array<{ trackId: string; keyframeIds: string[] }> {
+  return groupSelectedKeyframesByTrack(Array.from(selectionKeys).map(parseSelectionKey));
+}
+
+function groupSelectedKeyframesByTrack(keyframes: SelectedKeyframeRef[]): Array<{ trackId: string; keyframeIds: string[] }> {
+  const groups = new Map<string, string[]>();
+  for (const keyframe of keyframes) {
+    if (!keyframe.trackId || !keyframe.keyframeId) {
+      continue;
+    }
+    const bucket = groups.get(keyframe.trackId) ?? [];
+    bucket.push(keyframe.keyframeId);
+    groups.set(keyframe.trackId, bucket);
+  }
+  return Array.from(groups.entries()).map(([trackId, keyframeIds]) => ({ trackId, keyframeIds }));
+}
+
+function clampKeyframeDelta(delta: number, originFrames: number[], durationFrames: number): number {
+  if (originFrames.length === 0) {
+    return delta;
+  }
+
+  const minFrame = Math.min(...originFrames);
+  const maxFrame = Math.max(...originFrames);
+  const minDelta = -minFrame;
+  const maxDelta = Math.max(durationFrames, 1) - maxFrame;
+  return Math.max(minDelta, Math.min(delta, maxDelta));
+}
+
+function normalizeRect(startX: number, startY: number, currentX: number, currentY: number) {
+  return {
+    left: Math.min(startX, currentX),
+    top: Math.min(startY, currentY),
+    right: Math.max(startX, currentX),
+    bottom: Math.max(startY, currentY),
+  };
+}
+
+function getTimelineContentPoint(clientX: number, clientY: number, host: HTMLElement | null) {
+  const hostRect = host?.getBoundingClientRect();
+  const hostLeft = hostRect?.left ?? 0;
+  const hostTop = hostRect?.top ?? 0;
+  return {
+    x: clientX - hostLeft + (host?.scrollLeft ?? 0),
+    y: clientY - hostTop + (host?.scrollTop ?? 0),
+  };
+}
+
+function isKeyboardTargetEditable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable;
+}
+
+function getMarqueeStyle(state: AreaSelectState, host: HTMLElement | null) {
+  const bounds = normalizeRect(
+    state.startContentX,
+    state.startContentY,
+    state.currentContentX,
+    state.currentContentY,
+  );
+  return {
+    left: `${bounds.left}px`,
+    top: `${bounds.top}px`,
+    width: `${Math.max(1, bounds.right - bounds.left)}px`,
+    height: `${Math.max(1, bounds.bottom - bounds.top)}px`,
+  };
 }
 
 function displayValueForInput(property: AnimationPropertyPath, value: number): number {

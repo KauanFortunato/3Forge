@@ -28,7 +28,7 @@ import {
   getPropertyValue,
   parseInputValue,
 } from "../state";
-import type { AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset } from "../types";
+import type { AnimationEasePreset, AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset } from "../types";
 import type { ComponentBlueprint } from "../types";
 import type { PropertyApplyReport, PropertyClipboardScope } from "../propertyClipboard";
 import {
@@ -110,6 +110,13 @@ const APP_VERSION = "v3.0.0";
 interface NodeClipboard {
   sourceNodeIds: string[];
   subtrees: EditorNode[][];
+}
+
+interface KeyframePasteEntry {
+  trackId: string;
+  frame: number;
+  value: number;
+  ease: AnimationEasePreset;
 }
 
 function createAiChangeSummary(diff: BlueprintDiffSummary): AiChangeSummaryInput | undefined {
@@ -1303,6 +1310,64 @@ export function App() {
     store.shiftAnimationKeyframes(trackId, keyframeIds, frameDelta);
     sceneRef.current?.seekAnimation(currentFrame);
   }, [currentFrame, store]);
+
+  const handlePasteAnimationKeyframes = useCallback((keyframes: KeyframePasteEntry[], frame: number) => {
+    if (keyframes.length === 0) {
+      return [];
+    }
+
+    const activeClip = store.getActiveAnimationClip();
+    if (!activeClip) {
+      return [];
+    }
+
+    const firstFrame = Math.min(...keyframes.map((keyframe) => keyframe.frame));
+    const requestedDelta = Math.round(frame) - firstFrame;
+    const safeDelta = Math.max(
+      -firstFrame,
+      Math.min(
+        requestedDelta,
+        activeClip.durationFrames - Math.max(...keyframes.map((keyframe) => keyframe.frame)),
+      ),
+    );
+    const pasted: Array<{ trackId: string; keyframeId: string }> = [];
+
+    store.beginHistoryTransaction();
+    for (const keyframe of keyframes) {
+      const track = store.getAnimationTrack(keyframe.trackId);
+      if (!track) {
+        continue;
+      }
+
+      const targetFrame = Math.max(0, Math.min(activeClip.durationFrames, Math.round(keyframe.frame + safeDelta)));
+      if (track.keyframes.some((entry) => entry.frame === targetFrame)) {
+        continue;
+      }
+
+      const keyframeId = store.addAnimationKeyframe(
+        keyframe.trackId,
+        targetFrame,
+        keyframe.value,
+        keyframe.ease,
+      );
+      if (keyframeId) {
+        pasted.push({ trackId: keyframe.trackId, keyframeId });
+      }
+    }
+    store.commitHistoryTransaction("ui");
+
+    if (pasted.length > 0) {
+      const primary = pasted.at(-1);
+      if (primary) {
+        setSelectedTrackId(primary.trackId);
+        setSelectedKeyframeId(primary.keyframeId);
+      }
+      sceneRef.current?.seekAnimation(currentFrame);
+      setTransientStatus(`Pasted ${pasted.length} keyframes.`);
+    }
+
+    return pasted;
+  }, [currentFrame, setTransientStatus, store]);
 
   const handleInspectorInsertKeyframe = useCallback((nodeId: string, property: AnimationPropertyPath, frame: number, value: number) => {
     const keyframeId = store.insertOrUpdateKeyframeAtFrame(nodeId, property, frame, value);
@@ -3021,6 +3086,7 @@ export function App() {
                     onSetTrackMuted={handleSetAnimationTrackMuted}
                     onRemoveKeyframes={handleRemoveAnimationKeyframes}
                     onShiftKeyframes={handleShiftAnimationKeyframes}
+                    onPasteKeyframes={handlePasteAnimationKeyframes}
                     onBeginKeyframeDrag={() => store.beginHistoryTransaction()}
                     onEndKeyframeDrag={() => {
                       store.commitHistoryTransaction("ui");

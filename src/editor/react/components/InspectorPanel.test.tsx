@@ -768,12 +768,12 @@ describe("InspectorPanel", () => {
     fireEvent.pointerMove(dragHandle, { clientX: 212, pointerId: 2 });
     fireEvent.pointerUp(dragHandle, { clientX: 212, pointerId: 2 });
 
-    // position step 0.1 × 12px = 1.2
+    // position scrub uses a softer drag step: 0.1 * 0.25 * 12px = 0.3
     expect(props.onNodePropertyChange).toHaveBeenCalledTimes(1);
     expect(props.onNodePropertyChange).toHaveBeenCalledWith(
       "box-1",
       expect.objectContaining({ path: "transform.position.x" }),
-      "1.2",
+      "0.3",
     );
   });
 

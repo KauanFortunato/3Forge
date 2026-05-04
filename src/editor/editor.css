@@ -2685,10 +2685,21 @@ code {
   height: 0;
 }
 
+.tl__marquee {
+  position: absolute;
+  border: 1px solid var(--c-select);
+  background: color-mix(in srgb, var(--c-select) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-select) 30%, transparent);
+  pointer-events: none;
+  z-index: 4;
+}
+
 .tl-lane {
   position: relative;
   height: 26px;
   border-bottom: 1px solid var(--c-border-soft);
+  cursor: crosshair;
+  user-select: none;
 }
 
 .tl-lane.is-selected {
@@ -2709,6 +2720,7 @@ code {
   transform: translate(-50%, -50%) rotate(45deg);
   cursor: pointer;
   padding: 0;
+  z-index: 2;
 }
 
 .tl-kf:hover {

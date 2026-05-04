@@ -68,6 +68,7 @@ interface InspectorPanelProps {
 }
 
 const NUMERIC_INPUT_TYPES = new Set<NodePropertyDefinition["input"]>(["number", "degrees"]);
+const POSITION_DRAG_STEP_MULTIPLIER = 0.25;
 type AnimationOverrideMap = Record<string, { frame: number; value: number }>;
 
 function isNumericDefinition(definition: NodePropertyDefinition): boolean {
@@ -977,6 +978,10 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
             : typeof displayRawValue === "number"
               ? Number(displayRawValue)
               : 0;
+          const baseStep = definition.step ?? (definition.input === "degrees" ? 1 : 0.1);
+          const dragStep = definition.path.startsWith("transform.position")
+            ? baseStep * POSITION_DRAG_STEP_MULTIPLIER
+            : baseStep;
 
           return (
             <div
@@ -999,7 +1004,7 @@ function TransformAxisGroup(props: TransformAxisGroupProps) {
                 aria-label={`${title} ${axisLetter}`}
                 dragClassName="vec__drag"
                 scrubOnInput
-                step={definition.step ?? (definition.input === "degrees" ? 1 : 0.1)}
+                step={dragStep}
                 precision={definition.input === "degrees" ? 2 : 3}
               />
               {animatableProperty ? (
