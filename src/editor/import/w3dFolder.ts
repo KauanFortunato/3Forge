@@ -29,6 +29,11 @@ export async function parseW3DFromFolder(
   let lockPresent = false;
   const textureFiles: File[] = [];
   const videoFilenames = new Set<string>();
+  // Map of mesh resource GUID (lowercase, no extension) → vert/ind file pair.
+  // We don't yet load the buffers, but indexing them lets the parser emit
+  // accurate "asset present, loader missing" warnings instead of silently
+  // dropping every <Mesh>.
+  const meshAssets = new Map<string, { vert?: File; ind?: File }>();
 
   for (const file of list) {
     const relPath = relativePath(file);
@@ -59,6 +64,14 @@ export async function parseW3DFromFolder(
         videoFilenames.add(baseName);
       }
     }
+
+    if (lower.includes("/resources/meshes/") && (ext === ".vert" || ext === ".ind")) {
+      const guid = baseName.slice(0, -ext.length).toLowerCase();
+      const entry = meshAssets.get(guid) ?? {};
+      if (ext === ".vert") entry.vert = file;
+      else entry.ind = file;
+      meshAssets.set(guid, entry);
+    }
   }
 
   const chosenScene = sceneFile ?? sceneFileFallback;
@@ -68,9 +81,16 @@ export async function parseW3DFromFolder(
       `No .w3d scene file found in the selected folder (saw ${list.length} files: ${sample}${list.length > 8 ? ", …" : ""}). Make sure to pick the folder that directly contains scene.w3d.`,
     );
   }
+  // Only count meshes with at least the .vert buffer present — an .ind by
+  // itself isn't usable.
+  const completeMeshGuids = new Set(
+    Array.from(meshAssets.entries())
+      .filter(([, pair]) => Boolean(pair.vert))
+      .map(([guid]) => guid),
+  );
   // eslint-disable-next-line no-console
   console.info(
-    `[w3d folder import] scene=${relativePath(chosenScene)} textures=${textureFiles.length} videos=${videoFilenames.size} lock=${lockPresent}`,
+    `[w3d folder import] scene=${relativePath(chosenScene)} textures=${textureFiles.length} videos=${videoFilenames.size} meshes=${completeMeshGuids.size} lock=${lockPresent}`,
   );
 
   report(`Reading ${chosenScene.name}…`);
@@ -104,6 +124,7 @@ export async function parseW3DFromFolder(
     sceneName: sceneNameFromFolder,
     textures,
     videos: videoFilenames,
+    meshAssets: completeMeshGuids,
   });
 
   const warnings = [...result.warnings];

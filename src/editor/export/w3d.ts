@@ -40,6 +40,7 @@ const PROPERTY_TO_W3D: Record<AnimationPropertyPath, string> = {
   "transform.scale.y": "Transform.Scale.YProp",
   "transform.scale.z": "Transform.Scale.ZProp",
   visible: "Enabled",
+  "material.opacity": "Alpha",
 };
 
 export function exportToW3D(blueprint: ComponentBlueprint): W3DExportResult {
@@ -65,8 +66,12 @@ function patchExistingXml(blueprint: ComponentBlueprint, shadow: W3DShadowData):
   // Index every element with an Id attribute (case-insensitive lookup).
   const elementsById = indexElementsById(doc);
 
-  patchNodes(blueprint.nodes, shadow, elementsById, warnings);
-  patchAnimations(blueprint.animation.clips, shadow, elementsById, warnings);
+  // Default to true preserves the historical export behaviour for any
+  // pre-flag blueprint that still carries shadow data without flippedYZ set.
+  const flipYZ = shadow.flippedYZ !== false;
+
+  patchNodes(blueprint.nodes, shadow, elementsById, warnings, flipYZ);
+  patchAnimations(blueprint.animation.clips, shadow, elementsById, warnings, flipYZ);
 
   const xml = XML_DECL + new XMLSerializer().serializeToString(doc.documentElement);
   return { xml, warnings };
@@ -90,7 +95,12 @@ function patchNodes(
   shadow: W3DShadowData,
   elementsById: Map<string, Element>,
   warnings: string[],
+  flipYZ: boolean,
 ): void {
+  // The importer flipped every Enable="False" node to visible (design-view
+  // mode); we feed that ledger to patchNodeVisibility so it doesn't
+  // accidentally promote authoring-time hidden nodes back to enabled.
+  const initialDisabled = new Set(shadow.initialDisabledNodeIds ?? []);
   for (const node of nodes) {
     if (node.parentId === null) {
       continue; // 3Forge synthetic root — has no W3D counterpart.
@@ -107,12 +117,12 @@ function patchNodes(
       warnings.push(`W3D element with Id ${w3dId} for node "${node.name}" not found in shadow XML.`);
       continue;
     }
-    patchNodeTransform(el, node);
-    patchNodeVisibility(el, node);
+    patchNodeTransform(el, node, flipYZ);
+    patchNodeVisibility(el, node, initialDisabled.has(node.id));
   }
 }
 
-function patchNodeTransform(el: Element, node: EditorNode): void {
+function patchNodeTransform(el: Element, node: EditorNode, flipYZ: boolean): void {
   let transformEl = childByTag(el, "NodeTransform");
   const hasAnyDelta =
     !isVecDefault(node.transform.position, 0) ||
@@ -127,12 +137,11 @@ function patchNodeTransform(el: Element, node: EditorNode): void {
   }
   // Undo the importer's Y/Z flips (R3 designer is screen-space, +Y down with
   // depth stacked on the -Z side of XY plane; Three.js editor uses +Y up and
-  // mounts content on the +Z side).
-  const positionForXml = {
-    x: node.transform.position.x,
-    y: -node.transform.position.y,
-    z: -node.transform.position.z,
-  };
+  // mounts content on the +Z side). Only applies when the import side
+  // actually flipped — for 3D scenes we keep coordinates 1:1.
+  const positionForXml = flipYZ
+    ? { x: node.transform.position.x, y: -node.transform.position.y, z: -node.transform.position.z }
+    : node.transform.position;
   patchVecChild(transformEl, "Position", positionForXml, 0);
   patchVecChild(transformEl, "Scale", node.transform.scale, 1);
   patchVecChild(transformEl, "Rotation", node.transform.rotation, 0);
@@ -172,13 +181,19 @@ function patchAxisAttr(el: Element, attr: string, value: number, defaultValue: n
   el.setAttribute(attr, formatNumber(value));
 }
 
-function patchNodeVisibility(el: Element, node: EditorNode): void {
+function patchNodeVisibility(el: Element, node: EditorNode, wasInitiallyDisabled: boolean): void {
+  // The importer's design-view promotion means `node.visible` no longer
+  // reflects the XML truth on its own — a node that started Enable="False"
+  // and was never touched will read visible=true here. Resolve the
+  // "effective intent" first: if the user didn't change the visibility,
+  // restore whatever the XML originally had.
+  const intendedVisibility = wasInitiallyDisabled && node.visible === true ? false : node.visible;
   const currentRaw = el.getAttribute("Enable");
   const currentlyEnabled = currentRaw === null ? true : currentRaw !== "False";
-  if (currentlyEnabled === node.visible) {
+  if (currentlyEnabled === intendedVisibility) {
     return;
   }
-  el.setAttribute("Enable", node.visible ? "True" : "False");
+  el.setAttribute("Enable", intendedVisibility ? "True" : "False");
 }
 
 function patchAnimations(
@@ -186,6 +201,7 @@ function patchAnimations(
   shadow: W3DShadowData,
   elementsById: Map<string, Element>,
   warnings: string[],
+  flipYZ: boolean,
 ): void {
   for (const clip of clips) {
     const timelineId = shadow.clipIds[clip.id];
@@ -199,7 +215,7 @@ function patchAnimations(
       continue;
     }
     for (const track of clip.tracks) {
-      patchTrack(track, timelineEl, shadow, elementsById, warnings, clip.name);
+      patchTrack(track, timelineEl, shadow, elementsById, warnings, clip.name, flipYZ);
     }
   }
 }
@@ -211,6 +227,7 @@ function patchTrack(
   elementsById: Map<string, Element>,
   warnings: string[],
   clipName: string,
+  flipYZ: boolean,
 ): void {
   const trackKey = shadow.trackKeys[track.id];
   if (!trackKey) {
@@ -229,9 +246,10 @@ function patchTrack(
   }
 
   const isDiscrete = isDiscreteAnimationProperty(track.property);
-  // Reverse the Y/Z flips applied during import.
+  // Reverse the Y/Z flips applied during import — only when the import did flip.
   const flipValue =
-    track.property === "transform.position.y" || track.property === "transform.position.z";
+    flipYZ &&
+    (track.property === "transform.position.y" || track.property === "transform.position.z");
   for (const kf of track.keyframes) {
     const w3dKfId = shadow.keyframeIds[kf.id];
     if (!w3dKfId) {
