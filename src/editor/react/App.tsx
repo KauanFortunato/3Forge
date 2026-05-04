@@ -448,7 +448,7 @@ function LandingPage({
         <div className="landing-hero__grid" aria-hidden="true" />
         <div className="landing-hero__brand">
           <div className="landing-hero__brand-mark" aria-hidden="true">
-            <img src="/assets/web/logo.svg" alt="" />
+            <img src="/assets/web/logo.png" alt="" />
           </div>
           <span>3Forge</span>
         </div>

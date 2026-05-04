@@ -44,7 +44,7 @@ export function MenuBar({ menus, appVersion, onOpenSettings }: MenuBarProps) {
     <div ref={rootRef} className="menubar">
       <div className="menubar__brand" aria-label="3Forge">
         <div className="menubar__brand-mark" aria-hidden="true">
-          <img src="/assets/web/logo.svg" alt="" />
+          <img src="/assets/web/logo.png" alt="" />
         </div>
         <span>3Forge</span>
       </div>

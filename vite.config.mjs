@@ -18,7 +18,7 @@ export default defineConfig({
       includeAssets: [
         "assets/web/logo-32x32.png",
         "assets/web/logo.png",
-        "assets/web/logo.svg",
+        "assets/web/logo.png",
         "assets/ios/icons/ios-icon-180.png",
         "assets/android/icons/android-icon-192.png",
         "assets/android/icons/android-icon-512.png",
