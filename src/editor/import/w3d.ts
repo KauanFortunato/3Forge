@@ -90,6 +90,16 @@ export interface W3DShadowData {
    * silently strip every "false" flag.
    */
   initialDisabledNodeIds?: string[];
+  /**
+   * Subset of `initialDisabledNodeIds` whose own name — or some ancestor's
+   * name — matches a known authoring-helper pattern (HELPERS, ESCONDER,
+   * Pitch_Reference). The renderer hides these from the viewport while
+   * leaving them in the tree (selectable, editable, exportable). Without
+   * this the design-view promotion correctly turned them visible but they
+   * then competed with the authored layout — a giant solid-colour
+   * `Pitch_Reference` plate ended up in front of the scoreboard.
+   */
+  helperNodeIds?: string[];
 }
 
 interface ParseContext {
@@ -313,6 +323,11 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
   }
   if (ctx.initialDisabledNodeIds.size > 0) {
     ctx.shadow.initialDisabledNodeIds = Array.from(ctx.initialDisabledNodeIds);
+    const helperIds = collectAuthoringHelperNodeIds(
+      ctx.nodes,
+      ctx.initialDisabledNodeIds,
+    );
+    if (helperIds.length > 0) ctx.shadow.helperNodeIds = helperIds;
   }
 
   // Resolve mask references now that all nodes are walked (mask quads can be
@@ -806,6 +821,52 @@ function findTextureLayerId(quadEl: Element): string | null {
   const layerId = mapping.getAttribute("TextureLayerId");
   if (!layerId || layerId === "Standard") return null;
   return layerId.toLowerCase();
+}
+
+/**
+ * Names that R3 broadcast templates use to mark authoring-only scaffolding
+ * (full-frame guides, pitch references, hidden helpers). Conservative whole-
+ * name match — case-insensitive, anchored at start and end — so that real
+ * elements like "PITCH_OVERLAY" or "RefereeName" don't get caught by mistake.
+ */
+const HELPER_NAME_RE = /^(helpers?|esconder|pitch[_ -]?reference|reference)$/i;
+
+/**
+ * Returns the subset of `disabledNodeIds` whose own name — or the name of any
+ * ancestor — matches HELPER_NAME_RE. The renderer will keep these nodes in the
+ * tree (for selection/round-trip) but hide them from the viewport, undoing the
+ * design-view promotion *only* for clearly-marked authoring helpers.
+ */
+function collectAuthoringHelperNodeIds(
+  nodes: ReadonlyArray<EditorNode>,
+  disabledNodeIds: ReadonlySet<string>,
+): string[] {
+  const byId = new Map<string, EditorNode>();
+  for (const n of nodes) byId.set(n.id, n);
+
+  // Cache "is this node or any ancestor a helper-named one?" so deep trees
+  // don't re-walk the whole chain per descendant.
+  const helperAncestor = new Map<string, boolean>();
+  function isHelperAncestor(id: string | null): boolean {
+    if (!id) return false;
+    const cached = helperAncestor.get(id);
+    if (cached !== undefined) return cached;
+    const node = byId.get(id);
+    if (!node) {
+      helperAncestor.set(id, false);
+      return false;
+    }
+    const own = HELPER_NAME_RE.test(node.name ?? "");
+    const result = own || isHelperAncestor(node.parentId);
+    helperAncestor.set(id, result);
+    return result;
+  }
+
+  const out: string[] = [];
+  for (const id of disabledNodeIds) {
+    if (isHelperAncestor(id)) out.push(id);
+  }
+  return out;
 }
 
 function findAssetCaseInsensitive(map: Map<string, ImageAsset>, filename: string): ImageAsset | undefined {

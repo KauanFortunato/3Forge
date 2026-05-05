@@ -886,13 +886,23 @@ export class SceneEditor {
     // Also covers placeholder boxes for <Mesh>/<Model> primitives we couldn't
     // load — both groups are kept in the tree for editing and round-trip but
     // hidden from the viewport so they don't render as opaque white blocks.
+    // Also covers authoring-helper nodes (HELPERS / Pitch_Reference) that R3
+    // hides via Enable="False"; design-view promotion would otherwise put a
+    // full-frame solid plate in front of the actual layout.
     const w3d = this.store.blueprint.metadata?.w3d as
-      | { missingTextureNodeIds?: string[]; meshPlaceholderNodeIds?: string[] }
+      | {
+          missingTextureNodeIds?: string[];
+          meshPlaceholderNodeIds?: string[];
+          helperNodeIds?: string[];
+        }
       | undefined;
     if (Array.isArray(w3d?.missingTextureNodeIds) && w3d.missingTextureNodeIds.includes(nodeId)) {
       return true;
     }
     if (Array.isArray(w3d?.meshPlaceholderNodeIds) && w3d.meshPlaceholderNodeIds.includes(nodeId)) {
+      return true;
+    }
+    if (Array.isArray(w3d?.helperNodeIds) && w3d.helperNodeIds.includes(nodeId)) {
       return true;
     }
     return false;

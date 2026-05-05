@@ -533,6 +533,82 @@ describe("Alpha animation track", () => {
   });
 });
 
+describe("Authoring-helper detection", () => {
+  function shadowOf(blueprint: { metadata?: Record<string, unknown> }): {
+    initialDisabledNodeIds?: string[];
+    helperNodeIds?: string[];
+  } {
+    return (blueprint.metadata?.w3d ?? {}) as {
+      initialDisabledNodeIds?: string[];
+      helperNodeIds?: string[];
+    };
+  }
+
+  it("flags Enable=False descendants of a HELPERS group as helper nodes", () => {
+    // R3 broadcast templates park huge solid plates under
+    // <Group Name="HELPERS" Enable="False"> as authoring scaffolding. After
+    // FASE 2 the design-view promotion correctly turned those visible, but
+    // they then competed with the real layout. This collects them under
+    // shadow.helperNodeIds so the renderer can hide them while keeping the
+    // tree intact for selection / round-trip.
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>' +
+      '<Group Id="g1" Name="HELPERS" Enable="False"><Children>' +
+      '<Quad Id="q1" Name="Pitch_Reference" Enable="False"/>' +
+      "</Children></Group>" +
+      "</Children></SceneNode></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const pitchRef = result.blueprint.nodes.find((n) => n.name === "Pitch_Reference");
+    const helpers = result.blueprint.nodes.find((n) => n.name === "HELPERS");
+    const shadow = shadowOf(result.blueprint);
+
+    // Both promoted to visible (design-view) but both flagged as helpers.
+    expect(pitchRef?.visible).toBe(true);
+    expect(helpers?.visible).toBe(true);
+    expect(shadow.initialDisabledNodeIds).toEqual(
+      expect.arrayContaining([pitchRef!.id, helpers!.id]),
+    );
+    expect(shadow.helperNodeIds).toEqual(
+      expect.arrayContaining([pitchRef!.id, helpers!.id]),
+    );
+  });
+
+  it("does NOT flag a regular Enable=False node whose name doesn't match", () => {
+    // A node the author hid for non-helper reasons (e.g. a storyline element
+    // toggled off pre-take) must keep its design-view promotion AND not get
+    // pushed back into the hidden bucket.
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>' +
+      '<Quad Id="q1" Name="MainScoreboard" Enable="False"/>' +
+      "</Children></SceneNode></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const node = result.blueprint.nodes.find((n) => n.name === "MainScoreboard");
+    const shadow = shadowOf(result.blueprint);
+
+    expect(node?.visible).toBe(true);
+    expect(shadow.initialDisabledNodeIds).toContain(node!.id);
+    // Either the array is missing entirely (no helpers in this scene) or
+    // it doesn't include MainScoreboard.
+    expect(shadow.helperNodeIds ?? []).not.toContain(node!.id);
+  });
+
+  it("flags an Enable=False child whose own name matches even without a HELPERS parent", () => {
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>' +
+      '<Group Id="g1" Name="MAIN"><Children>' +
+      '<Quad Id="q1" Name="Reference" Enable="False"/>' +
+      "</Children></Group>" +
+      "</Children></SceneNode></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const node = result.blueprint.nodes.find((n) => n.name === "Reference");
+    const shadow = shadowOf(result.blueprint);
+    expect(shadow.helperNodeIds).toContain(node!.id);
+  });
+});
+
 describe("Static <Skew> on NodeTransform", () => {
   it("captures the authored skew angles in degrees onto node.transform.skew", () => {
     // GameName_FS authors `<Skew X="15"/>` on every lower-third bar; before
