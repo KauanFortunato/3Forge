@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseW3D } from "./w3d";
+import type { ImageAsset } from "../types";
 // Vite's ?raw import keeps the test runtime self-contained without Node fs.
 import testSceneXml from "../../test/fixtures/w3d/TestScene.w3d?raw";
 import gameNameFsXml from "../../test/fixtures/w3d/GameName_FS.w3d?raw";
@@ -71,6 +72,44 @@ describe("W3D import", () => {
     for (const masked of maskedNodes) {
       const mask = result.blueprint.nodes.find((n) => n.id === masked.maskId);
       expect(mask?.isMask).toBe(true);
+    }
+  });
+
+  it("resolves <ImageSequence> resources to image nodes when supplied as video assets", () => {
+    // GameName_FS references four .mov clips via <ImageSequence> entries in
+    // <Resources>. Without the ImageSequence lookup the parser would treat
+    // the layer's Texture GUID as unresolved and fall back to a plane.
+    const videoFilenames = [
+      "04_Game_Name_PITCH_IN.mov",
+      "04_Game_Name_PITCH_OUT.mov",
+      "CompetitionLogo_In.mov",
+      "NEW LKL logo_LOOP_alt.mov",
+    ];
+    const textures = new Map<string, ImageAsset>();
+    for (const name of videoFilenames) {
+      textures.set(name, {
+        name,
+        mimeType: "video/quicktime",
+        src: `blob:mock-${name}`,
+        width: 1920,
+        height: 1080,
+      });
+    }
+
+    const result = parseW3D(gameNameFsXml, { sceneName: "GameName_FS", textures });
+
+    const imageNodes = result.blueprint.nodes.filter((n) => n.type === "image");
+    const videoImageNodes = imageNodes.filter(
+      (n) => n.type === "image" && n.image.mimeType.startsWith("video/"),
+    );
+    expect(videoImageNodes.length).toBe(videoFilenames.length);
+
+    // The parser must not also report the four ImageSequence GUIDs as missing.
+    const missingWarning = result.warnings.find((w) => w.startsWith("Missing"));
+    if (missingWarning) {
+      for (const name of videoFilenames) {
+        expect(missingWarning).not.toContain(name);
+      }
     }
   });
 });

@@ -359,7 +359,12 @@ export function collectTextureMap(xmlText: string): Map<string, string> {
 }
 
 function collectTextureLayerMap(resourcesEl: Element): Map<string, string> {
-  // Texture id (lower) → filename
+  // Combined resource id (lower) → filename. Both <Texture> (still images)
+  // and <ImageSequence> (video clips, e.g. .mov) live here under the same
+  // GUID space — TextureMappingOption.Texture references either kind by Id.
+  // <Texture> exposes the file via Filename="..." while <ImageSequence>
+  // carries it in Name="..." (no Filename attribute), so we read the
+  // appropriate one per resource type.
   const textureById = new Map<string, string>();
   for (const tex of Array.from(resourcesEl.getElementsByTagName("Texture"))) {
     const id = tex.getAttribute("Id");
@@ -367,10 +372,17 @@ function collectTextureLayerMap(resourcesEl: Element): Map<string, string> {
     if (!id || !filename) continue;
     textureById.set(id.toLowerCase(), filename);
   }
+  for (const seq of Array.from(resourcesEl.getElementsByTagName("ImageSequence"))) {
+    const id = seq.getAttribute("Id");
+    const filename = seq.getAttribute("Name");
+    if (!id || !filename) continue;
+    textureById.set(id.toLowerCase(), filename);
+  }
 
   // TextureLayer id (lower) → filename via TextureMappingOption.Texture. R3
-  // stores the reference one of two ways:
+  // stores the reference one of three ways:
   //  - GUID matching a <Texture Id="…"> in this scene's Resources.
+  //  - GUID matching an <ImageSequence Id="…"> for video textures.
   //  - File path like "ProjectResource\Foo.png" — a shared asset library
   //    outside the scene folder. We treat the basename as a filename hint and
   //    let the folder import resolve it if the user happens to have placed
