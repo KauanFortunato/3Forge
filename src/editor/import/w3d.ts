@@ -166,6 +166,11 @@ const W3D_PROPERTY_TO_PATHS: Record<string, AnimationPropertyPath[]> = {
   "Transform.Rotation.XProp": ["transform.rotation.x"],
   "Transform.Rotation.YProp": ["transform.rotation.y"],
   "Transform.Rotation.ZProp": ["transform.rotation.z"],
+  // Some R3 scenes (notably AR_GAMEINTRO/AR_TACTIC) emit the rotation Y
+  // controller without the canonical `.Prop` suffix. Treat the bare name as
+  // an alias for the .YProp path so those tracks stop being aggregated as
+  // "no track mapping" and actually animate.
+  "Transform.Rotation.Y": ["transform.rotation.y"],
   "Transform.Scale.XProp": ["transform.scale.x"],
   "Transform.Scale.YProp": ["transform.scale.y"],
   "Transform.Scale.ZProp": ["transform.scale.z"],

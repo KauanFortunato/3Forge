@@ -532,3 +532,33 @@ describe("Alpha animation track", () => {
     expect(track?.keyframes[1].value).toBeCloseTo(1);
   });
 });
+
+describe("Transform.Rotation.Y legacy spelling", () => {
+  it("treats `Transform.Rotation.Y` (no .Prop) as an alias for transform.rotation.y", () => {
+    // AR_GAMEINTRO / AR_TACTIC emit a handful of rotation Y controllers
+    // without the canonical `.Prop` suffix. Without the alias these
+    // controllers fell back to the "no track mapping" warning bucket and
+    // were dropped from the imported blueprint entirely.
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>' +
+      '<Quad Id="q1" Name="Spinner"/>' +
+      "</Children></SceneNode>" +
+      '<Timelines Format="HD1080i50">' +
+      '<Timeline Id="T1" Name="In" MaxFrames="50">' +
+      '<KeyFrameAnimationController ControllableId="q1" AnimatedProperty="Transform.Rotation.Y">' +
+      '<KeyFrame Id="K1" FrameNumber="0" Value="0"/>' +
+      '<KeyFrame Id="K2" FrameNumber="50" Value="3.14159"/>' +
+      "</KeyFrameAnimationController></Timeline></Timelines></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const clip = result.blueprint.animation.clips.find((c) => c.name === "In");
+    expect(clip?.tracks.length).toBe(1);
+    expect(clip?.tracks[0].property).toBe("transform.rotation.y");
+    expect(clip?.tracks[0].keyframes.map((kf) => kf.value)).toEqual([0, 3.14159]);
+    // The alias must not also fire the "no track mapping" warning.
+    const skipWarning = result.warnings.find(
+      (w) => w.includes("AnimatedProperty") && w.includes("Transform.Rotation.Y"),
+    );
+    expect(skipWarning).toBeUndefined();
+  });
+});
