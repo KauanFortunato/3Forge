@@ -172,6 +172,7 @@ export class SceneEditor {
   private readonly unsubscribe: () => void;
   private readonly textureCache = new Map<string, Texture>();
   private readonly videoTextureCache = new Map<string, VideoTexture>();
+  private debugFallbackImage: HTMLCanvasElement | null = null;
   private readonly animationFrameListeners = new Set<(frame: number) => void>();
 
   private animationFrame = 0;
@@ -1176,6 +1177,38 @@ export class SceneEditor {
     return new Mesh(geometry, material);
   }
 
+  /**
+   * Lazily builds a tiny 8×8 magenta/black checker that we slot in whenever a
+   * texture load fails. Magenta is the long-running graphics-pipeline
+   * convention for "missing texture" — it makes the broken quad pop visually
+   * instead of vanishing into the material's flat colour. Returns null in
+   * environments where canvas isn't usable (jsdom without canvas), in which
+   * case the caller just leaves the texture as-is.
+   */
+  private getDebugFallbackImage(): HTMLCanvasElement | null {
+    if (this.debugFallbackImage) return this.debugFallbackImage;
+    let canvas: HTMLCanvasElement | null = null;
+    try {
+      canvas = document.createElement("canvas");
+      canvas.width = 8;
+      canvas.height = 8;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.fillStyle = "#ff00ff";
+      ctx.fillRect(0, 0, 8, 8);
+      ctx.fillStyle = "#000000";
+      for (let y = 0; y < 8; y += 2) {
+        for (let x = (y / 2) % 2; x < 8; x += 2) {
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+    } catch {
+      return null;
+    }
+    this.debugFallbackImage = canvas;
+    return canvas;
+  }
+
   private getVideoTexture(src: string): VideoTexture {
     const cached = this.videoTextureCache.get(src);
     if (cached) return cached;
@@ -1186,6 +1219,14 @@ export class SceneEditor {
     video.muted = true;
     video.autoplay = true;
     video.playsInline = true;
+    // Surface load failures (404, codec mismatch, CORS) — they would
+    // otherwise leave the VideoTexture stuck on a blank frame with no
+    // console signal at all.
+    video.addEventListener("error", () => {
+      const code = video.error?.code;
+      // eslint-disable-next-line no-console
+      console.warn(`[scene] video texture failed to load src=${src} code=${code ?? "unknown"}`);
+    });
     // Autoplay may be blocked until a user gesture; ignore the rejection — the
     // browser will start the video on the next interaction with the page.
     video.play().catch(() => {});
@@ -1214,7 +1255,22 @@ export class SceneEditor {
     if (!options) {
       const cached = this.textureCache.get(src);
       if (cached) return cached;
-      const texture = this.textureLoader.load(src);
+      // Three's TextureLoader signature is (url, onLoad, onProgress, onError).
+      // Without onError a 404 / CORS / mime mismatch leaves the texture
+      // permanently blank and the user just sees the material's flat colour
+      // with no console signal. Swap to a debug magenta image and warn so
+      // the broken layer is obvious in-editor.
+      const onError = (event: ErrorEvent | Event) => {
+        const reason = event instanceof ErrorEvent ? event.message : "load error";
+        // eslint-disable-next-line no-console
+        console.warn(`[scene] texture failed to load src=${src} reason=${reason}`);
+        const fallback = this.getDebugFallbackImage();
+        if (fallback) {
+          texture.image = fallback;
+          texture.needsUpdate = true;
+        }
+      };
+      const texture = this.textureLoader.load(src, undefined, undefined, onError);
       texture.colorSpace = SRGBColorSpace;
       texture.needsUpdate = true;
       this.textureCache.set(src, texture);
