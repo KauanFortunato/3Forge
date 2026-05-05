@@ -116,7 +116,7 @@ function readVideoDimensions(src: string): Promise<{ width: number; height: numb
   });
 }
 
-function inferVideoMimeType(fileName: string): string {
+export function inferVideoMimeType(fileName: string): string {
   const normalized = fileName.toLowerCase();
   if (normalized.endsWith(".mov")) return "video/quicktime";
   if (normalized.endsWith(".mp4") || normalized.endsWith(".m4v")) return "video/mp4";

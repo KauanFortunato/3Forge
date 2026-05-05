@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { afterAll, describe, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { parseW3D } from "./w3d";
+import { inferVideoMimeType, isVideoFileName } from "../images";
 import type { ImageAsset } from "../types";
 
 /**
@@ -76,16 +77,32 @@ describe("real W3D scenes smoke", () => {
         // disk + the mesh GUIDs — that's the path the UI takes via
         // parseW3DFromFolder. Without this the parser only sees the XML and
         // emits "Scene references X textures — re-import via folder".
+        // Build a Resources/Textures snapshot the parser will use to resolve
+        // <Texture> and <ImageSequence> references. mimeType has to be right
+        // for the renderer to switch between Texture (image) and VideoTexture
+        // (video) — getting it wrong silently degrades .mov layers to a
+        // single frame still.
         const textures = new Map<string, ImageAsset>();
+        const videoFilenames = new Set<string>();
         if (existsSync(texturesDir)) {
           for (const file of readdirSync(texturesDir)) {
+            const lower = file.toLowerCase();
+            const isVideo = isVideoFileName(file);
+            const mimeType = isVideo
+              ? inferVideoMimeType(file)
+              : lower.endsWith(".png")
+                ? "image/png"
+                : lower.endsWith(".webp")
+                  ? "image/webp"
+                  : "image/jpeg";
             textures.set(file, {
               name: file,
-              mimeType: file.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
+              mimeType,
               src: `file://${texturesDir}/${file}`,
               width: 0,
               height: 0,
             });
+            if (isVideo) videoFilenames.add(file);
           }
         }
         const meshAssets = new Set<string>();
@@ -94,12 +111,22 @@ describe("real W3D scenes smoke", () => {
             if (file.endsWith(".vert")) meshAssets.add(file.slice(0, -5).toLowerCase());
           }
         }
-        const result = parseW3D(xml, { sceneName: name, textures, meshAssets });
+        const result = parseW3D(xml, { sceneName: name, textures, videos: videoFilenames, meshAssets });
         const bp = result.blueprint;
         const counts = bp.nodes.reduce<Record<string, number>>((acc, n) => {
           acc[n.type] = (acc[n.type] ?? 0) + 1;
           return acc;
         }, {});
+        // End-to-end check: every <ImageSequence>-backed node should have made
+        // it across as an image node carrying a video/* mimeType. A regression
+        // anywhere in the chain (resolver, asset map, mimeType inference)
+        // would silently degrade to image/jpeg + still texture.
+        const videoImageNodes = bp.nodes.filter(
+          (n) => n.type === "image" && n.image.mimeType.startsWith("video/"),
+        );
+        if (videoFilenames.size > 0) {
+          expect(videoImageNodes.length).toBeGreaterThan(0);
+        }
         const totalKfs = bp.animation.clips.reduce(
           (sum, c) => sum + c.tracks.reduce((s, t) => s + t.keyframes.length, 0),
           0,
@@ -121,6 +148,7 @@ describe("real W3D scenes smoke", () => {
         console.log(
           `\n[${name}] sceneMode=${bp.sceneMode} bg=${bgStr} cam=${camStr}` +
           `\n  nodes=${bp.nodes.length} byType=${JSON.stringify(counts)}` +
+          `\n  videos: ${videoFilenames.size} on disk → ${videoImageNodes.length} image nodes with video/* mimeType` +
           `\n  designView: ${designViewPromoted} nodes promoted from Enable=False to visible` +
           `\n  clips=${bp.animation.clips.length} kfs=${totalKfs}` +
           `\n  warnings(${result.warnings.length}):\n    - ${result.warnings.join("\n    - ")}`,
