@@ -51,6 +51,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
+import { computeRenderOrderByWorldZ } from "./paintOrder";
 import {
   animationValueToBoolean,
   getAnimationValue,
@@ -164,6 +165,7 @@ export class SceneEditor {
   private readonly selectionBounds = new Box3();
   private readonly selectionSize = new Vector3();
   private readonly selectionCenter = new Vector3();
+  private readonly tmpVec3 = new Vector3();
   private readonly selectedObjects: Object3D[] = [];
   private readonly infiniteGrid: Mesh<PlaneGeometry, ShaderMaterial>;
   private readonly resizeObserver: ResizeObserver;
@@ -915,12 +917,26 @@ export class SceneEditor {
   }
 
   private applyPainterOrderingForLegacyLayout(): void {
-    this.store.blueprint.nodes.forEach((node, index) => {
+    // Refresh world transforms so getWorldPosition() reflects the just-mounted
+    // hierarchy. Without this the wrappers added in the current rebuild still
+    // report their previous world Z (or zero on first mount).
+    this.viewportRoot.updateMatrixWorld(true);
+    const orderMap = computeRenderOrderByWorldZ(
+      this.store.blueprint.nodes,
+      (id) => {
+        const wrapper = this.objectMap.get(id);
+        if (!wrapper) return undefined;
+        wrapper.getWorldPosition(this.tmpVec3);
+        return this.tmpVec3.z;
+      },
+    );
+    this.store.blueprint.nodes.forEach((node) => {
       const wrapper = this.objectMap.get(node.id);
       if (!wrapper) return;
+      const order = orderMap.get(node.id) ?? 0;
       wrapper.traverse((child) => {
         if (!(child instanceof Mesh)) return;
-        child.renderOrder = index;
+        child.renderOrder = order;
         forEachMaterial(child, (m) => {
           m.depthWrite = false;
           m.polygonOffset = false;
