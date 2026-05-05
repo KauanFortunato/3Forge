@@ -52,6 +52,7 @@ import { TransformControls } from "three/examples/jsm/controls/TransformControls
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import { computeRenderOrderByWorldZ } from "./paintOrder";
+import { buildSkewMatrix, isIdentitySkew } from "./skew";
 import {
   animationValueToBoolean,
   getAnimationValue,
@@ -1080,7 +1081,21 @@ export class SceneEditor {
     const wrapper = new Group();
     const mesh = this.buildMeshObject(node);
     this.applyNodeOrigin(mesh, node.origin);
-    wrapper.add(mesh);
+    // Static <Skew> shears the mesh via an inserted skewLayer Group so that
+    // animations on position/rotation/scale (which always target the wrapper)
+    // stay clean — the skew matrix lives one level down with
+    // matrixAutoUpdate off and is composed once at build time. Identity skew
+    // (undefined or all-zero) skips the extra group entirely so non-skewed
+    // nodes keep their original wrapper→mesh shape.
+    if (!isIdentitySkew(node.transform.skew)) {
+      const skewLayer = new Group();
+      skewLayer.matrix.copy(buildSkewMatrix(node.transform.skew!));
+      skewLayer.matrixAutoUpdate = false;
+      skewLayer.add(mesh);
+      wrapper.add(skewLayer);
+    } else {
+      wrapper.add(mesh);
+    }
     return wrapper;
   }
 

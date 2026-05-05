@@ -51,6 +51,14 @@ export interface TransformSpec {
   position: Vec3Like;
   rotation: Vec3Like;
   scale: Vec3Like;
+  /**
+   * Optional shear, in degrees, sourced from W3D `<NodeTransform><Skew/>`.
+   * `x` shears the X coordinate by `tan(x) * Y`; `y` shears Y by `tan(y) * X`;
+   * `z` is accepted for round-trip but doesn't apply in the 2D-flat shaders
+   * the editor uses today. Undefined or all-zero is treated as identity by
+   * the renderer and the extra skewLayer Group is not inserted.
+   */
+  skew?: Vec3Like;
 }
 
 export interface NodeOriginSpec {

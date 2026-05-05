@@ -1019,6 +1019,20 @@ function applyTransform(el: Element, node: EditorNode, ctx: ParseContext): void 
   if (rotationEl) {
     setVecFromEl(rotationEl, node.transform.rotation);
   }
+  // Static <Skew> in degrees per axis. Carry it onto the node only when at
+  // least one axis is authored — the renderer's identity check skips the
+  // skewLayer Group entirely when this stays undefined, so legacy nodes
+  // and templates without skew keep their existing wrapper shape.
+  const skewEl = childElementByTag(transformEl, "Skew");
+  if (skewEl) {
+    const skew = { x: 0, y: 0, z: 0 };
+    if (skewEl.hasAttribute("X")) skew.x = parseNumberAttr(skewEl, "X", 0);
+    if (skewEl.hasAttribute("Y")) skew.y = parseNumberAttr(skewEl, "Y", 0);
+    if (skewEl.hasAttribute("Z")) skew.z = parseNumberAttr(skewEl, "Z", 0);
+    if (skew.x !== 0 || skew.y !== 0 || skew.z !== 0) {
+      node.transform.skew = skew;
+    }
+  }
 }
 
 function setVecFromEl(

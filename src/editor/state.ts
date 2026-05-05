@@ -491,11 +491,20 @@ function normalizeTransform(value: unknown, fallback: TransformSpec): TransformS
   }
 
   const source = value as Record<string, unknown>;
-  return {
+  const out: TransformSpec = {
     position: normalizeVec3(source.position, fallback.position),
     rotation: normalizeVec3(source.rotation, fallback.rotation),
     scale: normalizeVec3(source.scale, fallback.scale),
   };
+  // Skew is optional; only carry it when authored, so legacy blueprints
+  // without the field stay shaped exactly as before.
+  if (source.skew && typeof source.skew === "object") {
+    const skew = normalizeVec3(source.skew, { x: 0, y: 0, z: 0 });
+    if (skew.x !== 0 || skew.y !== 0 || skew.z !== 0) out.skew = skew;
+  } else if (fallback.skew) {
+    out.skew = { ...fallback.skew };
+  }
+  return out;
 }
 
 function normalizeOriginHorizontal(value: unknown, fallback: NodeOriginHorizontal): NodeOriginHorizontal {

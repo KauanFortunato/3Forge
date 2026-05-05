@@ -533,6 +533,47 @@ describe("Alpha animation track", () => {
   });
 });
 
+describe("Static <Skew> on NodeTransform", () => {
+  it("captures the authored skew angles in degrees onto node.transform.skew", () => {
+    // GameName_FS authors `<Skew X="15"/>` on every lower-third bar; before
+    // this support landed the whole element was silently dropped and the
+    // imported quad rendered as an upright rectangle.
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>' +
+      '<Quad Id="q1" Name="Bar"><NodeTransform>' +
+      '<Position X="-0.68" Y="2.08"/>' +
+      '<Skew X="15"/>' +
+      "</NodeTransform></Quad>" +
+      "</Children></SceneNode></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const bar = result.blueprint.nodes.find((n) => n.name === "Bar");
+    expect(bar?.transform.skew).toEqual({ x: 15, y: 0, z: 0 });
+  });
+
+  it("leaves transform.skew undefined when the XML omits <Skew>", () => {
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>' +
+      '<Quad Id="q1" Name="NoSkew"><NodeTransform><Position X="0" Y="0"/></NodeTransform></Quad>' +
+      "</Children></SceneNode></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const node = result.blueprint.nodes.find((n) => n.name === "NoSkew");
+    expect(node?.transform.skew).toBeUndefined();
+  });
+
+  it("ignores all-zero <Skew> so the skewLayer is never inserted unnecessarily", () => {
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>' +
+      '<Quad Id="q1" Name="Zero"><NodeTransform><Skew X="0" Y="0"/></NodeTransform></Quad>' +
+      "</Children></SceneNode></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const node = result.blueprint.nodes.find((n) => n.name === "Zero");
+    expect(node?.transform.skew).toBeUndefined();
+  });
+});
+
 describe("Transform.Rotation.Y legacy spelling", () => {
   it("treats `Transform.Rotation.Y` (no .Prop) as an alias for transform.rotation.y", () => {
     // AR_GAMEINTRO / AR_TACTIC emit a handful of rotation Y controllers
