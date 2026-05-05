@@ -2652,6 +2652,7 @@ code {
   position: relative;
   overflow-y: auto;
   overflow-x: auto;
+  cursor: crosshair;
   background:
     repeating-linear-gradient(to bottom,
       transparent 0, transparent 25px,

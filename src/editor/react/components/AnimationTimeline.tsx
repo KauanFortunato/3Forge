@@ -410,12 +410,13 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     }
   }, [durationFrames, onSelectKeyframe, onSelectTrack, visibleTracks]);
 
-  const handleAreaSelectStart = useCallback((event: ReactPointerEvent<HTMLDivElement>, trackId: string) => {
-    if (event.button !== 0 || event.target !== event.currentTarget) {
+  const handleAreaSelectStart = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || isTimelineInteractiveTarget(event.target)) {
       return;
     }
 
     event.preventDefault();
+    const trackId = findTrackIdAtClientPoint(event.clientX, event.clientY, lanesScrollRef.current);
     onSelectTrack(trackId);
     const additive = event.shiftKey || event.ctrlKey || event.metaKey;
     const startPoint = getTimelineContentPoint(event.clientX, event.clientY, lanesScrollRef.current);
@@ -925,8 +926,15 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
           </div>
         </div>
 
-        <div className="tl__lanes" ref={lanesScrollRef}>
-          <div className="tl__lanes-inner" style={timelineContentStyle}>
+        <div
+          className="tl__lanes"
+          ref={lanesScrollRef}
+          onPointerDown={handleAreaSelectStart}
+        >
+          <div
+            className="tl__lanes-inner"
+            style={timelineContentStyle}
+          >
             {/* Spacer lane matching the property-selector track */}
             <div className="tl-lane" />
 
@@ -947,7 +955,6 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
                       onSelectTrack={() => onSelectTrack(track.id)}
                       onPickKeyframe={(keyframeId, additive) => handleKeyframePick(track.id, keyframeId, additive)}
                       onFrameChange={onFrameChange}
-                      onAreaSelectStart={(event) => handleAreaSelectStart(event, track.id)}
                       onStartKeyframeDrag={(event, keyframeId) => {
                         onBeginKeyframeDrag();
                         const laneElement = event.currentTarget.parentElement;
@@ -1107,7 +1114,6 @@ interface TrackLaneProps {
   onSelectTrack: () => void;
   onPickKeyframe: (keyframeId: string, additive: boolean) => void;
   onFrameChange: (frame: number) => void;
-  onAreaSelectStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onStartKeyframeDrag: (event: ReactPointerEvent<HTMLButtonElement>, keyframeId: string) => void;
 }
 
@@ -1122,7 +1128,6 @@ function TrackLane(props: TrackLaneProps) {
     onSelectTrack,
     onPickKeyframe,
     onFrameChange,
-    onAreaSelectStart,
     onStartKeyframeDrag,
   } = props;
 
@@ -1130,7 +1135,6 @@ function TrackLane(props: TrackLaneProps) {
     <div
       className={`tl-lane${isSelected ? " is-selected" : ""}${isMuted ? " is-muted" : ""}`}
       data-track-lane-id={track.id}
-      onPointerDown={onAreaSelectStart}
     >
       {track.keyframes.map((keyframe) => {
         const isKeyframeSelected = selectedKeyframeIds?.has(getSelectionKey(track.id, keyframe.id)) ?? false;
@@ -1157,7 +1161,7 @@ function TrackLane(props: TrackLaneProps) {
                 onPickKeyframe(keyframe.id, true);
                 return;
               }
-              if (!(selectedKeyframeIds?.has(keyframe.id) ?? false)) {
+              if (!(selectedKeyframeIds?.has(getSelectionKey(track.id, keyframe.id)) ?? false)) {
                 onPickKeyframe(keyframe.id, false);
               }
               onStartKeyframeDrag(event, keyframe.id);
@@ -1273,6 +1277,29 @@ function getTimelineContentPoint(clientX: number, clientY: number, host: HTMLEle
     x: clientX - hostLeft + (host?.scrollLeft ?? 0),
     y: clientY - hostTop + (host?.scrollTop ?? 0),
   };
+}
+
+function findTrackIdAtClientPoint(clientX: number, clientY: number, host: HTMLElement | null): string | null {
+  if (!host) {
+    return null;
+  }
+
+  for (const lane of Array.from(host.querySelectorAll<HTMLElement>("[data-track-lane-id]"))) {
+    const rect = lane.getBoundingClientRect();
+    if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+      return lane.dataset.trackLaneId ?? null;
+    }
+  }
+
+  return null;
+}
+
+function isTimelineInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest("button, input, textarea, select, [contenteditable='true']"));
 }
 
 function isKeyboardTargetEditable(target: EventTarget | null): boolean {

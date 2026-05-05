@@ -472,6 +472,93 @@ describe("AnimationTimeline", () => {
     expect(props.onRemoveKeyframes).toHaveBeenCalledWith(secondTrack.id, [secondKeyframe.id]);
   });
 
+  it("starts marquee selection from empty tl__lanes space", () => {
+    const root = createNode("group", null, ROOT_NODE_ID);
+    const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
+    firstNode.name = "Hero Panel";
+    const secondNode = createNode("plane", ROOT_NODE_ID, "plane-1");
+    secondNode.name = "Accent Plate";
+
+    const firstTrack = createAnimationTrack(firstNode.id, "transform.position.x");
+    const firstKeyframe = createAnimationKeyframe(10, 0);
+    firstTrack.keyframes.push(firstKeyframe);
+
+    const secondTrack = createAnimationTrack(secondNode.id, "transform.position.y");
+    const secondKeyframe = createAnimationKeyframe(30, 1);
+    secondTrack.keyframes.push(secondKeyframe);
+
+    const clip = createAnimationClip("main", {
+      durationFrames: 100,
+      tracks: [firstTrack, secondTrack],
+    });
+    const props = makeBaseProps();
+
+    render(
+      <AnimationTimeline
+        animation={{ activeClipId: clip.id, clips: [clip] }}
+        nodes={[root, firstNode, secondNode]}
+        selectedNode={firstNode}
+        currentFrame={0}
+        selectedTrackId={null}
+        selectedKeyframeId={null}
+        {...props}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "All keyframes" }));
+
+    const lanesRoot = document.querySelector<HTMLElement>(".tl__lanes");
+    const firstLane = document.querySelector<HTMLElement>(`[data-track-lane-id="${firstTrack.id}"]`);
+    const secondLane = document.querySelector<HTMLElement>(`[data-track-lane-id="${secondTrack.id}"]`);
+    expect(lanesRoot).toBeTruthy();
+    expect(firstLane).toBeTruthy();
+    expect(secondLane).toBeTruthy();
+
+    vi.spyOn(lanesRoot as HTMLElement, "getBoundingClientRect").mockReturnValue({
+      left: 100,
+      right: 1100,
+      top: 40,
+      bottom: 220,
+      width: 1000,
+      height: 180,
+      x: 100,
+      y: 40,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(firstLane as HTMLElement, "getBoundingClientRect").mockReturnValue({
+      left: 100,
+      right: 1100,
+      top: 100,
+      bottom: 126,
+      width: 1000,
+      height: 26,
+      x: 100,
+      y: 100,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(secondLane as HTMLElement, "getBoundingClientRect").mockReturnValue({
+      left: 100,
+      right: 1100,
+      top: 126,
+      bottom: 152,
+      width: 1000,
+      height: 26,
+      x: 100,
+      y: 126,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.pointerDown(lanesRoot as HTMLElement, { button: 0, clientX: 150, clientY: 80 });
+    fireEvent.pointerMove(window, { clientX: 450, clientY: 145 });
+    fireEvent.pointerUp(window);
+
+    const firstButton = screen.getByRole("button", { name: `Keyframe at ${firstKeyframe.frame}` });
+    const secondButton = screen.getByRole("button", { name: `Keyframe at ${secondKeyframe.frame}` });
+    expect(firstButton.classList.contains("is-selected")).toBe(true);
+    expect(secondButton.classList.contains("is-selected")).toBe(true);
+    expect(props.onSelectTrack).toHaveBeenCalledWith(null);
+  });
+
   it("copies and pastes multiple selected keyframes through a timeline-local clipboard", () => {
     const root = createNode("group", null, ROOT_NODE_ID);
     const firstNode = createNode("box", ROOT_NODE_ID, "box-1");
