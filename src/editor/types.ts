@@ -34,7 +34,11 @@ export type AnimationPropertyPath =
   | "transform.scale.x"
   | "transform.scale.y"
   | "transform.scale.z"
-  | "material.opacity";
+  | "material.opacity"
+  | "material.textureOptions.offsetU"
+  | "material.textureOptions.offsetV"
+  | "material.textureOptions.repeatU"
+  | "material.textureOptions.repeatV";
 export type AnimationEasePreset = "linear" | "easeIn" | "easeOut" | "easeInOut" | "backOut" | "bounceOut";
 
 export interface Vec3Like {

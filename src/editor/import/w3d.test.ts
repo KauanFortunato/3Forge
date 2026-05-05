@@ -112,4 +112,35 @@ describe("W3D import", () => {
       }
     }
   });
+
+  it("converts animated TextureMappingOption.Offset/Scale into material.textureOptions tracks", () => {
+    // GameName_FS animates TextureMappingOption.Offset.YProp on a TextureLayer
+    // shared by HOME_1/HOME_2/HOME_3 (etc). Without TextureLayer-aware
+    // resolution these tracks would be aggregated as "no track mapping".
+    const result = parseW3D(gameNameFsXml, { sceneName: "GameName_FS" });
+
+    const offsetVTracks = result.blueprint.animation.clips.flatMap((clip) =>
+      clip.tracks.filter((t) => t.property === "material.textureOptions.offsetV"),
+    );
+    expect(offsetVTracks.length).toBeGreaterThan(0);
+    // R3 V grows downward, Three's grows upward. The keyframe values must
+    // be sign-flipped at decode time to match the static parseTextureSamplingOptions.
+    const allValues = offsetVTracks.flatMap((t) => t.keyframes.map((k) => k.value));
+    expect(allValues.some((v) => v !== 0)).toBe(true);
+
+    // No skip warning should mention the now-supported AnimatedProperty.
+    const skippedOffsetWarning = result.warnings.find((w) =>
+      w.includes("TextureMappingOption.Offset"),
+    );
+    expect(skippedOffsetWarning).toBeUndefined();
+
+    // The path is registered in the AnimationPropertyPath union; the type
+    // narrowing of `t.property === "material.textureOptions.offsetV"` above
+    // is the static guarantee. As a runtime cross-check, confirm at least
+    // one track resolves to an actual node id we imported.
+    const nodeIds = new Set(result.blueprint.nodes.map((n) => n.id));
+    for (const track of offsetVTracks) {
+      expect(nodeIds.has(track.nodeId)).toBe(true);
+    }
+  });
 });

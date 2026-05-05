@@ -102,6 +102,13 @@ interface ParseContext {
   shadow: W3DShadowData;
   /** TextureLayerId (lowercase) → texture filename, or null when unmapped. */
   textureLayerToFilename: Map<string, string>;
+  /**
+   * TextureLayerId (lowercase) → ordered list of 3Forge node ids that draw
+   * with that layer. R3 routes animated `TextureMappingOption.*` properties
+   * through the TextureLayer's GUID (not the node's), so to fan a single
+   * controller out onto every Quad that shares the layer we need this map.
+   */
+  textureLayerToNodeIds: Map<string, string[]>;
   /** Filename → ImageAsset supplied by caller (folder import). */
   textures: Map<string, ImageAsset>;
   /** Filenames of video textures present in the folder (skipped, with clearer warning). */
@@ -170,6 +177,17 @@ const W3D_PROPERTY_TO_PATHS: Record<string, AnimationPropertyPath[]> = {
   // mapping it to material.opacity recovers most fade animations.
   Alpha: ["material.opacity"],
   "Material.Alpha": ["material.opacity"],
+  // Animated UV — broadcast templates use these for sliding logos /
+  // ticker bands. ControllableId for these tracks points at the
+  // <TextureLayer>, not at a scene node, so parseTimeline routes them
+  // through ctx.textureLayerToNodeIds (one track per Quad sharing the
+  // layer). Y is negated at keyframe-decode time to mirror the
+  // R3-downward-V → Three-upward-V flip we already do in the static
+  // parseTextureSamplingOptions path.
+  "TextureMappingOption.Offset.XProp": ["material.textureOptions.offsetU"],
+  "TextureMappingOption.Offset.YProp": ["material.textureOptions.offsetV"],
+  "TextureMappingOption.Scale.XProp": ["material.textureOptions.repeatU"],
+  "TextureMappingOption.Scale.YProp": ["material.textureOptions.repeatV"],
 };
 
 export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImportResult {
@@ -213,6 +231,7 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
       flippedYZ: flipYZ,
     },
     textureLayerToFilename: new Map(),
+    textureLayerToNodeIds: new Map(),
     textures: normalizeFilenameMap(options.textures),
     videos: normalizeFilenameSet(options.videos),
     usedImages: new Map(),
@@ -642,6 +661,7 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
       if (samplingOptions) {
         imageNode.material.textureOptions = samplingOptions;
       }
+      registerTextureLayerNode(ctx, layerId, imageNode.id);
       return imageNode;
     }
     ctx.missingTextures.add(filename);
@@ -651,6 +671,13 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
   node.geometry.width = width;
   node.geometry.height = height;
   applyMaterialFromPrimitive(el, node, ctx);
+  // Track the layer→node link even on the plane-fallback path so animated
+  // texture properties don't silently drop their target — the renderer can
+  // still apply offset/repeat to the (texture-less) material if the user
+  // wires up a texture later.
+  if (layerId) {
+    registerTextureLayerNode(ctx, layerId, node.id);
+  }
   // Track plane fallbacks for quads that referenced an unresolved texture so
   // the post-walk pass can hide them — they'd otherwise render as bright white
   // placeholders that obscure the rest of the scene.
@@ -752,6 +779,15 @@ function textureFilterFromW3D(raw: string | null): TextureSamplingOptions["magFi
       return "anisotropic";
     default:
       return undefined;
+  }
+}
+
+function registerTextureLayerNode(ctx: ParseContext, layerId: string, nodeId: string): void {
+  const existing = ctx.textureLayerToNodeIds.get(layerId);
+  if (existing) {
+    existing.push(nodeId);
+  } else {
+    ctx.textureLayerToNodeIds.set(layerId, [nodeId]);
   }
 }
 
@@ -1123,8 +1159,18 @@ function parseTimeline(el: Element, ctx: ParseContext, formatFps: number): Anima
       continue;
     }
 
-    const nodeId = ctx.idMap.get(controllableId);
-    if (!nodeId) {
+    // ControllableId for animated TextureMappingOption tracks references the
+    // <TextureLayer> rather than a scene node — fan the controller out to
+    // every Quad that draws with that layer (often more than one in
+    // broadcast templates that reuse a single texture across siblings).
+    const isTextureMappingTrack = animatedProperty.startsWith("TextureMappingOption.");
+    const nodeIds = isTextureMappingTrack
+      ? ctx.textureLayerToNodeIds.get(controllableId) ?? []
+      : (() => {
+          const id = ctx.idMap.get(controllableId);
+          return id ? [id] : [];
+        })();
+    if (nodeIds.length === 0) {
       aggregateSkip(ctx, "AnimationTrack", controllableId, "track targets a node we didn't import");
       continue;
     }
@@ -1138,11 +1184,17 @@ function parseTimeline(el: Element, ctx: ParseContext, formatFps: number): Anima
     );
     const flipKeyframeY = ctx.flipYZ && animatedProperty === "Transform.Position.YProp";
     const flipKeyframeZ = ctx.flipYZ && animatedProperty === "Transform.Position.ZProp";
+    // R3 stores texture V offsets growing downward; Three's grow upward, so
+    // negate the keyframe value to keep the visual direction the same. This
+    // mirrors the static `out.offsetV = -y` in parseTextureSamplingOptions.
+    // Scale (repeat) is a magnitude, not a direction — no flip needed.
+    const flipKeyframeOffsetV = animatedProperty === "TextureMappingOption.Offset.YProp";
 
-    // Walk every target path. Most properties have a single path; uniform
-    // Scale fans out to three. Using a stable cached value array prevents
-    // the import from re-decoding the same XML for each axis.
-    for (const propertyPath of propertyPaths) {
+    // Walk every (node, target path) pair. Most properties resolve to a
+    // single node + single path; uniform Scale fans out to three paths;
+    // shared TextureLayers fan out to N nodes. Using a stable cached value
+    // array prevents the import from re-decoding the same XML per axis.
+    for (const nodeId of nodeIds) for (const propertyPath of propertyPaths) {
       const track = createAnimationTrack(nodeId, propertyPath);
       // Same trackKey for every fan-out so the exporter folds them back
       // onto the original single controller — patchKeyframe is idempotent
@@ -1156,6 +1208,7 @@ function parseTimeline(el: Element, ctx: ParseContext, formatFps: number): Anima
           ? booleanAttrAsNumber(kfEl.getAttribute("Value"))
           : flipKeyframeY ? -rawValue
           : flipKeyframeZ ? -rawValue
+          : flipKeyframeOffsetV ? -rawValue
           : rawValue;
         const ease = mapEase(
           sortedKeyframes[index - 1]?.getAttribute("RightType") ?? "Linear",

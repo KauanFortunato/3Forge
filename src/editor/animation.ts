@@ -25,6 +25,10 @@ export const ANIMATION_PROPERTIES: Array<{ path: AnimationPropertyPath; label: s
   { path: "transform.scale.y", label: "Scale Y" },
   { path: "transform.scale.z", label: "Scale Z" },
   { path: "material.opacity", label: "Opacity" },
+  { path: "material.textureOptions.offsetU", label: "Texture Offset U" },
+  { path: "material.textureOptions.offsetV", label: "Texture Offset V" },
+  { path: "material.textureOptions.repeatU", label: "Texture Repeat U" },
+  { path: "material.textureOptions.repeatV", label: "Texture Repeat V" },
 ];
 
 export const ANIMATION_EASE_OPTIONS: Array<{ value: AnimationEasePreset; label: string; gsap: string }> = [

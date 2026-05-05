@@ -1791,6 +1791,20 @@ function resolveAnimationTarget(target: Object3D, path: string): [Record<string,
     const material = meshObj.material;
     const owner = Array.isArray(material) ? material[0] : material;
     if (!owner) return [null, null];
+    // Animated UV offset/repeat: route to the underlying Three Texture's
+    // `offset`/`repeat` Vector2. R3 broadcast templates animate these for
+    // sliding logos and ticker bands; the static counterpart already lives
+    // in MaterialSpec.textureOptions and is applied at texture creation.
+    const textureOpsMatch = /^material\.textureOptions\.(offset|repeat)([UV])$/.exec(path);
+    if (textureOpsMatch) {
+      const map = (owner as { map?: unknown }).map;
+      if (!map || typeof map !== "object") return [null, null];
+      const vecKey = textureOpsMatch[1];
+      const axis = textureOpsMatch[2] === "U" ? "x" : "y";
+      const vec = (map as Record<string, unknown>)[vecKey];
+      if (!vec || typeof vec !== "object") return [null, null];
+      return [vec as Record<string, unknown>, axis];
+    }
     if (path === "material.opacity") {
       forEachMaterial(meshObj, (m) => {
         m.transparent = true;
