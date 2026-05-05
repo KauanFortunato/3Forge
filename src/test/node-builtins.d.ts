@@ -6,7 +6,10 @@ declare module "node:fs" {
   export function existsSync(path: string): boolean;
   export function readFileSync(path: string, encoding: string): string;
   export function readdirSync(path: string): string[];
+  export function statSync(path: string): { isDirectory(): boolean; isFile(): boolean };
 }
+
+declare const process: { env: Record<string, string | undefined> };
 
 declare module "node:fs/promises" {
   export function mkdir(path: string, options?: { recursive?: boolean }): Promise<string | undefined>;
