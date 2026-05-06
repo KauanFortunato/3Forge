@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AiBlueprintDebugError, createAiBlueprintResult, createAiSceneFromBlueprint, createBlueprintFromAiScene, generateBlueprintResult, isAiSceneSpec, parseAiSceneSpecJson } from "./aiBlueprint";
+import { AiBlueprintDebugError, createAiBlueprintResult, createAiSceneFromBlueprint, createBlueprintFromAiAnimationPatch, createBlueprintFromAiScene, generateBlueprintResult, isAiAnimationPatch, isAiSceneSpec, parseAiBlueprintJson, parseAiSceneSpecJson } from "./aiBlueprint";
 import { createDefaultBlueprint, EditorStore, ROOT_NODE_ID } from "./state";
 
 describe("aiBlueprint", () => {
@@ -159,6 +159,103 @@ describe("aiBlueprint", () => {
     expect(isAiSceneSpec(result.sceneSpec)).toBe(true);
   });
 
+  it("maps AI scene animation object names to generated node ids", () => {
+    const blueprint = createBlueprintFromAiScene({
+      componentName: "Animated Panel",
+      objects: [
+        {
+          type: "box",
+          name: "Panel",
+          color: "#7c3aed",
+          opacity: 1,
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          width: 1,
+          height: 1,
+          depth: 1,
+          radius: null,
+          radiusTop: null,
+          radiusBottom: null,
+          text: null,
+          size: null,
+        },
+      ],
+      animation: {
+        activeClipId: "clip-main",
+        clips: [
+          {
+            id: "clip-main",
+            name: "Main",
+            fps: 24,
+            durationFrames: 48,
+            tracks: [
+              {
+                id: "track-panel-y",
+                objectName: "Panel",
+                property: "transform.position.y",
+                keyframes: [
+                  { id: "key-0", frame: 0, value: 0, ease: "easeInOut" },
+                  { id: "key-24", frame: 24, value: 1, ease: "bounceOut" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const panel = blueprint.nodes.find((node) => node.name === "Panel");
+    expect(blueprint.animation.activeClipId).toBe("clip-main");
+    expect(blueprint.animation.clips[0]?.tracks[0]?.nodeId).toBe(panel?.id);
+    expect(blueprint.animation.clips[0]?.tracks[0]?.keyframes[1]?.ease).toBe("bounceOut");
+  });
+
+  it("applies an animation-only AI patch to an existing blueprint", () => {
+    const baseBlueprint = createDefaultBlueprint();
+    const target = baseBlueprint.nodes.find((node) => node.name === "Hero Panel");
+    const patched = createBlueprintFromAiAnimationPatch({
+      animation: {
+        activeClipId: "clip-main",
+        clips: [
+          {
+            id: "clip-main",
+            name: "Main",
+            fps: 24,
+            durationFrames: 48,
+            tracks: [
+              {
+                id: "track-panel-y",
+                targetName: "Hero Panel",
+                property: "transform.position.y",
+                keyframes: [
+                  { id: "key-0", frame: 0, value: 0, ease: "easeInOut" },
+                  { id: "key-24", frame: 24, value: 0.5, ease: "backOut" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    }, baseBlueprint);
+
+    expect(patched.nodes).toHaveLength(baseBlueprint.nodes.length);
+    expect(patched.animation.activeClipId).toBe("clip-main");
+    expect(patched.animation.clips[0]?.tracks[0]?.nodeId).toBe(target?.id);
+    expect(patched.animation.clips[0]?.tracks[0]?.keyframes[1]?.ease).toBe("backOut");
+  });
+
+  it("parses animation-only AI JSON separately from scene specs", () => {
+    const parsed = parseAiBlueprintJson(JSON.stringify({
+      animation: {
+        activeClipId: null,
+        clips: [],
+      },
+    }));
+
+    expect(isAiAnimationPatch(parsed)).toBe(true);
+  });
+
   it("accepts AI scene JSON wrapped in a Markdown code fence", () => {
     const scene = parseAiSceneSpecJson(`\`\`\`json
 {
@@ -235,6 +332,61 @@ describe("aiBlueprint", () => {
 
     expect(result.executedModel).toBe("google/gemini-2.5-flash-lite");
     expect(result.sceneSpec.componentName).toBe("OpenRouter Scene");
+  });
+
+  it("enables reasoning for OpenRouter chat-completion providers", async () => {
+    const sceneSpec = {
+      componentName: "Reasoning Scene",
+      objects: [
+        {
+          type: "box",
+          name: "Panel",
+          color: "#7c3aed",
+          opacity: 1,
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          width: 1,
+          height: 1,
+          depth: 1,
+          radius: null,
+          radiusTop: null,
+          radiusBottom: null,
+          text: null,
+          size: null,
+        },
+      ],
+      animation: {
+        activeClipId: null,
+        clips: [],
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        model: "openai/gpt-oss-120b:free",
+        choices: [
+          {
+            message: {
+              content: JSON.stringify(sceneSpec),
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    const result = await generateBlueprintResult({
+      apiKey: "sk-or-test",
+      prompt: "make a panel",
+      provider: "openrouter",
+      model: "openai/gpt-oss-120b:free",
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init?.body)) as { reasoning?: { enabled?: boolean }; stream?: boolean };
+    expect(body.reasoning).toEqual({ enabled: true });
+    expect(body.stream).toBeUndefined();
+    expect(result.sceneSpec.componentName).toBe("Reasoning Scene");
   });
 
   it("sends a single leading system message for chat-completion providers", async () => {

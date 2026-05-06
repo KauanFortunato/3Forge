@@ -1,8 +1,8 @@
-import { createDefaultAnimation } from "./animation";
+import { normalizeAnimation } from "./animation";
 import aiBlueprintGuide from "./aiBlueprintGuide.md?raw";
 import { createMaterialSpec, isMaterialSide, isMaterialType } from "./materials";
 import { createNode, ROOT_NODE_ID } from "./state";
-import type { BoxNode, ComponentBlueprint, CylinderNode, EditorNode, MaterialSide, MaterialType, PlaneNode, SphereNode, TextNode, TransformSpec } from "./types";
+import type { BoxNode, ComponentAnimation, ComponentBlueprint, CylinderNode, EditorNode, MaterialSide, MaterialType, PlaneNode, SphereNode, TextNode, TransformSpec } from "./types";
 
 type AiPrimitiveType = "box" | "sphere" | "cylinder" | "plane" | "text";
 
@@ -38,6 +38,11 @@ export interface AiPrimitiveSpec {
 export interface AiSceneSpec {
   componentName: string;
   objects: AiPrimitiveSpec[];
+  animation?: unknown;
+}
+
+export interface AiAnimationPatchSpec {
+  animation: unknown;
 }
 
 export type AiProvider = "openai" | "openrouter" | "local" | "gemini" | "groq";
@@ -173,7 +178,15 @@ const AI_SCENE_SCHEMA = {
         },
       },
     },
+    animation: createAnimationSchema(),
   },
+} as const;
+
+const AI_BLUEPRINT_RESPONSE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["animation"],
+  properties: AI_SCENE_SCHEMA.properties,
 } as const;
 
 export async function generateBlueprint({ apiKey, prompt, provider = "openrouter", model }: GenerateBlueprintOptions): Promise<ComponentBlueprint> {
@@ -203,10 +216,14 @@ export async function editBlueprintWithAIResult({ apiKey, prompt, provider = "op
   const editPrompt = [
     "Edit the current 3Forge scene according to the user request.",
     "Keep existing objects, colors, names, and composition unless the request asks to change them.",
-    "Return the full updated scene spec, not a patch.",
+    "If the request only adds or changes animation, return only an animation patch with top-level animation.",
+    "If the request changes geometry, materials, names, or composition, return the full updated scene spec.",
     "",
     "Current scene spec:",
     JSON.stringify(currentScene),
+    "",
+    "Current animation target node map:",
+    JSON.stringify(createAiAnimationNodeMap(currentBlueprint)),
     "",
     "User edit request:",
     contextualPrompt,
@@ -264,7 +281,7 @@ async function generateOpenAiSceneSpec({ apiKey, prompt, model }: Required<Pick<
           type: "json_schema",
           name: "three_forge_scene",
           strict: true,
-          schema: AI_SCENE_SCHEMA,
+          schema: AI_BLUEPRINT_RESPONSE_SCHEMA,
         },
       },
     }),
@@ -293,6 +310,7 @@ async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, mode
     },
     body: JSON.stringify({
       model,
+      ...(provider === "openrouter" ? { reasoning: { enabled: true } } : {}),
       messages: [
         { role: "system", content: createChatSystemPrompt() },
         { role: "user", content: prompt },
@@ -302,7 +320,7 @@ async function generateChatCompletionsSceneSpec({ apiKey, prompt, provider, mode
         json_schema: {
           name: "three_forge_scene",
           strict: provider === "groq",
-          schema: AI_SCENE_SCHEMA,
+          schema: AI_BLUEPRINT_RESPONSE_SCHEMA,
         },
       },
     }),
@@ -377,7 +395,7 @@ async function generateGeminiSceneSpec({ apiKey, prompt, model }: Required<Pick<
       ],
       generationConfig: {
         responseMimeType: "application/json",
-        responseJsonSchema: AI_SCENE_SCHEMA,
+        responseJsonSchema: AI_BLUEPRINT_RESPONSE_SCHEMA,
       },
     }),
   });
@@ -430,7 +448,23 @@ export function createBlueprintFromAiScene(spec: AiSceneSpec, options: { baseBlu
     materials: options.baseBlueprint ? options.baseBlueprint.materials.map((material) => ({ ...material, spec: { ...material.spec } })) : [],
     images: options.baseBlueprint ? options.baseBlueprint.images.map((image) => ({ ...image })) : [],
     nodes,
-    animation: createDefaultAnimation(),
+    animation: normalizeAiAnimationForBlueprint(spec.animation, nodes),
+  };
+}
+
+function createAiAnimationNodeMap(blueprint: ComponentBlueprint): Array<{ id: string; name: string; type: string; parentId: string | null }> {
+  return blueprint.nodes.map((node) => ({
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    parentId: node.parentId,
+  }));
+}
+
+export function createBlueprintFromAiAnimationPatch(patch: AiAnimationPatchSpec, baseBlueprint: ComponentBlueprint): ComponentBlueprint {
+  return {
+    ...structuredClone(baseBlueprint),
+    animation: normalizeAiAnimationForBlueprint(patch.animation, baseBlueprint.nodes),
   };
 }
 
@@ -440,10 +474,19 @@ export function createAiBlueprintResult(
   executedModel?: string,
   baseBlueprint?: ComponentBlueprint,
 ): AiBlueprintResult {
+  const isAnimationOnlyPatch = baseBlueprint
+    && sceneSpec.animation !== undefined
+    && sceneSpec.objects.length === 0;
+  const blueprint = isAnimationOnlyPatch
+    ? createBlueprintFromAiAnimationPatch({ animation: sceneSpec.animation }, baseBlueprint)
+    : createBlueprintFromAiScene(sceneSpec, { baseBlueprint });
+
   return {
-    blueprint: createBlueprintFromAiScene(sceneSpec, { baseBlueprint }),
+    blueprint,
     sceneSpec,
-    sceneSpecJson: JSON.stringify(sceneSpec, null, 2),
+    sceneSpecJson: isAnimationOnlyPatch
+      ? JSON.stringify({ animation: sceneSpec.animation }, null, 2)
+      : JSON.stringify(sceneSpec, null, 2),
     rawText,
     executedModel,
   };
@@ -543,6 +586,18 @@ function parseAiSceneSpec(payload: unknown): ParsedAiSceneSpec {
     );
   }
 
+  if (isAiAnimationPatch(parsed)) {
+    return {
+      sceneSpec: {
+        componentName: "Animation Patch",
+        objects: [],
+        animation: parsed.animation,
+      },
+      rawText: outputText,
+      executedModel,
+    };
+  }
+
   if (!parsed.componentName || !Array.isArray(parsed.objects) || parsed.objects.length === 0) {
     throw new AiBlueprintDebugError(
       "The model returned an incomplete scene specification.",
@@ -572,6 +627,79 @@ export function parseAiSceneSpecJson(sceneSpecJson: string): AiSceneSpec {
   return parsed as AiSceneSpec;
 }
 
+function normalizeAiAnimationForBlueprint(rawAnimation: unknown, nodes: EditorNode[]): ComponentAnimation {
+  const validNodeIds = new Set(nodes.map((node) => node.id));
+  return normalizeAnimation(resolveAiAnimationTargets(rawAnimation, nodes), validNodeIds);
+}
+
+function resolveAiAnimationTargets(rawAnimation: unknown, nodes: EditorNode[]): unknown {
+  if (!rawAnimation || typeof rawAnimation !== "object") {
+    return rawAnimation;
+  }
+
+  const animation = structuredClone(rawAnimation) as Record<string, unknown>;
+  if (!Array.isArray(animation.clips)) {
+    return animation;
+  }
+
+  for (const clip of animation.clips) {
+    if (!clip || typeof clip !== "object") {
+      continue;
+    }
+
+    const tracks = (clip as Record<string, unknown>).tracks;
+    if (!Array.isArray(tracks)) {
+      continue;
+    }
+
+    for (const track of tracks) {
+      if (!track || typeof track !== "object") {
+        continue;
+      }
+
+      const trackRecord = track as Record<string, unknown>;
+      if (typeof trackRecord.nodeId === "string" && nodes.some((node) => node.id === trackRecord.nodeId)) {
+        continue;
+      }
+
+      const targetName = typeof trackRecord.targetName === "string"
+        ? trackRecord.targetName
+        : typeof trackRecord.objectName === "string"
+          ? trackRecord.objectName
+          : "";
+      const nodeId = resolveUniqueNodeIdByName(nodes, targetName);
+      if (nodeId) {
+        trackRecord.nodeId = nodeId;
+      }
+      delete trackRecord.targetName;
+      delete trackRecord.objectName;
+    }
+  }
+
+  return animation;
+}
+
+function resolveUniqueNodeIdByName(nodes: EditorNode[], name: string): string | null {
+  const normalizedName = name.trim().toLowerCase();
+  if (!normalizedName) {
+    return null;
+  }
+
+  const matches = nodes.filter((node) => node.name.trim().toLowerCase() === normalizedName);
+  return matches.length === 1 ? matches[0].id : null;
+}
+
+export function parseAiBlueprintJson(sceneSpecJson: string): AiSceneSpec | AiAnimationPatchSpec {
+  const parsed = JSON.parse(normalizeAiJsonText(sceneSpecJson)) as unknown;
+  if (isAiAnimationPatch(parsed)) {
+    return parsed;
+  }
+  if (isAiSceneSpec(parsed)) {
+    return parsed;
+  }
+  throw new Error("Invalid AI blueprint JSON.");
+}
+
 export function isAiSceneSpec(value: unknown): value is AiSceneSpec {
   if (!value || typeof value !== "object") {
     return false;
@@ -587,6 +715,17 @@ export function isAiSceneSpec(value: unknown): value is AiSceneSpec {
       && typeof (object as Partial<AiPrimitiveSpec>).type === "string"
       && typeof (object as Partial<AiPrimitiveSpec>).name === "string"
     ));
+}
+
+export function isAiAnimationPatch(value: unknown): value is AiAnimationPatchSpec {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<AiSceneSpec & AiAnimationPatchSpec>;
+  return candidate.animation !== undefined
+    && candidate.componentName === undefined
+    && candidate.objects === undefined;
 }
 
 function extractOutputText(payload: unknown): string {
@@ -712,6 +851,74 @@ function createVec3Schema() {
       x: { type: "number" },
       y: { type: "number" },
       z: { type: "number" },
+    },
+  } as const;
+}
+
+function createAnimationSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["activeClipId", "clips"],
+    properties: {
+      activeClipId: { type: ["string", "null"] },
+      clips: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "name", "fps", "durationFrames", "tracks"],
+          properties: {
+            id: { type: "string" },
+            name: { type: "string" },
+            fps: { type: "number" },
+            durationFrames: { type: "number" },
+            tracks: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["id", "property", "keyframes"],
+                properties: {
+                  id: { type: "string" },
+                  nodeId: { type: "string" },
+                  targetName: { type: "string" },
+                  objectName: { type: "string" },
+                  property: {
+                    type: "string",
+                    enum: [
+                      "visible",
+                      "transform.position.x",
+                      "transform.position.y",
+                      "transform.position.z",
+                      "transform.rotation.x",
+                      "transform.rotation.y",
+                      "transform.rotation.z",
+                      "transform.scale.x",
+                      "transform.scale.y",
+                      "transform.scale.z",
+                    ],
+                  },
+                  keyframes: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["id", "frame", "value", "ease"],
+                      properties: {
+                        id: { type: "string" },
+                        frame: { type: "number" },
+                        value: { type: "number" },
+                        ease: { type: "string", enum: ["linear", "easeIn", "easeOut", "easeInOut", "backOut", "bounceOut"] },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     },
   } as const;
 }

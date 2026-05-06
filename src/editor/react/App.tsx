@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { Object3D } from "three";
-import { createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, isAiSceneSpec, parseAiSceneSpecJson } from "../aiBlueprint";
+import { createBlueprintFromAiAnimationPatch, createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, isAiAnimationPatch, isAiSceneSpec, parseAiBlueprintJson } from "../aiBlueprint";
 import type { AiChatContext, AiProvider } from "../aiBlueprint";
 import { compareComponentBlueprints } from "../blueprintDiff";
 import type { BlueprintDiffChangedObject, BlueprintDiffSummary } from "../blueprintDiff";
@@ -375,17 +375,27 @@ function resolveSelectionMaterialId(nodes: EditorNode[]): string | null {
   return materialId;
 }
 
-function resolveImportedBlueprint(rawBlueprint: unknown): { blueprint: ComponentBlueprint; convertedFromAiScene: boolean } {
+function resolveImportedBlueprint(rawBlueprint: unknown, baseBlueprint?: ComponentBlueprint): { blueprint: ComponentBlueprint; convertedFromAiScene: boolean; convertedFromAnimationPatch: boolean } {
+  if (isAiAnimationPatch(rawBlueprint) && baseBlueprint) {
+    return {
+      blueprint: createBlueprintFromAiAnimationPatch(rawBlueprint, baseBlueprint),
+      convertedFromAiScene: false,
+      convertedFromAnimationPatch: true,
+    };
+  }
+
   if (isAiSceneSpec(rawBlueprint)) {
     return {
       blueprint: createBlueprintFromAiScene(rawBlueprint),
       convertedFromAiScene: true,
+      convertedFromAnimationPatch: false,
     };
   }
 
   return {
     blueprint: rawBlueprint as ComponentBlueprint,
     convertedFromAiScene: false,
+    convertedFromAnimationPatch: false,
   };
 }
 
@@ -1723,7 +1733,7 @@ export function App() {
   const importJsonFromFile = useCallback(async (file: File) => {
     await runTask(`Importing ${file.name}…`, async () => {
       const rawBlueprint = await readBlueprintFromFile(file);
-      const { blueprint, convertedFromAiScene } = resolveImportedBlueprint(rawBlueprint);
+      const { blueprint, convertedFromAiScene, convertedFromAnimationPatch } = resolveImportedBlueprint(rawBlueprint, blueprintSnapshot);
       const { recentProjectId } = await syncRecentProject(blueprint, {
         fileName: file.name,
       });
@@ -1737,10 +1747,14 @@ export function App() {
           fileHandleId: null,
           canOverwriteFile: false,
         }),
-        convertedFromAiScene ? `Imported AI scene ${file.name}.` : `Imported ${file.name}.`,
+        convertedFromAnimationPatch
+          ? `Imported animation ${file.name}.`
+          : convertedFromAiScene
+            ? `Imported AI scene ${file.name}.`
+            : `Imported ${file.name}.`,
       );
     }, { blocking: true });
-  }, [applyWorkspaceBlueprint, syncRecentProject]);
+  }, [applyWorkspaceBlueprint, blueprintSnapshot, syncRecentProject]);
 
   const handleGenerateWithAI = useCallback(async (
     apiKey: string,
@@ -1756,9 +1770,12 @@ export function App() {
       ? await editBlueprintWithAIResult({ apiKey, prompt, provider, model, localUrl, chatContext, currentBlueprint: blueprintSnapshot })
       : await generateBlueprintResult({ apiKey, prompt, provider, model, localUrl, chatContext });
     const changes = createAiChangeSummary(compareComponentBlueprints(blueprintSnapshot, result.blueprint));
+    const isAnimationOnlyResponse = result.sceneSpec.objects.length === 0 && result.sceneSpec.animation !== undefined;
     setTransientStatus("AI response ready.");
     return {
-      content: mode === "edit"
+      content: isAnimationOnlyResponse
+        ? `I prepared an animation for "${result.blueprint.componentName}". Review the JSON and apply it when ready.`
+        : mode === "edit"
         ? `I prepared an edit for "${result.sceneSpec.componentName}". Review the JSON and apply it when ready.`
         : `I generated "${result.sceneSpec.componentName}". Review the JSON and apply it when ready.`,
       sceneSpecJson: result.sceneSpecJson,
@@ -1769,11 +1786,13 @@ export function App() {
   }, [blueprintSnapshot, setTransientStatus]);
 
   const handleApplyAiScene = useCallback(async (sceneSpecJson: string, mode: AIGenerationMode) => {
-    const sceneSpec = parseAiSceneSpecJson(sceneSpecJson);
-    const generatedBlueprint = createBlueprintFromAiScene(
-      sceneSpec,
-      mode === "edit" ? { baseBlueprint: blueprintSnapshot } : undefined,
-    );
+    const parsedAiJson = parseAiBlueprintJson(sceneSpecJson);
+    const generatedBlueprint = isAiAnimationPatch(parsedAiJson)
+      ? createBlueprintFromAiAnimationPatch(parsedAiJson, blueprintSnapshot)
+      : createBlueprintFromAiScene(
+        parsedAiJson,
+        mode === "edit" ? { baseBlueprint: blueprintSnapshot } : undefined,
+      );
 
     if (mode === "edit") {
       store.loadBlueprint(generatedBlueprint, "ui");
@@ -1943,28 +1962,32 @@ export function App() {
 
     try {
       await runTask(`Opening ${result.fileName}…`, async () => {
-        const { blueprint, convertedFromAiScene } = resolveImportedBlueprint(result.blueprint);
+        const { blueprint, convertedFromAiScene, convertedFromAnimationPatch } = resolveImportedBlueprint(result.blueprint, blueprintSnapshot);
         const { recentProjectId, fileHandleId } = await syncRecentProject(blueprint, {
           fileName: result.fileName,
-          handle: convertedFromAiScene ? null : result.handle,
+          handle: convertedFromAiScene || convertedFromAnimationPatch ? null : result.handle,
         });
 
         applyWorkspaceBlueprint(
           blueprint,
           createWorkspaceProjectContext({
-            source: !convertedFromAiScene && fileHandleId ? "file-handle" : "imported-file",
+            source: !convertedFromAiScene && !convertedFromAnimationPatch && fileHandleId ? "file-handle" : "imported-file",
             fileName: result.fileName,
             recentProjectId,
-            fileHandleId: convertedFromAiScene ? null : fileHandleId,
-            canOverwriteFile: !convertedFromAiScene && Boolean(fileHandleId),
+            fileHandleId: convertedFromAiScene || convertedFromAnimationPatch ? null : fileHandleId,
+            canOverwriteFile: !convertedFromAiScene && !convertedFromAnimationPatch && Boolean(fileHandleId),
           }),
-          convertedFromAiScene ? `Opened AI scene ${result.fileName}.` : `Opened ${result.fileName}.`,
+          convertedFromAnimationPatch
+            ? `Opened animation ${result.fileName}.`
+            : convertedFromAiScene
+              ? `Opened AI scene ${result.fileName}.`
+              : `Opened ${result.fileName}.`,
         );
       }, { blocking: true });
     } catch {
       setTransientStatus("Unable to open file.");
     }
-  }, [applyWorkspaceBlueprint, setTransientStatus, syncRecentProject]);
+  }, [applyWorkspaceBlueprint, blueprintSnapshot, setTransientStatus, syncRecentProject]);
 
   const handleOpenRecent = useCallback(async (recentProjectId: string) => {
     const entry = recentProjects.find((candidate) => candidate.id === recentProjectId);
@@ -2006,8 +2029,8 @@ export function App() {
         return;
       }
 
-      const { blueprint, convertedFromAiScene } = resolveImportedBlueprint(rawBlueprint);
-      const effectiveHandle = convertedFromAiScene ? null : handle;
+      const { blueprint, convertedFromAiScene, convertedFromAnimationPatch } = resolveImportedBlueprint(rawBlueprint, blueprintSnapshot);
+      const effectiveHandle = convertedFromAiScene || convertedFromAnimationPatch ? null : handle;
 
       applyWorkspaceBlueprint(
         blueprint,
@@ -2020,12 +2043,14 @@ export function App() {
         }),
         openedFromSnapshot
           ? `Opened recent "${entry.label}" from local snapshot.`
-          : convertedFromAiScene
-            ? `Opened recent AI scene "${entry.label}".`
-            : `Opened recent "${entry.label}".`,
+          : convertedFromAnimationPatch
+            ? `Opened recent animation "${entry.label}".`
+            : convertedFromAiScene
+              ? `Opened recent AI scene "${entry.label}".`
+              : `Opened recent "${entry.label}".`,
       );
     }, { blocking: true });
-  }, [applyWorkspaceBlueprint, projectContext.fileHandleId, recentProjects, setTransientStatus]);
+  }, [applyWorkspaceBlueprint, blueprintSnapshot, projectContext.fileHandleId, recentProjects, setTransientStatus]);
 
   const handleRemoveRecent = useCallback(async (recentProjectId: string) => {
     const entry = recentProjects.find((candidate) => candidate.id === recentProjectId);

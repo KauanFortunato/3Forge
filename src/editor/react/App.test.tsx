@@ -482,6 +482,42 @@ describe("App", () => {
     expect(screen.getByText("blueprint / 2 nodes")).toBeTruthy();
   });
 
+  it("imports an animation-only AI JSON patch onto the current blueprint", async () => {
+    const { container } = render(<App />);
+    const jsonInput = container.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    const animationPatch = {
+      animation: {
+        activeClipId: "clip-main",
+        clips: [
+          {
+            id: "clip-main",
+            name: "Main",
+            fps: 24,
+            durationFrames: 48,
+            tracks: [
+              {
+                id: "track-hero-panel-y",
+                targetName: "Hero Panel",
+                property: "transform.position.y",
+                keyframes: [
+                  { id: "key-0", frame: 0, value: 0, ease: "easeInOut" },
+                  { id: "key-24", frame: 24, value: 0.5, ease: "backOut" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const file = new File([JSON.stringify(animationPatch)], "hero-animation.json", { type: "application/json" });
+
+    fireEvent.change(jsonInput, { target: { files: [file] } });
+
+    await screen.findByText("Imported animation hero-animation.json.");
+    expect(screen.getByDisplayValue("3Forge-Component")).toBeTruthy();
+    expect(screen.getByText("blueprint / 4 nodes")).toBeTruthy();
+  });
+
   it("keeps a history of multiple recent projects instead of overwriting the current one", async () => {
     const { container } = render(<App />);
 
