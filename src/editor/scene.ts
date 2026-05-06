@@ -65,6 +65,7 @@ import type {
   AnimationEasePreset,
   AnimationKeyframe,
   AnimationPropertyPath,
+  ComponentBlueprint,
   EditorNode,
   EditorStoreChange,
   ImageNode,
@@ -301,6 +302,15 @@ export class SceneEditor {
     this.rebuildScene();
     this.resize();
     this.startLoop();
+
+    // Dev-only console hook: surfaces a structured dump of the live scene so
+    // a user reporting "this looks wrong" can paste back evidence (which node
+    // is the giant bar, did its skewLayer actually mount, did the texture
+    // bind?) instead of guessing at screenshots. Vite's import.meta.env.DEV
+    // is true in `npm run dev`, false in production builds.
+    if (typeof window !== "undefined" && (import.meta as { env?: { DEV?: boolean } }).env?.DEV) {
+      (window as unknown as { __r3Dump?: () => unknown }).__r3Dump = () => this.dumpRuntimeScene();
+    }
   }
 
   setTransformMode(mode: ToolMode): void {
@@ -882,6 +892,144 @@ export class SceneEditor {
     this.orbitControls.update();
   }
 
+  /**
+   * Dev-only diagnostic. Returns a structured snapshot of every node currently
+   * mounted on the viewport: blueprint values + actual Three.js state
+   * (whether a skewLayer was inserted, whether the texture image has loaded,
+   * world-space bounding box, render order, etc.).
+   *
+   * Intended use: a user reports a visual regression, opens devtools, calls
+   * `__r3Dump()` and pastes the output back. We can pinpoint which node is
+   * the giant white bar / black square / yellow plate without guessing.
+   */
+  private dumpRuntimeScene(): {
+    sceneMode: string | undefined;
+    cameraKind: "perspective" | "orthographic";
+    nodeCount: number;
+    nodes: Array<Record<string, unknown>>;
+    shadow: {
+      missingTextureNodeCount: number;
+      meshPlaceholderNodeCount: number;
+      helperNodeCount: number;
+      initialDisabledCount: number;
+      unresolvedMaterialIds?: string[];
+    };
+  } {
+    this.viewportRoot.updateMatrixWorld(true);
+    const bp = this.store.blueprint;
+    const w3d = (bp.metadata?.w3d ?? {}) as {
+      missingTextureNodeIds?: string[];
+      meshPlaceholderNodeIds?: string[];
+      helperNodeIds?: string[];
+      initialDisabledNodeIds?: string[];
+      unresolvedMaterialIds?: string[];
+    };
+
+    const out: Array<Record<string, unknown>> = [];
+    for (const node of bp.nodes) {
+      const wrapper = this.objectMap.get(node.id);
+      if (!wrapper) continue;
+      // Look one level deep for a skewLayer Group (matrixAutoUpdate=false)
+      // and the underlying Mesh.
+      let skewLayer: Group | null = null;
+      let mesh: Mesh | null = null;
+      for (const child of wrapper.children) {
+        if (child instanceof Group && child.matrixAutoUpdate === false) {
+          skewLayer = child;
+        }
+      }
+      wrapper.traverse((c) => {
+        if (!mesh && c instanceof Mesh) mesh = c;
+      });
+      const meshObj: Mesh | null = mesh;
+      const worldPos = wrapper.getWorldPosition(this.tmpVec3).clone();
+      let worldBoxSize: { x: number; y: number; z: number } | null = null;
+      let textureState: string | null = null;
+      let materialColor: string | null = null;
+      let materialOpacity: number | null = null;
+      let materialTransparent: boolean | null = null;
+      let renderOrder: number | null = null;
+      let clippingPlaneCount = 0;
+      if (meshObj) {
+        if (!meshObj.geometry.boundingBox) meshObj.geometry.computeBoundingBox();
+        const bbox = meshObj.geometry.boundingBox;
+        if (bbox) {
+          const wb = bbox.clone().applyMatrix4(meshObj.matrixWorld);
+          const size = new Vector3();
+          wb.getSize(size);
+          worldBoxSize = { x: +size.x.toFixed(3), y: +size.y.toFixed(3), z: +size.z.toFixed(3) };
+        }
+        renderOrder = meshObj.renderOrder;
+        const mat = Array.isArray(meshObj.material) ? meshObj.material[0] : meshObj.material;
+        if (mat) {
+          materialOpacity = mat.opacity;
+          materialTransparent = mat.transparent;
+          clippingPlaneCount = mat.clippingPlanes?.length ?? 0;
+          const mWithMap = mat as Material & { color?: { getHexString(): string }; map?: Texture };
+          if (mWithMap.color) materialColor = "#" + mWithMap.color.getHexString();
+          const map = mWithMap.map;
+          if (map) {
+            const img = (map as Texture & { image?: HTMLImageElement | HTMLVideoElement }).image;
+            if (!img) textureState = "no-image";
+            else if ("complete" in img) textureState = (img as HTMLImageElement).complete ? "loaded" : "loading";
+            else if ("readyState" in img) textureState = `video-readyState=${(img as HTMLVideoElement).readyState}`;
+          } else {
+            textureState = "no-map";
+          }
+        }
+      }
+      out.push({
+        id: node.id.slice(0, 8),
+        name: node.name,
+        type: node.type,
+        visible: node.visible,
+        meshVisible: meshObj?.visible ?? null,
+        hasSkewLayer: !!skewLayer,
+        skewLayerMatrix: skewLayer ? Array.from(skewLayer.matrix.elements).map((v) => +v.toFixed(4)) : null,
+        blueprintSkew: node.transform.skew ?? null,
+        localPos: {
+          x: +node.transform.position.x.toFixed(3),
+          y: +node.transform.position.y.toFixed(3),
+          z: +node.transform.position.z.toFixed(4),
+        },
+        worldPos: { x: +worldPos.x.toFixed(3), y: +worldPos.y.toFixed(3), z: +worldPos.z.toFixed(4) },
+        scale: {
+          x: +node.transform.scale.x.toFixed(3),
+          y: +node.transform.scale.y.toFixed(3),
+          z: +node.transform.scale.z.toFixed(3),
+        },
+        worldBoxSize,
+        renderOrder,
+        materialColor,
+        materialOpacity,
+        materialTransparent,
+        textureState,
+        textureSrc: node.type === "image" ? (node.image?.src ?? "").slice(0, 64) : null,
+        textureMime: node.type === "image" ? node.image?.mimeType : null,
+        isMask: !!node.isMask,
+        maskIds: node.maskIds ?? (node.maskId ? [node.maskId] : []),
+        clippingPlaneCount,
+        isHelper: w3d.helperNodeIds?.includes(node.id) ?? false,
+        isMissingTexture: w3d.missingTextureNodeIds?.includes(node.id) ?? false,
+        wasInitialDisabled: w3d.initialDisabledNodeIds?.includes(node.id) ?? false,
+      });
+    }
+
+    return {
+      sceneMode: bp.sceneMode,
+      cameraKind: this.camera instanceof OrthographicCamera ? "orthographic" : "perspective",
+      nodeCount: bp.nodes.length,
+      nodes: out,
+      shadow: {
+        missingTextureNodeCount: w3d.missingTextureNodeIds?.length ?? 0,
+        meshPlaceholderNodeCount: w3d.meshPlaceholderNodeIds?.length ?? 0,
+        helperNodeCount: w3d.helperNodeIds?.length ?? 0,
+        initialDisabledCount: w3d.initialDisabledNodeIds?.length ?? 0,
+        unresolvedMaterialIds: w3d.unresolvedMaterialIds,
+      },
+    };
+  }
+
   private isMissingTextureNode(nodeId: string): boolean {
     // Also covers placeholder boxes for <Mesh>/<Model> primitives we couldn't
     // load — both groups are kept in the tree for editing and round-trip but
@@ -1008,7 +1156,11 @@ export class SceneEditor {
       for (const maskId of ids) {
         const maskWrapper = this.objectMap.get(maskId);
         if (!maskWrapper) continue;
-        const planes = this.computeMaskPlanes(maskWrapper, node.maskInverted === true);
+        // Inversion is a property of the mask itself (W3D
+        // <MaskProperties IsInvertedMask="…"/> sits on the mask quad).
+        // Each mask in a multi-mask list contributes its own orientation.
+        const inverted = resolveMaskInversion(this.store.blueprint, maskId, node);
+        const planes = this.computeMaskPlanes(maskWrapper, inverted);
         if (planes) allPlanes.push(...planes);
       }
       if (allPlanes.length > 0) {
@@ -2123,4 +2275,22 @@ export function shouldAttachTransformGizmo(
     return false;
   }
   return hasPrimaryObject;
+}
+
+/**
+ * Returns true when clipping for `targetNode` against the mask identified by
+ * `maskNodeId` should keep the inside of the mask volume rather than the
+ * outside. Inversion is a property of the mask itself (W3D
+ * `<MaskProperties IsInvertedMask="…"/>` lives on the mask quad) — every
+ * node referencing the same mask sees the same orientation. A leftover
+ * `maskInverted` flag on the target is treated as stale and ignored.
+ */
+export function resolveMaskInversion(
+  blueprint: ComponentBlueprint,
+  maskNodeId: string,
+  _targetNode: EditorNode,
+): boolean {
+  void _targetNode;
+  const mask = blueprint.nodes.find((n) => n.id === maskNodeId);
+  return mask?.maskInverted === true;
 }

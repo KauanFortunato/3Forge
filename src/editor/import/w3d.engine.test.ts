@@ -296,16 +296,84 @@ describe("Multi-mask + IsInvertedMask", () => {
     expect(target?.maskId).toBe(target?.maskIds?.[0]);
   });
 
-  it("flags IsInvertedMask='True' on the target node", () => {
+  it("reads IsInvertedMask='True' from the mask's <MaskProperties> child onto the mask node", () => {
+    // Real W3D scenes (e.g. GameName_FS Quad1) store the flag inside the
+    // mask quad's <MaskProperties> child element — never on the root
+    // attribute. The earlier path that read `el.getAttribute('IsInvertedMask')`
+    // never fired for any real scene.
     const xml =
       '<?xml version="1.0" encoding="utf-8"?>' +
       '<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>' +
-      '<Quad Id="m1" Name="MaskA" IsMask="True"/>' +
-      '<Quad Id="q1" Name="Target" MaskId="m1" IsInvertedMask="True"/>' +
+      '<Quad Id="m1" Name="MaskA" IsMask="True">' +
+      '<MaskProperties IsInvertedMask="True"/>' +
+      "</Quad>" +
+      '<Quad Id="q1" Name="Target" MaskId="m1"/>' +
       "</Children></SceneNode></SceneLayer></Scene>";
     const result = parseW3D(xml);
+    const mask = result.blueprint.nodes.find((n) => n.name === "MaskA");
     const target = result.blueprint.nodes.find((n) => n.name === "Target");
-    expect(target?.maskInverted).toBe(true);
+    expect(mask?.maskInverted).toBe(true);
+    // Inversion lives on the mask, not the target.
+    expect(target?.maskInverted).toBeUndefined();
+  });
+
+  it("leaves maskInverted unset when MaskProperties has IsInvertedMask='False'", () => {
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>' +
+      '<Quad Id="m1" Name="MaskA" IsMask="True">' +
+      '<MaskProperties IsInvertedMask="False"/>' +
+      "</Quad>" +
+      "</Children></SceneNode></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const mask = result.blueprint.nodes.find((n) => n.name === "MaskA");
+    expect(mask?.maskInverted).toBeUndefined();
+  });
+
+  it("multi-mask: each mask carries its own inversion independently", () => {
+    const xml =
+      '<?xml version="1.0" encoding="utf-8"?>' +
+      '<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>' +
+      '<Quad Id="m1" Name="MaskNormal" IsMask="True">' +
+      '<MaskProperties IsInvertedMask="False"/>' +
+      "</Quad>" +
+      '<Quad Id="m2" Name="MaskInverted" IsMask="True">' +
+      '<MaskProperties IsInvertedMask="True"/>' +
+      "</Quad>" +
+      '<Quad Id="q1" Name="Target" MaskId="m1;m2"/>' +
+      "</Children></SceneNode></SceneLayer></Scene>";
+    const result = parseW3D(xml);
+    const normal = result.blueprint.nodes.find((n) => n.name === "MaskNormal");
+    const inverted = result.blueprint.nodes.find((n) => n.name === "MaskInverted");
+    const target = result.blueprint.nodes.find((n) => n.name === "Target");
+    expect(normal?.maskInverted).toBeUndefined();
+    expect(inverted?.maskInverted).toBe(true);
+    expect(target?.maskIds?.length).toBe(2);
+    // Target itself never carries inversion under the new contract.
+    expect(target?.maskInverted).toBeUndefined();
+  });
+
+  it("regression — GameName_FS Quad1 mask is parsed as inverted", () => {
+    // Quad1 is the CompetitionLogo mask; its <MaskProperties> sets
+    // IsInvertedMask="True". The whole point of FASE D Pass 3 is to surface
+    // this so the renderer can do an inner-clip rather than the default
+    // outer-clip. Use the bundled fixture so the assertion stays in sync
+    // with what the importer actually sees.
+    const result = parseW3D(gameNameFsXml, { sceneName: "GameName_FS" });
+    const quad1 = result.blueprint.nodes.find((n) => n.name === "Quad1");
+    expect(quad1?.isMask).toBe(true);
+    expect(quad1?.maskInverted).toBe(true);
+
+    // The text masks (HOME/AWAY_TEAM_MASK_*) declare IsInvertedMask="False"
+    // — they must stay un-inverted to keep the team-name clipping behaviour.
+    const teamMasks = result.blueprint.nodes.filter((n) =>
+      ["HOME_TEAM_MASK_01", "HOME_TEAM_MASK_02", "AWAY_TEAM_MASK_01", "AWAY_TEAM_MASK_02"].includes(n.name),
+    );
+    expect(teamMasks.length).toBe(4);
+    for (const m of teamMasks) {
+      expect(m.isMask).toBe(true);
+      expect(m.maskInverted).toBeUndefined();
+    }
   });
 
   it("captures MaskProperties attributes into shadow data", () => {

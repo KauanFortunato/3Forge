@@ -100,6 +100,18 @@ export interface W3DShadowData {
    * `Pitch_Reference` plate ended up in front of the scoreboard.
    */
   helperNodeIds?: string[];
+  /**
+   * MaterialIds referenced by `<NamedBaseFaceMapping MaterialId="…">` that
+   * are **not** defined in the scene's `<Resources>`. R3 Designer treats
+   * these as shared external library materials loaded from the install
+   * directory (the broadcast-house "base diffuse" tints and similar).
+   * We don't have access to that library, so the affected nodes fall
+   * through to the default MaterialSpec — which makes ORANGE_HOME_BIG
+   * type bars render as white instead of orange. Tracked here so the
+   * renderer can surface a single warning per import + a future
+   * "project materials library" feature can consume the list.
+   */
+  unresolvedMaterialIds?: string[];
 }
 
 interface ParseContext {
@@ -143,6 +155,8 @@ interface ParseContext {
   meshAssets: Set<string>;
   /** Aggregate counts for noisy "skipped" warnings, written into ctx.warnings at the end. */
   skipped: Map<string, { count: number; sample: string | null }>;
+  /** MaterialIds referenced but not defined in <Resources> — see W3DShadowData.unresolvedMaterialIds. */
+  unresolvedMaterialIds: Set<string>;
 }
 
 export interface W3DParseOptions {
@@ -259,6 +273,7 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     flipYZ,
     meshAssets: options.meshAssets ?? new Set(),
     skipped: new Map(),
+    unresolvedMaterialIds: new Set(),
   };
 
   const sceneLayer = sceneEl.getElementsByTagName("SceneLayer")[0];
@@ -328,6 +343,15 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
       ctx.initialDisabledNodeIds,
     );
     if (helperIds.length > 0) ctx.shadow.helperNodeIds = helperIds;
+  }
+  if (ctx.unresolvedMaterialIds.size > 0) {
+    const ids = Array.from(ctx.unresolvedMaterialIds);
+    ctx.shadow.unresolvedMaterialIds = ids;
+    ctx.warnings.push(
+      `${ids.length} <BaseMaterial> id${ids.length === 1 ? "" : "s"} referenced by FaceMappings ` +
+      `but not defined in <Resources> — R3 loads these from its shared install library; ` +
+      `affected nodes use the editor default colour. First: ${ids[0]}.`,
+    );
   }
 
   // Resolve mask references now that all nodes are walked (mask quads can be
@@ -592,14 +616,18 @@ function handleNode(el: Element, parentId: string, ctx: ParseContext): void {
     }
   }
   // IsInvertedMask flips clipping: keep the inside of the mask volume.
-  // MaskProperties (DisableBinaryAlpha, IsColoredMask) we preserve as
-  // metadata — the renderer doesn't consume them yet but the data is there
-  // for future stencil/colour-key work.
-  if (el.getAttribute("IsInvertedMask") === "True" && !isMaskQuad) {
+  // R3 stores it inside `<MaskProperties>` as a child of the mask <Quad>
+  // (never as a root attribute, never on the masked target). The flag is a
+  // property of the mask itself — every node referencing the mask shares
+  // its inversion. The renderer reads it back from the mask node.
+  const maskPropsEl = childElementByTag(el, "MaskProperties");
+  if (isMaskQuad && maskPropsEl?.getAttribute("IsInvertedMask") === "True") {
     node.maskInverted = true;
   }
-  const maskPropsEl = childElementByTag(el, "MaskProperties");
   if (maskPropsEl) {
+    // Preserve the full attribute bag (DisableBinaryAlpha, IsColoredMask,
+    // HasSampleCount, …) as shadow metadata for round-trip + future
+    // stencil/colour-key work the renderer doesn't consume yet.
     const props: Record<string, string> = {};
     for (let i = 0; i < maskPropsEl.attributes.length; i += 1) {
       const attr = maskPropsEl.attributes[i];
@@ -1135,6 +1163,12 @@ function applyMaterialFromPrimitive(el: Element, node: EditorNode, ctx: ParseCon
   }
   const baseSpec = ctx.baseMaterials.get(materialId.toLowerCase());
   if (!baseSpec) {
+    // External / shared library MaterialId — R3 Designer resolves these
+    // from its install dir; we cannot. Track the GUID so we can surface a
+    // single aggregated warning and the runtime debug helper can show
+    // exactly which nodes are coloured by the editor default instead of
+    // the authored tint.
+    ctx.unresolvedMaterialIds.add(materialId.toLowerCase());
     return;
   }
   node.material = { ...baseSpec };
