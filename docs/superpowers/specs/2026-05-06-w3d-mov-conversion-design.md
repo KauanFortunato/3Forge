@@ -3,7 +3,11 @@
 **Date:** 2026-05-06
 **Topic:** `feat/w3d-scene-support` follow-up after FASE D / Pass 3
 **Status:** approved by user across three brainstorming Q&A turns
-(see Q1=C hybrid, Q2=B still-image-only, Q3=A+B fallback).
+(Q1=C hybrid, Q2=A revised — full PNG sequence player included this
+round; see §"Revision 1 — 2026-05-06 (post first review)" below;
+Q3=A+B fallback). Revision 1 also adds an explicit non-disappearance
+invariant for `.mov` / ImageSequence assets and corresponding
+diagnostics.
 
 ## Problem
 
@@ -17,12 +21,13 @@ via ffmpeg (never inside the browser).
 ## Non-goals
 
 * In-browser conversion (no `ffmpeg.wasm`).
-* PNG-sequence playback animator in `scene.ts` — sequences imported in
-  this round resolve to **frame 1 as a still image**. The animator is
-  a follow-up commit.
 * `.vert` / `.ind` mesh loader.
 * `Size.YProp` animations.
-* Refactoring the scene renderer beyond the minimum needed.
+* Refactoring the scene renderer beyond the minimum needed (the new
+  PNG-sequence player added in Revision 1 below is the *only* renderer
+  expansion in scope).
+* Sprite-sheet packing for sequence playback (explicitly off the
+  table — texture-size limits + loop friction).
 
 ## Architecture
 
@@ -97,6 +102,7 @@ Behaviour:
 ```json
 {
   "version": 1,
+  "type": "image-sequence",
   "source": "04_Game_Name_PITCH_IN.mov",
   "framePattern": "frame_%06d.png",
   "frameCount": 240,
@@ -104,9 +110,17 @@ Behaviour:
   "width": 1920,
   "height": 1080,
   "durationSec": 8.0,
-  "loop": true
+  "loop": true,
+  "alpha": true,
+  "pixelFormat": "rgba"
 }
 ```
+
+`type` and `alpha`/`pixelFormat` are recorded explicitly even when
+`alpha` is always true at conversion time (PNG conversion preserves
+the source's alpha channel). The fields document intent — "this
+sequence exists to preserve transparency" — and let a future format
+upgrade signal a different choice without ambiguity.
 `fps`/`width`/`height`/`durationSec` come from `ffprobe` when
 available. `frameCount` is always set from the actual number of PNG
 files written (counted post-conversion, never trusted from ffprobe).
@@ -168,12 +182,89 @@ Pure: looks at `webkitRelativePath`, finds every `.mov` in
 list. Used by the App before the modal opens.
 
 `parseW3DFromFolder` is also extended to **prefer sequences when
-present**: if the folder contains a `<basename>_frames/sequence.json`
-for a referenced video, the parser pulls
-`<basename>_frames/frame_000001.png` as a still image asset and binds
-that to the image node instead of the `.mov`. The `<ImageSequence>`
-mimeType becomes `image/png`. (PNG-sequence playback is the deferred
-follow-up; this round just makes the still work end-to-end.)
+present**, with a structured outcome (`mimeType` and side-data) the
+renderer reads:
+
+* No `<basename>_frames/` for a referenced video → existing video path:
+  `ImageAsset { mimeType: "video/quicktime", src: blob:<mov> }`. The
+  importer still creates an `ImageNode`. **NEVER omit it.**
+* `<basename>_frames/sequence.json` present and parseable →
+  `ImageAsset { mimeType: "application/x-image-sequence", src:
+  blob:<frame_000001.png>, sequence: { framePattern, frameCount, fps,
+  width, height, loop, alpha, frameUrls: blob:[…] } }`. The first
+  frame's URL is used as `src` so the existing render path can show
+  something even if the player isn't ready yet (defence in depth).
+  The renderer's PNG-sequence player (§5) reads
+  `image.sequence.frameUrls` to drive playback.
+* `<basename>_frames/sequence.json` present but invalid (parse error,
+  missing `framePattern`, missing referenced PNG files) → fall back to
+  the `.mov` path with a warning surfaced in `result.warnings`:
+  `"sequence.json for <basename> is invalid (<reason>) — falling back
+  to VideoTexture."` **NEVER drop the asset entirely.**
+
+The new `ImageAsset.sequence` field is optional and only present for
+the sequence path. Adding it is type-safe (existing code that doesn't
+read `sequence` keeps working).
+
+### 4b. Renderer — PNG sequence player (`src/editor/scene.ts`)
+
+**Scope reversal vs the original Q2=B answer.** The renderer now
+includes a small player so converted assets actually animate (and so
+the non-disappearance invariant in §"Invariant" below is satisfied
+end-to-end). Bounded scope, hard memory ceilings:
+
+* New private `ImageSequencePlayer` class held in the scene editor:
+  ```ts
+  class ImageSequencePlayer {
+    constructor(spec: { frameUrls: string[]; fps: number; loop: boolean });
+    readonly texture: Texture;            // exposed as `material.map`
+    tick(deltaSec: number): void;         // called from the render loop
+    dispose(): void;                      // releases textures + listeners
+    state(): {                            // surfaced in __r3Dump
+      currentFrame: number;
+      loadedFrames: number;
+      totalFrames: number;
+      paused: boolean;
+      error: string | null;
+    };
+  }
+  ```
+* **Frame loading strategy** (defence against memory blow-up):
+  - Always load frame 1 eagerly so the texture has *something* on first
+    paint.
+  - Lazy-load subsequent frames on demand: when `tick` is about to
+    advance to frame `N`, kick off the fetch for frame `N` and the
+    next 4 frames if not already loaded. Cap concurrent fetches at 4.
+  - **Hard ceiling**: at most 60 decoded frames in memory at any time
+    (a sliding window centred on `currentFrame`). Older frames are
+    `dispose()`d when the window moves. For sequences ≤ 60 frames the
+    full set stays resident.
+  - **Pre-load warning**: if `frameCount > 60` *or* estimated memory
+    (`width * height * 4 * 60` bytes) exceeds 200 MB, log a
+    `console.warn` once with the estimate so the operator is aware
+    before the scene gets sluggish.
+* **Playback**: `tick(deltaSec)` accumulates `deltaSec * fps` and
+  steps forward integer frames. `loop: true` wraps to 0; `loop:
+  false` clamps at the last frame. When `currentFrame` changes, the
+  texture's `image` is swapped to the corresponding `HTMLImageElement`
+  and `texture.needsUpdate = true` is set **only if the image has
+  data** (this is the §"Renderer guard" rule below — never set
+  `needsUpdate` when the image isn't ready, that has caused WebGL
+  black frames in the past).
+* **Failure mode**: if frame-fetch errors out (e.g. blob URL revoked,
+  PNG corrupt), the player records `error: <message>`, stops
+  advancing, and the texture stays bound to whichever frame loaded
+  last (frame 1 in the worst case). It does NOT throw.
+* **Cleanup**: the scene editor calls `player.dispose()` when the
+  blueprint is rebuilt or the editor unmounts. Disposing releases all
+  cached `Texture` objects and clears the frame cache.
+
+This player is wired into the existing texture-binding path:
+`buildMeshObject` checks `mimeType === "application/x-image-sequence"`
+before the existing video / image branches and constructs an
+`ImageSequencePlayer`, registering it in a `sequencePlayers:
+Map<nodeId, ImageSequencePlayer>` on the editor. The render loop ticks
+every registered player.
 
 ### 5. Frontend — modal (`src/editor/react/components/MovConversionModal.tsx`)
 
@@ -189,8 +280,16 @@ detected". Body lists each detected `.mov` with a one-row badge
     resends with `{ folderPath }`. On `FFMPEG_NOT_INSTALLED`, show the
     install hint inline with a "Continue without converting" link.
     Partial success (`failed[].length > 0` with `converted[].length >
-    0`) shows red rows but still enables the re-import button so the
-    operator can proceed with the videos that did convert.
+    0`) shows three explicit groups in the modal body:
+    - **Converted** (green badge) — filename + frame count
+    - **Skipped** (grey, "already had sequence.json") — filename
+    - **Failed** (red badge) — filename + truncated reason from
+      `failed[i].error`
+    The re-import button stays enabled so the operator can proceed
+    with the videos that did convert; the failed ones fall back to
+    `VideoTexture` in the re-import (still respecting the
+    non-disappearance invariant — they remain in the blueprint as
+    `video/quicktime` image nodes).
   * Build (`import.meta.env.DEV === false`, i.e. `npm run build`
     output): replace the action with a sub-modal showing the exact
     CLI command (`node scripts/convert-w3d-mov-to-sequence.mjs
@@ -238,6 +337,67 @@ Minimal changes:
        c. Cancel → abort
 ```
 
+## Invariant — `.mov` / ImageSequence MUST NEVER disappear
+
+A non-negotiable contract enforced by tests and a dedicated commit:
+
+> Every `.mov` referenced by the source W3D — and every
+> `<ImageSequence>` resource — produces **exactly one** ImageNode in
+> the imported blueprint. The mime type tells the rest of the system
+> how to render it:
+>
+> * `video/quicktime` → existing VideoTexture path (Pass-3
+>   diagnostics still apply).
+> * `application/x-image-sequence` → new PNG-sequence player.
+>
+> Both surface in the asset library AND in `__r3Dump`. The
+> illegal state is "asset present in the source W3D, missing from
+> blueprint or runtime". A regression that drops one is treated as
+> a P0 bug.
+
+This invariant exists because the user's live `__r3Dump` showed
+`videos: 0, images: 18` for `GameName_FS` even though the parser dump
+(offline test) shows `imageNodes: 22, videoImageNodes: 4` — i.e. 4
+video-mime image nodes appear to be vanishing somewhere downstream.
+The first commit of this round is dedicated to:
+
+1. **Reproduce** the live discrepancy with a vitest test that builds
+   the blueprint from `GameName_FS` and asserts `videoImageNodes ===
+   4` AND that those four show up in whatever asset-library/Media
+   surface drives the user-visible counter.
+2. **Fix** whatever drops them (likely either `App.tsx`
+   `resolveImageAssetLibrary` filters by `image.id` and the four
+   video assets share/lack an id, OR the asset library never receives
+   the video assets at all).
+3. **Lock it** with a regression test so the invariant cannot decay.
+
+This work happens *before* any `sequence.json` code lands so we don't
+build new pipes on top of broken plumbing.
+
+## Renderer guard — `texture.needsUpdate` only when data is ready
+
+Adjacent rule the player and any future texture-swap code must obey:
+
+> Never set `texture.needsUpdate = true` when the underlying
+> `texture.image` is null, undefined, or has no decoded data
+> (`HTMLImageElement` with `complete === false`, `HTMLVideoElement`
+> with `readyState < 2`). Doing so produces black/transparent frames
+> in WebGL and has caused real visual regressions before.
+
+Encoded as a small helper:
+```ts
+function setTextureUpdateIfReady(t: Texture): void {
+  const img = t.image;
+  if (!img) return;
+  if (img instanceof HTMLImageElement && !img.complete) return;
+  if (img instanceof HTMLVideoElement && img.readyState < 2) return;
+  t.needsUpdate = true;
+}
+```
+
+The player calls this every tick instead of `t.needsUpdate = true`
+directly.
+
 ## Error handling
 
 | Where | Error | Behaviour |
@@ -255,38 +415,89 @@ Minimal changes:
 ## Security
 
 * `projectName` is regex-validated `/^[A-Za-z0-9_.\- ]+$/` — no slashes,
-  no `..`, no whitespace tricks.
+  no `..`, no whitespace tricks. Anything else returns 400
+  `INVALID_PROJECT_NAME`.
 * Manual `folderPath` is allowed ONLY through the dev plugin and ONLY
   in dev mode; the plugin is registered behind `config.command ===
   "serve"`.
 * `folderPath` is required to be absolute and to contain
   `Resources/Textures` before any spawn happens.
+* `path.resolve(R3_PROJECTS_ROOT, projectName)` is checked to still
+  start with `R3_PROJECTS_ROOT` after normalisation (defence against
+  unicode-normalisation tricks even though the regex already strips
+  separators).
+* **`ffmpeg` is invoked exclusively via `spawn("ffmpeg", argsArray,
+  options)` — never `exec` of a concatenated string.** This makes
+  paths-with-spaces / quoting trivially safe and removes the entire
+  shell-injection surface. Same rule for `ffprobe`.
 * No frontend code attempts to `spawn` ffmpeg or use `ffmpeg.wasm`.
 * Production bundles do not ship the endpoint or any `child_process`
-  dependency.
+  dependency. The plugin's body is gated by `if (config.command !==
+  "serve") return;` and is otherwise a no-op object.
+
+## `__r3Dump` — extended for image sequence
+
+Per-node block when `mimeType === "application/x-image-sequence"`:
+```ts
+imageSequence: {
+  frameCount: number;
+  currentFrame: number;
+  loadedFrames: number;
+  fps: number;
+  loop: boolean;
+  paused: boolean;
+  firstFrameSrc: string;       // first 64 chars of frame 1's URL
+  error: string | null;
+} | null
+```
+Per-node block for video unchanged (Pass-3 already added it):
+`video: { src, readyState, networkState, errorCode, paused, muted,
+loop, playsInline, currentTime, duration } | null`.
+
+Plus per-node common fields (always present, used by the regression
+tests for the non-disappearance invariant):
+`textureMime`, `hasMap` (bool — mesh's material has a `.map`),
+`mapHasImage` (bool — `texture.image` is not null), `textureSrc`
+(first 64 chars or null).
 
 ## Testing
 
 | Layer | Test | File |
 |-------|------|------|
+| **Invariant** | `GameName_FS` blueprint has exactly 4 video-mime image nodes (regression for the live `videos: 0` report) | `src/editor/import/w3d.test.ts` (extension) |
+| **Invariant** | App's image-asset library reports the 4 video assets too | `src/editor/react/App.test.tsx` (extension) |
+| **Invariant** | `__r3Dump` per-node `textureMime` matches `node.image.mimeType` | `src/editor/scene.test.ts` (extension) |
 | Pure   | `classifyMovAssets` returns withSequence + withoutSequence | `src/editor/import/w3dFolder.test.ts` (new) |
-| Pure   | `parseW3DFromFolder` resolves `<name>_frames/frame_000001.png` when sequence.json present | same |
+| Pure   | `parseW3DFromFolder` resolves `application/x-image-sequence` mime when sequence.json present | same |
+| Pure   | `parseW3DFromFolder` writes a `result.warnings` entry and falls back to `.mov` when sequence.json is invalid (missing framePattern, parse error, missing PNG file) | same |
 | Pure   | `parseW3DFromFolder` falls back to `.mov` when no sequence | same |
-| Core   | `runMovConversion` skips when sequence.json exists and !force | `scripts/movConversion.test.mjs` (new) |
-| Core   | `runMovConversion` returns FFMPEG_NOT_INSTALLED sentinel when spawn fails with ENOENT | same |
-| Core   | `runMovConversion` validates folderPath structure | same |
-| Endpoint | `projectName` with `..` rejected as INVALID_PROJECT_NAME | `src/server/movConvertPlugin.test.mjs` (new) |
-| Endpoint | unknown `projectName` returns PROJECT_PATH_NOT_FOUND with `manualPathAllowed: true` | same |
-| Endpoint | `folderPath` outside any safe root still works in dev | same |
-| Modal | renders only when withoutSequence.length > 0 | `src/editor/react/components/MovConversionModal.test.tsx` (new) |
-| Modal | dev mode: Convert and Import calls fetch with projectName | same |
-| Modal | build mode: shows CLI command + Copy button | same |
-| Modal | Cancel calls onCancel and does not POST | same |
-| Wiring | App: classifyMovAssets short-circuits when no .mov | new App test or extension of existing |
+| Core   | `runMovConversion` skips when sequence.json exists and `!force` | `scripts/movConversion.test.mjs` (new) |
+| Core   | `runMovConversion` returns `FFMPEG_NOT_INSTALLED` sentinel when spawn fails with ENOENT | same |
+| Core   | `runMovConversion` validates folderPath structure (rejects when no `Resources/Textures`) | same |
+| Core   | `runMovConversion` writes a sequence.json with `alpha: true, type: "image-sequence"` | same |
+| Endpoint | `projectName` with `..` rejected as `INVALID_PROJECT_NAME` | `scripts/movConvertPlugin.test.mjs` (new) |
+| Endpoint | unknown `projectName` returns `PROJECT_PATH_NOT_FOUND` with `manualPathAllowed: true` | same |
+| Endpoint | `folderPath` works in dev for paths outside `R3_PROJECTS_ROOT` | same |
+| Endpoint | endpoint not registered when `command !== "serve"` | same |
+| Modal | renders only when `withoutSequence.length > 0` | `src/editor/react/components/MovConversionModal.test.tsx` (new) |
+| Modal | dev mode: Convert and Import calls fetch with `{ projectName }` | same |
+| Modal | partial success: shows converted/skipped/failed groups + reason per file | same |
+| Modal | build mode: shows CLI command + Copy button (no fetch) | same |
+| Modal | Cancel calls `onCancel` and does not POST | same |
+| Wiring | App: `classifyMovAssets` short-circuits when no `.mov` (modal does not open) | App test |
+| Wiring | App: `Import Without Converting` reaches existing VideoTexture path | App test |
+| Renderer | `setTextureUpdateIfReady` no-ops on incomplete image / low-readyState video | scene.test.ts |
+| Renderer | `ImageSequencePlayer.tick` advances frames at fps; loop wraps; non-loop clamps | scene.test.ts |
+| Renderer | player issues a single console.warn once when memory estimate > 200 MB | scene.test.ts |
+| Renderer | `dispose()` releases all cached `Texture` instances | scene.test.ts |
+| Renderer | existing VideoTexture path is not regressed (Pass-3 tests stay green) | scene.test.ts |
 
 `runMovConversion` integration with real ffmpeg is **not** tested in
-CI (no ffmpeg in sandbox); the spawn is mocked. The CLI is exercised
-locally via `node scripts/convert-w3d-mov-to-sequence.mjs "<dir>"`.
+CI (no ffmpeg in sandbox); the spawn is mocked at the
+`child_process.spawn` boundary so the lib's argument shape, exit-code
+handling, and sequence.json writing are all asserted. The CLI is
+exercised locally via `node scripts/convert-w3d-mov-to-sequence.mjs
+"<dir>"`.
 
 ## File-by-file change list
 
@@ -316,29 +527,92 @@ Edited files:
 
 ## Commit plan
 
-Small commits, each green:
+Small commits, each green. Order picked so the non-disappearance
+invariant is locked in BEFORE any new code touches the import path:
 
-1. `Extract sequence.json shape + classifyMovAssets pure helper` — type
-   + pure function + unit tests, no UI.
-2. `Add scripts/movConversion.mjs core + CLI wrapper` — Node lib + CLI
-   + tests with mocked spawn.
-3. `Importer prefers <name>_frames/sequence.json over .mov` — parser
-   change + tests, behaviour-only.
-4. `Add Vite dev plugin POST /api/w3d/convert-mov` — plugin + tests.
-5. `MovConversionModal component` — UI + tests, no app wiring yet.
-6. `App: open MovConversionModal during W3D folder import` — wiring +
-   handle retention.
-7. `Docs: w3d-mov-conversion.md operator guide`.
+1. **`Lock non-disappearance invariant for .mov / ImageSequence`** —
+   add the regression test surfacing the live `videos: 0` report;
+   diagnose; minimal fix in whatever surface drops the assets
+   (parser, asset-library resolver, or panel filter); `__r3Dump`
+   carries the new common fields (`textureMime`, `hasMap`,
+   `mapHasImage`).
+2. `Extract sequence.json shape + classifyMovAssets pure helper` —
+   type + pure function + unit tests, no UI.
+3. `Add scripts/movConversion.mjs core + CLI wrapper` — Node lib +
+   CLI + tests with mocked spawn (asserts the `spawn(…, [args])` form).
+4. `Importer prefers <name>_frames/sequence.json over .mov` — parser
+   change, sequence.json validation, fallback-with-warning, tests.
+5. `Add ImageSequencePlayer + setTextureUpdateIfReady to renderer` —
+   bounded player with memory ceilings, dispose, tick; `__r3Dump`
+   gains `imageSequence: {…}` block; tests for tick/loop/dispose/
+   guard.
+6. `Add Vite dev plugin POST /api/w3d/convert-mov` — plugin + tests.
+7. `MovConversionModal component` — UI + tests, no app wiring yet.
+8. `App: open MovConversionModal during W3D folder import` — wiring,
+   FSA handle retention, re-import flow.
+9. `Docs: w3d-mov-conversion.md operator guide`.
 
 ## What is explicitly NOT in this round
 
 (Repeated for clarity; see "Non-goals" above.)
 
-* PNG-sequence playback animator in `scene.ts`. The "Convert and
-  Import" path produces a still image (first frame) for now. Animation
-  is a follow-up plan.
 * Anything touching `.vert` / `.ind`, `Size.YProp`, the colour
   fallback for unresolved external materials, or the skewed-mask
   AABB over-clip.
+* Sprite-sheet packing as an alternative animation strategy.
+* `ffmpeg.wasm` or any in-browser conversion fallback.
+* Pre-converting on import without asking — the modal is mandatory
+  whenever there is at least one `.mov` without `sequence.json`.
 
-— end of design —
+## Acceptance criteria (final)
+
+* `npm test` green, `npm run typecheck` green.
+* For `GameName_FS`:
+  * Without running conversion, `__r3Dump()` shows `videos: 4` for
+    the four `.mov`-backed image nodes (PITCH_IN, PITCH_Out,
+    CompLogo_In, CompLogo_In_shadow). Never `videos: 0`.
+  * After running conversion (`Convert and Import` in dev),
+    `__r3Dump()` shows `imageSequenceNodes: 4` for the same four
+    nodes. Never `videos: 0` AND `imageSequenceNodes: 0` for those
+    assets.
+* Existing VideoTexture path remains visually unchanged for users who
+  pick `Import Without Converting`.
+* Modal appears only when at least one `.mov` is referenced AND has
+  no sibling `sequence.json`.
+* `node scripts/convert-w3d-mov-to-sequence.mjs "<absolute path>"`
+  works standalone in a terminal that has ffmpeg on PATH.
+* Production build never hits the dev endpoint.
+
+## Revision 1 — 2026-05-06 (post first review)
+
+Changes from the v1 spec:
+
+* **Q2 reversal**: PNG sequence player IS in scope this round
+  (§4b — bounded scope, hard memory ceiling, lazy preload).
+* **`sequence.json` schema**: added `type: "image-sequence"`, `alpha:
+  true`, `pixelFormat: "rgba"`. `frameCount` is sourced from PNG
+  files written, not ffprobe.
+* **Mime type** for sequence-backed image nodes is now
+  `application/x-image-sequence` (was `image/png`). The existing
+  `<ImageSequence>` resource path stays as `video/quicktime` when no
+  sequence.json exists.
+* **`ImageAsset.sequence`** field added (optional) carrying
+  `frameUrls`, `framePattern`, `frameCount`, `fps`, `width`,
+  `height`, `loop`, `alpha`.
+* **Non-disappearance invariant** added as commit 1 + tests +
+  `__r3Dump` common fields. Triggers a small fix to whatever surface
+  is dropping the 4 video-mime image nodes from the user's live
+  `__r3Dump`.
+* **Renderer guard** `setTextureUpdateIfReady` documented as a rule
+  the new player and any future texture-swap code must obey.
+* **Modal partial-success** explicitly shows three groups
+  (Converted/Skipped/Failed) with reason per failed file.
+* **Security** clarifies `spawn(cmd, args[])` form (never shell), env
+  var prefix-check after `path.resolve`.
+* **`__r3Dump`** extended with `imageSequence: {…}` block per node.
+* **Commit plan**: 9 commits (was 7), with commit 1 dedicated to the
+  invariant.
+* **Acceptance criteria** added explicitly, including the live
+  `__r3Dump` shape.
+
+— end of design (Revision 1) —
