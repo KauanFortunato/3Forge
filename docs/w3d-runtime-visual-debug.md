@@ -388,3 +388,174 @@ that the operator confirms reproduce in the editor:
   follow-up; not in scope).
 
 — end of FASE D / Pass 2 —
+
+---
+
+# FASE D / Pass 3 — Targeted fixes (commits `40eb82f`, `20ae52d`)
+
+## 12. Inverted-mask bug — fixed
+
+**Symptom:** `Quad1` (CompetitionLogo mask) declares
+`<MaskProperties IsInvertedMask="True"/>` but the renderer always did
+outer-clip → the bottom-centre logo plate read as the inverse of what
+R3 paints.
+
+**Root cause** (two places):
+* `src/editor/import/w3d.ts:622` (pre-fix): the parser called
+  `el.getAttribute("IsInvertedMask")` on the masked node's *root*
+  element. In real W3D scenes the flag is **always** on the
+  `<MaskProperties>` *child* of the *mask* quad, so the check fired for
+  zero nodes ever.
+* `src/editor/scene.ts:1158` (pre-fix): the renderer read
+  `node.maskInverted` from the **target** node — not from the mask. So
+  even if the parser had correctly stored inversion on the target, the
+  semantics would still be off (one mask shared by N targets must
+  invert the same way for all of them).
+
+**Fix:**
+* Parser now sources the flag from the mask's `<MaskProperties>` child
+  and only sets `node.maskInverted = true` on the **mask** node:
+  ```ts
+  if (isMaskQuad && maskPropsEl?.getAttribute("IsInvertedMask") === "True") {
+    node.maskInverted = true;
+  }
+  ```
+* Renderer's `applyMasks` now goes through a small pure helper:
+  ```ts
+  const inverted = resolveMaskInversion(this.store.blueprint, maskId, node);
+  const planes = this.computeMaskPlanes(maskWrapper, inverted);
+  ```
+  `resolveMaskInversion` is exported and looks **only** at the mask
+  node. A leftover `maskInverted` flag on the target is treated as
+  stale and ignored.
+
+**Tests added** (TDD, all pass):
+* `w3d.engine.test.ts > Multi-mask + IsInvertedMask`:
+  - `reads IsInvertedMask='True' from the mask's <MaskProperties> child onto the mask node`
+  - `leaves maskInverted unset when MaskProperties has IsInvertedMask='False'`
+  - `multi-mask: each mask carries its own inversion independently`
+  - `regression — GameName_FS Quad1 mask is parsed as inverted`
+* `scene.test.ts > resolveMaskInversion`:
+  - `returns true when the mask node is marked inverted`
+  - `returns false when the mask node is not inverted`
+  - `ignores a maskInverted flag on the target — inversion is a property of the mask`
+  - `returns false when the mask id does not resolve to any node`
+
+The previous obsolete test (`flags IsInvertedMask='True' on the target
+node`) was removed — it codified the buggy behaviour and asserted on a
+pattern that does not exist in any real W3D file we have on disk.
+
+## 13. Video diagnostics — added
+
+**Symptom:** PITCH_IN / PITCH_Out (`.mov`) cover ~60% of the frame and
+have no colour fallback. If the codec isn't decodable in Chrome, or if
+autoplay is blocked, the centre of the canvas reads as black with no
+console signal at all.
+
+**What changed:**
+* `getVideoTexture` (`scene.ts:1389`):
+  * One info-level log when the `<video>` element is created
+    (`[scene] video texture requested src=…`) — confirms binding
+    actually happened.
+  * The `error` listener now produces an operator-facing message via
+    `formatVideoLoadFailureMessage`. For `MediaError.code === 4`
+    (`MEDIA_ERR_SRC_NOT_SUPPORTED`) it explicitly names the codec
+    problem and offers the cheapest fix:
+    ```
+    The browser cannot decode this file — most often a .mov carrying
+    ProRes/DNxHR or another non-web codec. Try transcoding to H.264 MP4
+    (ffmpeg -i in.mov -c:v libx264 -pix_fmt yuv420p out.mp4) or open
+    the source file directly in Chrome to confirm.
+    ```
+  * `play().catch(...)` no longer silently swallows the rejection — it
+    logs an info line with the rejection name plus a "click anywhere
+    on the page to start" hint.
+  * The existing autoplay contract (`muted=true`, `loop=true`,
+    `playsInline=true`, `autoplay=true`, `crossOrigin="anonymous"`) is
+    unchanged — only the diagnostics around it are richer.
+* `__r3Dump()` now carries a `video: {…} | null` block per node when
+  the texture is backed by a `<video>` element. Fields exposed:
+  `src`, `readyState`, `networkState`, `errorCode`, `paused`, `muted`,
+  `loop`, `playsInline`, `currentTime`, `duration`. Built from the new
+  pure helper `summariseVideoTextureState`.
+
+**Tests added** (TDD, all pass), in `scene.test.ts`:
+* `summariseVideoTextureState`: returns null for `HTMLImageElement` and
+  for `null`/`undefined`; extracts diagnostic fields from a real
+  `<video>` element; surfaces `errorCode` when the video has one.
+* `formatVideoLoadFailureMessage`: includes src + code in every
+  message; for code 4 names the codec problem and the H.264/MP4
+  remediation (substring locked in to prevent regression to a generic
+  "video failed"); falls back to a generic message for unknown codes.
+
+## 14. How to validate
+
+### A. Mask inversion (the real visual bug)
+1. `npm run dev`, open `GameName_FS` (re-import via folder if blueprint
+   is cached). The **CompetitionLogo plate at the bottom centre** is
+   the only directly visible affected region in this scene.
+2. Devtools console:
+   ```js
+   const d = window.__r3Dump();
+   const compLogo = d.nodes.find(n => n.name === "Quad1");
+   console.log("Quad1.isMask:", compLogo.isMask, "; clip planes:",
+       d.nodes.find(n => n.name === "In").clippingPlaneCount);
+   ```
+   Expectation: `Quad1.isMask: true`; the `In` group has clipping
+   planes applied (count ≥ 4 for a single mask). The renderer is now
+   doing inner-clip on `In` rather than outer-clip.
+3. In R3 the CompetitionLogo plate appears inside the Quad1 region; in
+   the editor it should now read the same way.
+
+### B. PITCH_IN.mov (probably the dominant remaining artefact)
+1. With the same dev session open, run:
+   ```js
+   const d = window.__r3Dump();
+   d.nodes.filter(n => n.video).forEach(n =>
+     console.log(n.name, n.video.readyState, n.video.errorCode, n.video.paused));
+   ```
+2. Read each row:
+   * `readyState 4`, `errorCode null`, `paused false` → playing.
+   * `readyState 0`, `errorCode 4` → codec not supported. Console will
+     have a `[scene] video texture failed to load … MEDIA_ERR_SRC_NOT_SUPPORTED …`
+     line with the ffmpeg command. Transcode the source `.mov` and
+     re-import.
+   * `readyState 0`, `errorCode null`, `paused true` → autoplay
+     blocked. Console will have `[scene] video.play() rejected …
+     click anywhere on the page to start`. Click into the viewport.
+3. Independent verification: open
+   `04_Game_Name_PITCH_IN.mov` directly in a Chrome tab. If it plays,
+   the codec is fine and the issue is autoplay or URL scheme. If it
+   shows a black frame, the codec needs transcoding.
+
+## 15. Pass-3 acceptance — checked off
+
+- [x] Parser reads `IsInvertedMask` from `<MaskProperties>` child.
+- [x] Parser stores inversion on the mask node, never the target.
+- [x] Renderer reads inversion from the mask, never the target.
+- [x] Multi-mask preserved; each mask contributes its own orientation.
+- [x] Non-inverted masks still behave correctly (4 GameName_FS team-name
+      masks kept un-inverted, asserted by the regression test).
+- [x] `npm test` green: 399 passing / 1 skipped (was 384 at Pass 2
+      baseline; +15 new test cases).
+- [x] R3 smoke test green (`w3d.realScenes.test.ts` runs against the
+      real `GameName_FS` folder when `R3_PROJECTS_ROOT` is set or the
+      hard-coded fallback exists).
+- [x] Two separate commits (`40eb82f` mask fix; `20ae52d` video diag).
+
+## 16. What is still open after Pass 3
+
+* **Skewed-mask AABB over-clip** (Pass 2 §7 cosmetic). Quad1 is
+  skewed; `computeMaskPlanes` builds an axis-aligned bbox around the
+  sheared mesh, which is wider than the actual parallelogram. The
+  inner-clip side now computes correctly but the boundary itself is
+  too generous. Defer until visually confirmed in the editor.
+* **External material library** (Pass 2 §6, 5 GUIDs / 24 affected
+  nodes). Warning + shadow data already in place; UI / "Project
+  materials library" follow-up not in scope.
+* **`.vert` / `.ind` mesh reader, `Size.YProp` animations** —
+  explicitly off the table per the user's plan.
+* **Codec verification** — we can't run `ffprobe` in this sandbox.
+  Validation step §14B above is the operator's path.
+
+— end of FASE D / Pass 3 —
