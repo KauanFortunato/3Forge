@@ -9,7 +9,8 @@ import {
   markWorkspaceSessionActive,
   persistWorkspace,
 } from "../workspace";
-import { App } from "./App";
+import { App, resolveImageAssetLibrary } from "./App";
+import type { ImageAsset } from "../types";
 
 const fakeScene = {
   setTransformMode: vi.fn(),
@@ -917,5 +918,18 @@ describe("App", () => {
     await waitFor(() => {
       expect(exportPackageMocks.createExportPackageZip).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("resolveImageAssetLibrary non-disappearance invariant", () => {
+  it("retains video/* assets alongside raster images", () => {
+    const images: ImageAsset[] = [
+      { id: "logo", name: "logo.png", mimeType: "image/png", src: "blob:logo", width: 100, height: 100 },
+      { id: "stage", name: "stage.mov", mimeType: "video/quicktime", src: "blob:stage", width: 1920, height: 1080 },
+    ];
+    const lib = resolveImageAssetLibrary(images);
+    expect(lib.length).toBe(2);
+    const videoEntry = lib.find((a) => a.mimeType.startsWith("video/"));
+    expect(videoEntry).toBeDefined();
   });
 });

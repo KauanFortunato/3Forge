@@ -113,6 +113,62 @@ describe("W3D import", () => {
     }
   });
 
+  it("invariant: every <ImageSequence>-backed quad in GameName_FS produces an image node with video/* mime", () => {
+    // Locks the parser side of the non-disappearance invariant
+    // (FASE D / Pass 4). Even if a downstream surface drops these,
+    // the parser must always emit them — that's the contract the rest
+    // of the system can rely on.
+    const videoFilenames = [
+      "04_Game_Name_PITCH_IN.mov",
+      "04_Game_Name_PITCH_OUT.mov",
+      "CompetitionLogo_In.mov",
+      "NEW LKL logo_LOOP_alt.mov",
+    ];
+    const textures = new Map<string, ImageAsset>();
+    for (const name of videoFilenames) {
+      textures.set(name, {
+        name,
+        mimeType: "video/quicktime",
+        src: `blob:mock-${name}`,
+        width: 1920,
+        height: 1080,
+      });
+    }
+    const result = parseW3D(gameNameFsXml, {
+      sceneName: "GameName_FS",
+      textures,
+      videos: new Set(videoFilenames),
+    });
+    const videoNodes = result.blueprint.nodes.filter(
+      (n) => n.type === "image" && n.image.mimeType.startsWith("video/"),
+    );
+    // GameName_FS contains four <Quad>s textured by an <ImageSequence>:
+    // PITCH_IN, PITCH_Out, CompLogo_In, CompLogo_In_shadow. Two of them
+    // (CompLogo_In + its shadow) share the same TextureLayer GUID, so
+    // they reference the same .mov asset. Net result: 4 video image
+    // nodes, 3 unique video assets in blueprint.images. The contract
+    // we lock here is "no video node disappears" — both the per-node
+    // count and the asset-library presence must hold.
+    expect(videoNodes.length).toBe(4);
+    // Every video node MUST appear in blueprint.images so the asset
+    // library can show it. Compare by stable id rather than count to
+    // catch the case where a node points at an asset that got dropped
+    // from blueprint.images during dedup.
+    const videoAssets = result.blueprint.images.filter((img) =>
+      img.mimeType.startsWith("video/"),
+    );
+    const videoAssetIds = new Set(videoAssets.map((a) => a.id));
+    for (const n of videoNodes) {
+      if (n.type !== "image") continue;
+      expect(n.imageId).toBeTruthy();
+      expect(videoAssetIds.has(n.imageId!)).toBe(true);
+    }
+    // Static fixture binds three of the four .mov ImageSequences via
+    // TextureLayer/TextureMappingOption (CompetitionLogo_In.mov is
+    // wired up at runtime by an ExportProperty, not statically).
+    expect(videoAssets.length).toBe(3);
+  });
+
   it("converts animated TextureMappingOption.Offset/Scale into material.textureOptions tracks", () => {
     // GameName_FS animates TextureMappingOption.Offset.YProp on a TextureLayer
     // shared by HOME_1/HOME_2/HOME_3 (etc). Without TextureLayer-aware

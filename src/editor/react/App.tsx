@@ -207,7 +207,7 @@ function countMaterialUsage(nodes: EditorNode[]): Record<string, number> {
   return usage;
 }
 
-function resolveImageAssetLibrary(images: ImageAsset[]): ProjectImageAsset[] {
+export function resolveImageAssetLibrary(images: ImageAsset[]): ProjectImageAsset[] {
   return images.flatMap((image) => image.id ? [{ ...image, id: image.id }] : []);
 }
 

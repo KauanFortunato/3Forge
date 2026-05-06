@@ -951,6 +951,13 @@ export class SceneEditor {
       let materialTransparent: boolean | null = null;
       let renderOrder: number | null = null;
       let clippingPlaneCount = 0;
+      // Mesh-side material/map snapshot for follow-up diagnostics
+      // (FASE D / Pass 4). hasMap distinguishes "blueprint says image but
+      // the runtime never bound a texture" (hasMap=false) from
+      // "texture bound but the underlying HTMLImageElement/HTMLVideoElement
+      // hasn't loaded yet" (hasMap=true, mapHasImage=false).
+      let hasMap = false;
+      let mapHasImage = false;
       if (meshObj) {
         if (!meshObj.geometry.boundingBox) meshObj.geometry.computeBoundingBox();
         const bbox = meshObj.geometry.boundingBox;
@@ -969,8 +976,10 @@ export class SceneEditor {
           const mWithMap = mat as Material & { color?: { getHexString(): string }; map?: Texture };
           if (mWithMap.color) materialColor = "#" + mWithMap.color.getHexString();
           const map = mWithMap.map;
+          hasMap = !!map;
           if (map) {
             const img = (map as Texture & { image?: HTMLImageElement | HTMLVideoElement }).image;
+            mapHasImage = !!img;
             if (!img) textureState = "no-image";
             else if ("complete" in img) textureState = (img as HTMLImageElement).complete ? "loaded" : "loading";
             else if ("readyState" in img) textureState = `video-readyState=${(img as HTMLVideoElement).readyState}`;
@@ -1011,6 +1020,8 @@ export class SceneEditor {
         textureState,
         textureSrc: node.type === "image" ? (node.image?.src ?? "").slice(0, 64) : null,
         textureMime: node.type === "image" ? node.image?.mimeType : null,
+        hasMap,
+        mapHasImage,
         // Only present when the texture is backed by a <video>. Lets the
         // operator distinguish "video never started" (readyState=0) from
         // "video paused after error" (errorCode != null) from "playing".
