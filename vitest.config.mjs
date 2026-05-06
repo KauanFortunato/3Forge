@@ -6,7 +6,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "playgrounds/**/*.test.ts", "playgrounds/**/*.test.tsx"],
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx", "playgrounds/**/*.test.ts", "playgrounds/**/*.test.tsx", "scripts/**/*.test.mjs"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],
