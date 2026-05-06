@@ -127,6 +127,34 @@ export interface FontAsset {
   data?: string;
 }
 
+export interface ImageSequenceMetadata {
+  /** Discriminator. Always "image-sequence" for v1. */
+  type: "image-sequence";
+  /** sequence.json schema version. */
+  version: 1;
+  /** Source .mov filename the sequence was generated from. */
+  source: string;
+  /** ffmpeg %d-style pattern, e.g. "frame_%06d.png". */
+  framePattern: string;
+  /** Count of PNG files actually written by the conversion. */
+  frameCount: number;
+  /** Frames per second, 0 when ffprobe is unavailable. */
+  fps: number;
+  /** Pixel width / height (0 when unknown). */
+  width: number;
+  height: number;
+  /** Duration in seconds (0 when unknown). */
+  durationSec: number;
+  /** Loop on the last frame. */
+  loop: boolean;
+  /** Always true for PNG sequences (alpha is the reason we exist). */
+  alpha: boolean;
+  /** Always "rgba" for v1. */
+  pixelFormat: "rgba";
+  /** Resolved blob: URLs for each frame, in order. Browser-only. */
+  frameUrls: string[];
+}
+
 export interface ImageAsset {
   id?: string;
   name: string;
@@ -134,6 +162,8 @@ export interface ImageAsset {
   src: string;
   width: number;
   height: number;
+  /** Present only for application/x-image-sequence assets. */
+  sequence?: ImageSequenceMetadata;
 }
 
 export interface EditableBinding {

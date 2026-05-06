@@ -1,7 +1,70 @@
 import { describe, expect, it } from "vitest";
 import type { ImageAsset } from "../types";
 import { collectTextureMap, parseW3D } from "./w3d";
+import { classifyMovAssets } from "./w3dFolder";
 import gameNameFsXml from "../../test/fixtures/w3d/GameName_FS.w3d?raw";
+
+function makeFile(relativePath: string): File {
+  const file = new File(["x"], relativePath.split("/").pop() ?? "f");
+  Object.defineProperty(file, "webkitRelativePath", {
+    value: relativePath,
+    configurable: true,
+  });
+  return file;
+}
+
+describe("classifyMovAssets", () => {
+  it("returns empty arrays when no .mov files are present", () => {
+    const result = classifyMovAssets([
+      makeFile("Project/Resources/Textures/logo.png"),
+      makeFile("Project/scene.w3d"),
+    ]);
+    expect(result.withSequence.length).toBe(0);
+    expect(result.withoutSequence.length).toBe(0);
+  });
+
+  it("classifies a .mov without a sibling sequence.json as 'withoutSequence'", () => {
+    const result = classifyMovAssets([
+      makeFile("Project/Resources/Textures/PITCH_IN.mov"),
+    ]);
+    expect(result.withoutSequence).toEqual([{ videoName: "PITCH_IN.mov" }]);
+    expect(result.withSequence.length).toBe(0);
+  });
+
+  it("classifies a .mov with sibling <basename>_frames/sequence.json as 'withSequence'", () => {
+    const result = classifyMovAssets([
+      makeFile("Project/Resources/Textures/PITCH_IN.mov"),
+      makeFile("Project/Resources/Textures/PITCH_IN_frames/sequence.json"),
+      makeFile("Project/Resources/Textures/PITCH_IN_frames/frame_000001.png"),
+    ]);
+    expect(result.withSequence.length).toBe(1);
+    expect(result.withSequence[0].videoName).toBe("PITCH_IN.mov");
+    expect(result.withSequence[0].sequencePath).toBe(
+      "Project/Resources/Textures/PITCH_IN_frames/sequence.json",
+    );
+    expect(result.withoutSequence.length).toBe(0);
+  });
+
+  it("handles many .mov files with mixed sequence presence", () => {
+    const result = classifyMovAssets([
+      makeFile("P/Resources/Textures/A.mov"),
+      makeFile("P/Resources/Textures/A_frames/sequence.json"),
+      makeFile("P/Resources/Textures/B.mov"),
+      makeFile("P/Resources/Textures/C.mov"),
+      makeFile("P/Resources/Textures/C_frames/sequence.json"),
+    ]);
+    expect(result.withSequence.map((s) => s.videoName).sort()).toEqual(["A.mov", "C.mov"]);
+    expect(result.withoutSequence.map((s) => s.videoName).sort()).toEqual(["B.mov"]);
+  });
+
+  it("ignores .mov files outside Resources/Textures", () => {
+    const result = classifyMovAssets([
+      makeFile("Project/SomeOtherFolder/clip.mov"),
+    ]);
+    expect(result.withSequence.length).toBe(0);
+    expect(result.withoutSequence.length).toBe(0);
+  });
+});
 
 describe("W3D folder import (parser extensions)", () => {
   it("collectTextureMap resolves layer ids to filenames", () => {

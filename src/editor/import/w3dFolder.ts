@@ -210,3 +210,47 @@ function stripExtension(name: string): string {
   const idx = name.lastIndexOf(".");
   return idx <= 0 ? name : name.slice(0, idx);
 }
+
+export interface MovClassification {
+  withSequence: { videoName: string; sequencePath: string }[];
+  withoutSequence: { videoName: string }[];
+}
+
+/**
+ * Pure: classifies every .mov in `Resources/Textures` of the supplied
+ * file list into "has a sibling <basename>_frames/sequence.json" vs
+ * "no sequence yet". Used by the import flow to decide whether to
+ * open the conversion modal. Files outside Resources/Textures and
+ * non-.mov files are ignored.
+ */
+export function classifyMovAssets(files: File[] | FileList): MovClassification {
+  const list = Array.from(files);
+  const movs: { videoName: string; basePath: string; baseName: string }[] = [];
+  const sequenceJsons = new Set<string>();
+  for (const file of list) {
+    const rel = relativePath(file).replace(/\\/g, "/");
+    const lower = rel.toLowerCase();
+    if (!lower.includes("/resources/textures/")) continue;
+    if (lower.endsWith(".mov")) {
+      const basename = baseNameOf(rel);
+      const stem = basename.replace(/\.mov$/i, "");
+      const dir = rel.slice(0, rel.length - basename.length);
+      movs.push({ videoName: basename, basePath: dir, baseName: stem });
+    } else if (lower.endsWith("/sequence.json")) {
+      // Normalise to the "<basename>_frames/sequence.json" form so we can
+      // index by the .mov stem.
+      sequenceJsons.add(rel);
+    }
+  }
+  const withSequence: MovClassification["withSequence"] = [];
+  const withoutSequence: MovClassification["withoutSequence"] = [];
+  for (const mov of movs) {
+    const expected = `${mov.basePath}${mov.baseName}_frames/sequence.json`;
+    if (sequenceJsons.has(expected)) {
+      withSequence.push({ videoName: mov.videoName, sequencePath: expected });
+    } else {
+      withoutSequence.push({ videoName: mov.videoName });
+    }
+  }
+  return { withSequence, withoutSequence };
+}
