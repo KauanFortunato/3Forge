@@ -945,6 +945,7 @@ export class SceneEditor {
       const worldPos = wrapper.getWorldPosition(this.tmpVec3).clone();
       let worldBoxSize: { x: number; y: number; z: number } | null = null;
       let textureState: string | null = null;
+      let videoState: VideoTextureState | null = null;
       let materialColor: string | null = null;
       let materialOpacity: number | null = null;
       let materialTransparent: boolean | null = null;
@@ -973,6 +974,10 @@ export class SceneEditor {
             if (!img) textureState = "no-image";
             else if ("complete" in img) textureState = (img as HTMLImageElement).complete ? "loaded" : "loading";
             else if ("readyState" in img) textureState = `video-readyState=${(img as HTMLVideoElement).readyState}`;
+            // Pull the full video diagnostic bag for video-backed textures so
+            // the operator can see paused/muted/loop/errorCode/duration in
+            // one place. summariseVideoTextureState returns null for non-video.
+            videoState = summariseVideoTextureState(img);
           } else {
             textureState = "no-map";
           }
@@ -1006,6 +1011,10 @@ export class SceneEditor {
         textureState,
         textureSrc: node.type === "image" ? (node.image?.src ?? "").slice(0, 64) : null,
         textureMime: node.type === "image" ? node.image?.mimeType : null,
+        // Only present when the texture is backed by a <video>. Lets the
+        // operator distinguish "video never started" (readyState=0) from
+        // "video paused after error" (errorCode != null) from "playing".
+        video: videoState,
         isMask: !!node.isMask,
         maskIds: node.maskIds ?? (node.maskId ? [node.maskId] : []),
         clippingPlaneCount,
@@ -1396,17 +1405,31 @@ export class SceneEditor {
     video.muted = true;
     video.autoplay = true;
     video.playsInline = true;
+    // One-line confirmation that a VideoTexture was actually requested,
+    // so the operator can tell the difference between "video binding
+    // never tried" and "video tried but stayed paused".
+    // eslint-disable-next-line no-console
+    console.info(`[scene] video texture requested src=${src}`);
     // Surface load failures (404, codec mismatch, CORS) — they would
     // otherwise leave the VideoTexture stuck on a blank frame with no
-    // console signal at all.
+    // console signal at all. The formatted message names the most likely
+    // remediation (transcode to H.264 MP4) when the failure looks like a
+    // codec problem.
     video.addEventListener("error", () => {
-      const code = video.error?.code;
       // eslint-disable-next-line no-console
-      console.warn(`[scene] video texture failed to load src=${src} code=${code ?? "unknown"}`);
+      console.warn(formatVideoLoadFailureMessage(src, video.error?.code));
     });
-    // Autoplay may be blocked until a user gesture; ignore the rejection — the
-    // browser will start the video on the next interaction with the page.
-    video.play().catch(() => {});
+    // Autoplay may be blocked until a user gesture. We swallow the
+    // rejection silently *and* log a single info line so the operator
+    // sees a clear "click anywhere to start" hint when nothing is
+    // moving on screen.
+    video.play().catch((err: unknown) => {
+      // eslint-disable-next-line no-console
+      console.info(
+        `[scene] video.play() rejected for src=${src} (${err instanceof Error ? err.name : "unknown"}). ` +
+        `Autoplay is likely blocked — click anywhere on the page to start.`,
+      );
+    });
     const texture = new VideoTexture(video);
     texture.colorSpace = SRGBColorSpace;
     this.videoTextureCache.set(src, texture);
@@ -2293,4 +2316,63 @@ export function resolveMaskInversion(
   void _targetNode;
   const mask = blueprint.nodes.find((n) => n.id === maskNodeId);
   return mask?.maskInverted === true;
+}
+
+export interface VideoTextureState {
+  src: string;
+  readyState: number;
+  networkState: number;
+  errorCode: number | null;
+  paused: boolean;
+  muted: boolean;
+  loop: boolean;
+  playsInline: boolean;
+  currentTime: number;
+  duration: number;
+}
+
+/**
+ * Pulls every diagnostically-useful field off a `<video>` element backing a
+ * VideoTexture. Returns null when `image` is not a video (e.g. an
+ * `HTMLImageElement` or undefined). The shape matches what
+ * `__r3Dump()` surfaces per node so the operator can paste back the state
+ * after a failed video bind: `readyState`, `networkState`, `errorCode`,
+ * `paused`, `currentTime`, `duration`, plus the `muted`/`loop`/`playsInline`
+ * flags so we can verify the autoplay contract.
+ */
+export function summariseVideoTextureState(image: unknown): VideoTextureState | null {
+  if (image == null) return null;
+  if (typeof HTMLVideoElement === "undefined") return null;
+  if (!(image instanceof HTMLVideoElement)) return null;
+  return {
+    src: image.src,
+    readyState: image.readyState,
+    networkState: image.networkState,
+    errorCode: image.error?.code ?? null,
+    paused: image.paused,
+    muted: image.muted,
+    loop: image.loop,
+    playsInline: image.playsInline,
+    currentTime: image.currentTime,
+    duration: image.duration,
+  };
+}
+
+/**
+ * Builds an operator-facing warning for a VideoTexture load failure. Code 4
+ * (`MEDIA_ERR_SRC_NOT_SUPPORTED`) names the codec problem and points at the
+ * cheapest fix — transcoding the asset to H.264 MP4 — because Chrome ships
+ * H.264 universally but does not decode ProRes/DNxHR `.mov` containers.
+ */
+export function formatVideoLoadFailureMessage(src: string, code: number | undefined): string {
+  if (code === 4) {
+    return (
+      `[scene] video texture failed to load src=${src} code=4 ` +
+      `(MEDIA_ERR_SRC_NOT_SUPPORTED). The browser cannot decode this file — ` +
+      `most often a .mov carrying ProRes/DNxHR or another non-web codec. ` +
+      `Try transcoding to H.264 MP4 (ffmpeg -i in.mov -c:v libx264 -pix_fmt yuv420p out.mp4) ` +
+      `or open the source file directly in Chrome to confirm.`
+    );
+  }
+  return `[scene] video texture failed to load src=${src} code=${code ?? "unknown"}`;
 }

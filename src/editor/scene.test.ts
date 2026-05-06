@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveMaskInversion, shouldAttachTransformGizmo } from "./scene";
+import {
+  formatVideoLoadFailureMessage,
+  resolveMaskInversion,
+  shouldAttachTransformGizmo,
+  summariseVideoTextureState,
+} from "./scene";
 import { createNode } from "./state";
 import type { ComponentBlueprint, EditorNode } from "./types";
 
@@ -84,5 +89,75 @@ describe("resolveMaskInversion", () => {
     const bp = makeBlueprint([target]);
 
     expect(resolveMaskInversion(bp, "missing-mask-id", target)).toBe(false);
+  });
+});
+
+describe("summariseVideoTextureState", () => {
+  it("returns null for a non-video image (HTMLImageElement)", () => {
+    const img = document.createElement("img");
+    expect(summariseVideoTextureState(img)).toBeNull();
+  });
+
+  it("returns null when no image is bound", () => {
+    expect(summariseVideoTextureState(null)).toBeNull();
+    expect(summariseVideoTextureState(undefined)).toBeNull();
+  });
+
+  it("extracts the diagnostic fields from a real <video> element", () => {
+    // jsdom provides a working HTMLVideoElement; we only need to read
+    // its public state, not actually decode anything.
+    const video = document.createElement("video");
+    video.src = "blob:test-clip";
+    video.muted = true;
+    video.loop = true;
+    video.playsInline = true;
+    video.currentTime = 0;
+    const state = summariseVideoTextureState(video);
+    expect(state).not.toBeNull();
+    if (!state) return;
+    expect(state.src).toBe("blob:test-clip");
+    expect(typeof state.readyState).toBe("number");
+    expect(typeof state.networkState).toBe("number");
+    expect(state.paused).toBe(true);  // jsdom never auto-plays
+    expect(state.muted).toBe(true);
+    expect(state.loop).toBe(true);
+    expect(state.playsInline).toBe(true);
+    // currentTime/duration: jsdom returns 0/NaN by default — accept either.
+    expect(typeof state.currentTime).toBe("number");
+  });
+
+  it("surfaces an error code when the video has one", () => {
+    const video = document.createElement("video");
+    // jsdom doesn't trigger media errors organically; simulate by
+    // overriding the `error` getter so the helper can read it.
+    Object.defineProperty(video, "error", {
+      configurable: true,
+      get: () => ({ code: 4, message: "MEDIA_ERR_SRC_NOT_SUPPORTED" }),
+    });
+    const state = summariseVideoTextureState(video);
+    expect(state?.errorCode).toBe(4);
+  });
+});
+
+describe("formatVideoLoadFailureMessage", () => {
+  it("includes the src and the error code", () => {
+    const msg = formatVideoLoadFailureMessage("blob:foo.mov", 4);
+    expect(msg).toContain("blob:foo.mov");
+    expect(msg).toContain("4");
+  });
+
+  it("for MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) names the codec problem and gives a remediation hint", () => {
+    const msg = formatVideoLoadFailureMessage("blob:foo.mov", 4);
+    // Operator-facing message — the wording matters because it tells the
+    // user *what to do*. Lock the substrings so a future refactor can't
+    // silently regress to a generic "video failed".
+    expect(msg).toMatch(/cannot decode/i);
+    expect(msg).toMatch(/H\.?264|MP4/i);
+  });
+
+  it("falls back to a generic message when the error code is unknown", () => {
+    const msg = formatVideoLoadFailureMessage("blob:foo.mov", undefined);
+    expect(msg).toContain("blob:foo.mov");
+    expect(msg).toMatch(/unknown|failed/i);
   });
 });
