@@ -92,7 +92,8 @@ import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { collectFilesFromDirectory, parseW3DFromFolder } from "../import/w3dFolder";
+import { classifyMovAssets, collectFilesFromDirectory, parseW3DFromFolder } from "../import/w3dFolder";
+import { MovConversionModal, type MovConversionResult, type MovConvertError } from "./components/MovConversionModal";
 import { exportToW3D } from "../export/w3d";
 import { runTask } from "./hooks/useAsyncTask";
 import { useTheme } from "./hooks/useTheme";
@@ -407,6 +408,25 @@ function LandingPage({
       </aside>
     </div>
   );
+}
+
+export type MovImportDecision =
+  | { action: "direct-import" }
+  | {
+      action: "open-modal";
+      projectName: string;
+      classification: ReturnType<typeof classifyMovAssets>;
+    };
+
+export function decideMovImportFlow(files: File[]): MovImportDecision {
+  const classification = classifyMovAssets(files);
+  if (classification.withoutSequence.length === 0) {
+    return { action: "direct-import" };
+  }
+  const first = files[0];
+  const rel = (first as File & { webkitRelativePath?: string })?.webkitRelativePath ?? "";
+  const projectName = rel.split("/")[0] || "Project";
+  return { action: "open-modal", projectName, classification };
 }
 
 export function App() {
@@ -1370,6 +1390,68 @@ export function App() {
     }, { blocking: true });
   }, [applyWorkspaceBlueprint, showToast, syncRecentProject]);
 
+  const [movModalState, setMovModalState] = useState<{
+    open: boolean;
+    files: File[];
+    classification: ReturnType<typeof classifyMovAssets>;
+    projectName: string;
+    directoryHandle: FileSystemDirectoryHandle | null;
+    conversionResult?: MovConversionResult;
+    lastError?: MovConvertError;
+  } | null>(null);
+
+  const importW3DFromFolderWithModalCheck = useCallback(async (
+    files: File[],
+    directoryHandle: FileSystemDirectoryHandle | null,
+  ) => {
+    const decision = decideMovImportFlow(files);
+    if (decision.action === "direct-import") {
+      await importW3DFromFolder(files);
+      return;
+    }
+    setMovModalState({
+      open: true,
+      files,
+      classification: decision.classification,
+      projectName: decision.projectName,
+      directoryHandle,
+    });
+  }, [importW3DFromFolder]);
+
+  const handleMovConvert = useCallback(async (
+    req: { projectName: string } | { folderPath: string },
+  ) => {
+    const state = movModalState;
+    if (!state) return;
+    try {
+      const resp = await fetch("/api/w3d/convert-mov", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(req),
+      });
+      const body = await resp.json();
+      if (!resp.ok) {
+        setMovModalState((s) => s ? { ...s, lastError: body } : s);
+        return;
+      }
+      setMovModalState((s) => s ? { ...s, conversionResult: body, lastError: undefined } : s);
+
+      if (state.directoryHandle) {
+        const refreshed = await collectFilesFromDirectory(state.directoryHandle);
+        setMovModalState(null);
+        await importW3DFromFolder(refreshed);
+      } else {
+        showToast(
+          "Conversion completed. Please re-select the project folder to import the generated PNG sequences.",
+          "info",
+        );
+        setMovModalState(null);
+      }
+    } catch (err) {
+      setMovModalState((s) => s ? { ...s, lastError: { code: "ENDPOINT_UNREACHABLE", message: String(err) } } : s);
+    }
+  }, [movModalState, importW3DFromFolder, showToast]);
+
   const pickW3DFolder = useCallback(async () => {
     // Prefer File System Access API (Chrome/Edge) — the `<input webkitdirectory>`
     // path occasionally returns 0 files because React's attribute pipeline
@@ -1389,7 +1471,7 @@ export function App() {
           return;
         }
         try {
-          await importW3DFromFolder(collected);
+          await importW3DFromFolderWithModalCheck(collected, handle);
         } catch (error) {
           const message = error instanceof Error && error.message ? error.message : "Unable to import W3D folder.";
           showToast(`W3D import failed: ${message}`, "warning");
@@ -1408,7 +1490,7 @@ export function App() {
     }
     // Fallback for browsers without showDirectoryPicker (Firefox, Safari).
     w3dFolderInputRef.current?.click();
-  }, [importW3DFromFolder, showToast]);
+  }, [importW3DFromFolderWithModalCheck, showToast]);
 
   const importJsonFromFile = useCallback(async (file: File) => {
     await runTask(`Importing ${file.name}…`, async () => {
@@ -2391,7 +2473,7 @@ export function App() {
               return;
             }
             try {
-              await importW3DFromFolder(files);
+              await importW3DFromFolderWithModalCheck(Array.from(files), null);
             } catch (error) {
               const message = error instanceof Error && error.message ? error.message : "Unable to import W3D folder.";
               showToast(`W3D import failed: ${message}`, "warning");
@@ -2977,7 +3059,7 @@ export function App() {
             return;
           }
           try {
-            await importW3DFromFolder(files);
+            await importW3DFromFolderWithModalCheck(Array.from(files), null);
           } catch (error) {
             const message = error instanceof Error && error.message ? error.message : "Unable to import W3D folder.";
             showToast(`W3D import failed: ${message}`, "warning");
@@ -3076,6 +3158,24 @@ export function App() {
       />
 
       <LoadingOverlay />
+
+      {movModalState && (
+        <MovConversionModal
+          isOpen={movModalState.open}
+          classification={movModalState.classification}
+          projectName={movModalState.projectName}
+          isDevMode={import.meta.env.DEV}
+          conversionResult={movModalState.conversionResult}
+          lastError={movModalState.lastError}
+          onConvert={handleMovConvert}
+          onImportWithoutConverting={() => {
+            const files = movModalState.files;
+            setMovModalState(null);
+            void importW3DFromFolder(files);
+          }}
+          onCancel={() => setMovModalState(null)}
+        />
+      )}
     </div>
   );
 }

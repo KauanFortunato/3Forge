@@ -9,7 +9,7 @@ import {
   markWorkspaceSessionActive,
   persistWorkspace,
 } from "../workspace";
-import { App, resolveImageAssetLibrary } from "./App";
+import { App, decideMovImportFlow, resolveImageAssetLibrary } from "./App";
 import type { ImageAsset } from "../types";
 
 const fakeScene = {
@@ -918,6 +918,41 @@ describe("App", () => {
     await waitFor(() => {
       expect(exportPackageMocks.createExportPackageZip).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+function fakeFile(rel: string): File {
+  const f = new File(["x"], rel.split("/").pop() ?? "f");
+  Object.defineProperty(f, "webkitRelativePath", { value: rel, configurable: true });
+  return f;
+}
+
+describe("decideMovImportFlow", () => {
+  it("returns 'direct-import' when there are no .mov files", () => {
+    const result = decideMovImportFlow([
+      fakeFile("Project/scene.w3d"),
+      fakeFile("Project/Resources/Textures/logo.png"),
+    ]);
+    expect(result.action).toBe("direct-import");
+  });
+
+  it("returns 'direct-import' when every .mov already has a sequence.json sibling", () => {
+    const result = decideMovImportFlow([
+      fakeFile("Project/scene.w3d"),
+      fakeFile("Project/Resources/Textures/A.mov"),
+      fakeFile("Project/Resources/Textures/A_frames/sequence.json"),
+    ]);
+    expect(result.action).toBe("direct-import");
+  });
+
+  it("returns 'open-modal' with the project name when at least one .mov lacks a sequence", () => {
+    const result = decideMovImportFlow([
+      fakeFile("GameName_FS/scene.w3d"),
+      fakeFile("GameName_FS/Resources/Textures/PITCH_IN.mov"),
+    ]);
+    expect(result.action).toBe("open-modal");
+    expect(result.action === "open-modal" && result.projectName).toBe("GameName_FS");
+    expect(result.action === "open-modal" && result.classification.withoutSequence.length).toBe(1);
   });
 });
 
