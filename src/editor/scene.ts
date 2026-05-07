@@ -5,6 +5,7 @@ import {
   BoxGeometry,
   Box3Helper,
   ClampToEdgeWrapping,
+  Clock,
   Color,
   CylinderGeometry,
   DirectionalLight,
@@ -174,6 +175,8 @@ export class SceneEditor {
   private readonly unsubscribe: () => void;
   private readonly textureCache = new Map<string, Texture>();
   private readonly videoTextureCache = new Map<string, VideoTexture>();
+  private readonly sequencePlayers = new Map<string, ImageSequencePlayer>();
+  private readonly playerClock = new Clock();
   private debugFallbackImage: HTMLCanvasElement | null = null;
   private readonly animationFrameListeners = new Set<(frame: number) => void>();
 
@@ -820,6 +823,8 @@ export class SceneEditor {
     const hasAuthoredCameraPose = Boolean(this.store.blueprint.engine?.camera?.position);
     this.maybeApplyEngineSettings();
     this.clearViewportRoot();
+    for (const player of this.sequencePlayers.values()) player.dispose();
+    this.sequencePlayers.clear();
     this.objectMap.clear();
     this.childContainerMap.clear();
 
@@ -1026,6 +1031,21 @@ export class SceneEditor {
         // operator distinguish "video never started" (readyState=0) from
         // "video paused after error" (errorCode != null) from "playing".
         video: videoState,
+        imageSequence: (() => {
+          const player = this.sequencePlayers.get(node.id);
+          if (!player) return null;
+          const s = player.state();
+          return {
+            frameCount: s.totalFrames,
+            currentFrame: s.currentFrame,
+            loadedFrames: s.loadedFrames,
+            fps: node.type === "image" ? (node.image.sequence?.fps ?? 0) : 0,
+            loop: node.type === "image" ? (node.image.sequence?.loop ?? true) : true,
+            paused: s.paused,
+            firstFrameSrc: node.type === "image" ? (node.image.sequence?.frameUrls?.[0] ?? "").slice(0, 64) : "",
+            error: s.error,
+          };
+        })(),
         isMask: !!node.isMask,
         maskIds: node.maskIds ?? (node.maskId ? [node.maskId] : []),
         clippingPlaneCount,
@@ -1362,16 +1382,41 @@ export class SceneEditor {
 
   private createImageMesh(node: ImageNode): Mesh {
     const geometry = new PlaneGeometry(node.geometry.width, node.geometry.height);
-    const isVideo = typeof node.image.mimeType === "string" && node.image.mimeType.startsWith("video/");
-    const texture = isVideo
-      ? this.getVideoTexture(node.image.src)
-      : this.getTexture(node.image.src, node.material.textureOptions);
+    const mime = node.image.mimeType;
+    const isSequence = mime === "application/x-image-sequence" && !!node.image.sequence;
+    const isVideo = typeof mime === "string" && mime.startsWith("video/");
+    let texture: Texture;
+    if (isSequence && node.image.sequence) {
+      const player = this.getOrCreateSequencePlayer(node.id, node.image.sequence);
+      texture = player.texture;
+    } else if (isVideo) {
+      texture = this.getVideoTexture(node.image.src);
+    } else {
+      texture = this.getTexture(node.image.src, node.material.textureOptions);
+    }
     const baseOptions = {
       ...this.createBaseMaterialOptions(node),
       map: texture,
     };
     const material = buildMaterialFromSpec(baseOptions, node.material);
     return new Mesh(geometry, material);
+  }
+
+  private getOrCreateSequencePlayer(
+    nodeId: string,
+    spec: import("./types").ImageSequenceMetadata,
+  ): ImageSequencePlayer {
+    const existing = this.sequencePlayers.get(nodeId);
+    if (existing) return existing;
+    const player = new ImageSequencePlayer({
+      frameUrls: spec.frameUrls,
+      fps: spec.fps,
+      loop: spec.loop,
+      width: spec.width || 1,
+      height: spec.height || 1,
+    });
+    this.sequencePlayers.set(nodeId, player);
+    return player;
   }
 
   /**
@@ -1862,6 +1907,8 @@ export class SceneEditor {
   private startLoop(): void {
     const tick = () => {
       this.animationFrame = requestAnimationFrame(tick);
+      const dt = this.playerClock.getDelta();
+      for (const player of this.sequencePlayers.values()) player.tick(dt);
       this.updateAnimationPlayback();
       this.orbitControls.update();
       this.updateInfiniteGrid();
@@ -2386,4 +2433,149 @@ export function formatVideoLoadFailureMessage(src: string, code: number | undefi
     );
   }
   return `[scene] video texture failed to load src=${src} code=${code ?? "unknown"}`;
+}
+
+/**
+ * Marks `t.needsUpdate = true` only when the underlying image actually
+ * has decoded data. Setting needsUpdate prematurely produces black /
+ * transparent frames in WebGL; this guard has caught the bug before.
+ */
+export function setTextureUpdateIfReady(t: Texture): void {
+  const img = t.image as unknown;
+  if (!img) return;
+  if (typeof HTMLImageElement !== "undefined" && img instanceof HTMLImageElement && !img.complete) return;
+  if (typeof HTMLVideoElement !== "undefined" && img instanceof HTMLVideoElement && img.readyState < 2) return;
+  t.needsUpdate = true;
+}
+
+const DEFAULT_PLAYER_FPS = 25;
+const FRAME_WINDOW = 60;
+const MEMORY_WARN_BYTES = 200 * 1024 * 1024;
+
+export interface ImageSequencePlayerSpec {
+  frameUrls: string[];
+  fps: number;
+  loop: boolean;
+  width: number;
+  height: number;
+}
+
+export class ImageSequencePlayer {
+  readonly texture: Texture;
+  private readonly frameUrls: string[];
+  private readonly fps: number;
+  private readonly loop: boolean;
+  private readonly width: number;
+  private readonly height: number;
+  private currentFrame = 0;
+  private acc = 0;
+  private paused = false;
+  private error: string | null = null;
+  private frameCache = new Map<number, HTMLImageElement>();
+  private inFlight = new Set<number>();
+  private disposed = false;
+  private warned = false;
+
+  constructor(spec: ImageSequencePlayerSpec) {
+    this.frameUrls = spec.frameUrls;
+    this.fps = spec.fps && spec.fps > 0 ? spec.fps : DEFAULT_PLAYER_FPS;
+    this.loop = spec.loop;
+    this.width = spec.width;
+    this.height = spec.height;
+    this.texture = new Texture();
+    this.texture.colorSpace = SRGBColorSpace;
+    this.maybeWarn();
+    this.loadFrame(0);
+  }
+
+  private maybeWarn(): void {
+    if (this.warned) return;
+    const bytes = FRAME_WINDOW * this.width * this.height * 4;
+    if (this.frameUrls.length > FRAME_WINDOW || bytes > MEMORY_WARN_BYTES) {
+      const mb = (bytes / 1024 / 1024).toFixed(0);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[scene] large image sequence — ${this.frameUrls.length} frames at ${this.width}x${this.height} ` +
+        `(estimated ${mb} MB at peak window). Consider downsampling for smoother playback.`,
+      );
+      this.warned = true;
+    }
+  }
+
+  private loadFrame(idx: number): void {
+    if (this.disposed) return;
+    if (idx < 0 || idx >= this.frameUrls.length) return;
+    if (this.frameCache.has(idx) || this.inFlight.has(idx)) return;
+    if (this.inFlight.size >= 4) return;
+    this.inFlight.add(idx);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      this.inFlight.delete(idx);
+      if (this.disposed) return;
+      this.frameCache.set(idx, img);
+      if (idx === this.currentFrame) this.bind(img);
+      this.evictIfBeyondWindow();
+    };
+    img.onerror = () => {
+      this.inFlight.delete(idx);
+      if (this.disposed) return;
+      this.error = `frame ${idx + 1} failed to load`;
+    };
+    img.src = this.frameUrls[idx];
+  }
+
+  private evictIfBeyondWindow(): void {
+    if (this.frameCache.size <= FRAME_WINDOW) return;
+    const half = Math.floor(FRAME_WINDOW / 2);
+    for (const k of [...this.frameCache.keys()]) {
+      if (Math.abs(k - this.currentFrame) > half) this.frameCache.delete(k);
+    }
+  }
+
+  private bind(img: HTMLImageElement): void {
+    this.texture.image = img;
+    setTextureUpdateIfReady(this.texture);
+  }
+
+  tick(deltaSec: number): void {
+    if (this.disposed || this.paused) return;
+    this.acc += deltaSec;
+    const advance = Math.floor(this.acc * this.fps);
+    if (advance <= 0) return;
+    this.acc -= advance / this.fps;
+    let next = this.currentFrame + advance;
+    if (this.loop) {
+      next = ((next % this.frameUrls.length) + this.frameUrls.length) % this.frameUrls.length;
+    } else {
+      next = Math.min(next, this.frameUrls.length - 1);
+    }
+    this.currentFrame = next;
+    const cached = this.frameCache.get(next);
+    if (cached) this.bind(cached);
+    for (let i = 1; i <= 4; i += 1) {
+      const idx = this.loop
+        ? (next + i) % this.frameUrls.length
+        : Math.min(next + i, this.frameUrls.length - 1);
+      this.loadFrame(idx);
+    }
+  }
+
+  state(): { currentFrame: number; loadedFrames: number; totalFrames: number; paused: boolean; error: string | null } {
+    return {
+      currentFrame: this.currentFrame,
+      loadedFrames: this.frameCache.size,
+      totalFrames: this.frameUrls.length,
+      paused: this.paused,
+      error: this.error,
+    };
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.frameCache.clear();
+    this.inFlight.clear();
+    this.texture.dispose();
+  }
 }

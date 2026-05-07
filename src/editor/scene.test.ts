@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Texture } from "three";
 import {
   formatVideoLoadFailureMessage,
+  ImageSequencePlayer,
   resolveMaskInversion,
+  setTextureUpdateIfReady,
   shouldAttachTransformGizmo,
   summariseVideoTextureState,
 } from "./scene";
@@ -159,6 +162,119 @@ describe("formatVideoLoadFailureMessage", () => {
     const msg = formatVideoLoadFailureMessage("blob:foo.mov", undefined);
     expect(msg).toContain("blob:foo.mov");
     expect(msg).toMatch(/unknown|failed/i);
+  });
+});
+
+describe("setTextureUpdateIfReady", () => {
+  // Three's `Texture.needsUpdate` is a write-only setter that bumps
+  // `texture.version`; reading the property returns undefined. We
+  // therefore assert via the version counter — a bump means the
+  // helper called `needsUpdate = true`, no bump means it didn't.
+  it("does not mark a texture dirty when image is null", () => {
+    const tex = new Texture();
+    tex.image = null as unknown as undefined;
+    const before = tex.version;
+    setTextureUpdateIfReady(tex);
+    expect(tex.version).toBe(before);
+  });
+  it("does not mark dirty when image is an HTMLImageElement that hasn't loaded", () => {
+    const tex = new Texture();
+    const img = document.createElement("img");
+    // jsdom defaults `complete` to true on a fresh <img>; force it to
+    // false so we test the actually-loading path.
+    Object.defineProperty(img, "complete", { value: false, configurable: true });
+    tex.image = img;
+    const before = tex.version;
+    setTextureUpdateIfReady(tex);
+    expect(tex.version).toBe(before);
+  });
+  it("marks dirty when image is an HTMLImageElement with complete=true", () => {
+    const tex = new Texture();
+    const img = document.createElement("img");
+    Object.defineProperty(img, "complete", { value: true });
+    tex.image = img;
+    const before = tex.version;
+    setTextureUpdateIfReady(tex);
+    expect(tex.version).toBeGreaterThan(before);
+  });
+  it("does not mark dirty when image is a video with readyState < 2", () => {
+    const tex = new Texture();
+    const video = document.createElement("video");
+    Object.defineProperty(video, "readyState", { value: 0, configurable: true });
+    tex.image = video;
+    const before = tex.version;
+    setTextureUpdateIfReady(tex);
+    expect(tex.version).toBe(before);
+  });
+  it("marks dirty when image is a video with readyState >= 2", () => {
+    const tex = new Texture();
+    const video = document.createElement("video");
+    Object.defineProperty(video, "readyState", { value: 2, configurable: true });
+    tex.image = video;
+    const before = tex.version;
+    setTextureUpdateIfReady(tex);
+    expect(tex.version).toBeGreaterThan(before);
+  });
+});
+
+function makeFrameUrls(n: number): string[] {
+  return Array.from({ length: n }, (_, i) => `blob:frame-${i + 1}`);
+}
+
+describe("ImageSequencePlayer", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => { warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined); });
+  afterEach(() => { warnSpy.mockRestore(); });
+
+  it("starts at frame 0 and advances by deltaSec * fps", () => {
+    const player = new ImageSequencePlayer({ frameUrls: makeFrameUrls(10), fps: 25, loop: true, width: 100, height: 100 });
+    expect(player.state().currentFrame).toBe(0);
+    player.tick(1 / 25); expect(player.state().currentFrame).toBe(1);
+    player.tick(2 / 25); expect(player.state().currentFrame).toBe(3);
+    player.dispose();
+  });
+  it("loop: true wraps past the last frame back to 0", () => {
+    const player = new ImageSequencePlayer({ frameUrls: makeFrameUrls(3), fps: 25, loop: true, width: 100, height: 100 });
+    player.tick(3 / 25); expect(player.state().currentFrame).toBe(0);
+    player.dispose();
+  });
+  it("loop: false clamps at the last frame", () => {
+    const player = new ImageSequencePlayer({ frameUrls: makeFrameUrls(3), fps: 25, loop: false, width: 100, height: 100 });
+    player.tick(10); expect(player.state().currentFrame).toBe(2);
+    player.dispose();
+  });
+  it("falls back to fps=25 when fps is 0 or missing", () => {
+    const player = new ImageSequencePlayer({ frameUrls: makeFrameUrls(50), fps: 0, loop: true, width: 100, height: 100 });
+    player.tick(1); expect(player.state().currentFrame).toBe(25);
+    player.dispose();
+  });
+  it("warns once when frameCount > 60", () => {
+    const player = new ImageSequencePlayer({ frameUrls: makeFrameUrls(120), fps: 25, loop: true, width: 1920, height: 1080 });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toMatch(/large image sequence/i);
+    player.dispose();
+  });
+  it("warns once when estimated memory > 200 MB", () => {
+    const player = new ImageSequencePlayer({ frameUrls: makeFrameUrls(60), fps: 25, loop: true, width: 1920, height: 1080 });
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toMatch(/MB/);
+    player.dispose();
+  });
+  it("dispose() releases all cached textures (no leaks)", () => {
+    const player = new ImageSequencePlayer({ frameUrls: makeFrameUrls(5), fps: 25, loop: true, width: 100, height: 100 });
+    const tex = player.texture;
+    const disposeSpy = vi.spyOn(tex, "dispose");
+    player.dispose();
+    expect(disposeSpy).toHaveBeenCalled();
+  });
+  it("state() reports currentFrame, totalFrames, paused, error", () => {
+    const player = new ImageSequencePlayer({ frameUrls: makeFrameUrls(4), fps: 25, loop: true, width: 100, height: 100 });
+    const s = player.state();
+    expect(s.currentFrame).toBe(0);
+    expect(s.totalFrames).toBe(4);
+    expect(s.paused).toBe(false);
+    expect(s.error).toBeNull();
+    player.dispose();
   });
 });
 
