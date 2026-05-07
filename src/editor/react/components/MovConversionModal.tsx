@@ -67,12 +67,14 @@ export function MovConversionModal(props: MovConversionModalProps) {
         {classification.withSequence.map((s) => (
           <li key={s.videoName}>
             <span className="mov-conv-name">{s.videoName}</span>
+            <span className="mov-conv-sep"> — </span>
             <span className="badge badge--ok">sequence ready</span>
           </li>
         ))}
         {classification.withoutSequence.map((s) => (
           <li key={s.videoName}>
             <span className="mov-conv-name">{s.videoName}</span>
+            <span className="mov-conv-sep"> — </span>
             <span className="badge badge--warn">no sequence</span>
           </li>
         ))}

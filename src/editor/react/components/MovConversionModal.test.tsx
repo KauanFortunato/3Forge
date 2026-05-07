@@ -105,6 +105,32 @@ describe("MovConversionModal", () => {
     expect(screen.getByText(/ffmpeg exited with code 1/)).toBeInTheDocument();
   });
 
+  it("renders an em-dash separator between each filename and its badge", () => {
+    render(
+      <MovConversionModal
+        isOpen
+        classification={{
+          withSequence: [{ videoName: "ALREADY_DONE.mov", sequencePath: "x/ALREADY_DONE_frames/sequence.json" }],
+          withoutSequence: [{ videoName: "PITCH_IN.mov" }],
+        }}
+        projectName="GameName_FS"
+        isDevMode
+        onConvert={vi.fn()}
+        onImportWithoutConverting={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    // The list item for PITCH_IN should contain the filename + an em-dash + the badge.
+    // Use a regex against the textContent so we tolerate whitespace from React's
+    // span boundaries — what we care about is that the user SEES the separator.
+    const items = screen.getAllByRole("listitem");
+    expect(items.length).toBe(2);
+    // Each item's text should match "<name> — <badge text>" with the em-dash.
+    for (const li of items) {
+      expect(li.textContent ?? "").toMatch(/\.mov\s*—\s*(no sequence|sequence ready)/);
+    }
+  });
+
   it("falls back to manual folderPath input when convert returns PROJECT_PATH_NOT_FOUND", () => {
     const onConvert = vi.fn();
     render(
