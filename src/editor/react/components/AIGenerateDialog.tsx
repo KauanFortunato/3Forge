@@ -84,8 +84,6 @@ const AI_PROVIDER_STORAGE_KEY = "3forge-ai-provider";
 const AI_MODEL_STORAGE_PREFIX = "3forge-ai-model";
 const AI_LOCAL_URL_STORAGE_KEY = "3forge-ai-local-url";
 const AI_CHAT_STORAGE_PREFIX = "3forge-ai-chat-history-v1";
-const AI_STREAM_CHUNK_SIZE = 10;
-const AI_STREAM_INTERVAL_MS = 18;
 const AI_COPY_FEEDBACK_MS = 1200;
 const AI_COMPOSER_MAX_HEIGHT = 132;
 
@@ -358,12 +356,6 @@ function formatChangeSummary(message: AiChatMessage): string {
   return items ? `${counts}; ${items}` : counts;
 }
 
-function waitForAiStreamFrame() {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, AI_STREAM_INTERVAL_MS);
-  });
-}
-
 async function copyTextToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
@@ -449,17 +441,7 @@ export function AIGenerateDialog({ isOpen, projectId, onGenerate, onApplyScene }
     }
   }, []);
 
-  async function revealAssistantMessage(messageId: string, message: AiChatMessage) {
-    const content = message.content || "Done.";
-
-    for (let length = AI_STREAM_CHUNK_SIZE; length < content.length; length += AI_STREAM_CHUNK_SIZE) {
-      await waitForAiStreamFrame();
-      setMessages((current) => current.map((entry) => (
-        entry.id === messageId ? { ...entry, content: content.slice(0, length), status: "streaming" } : entry
-      )));
-    }
-
-    await waitForAiStreamFrame();
+  function completeAssistantMessage(messageId: string, message: AiChatMessage) {
     setMessages((current) => current.map((entry) => (
       entry.id === messageId ? { ...message, id: messageId } : entry
     )));
@@ -537,10 +519,10 @@ export function AIGenerateDialog({ isOpen, projectId, onGenerate, onApplyScene }
         changes: normalizeChangeSummary(result.changes),
         status: "ready",
       };
-      await revealAssistantMessage(assistantMessageId, assistantMessage);
+      completeAssistantMessage(assistantMessageId, assistantMessage);
     } catch (error) {
       const content = error instanceof Error ? error.message : "Unable to generate a response.";
-      await revealAssistantMessage(assistantMessageId, {
+      completeAssistantMessage(assistantMessageId, {
         id: assistantMessageId,
         role: "assistant",
         createdAt: Date.now(),

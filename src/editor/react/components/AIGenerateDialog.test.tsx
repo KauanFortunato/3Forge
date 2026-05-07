@@ -211,12 +211,12 @@ describe("AIGenerateDialog", () => {
     );
   });
 
-  it("reveals assistant responses progressively before enabling apply", async () => {
+  it("shows assistant responses once ready before enabling apply", async () => {
     const user = userEvent.setup();
-    const streamedContent = [
+    const generatedContent = [
       "I am checking the current scene structure, material palette, and object hierarchy before preparing a valid update.",
       "The generated scene will stay unavailable until the full JSON result is ready.",
-      "I will keep writing this response progressively so the user can see active work in the chat surface.",
+      "I will return the full response when generation is complete.",
       "Only after the final validated scene result is ready should the JSON preview and Apply action become available.",
       "This keeps the editor interaction clear while preserving the existing generation and apply workflow.",
     ].join(" ");
@@ -234,22 +234,21 @@ describe("AIGenerateDialog", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByLabelText("AI is typing")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
 
     resolveGeneration({
-      content: streamedContent,
+      content: generatedContent,
       sceneSpecJson,
       rawText: sceneSpecJson,
       executedModel: "google/gemini-2.5-flash-lite",
     });
 
     await waitFor(() => {
-      expect(container.querySelector(".ai-chat-message.is-streaming[data-status='streaming']")).not.toBeNull();
-      expect(screen.getByText("writing")).not.toBeNull();
-      expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+      expect(container.querySelector(".ai-chat-message.is-streaming[data-status='streaming']")).toBeNull();
     });
 
-    expect(await screen.findByText(streamedContent, undefined, { timeout: 3000 })).not.toBeNull();
-    expect(await screen.findByRole("button", { name: "Apply" }, { timeout: 3000 })).not.toBeNull();
+    expect(await screen.findByText(generatedContent)).not.toBeNull();
+    expect(await screen.findByRole("button", { name: "Apply" })).not.toBeNull();
   });
 
   it("keeps a pending generation when the dialog is hidden and shows the response when reopened", async () => {

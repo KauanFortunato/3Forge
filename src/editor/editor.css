@@ -3304,6 +3304,50 @@ code {
   line-height: 1.55;
 }
 
+.modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-5);
+}
+
+.project-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3900;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+  background: color-mix(in srgb, var(--c-accent) 22%, rgba(0, 0, 0, 0.72));
+  border: 2px solid color-mix(in srgb, var(--c-accent) 72%, transparent);
+  pointer-events: none;
+}
+
+.project-drop-overlay__card {
+  display: grid;
+  gap: var(--sp-2);
+  width: min(360px, calc(100vw - 48px));
+  padding: var(--sp-5);
+  border: 1px solid color-mix(in srgb, var(--c-accent) 65%, var(--c-border-strong));
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--c-bg-1) 88%, var(--c-accent));
+  box-shadow: var(--sh-dropdown);
+  text-align: center;
+}
+
+.project-drop-overlay__label {
+  color: var(--c-text);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+
+.project-drop-overlay__copy {
+  color: var(--c-text-med);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
 .ai-chat-window {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
@@ -4647,6 +4691,54 @@ code {
   border-radius: var(--r-sm);
   background: var(--c-bg-3);
   color: var(--c-accent);
+}
+
+.panel--assets {
+  position: relative;
+}
+
+.panel--assets.is-image-drop-active {
+  border-color: color-mix(in srgb, var(--c-accent) 62%, var(--c-border));
+}
+
+.asset-drop-overlay {
+  position: absolute;
+  inset: var(--h-panel-hd) 0 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  background: color-mix(in srgb, var(--c-accent) 18%, rgba(9, 10, 13, 0.86));
+  border: 1px solid color-mix(in srgb, var(--c-accent) 60%, transparent);
+  pointer-events: none;
+}
+
+.panel--assets:has(> .panel__subhd) .asset-drop-overlay {
+  inset-block-start: calc(var(--h-panel-hd) + var(--h-control));
+}
+
+.asset-drop-overlay__card {
+  display: grid;
+  gap: var(--sp-2);
+  width: min(240px, 100%);
+  padding: var(--sp-4);
+  border: 1px solid color-mix(in srgb, var(--c-accent) 65%, var(--c-border-strong));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--c-bg-2) 90%, var(--c-accent));
+  box-shadow: var(--sh-dropdown);
+  text-align: center;
+}
+
+.asset-drop-overlay__label {
+  color: var(--c-text);
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+
+.asset-drop-overlay__copy {
+  color: var(--c-text-med);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
 }
 
 .material-asset-editor {

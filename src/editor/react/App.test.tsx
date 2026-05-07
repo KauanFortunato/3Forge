@@ -149,6 +149,18 @@ function createAiSceneSpecFixture(componentName = "AI Lamp") {
   };
 }
 
+function createDropDataTransfer(files: File[]): DataTransfer {
+  return {
+    files,
+    items: files.map((file) => ({
+      kind: "file",
+      type: file.type,
+    })),
+    types: ["Files"],
+    dropEffect: "none",
+  } as unknown as DataTransfer;
+}
+
 async function openFileMenu() {
   fireEvent.click(screen.getByRole("button", { name: "File" }));
   await screen.findByText("Save As");
@@ -171,6 +183,22 @@ describe("App", () => {
     mockNavigationType("navigate");
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:fixture");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    Object.defineProperty(window, "Image", {
+      configurable: true,
+      writable: true,
+      value: class MockImage {
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        naturalWidth = 64;
+        naturalHeight = 32;
+        width = 64;
+        height = 32;
+
+        set src(_value: string) {
+          window.setTimeout(() => this.onload?.(), 0);
+        }
+      },
+    });
   });
 
   it("shows the welcome screen again on reentry even when a local project exists", () => {
@@ -467,6 +495,60 @@ describe("App", () => {
 
     await screen.findByDisplayValue("Recent Fixture");
     expect(screen.getByTestId("viewport-host")).toBeTruthy();
+  });
+
+  it("asks before opening a dropped JSON project", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /New project/i }));
+    const currentNameInput = screen.getByDisplayValue("3Forge-Component");
+    fireEvent.change(currentNameInput, { target: { value: "Work In Progress" } });
+
+    const droppedBlueprint = createDefaultBlueprint();
+    droppedBlueprint.componentName = "Dropped Project";
+    const file = new File([JSON.stringify(droppedBlueprint)], "dropped-project.json", { type: "application/json" });
+    const dataTransfer = createDropDataTransfer([file]);
+
+    fireEvent.dragEnter(window, { dataTransfer });
+    expect(screen.getByText("Drop JSON project")).toBeTruthy();
+
+    fireEvent.drop(window, { dataTransfer });
+    expect(await screen.findByText("Open dropped project?")).toBeTruthy();
+    expect(screen.getByText(/Your current project progress is saved locally/i)).toBeTruthy();
+    expect(screen.getByDisplayValue("Work In Progress")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open project" }));
+
+    await screen.findByDisplayValue("Dropped Project");
+    expect(screen.getByText("Imported dropped-project.json.")).toBeTruthy();
+  });
+
+  it("imports dropped image files only through the Assets panel and switches to Images", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /New project/i }));
+
+    expect(screen.getByRole("tab", { name: /Animations/i }).getAttribute("aria-selected")).toBe("true");
+
+    const file = new File(["image"], "panel-texture.png", { type: "image/png" });
+    const windowDataTransfer = createDropDataTransfer([file]);
+    fireEvent.dragEnter(window, { dataTransfer: windowDataTransfer });
+    expect(screen.getByText("Drop image asset")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /Images/i }).getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.drop(window, { dataTransfer: windowDataTransfer });
+    expect(screen.queryByText("panel-texture.png")).toBeNull();
+    expect(screen.queryByText("Drop image asset")).toBeNull();
+
+    const assetsPanel = screen.getByText("Assets").closest("section") as HTMLElement;
+    const dataTransfer = createDropDataTransfer([file]);
+    fireEvent.dragEnter(assetsPanel, { dataTransfer });
+    expect(screen.getByText("Drop image asset")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /Images/i }).getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.drop(assetsPanel, { dataTransfer });
+
+    expect(await screen.findByText("panel-texture.png")).toBeTruthy();
+    expect(screen.getByText("64 x 32px - 0 uses")).toBeTruthy();
+    expect(screen.queryByText("Drop image asset")).toBeNull();
   });
 
   it("imports an AI scene spec JSON as a real blueprint", async () => {

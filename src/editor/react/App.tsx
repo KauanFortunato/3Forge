@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, DragEvent as ReactDragEvent, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import type { Object3D } from "three";
 import { createBlueprintFromAiAnimationPatch, createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, isAiAnimationPatch, isAiSceneSpec, parseAiBlueprintJson } from "../aiBlueprint";
 import type { AiChatContext, AiProvider } from "../aiBlueprint";
@@ -7,6 +7,7 @@ import { compareComponentBlueprints } from "../blueprintDiff";
 import type { BlueprintDiffChangedObject, BlueprintDiffSummary } from "../blueprintDiff";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { createExportPackageZip } from "../exportPackage";
+import { exportBlueprintToGlbBlob, exportBlueprintToGltfBlob } from "../gltfExport";
 import {
   BrowserFileSystemFileHandle,
   getBlueprintFileName,
@@ -247,6 +248,11 @@ type PendingImageImport =
   | { mode: "replace"; nodeId: string }
   | { mode: "replaceAsset"; imageId: string };
 
+interface PendingJsonDropImport {
+  file: File;
+  fileName: string;
+}
+
 interface InsertTarget {
   parentId: string;
   index?: number;
@@ -354,6 +360,36 @@ function countImageUsage(nodes: EditorNode[]): Record<string, number> {
     usage[node.imageId] = (usage[node.imageId] ?? 0) + 1;
   }
   return usage;
+}
+
+function isJsonFile(file: File): boolean {
+  return file.type === "application/json" || file.name.toLowerCase().endsWith(".json");
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || /\.(png|jpe?g|webp|svg)$/i.test(file.name);
+}
+
+function dataTransferHasJsonFile(dataTransfer: DataTransfer): boolean {
+  const files = Array.from(dataTransfer.files ?? []);
+  if (files.some(isJsonFile)) {
+    return true;
+  }
+
+  return Array.from(dataTransfer.items ?? []).some((item) => (
+    item.kind === "file" && (item.type === "application/json" || item.type === "")
+  ));
+}
+
+function dataTransferHasImageFile(dataTransfer: DataTransfer): boolean {
+  const files = Array.from(dataTransfer.files ?? []);
+  if (files.some(isImageFile)) {
+    return true;
+  }
+
+  return Array.from(dataTransfer.items ?? []).some((item) => (
+    item.kind === "file" && item.type.startsWith("image/")
+  ));
 }
 
 function resolveSelectionMaterialId(nodes: EditorNode[]): string | null {
@@ -606,6 +642,9 @@ export function App() {
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const { theme, setTheme } = useTheme();
   const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
+  const [pendingJsonDropImport, setPendingJsonDropImport] = useState<PendingJsonDropImport | null>(null);
+  const [isJsonDropOverlayVisible, setIsJsonDropOverlayVisible] = useState(false);
+  const [isAssetImageDropActive, setIsAssetImageDropActive] = useState(false);
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(480);
@@ -630,6 +669,9 @@ export function App() {
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fontInputRef = useRef<HTMLInputElement | null>(null);
+  const jsonDragDepthRef = useRef(0);
+  const imageDragDepthRef = useRef(0);
+  const assetImageDragDepthRef = useRef(0);
   const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const blueprintSnapshot = useMemo(() => store.getSnapshot(), [store, storeView]);
@@ -1730,8 +1772,24 @@ export function App() {
     }
   }, [blueprintSnapshot, setTransientStatus]);
 
+  const downloadSceneModel = useCallback(async (format: "glb" | "gltf") => {
+    try {
+      const blob = await runTask(`Exporting ${format.toUpperCase()}...`, () => (
+        format === "glb"
+          ? exportBlueprintToGlbBlob(blueprintSnapshot)
+          : exportBlueprintToGltfBlob(blueprintSnapshot)
+      ));
+      const fileName = `${blueprintSnapshot.componentName || "3forge-component"}.${format}`;
+      downloadBlobFile(blob, fileName);
+      setTransientStatus(`Downloaded ${fileName}.`);
+    } catch {
+      setTransientStatus(`Unable to export ${format.toUpperCase()} model.`);
+    }
+  }, [blueprintSnapshot, setTransientStatus]);
+
   const importJsonFromFile = useCallback(async (file: File) => {
     await runTask(`Importing ${file.name}…`, async () => {
+      persistWorkspace(blueprintSnapshot, projectContext);
       const rawBlueprint = await readBlueprintFromFile(file);
       const { blueprint, convertedFromAiScene, convertedFromAnimationPatch } = resolveImportedBlueprint(rawBlueprint, blueprintSnapshot);
       const { recentProjectId } = await syncRecentProject(blueprint, {
@@ -1754,7 +1812,202 @@ export function App() {
             : `Imported ${file.name}.`,
       );
     }, { blocking: true });
-  }, [applyWorkspaceBlueprint, blueprintSnapshot, syncRecentProject]);
+  }, [applyWorkspaceBlueprint, blueprintSnapshot, projectContext, syncRecentProject]);
+
+  const importImageAssetsFromFiles = useCallback(async (files: File[]) => {
+    const imageFiles = files.filter(isImageFile);
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    setRuntimePanelTab("images");
+    setIsAssetsPanelCollapsed(false);
+
+    try {
+      let lastImageId: string | null = null;
+      for (const file of imageFiles) {
+        const image = await runTask(`Importing ${file.name}...`, () => imageFileToAsset(file));
+        lastImageId = store.addImageAsset(image);
+      }
+
+      if (lastImageId) {
+        setSelectedImageId(lastImageId);
+      }
+
+      setTransientStatus(imageFiles.length === 1
+        ? `Imported image asset "${imageFiles[0].name}".`
+        : `Imported ${imageFiles.length} image assets.`);
+    } catch {
+      setTransientStatus("Unable to import image.");
+    }
+  }, [setTransientStatus, store]);
+
+  const clearAssetImageDropState = useCallback(() => {
+    assetImageDragDepthRef.current = 0;
+    setIsAssetImageDropActive(false);
+  }, []);
+
+  const handleAssetsDragEnter = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    if (!dataTransferHasImageFile(event.dataTransfer)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    assetImageDragDepthRef.current += 1;
+    setRuntimePanelTab("images");
+    setIsAssetsPanelCollapsed(false);
+    setIsAssetImageDropActive(true);
+  }, []);
+
+  const handleAssetsDragOver = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    if (!dataTransferHasImageFile(event.dataTransfer)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setRuntimePanelTab("images");
+    setIsAssetsPanelCollapsed(false);
+    setIsAssetImageDropActive(true);
+  }, []);
+
+  const handleAssetsDragLeave = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    if (!dataTransferHasImageFile(event.dataTransfer)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    assetImageDragDepthRef.current = Math.max(0, assetImageDragDepthRef.current - 1);
+    if (assetImageDragDepthRef.current === 0) {
+      setIsAssetImageDropActive(false);
+    }
+  }, []);
+
+  const handleAssetsDrop = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    const files = Array.from(event.dataTransfer.files ?? []).filter(isImageFile);
+    if (files.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    clearAssetImageDropState();
+    void importImageAssetsFromFiles(files);
+  }, [clearAssetImageDropState, importImageAssetsFromFiles]);
+
+  useEffect(() => {
+    const handleDragEnter = (event: DragEvent) => {
+      if (!event.dataTransfer) {
+        return;
+      }
+
+      if (dataTransferHasJsonFile(event.dataTransfer)) {
+        event.preventDefault();
+        jsonDragDepthRef.current += 1;
+        setIsJsonDropOverlayVisible(true);
+        return;
+      }
+
+      if (dataTransferHasImageFile(event.dataTransfer)) {
+        event.preventDefault();
+        imageDragDepthRef.current += 1;
+        setRuntimePanelTab("images");
+        setIsAssetsPanelCollapsed(false);
+        setIsAssetImageDropActive(true);
+      }
+    };
+
+    const handleDragOver = (event: DragEvent) => {
+      if (!event.dataTransfer) {
+        return;
+      }
+
+      if (dataTransferHasJsonFile(event.dataTransfer)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        setIsJsonDropOverlayVisible(true);
+        return;
+      }
+
+      if (dataTransferHasImageFile(event.dataTransfer)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "none";
+        setRuntimePanelTab("images");
+        setIsAssetsPanelCollapsed(false);
+        setIsAssetImageDropActive(true);
+      }
+    };
+
+    const handleDragLeave = (event: DragEvent) => {
+      if (!event.dataTransfer) {
+        return;
+      }
+
+      if (dataTransferHasJsonFile(event.dataTransfer)) {
+        jsonDragDepthRef.current = Math.max(0, jsonDragDepthRef.current - 1);
+        if (jsonDragDepthRef.current === 0) {
+          setIsJsonDropOverlayVisible(false);
+        }
+        return;
+      }
+
+      if (dataTransferHasImageFile(event.dataTransfer)) {
+        imageDragDepthRef.current = Math.max(0, imageDragDepthRef.current - 1);
+        if (imageDragDepthRef.current === 0) {
+          setIsAssetImageDropActive(false);
+        }
+      }
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      const jsonFile = files.find(isJsonFile) ?? null;
+      const hasImageFile = files.some(isImageFile);
+
+      jsonDragDepthRef.current = 0;
+      imageDragDepthRef.current = 0;
+      setIsJsonDropOverlayVisible(false);
+      setIsAssetImageDropActive(false);
+
+      if (jsonFile) {
+        event.preventDefault();
+        setPendingJsonDropImport({ file: jsonFile, fileName: jsonFile.name });
+        return;
+      }
+
+      if (hasImageFile) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("drop", handleDrop);
+    return () => {
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("drop", handleDrop);
+    };
+  }, []);
+
+  const handleConfirmJsonDropImport = useCallback(async () => {
+    if (!pendingJsonDropImport) {
+      return;
+    }
+
+    const file = pendingJsonDropImport.file;
+    setPendingJsonDropImport(null);
+    try {
+      await importJsonFromFile(file);
+    } catch {
+      setTransientStatus("Unable to import JSON.");
+    }
+  }, [importJsonFromFile, pendingJsonDropImport, setTransientStatus]);
 
   const handleGenerateWithAI = useCallback(async (
     apiKey: string,
@@ -2587,6 +2840,8 @@ export function App() {
             { id: "file-export-ts", label: "TypeScript", onSelect: () => downloadExportFile("typescript") },
             { id: "file-export-json", label: "Blueprint", onSelect: () => downloadExportFile("json") },
             { id: "file-export-zip", label: "ZIP file", onSelect: () => void downloadExportPackage() },
+            { id: "file-export-gltf", label: "GLTF scene", onSelect: () => void downloadSceneModel("gltf") },
+            { id: "file-export-glb", label: "GLB scene", onSelect: () => void downloadSceneModel("glb") },
           ],
         },
         { id: "file-divider-4", separator: true },
@@ -2680,6 +2935,7 @@ export function App() {
     createAddMenuActions,
     downloadExportFile,
     downloadExportPackage,
+    downloadSceneModel,
     handleCopy,
     handleCopyProperties,
     handleExitProject,
@@ -2704,6 +2960,38 @@ export function App() {
     storeView.propertyClipboard,
   ]);
 
+  const jsonDropOverlay = isJsonDropOverlayVisible ? (
+    <div className="project-drop-overlay" role="status" aria-live="polite">
+      <div className="project-drop-overlay__card">
+        <span className="project-drop-overlay__label">Drop JSON project</span>
+        <span className="project-drop-overlay__copy">Release to review before opening. Your current progress stays saved locally.</span>
+      </div>
+    </div>
+  ) : null;
+
+  const jsonDropImportModal = (
+    <Modal
+      title="Open dropped project?"
+      isOpen={pendingJsonDropImport !== null}
+      onClose={() => setPendingJsonDropImport(null)}
+    >
+      <p>
+        Open {pendingJsonDropImport?.fileName ? `"${pendingJsonDropImport.fileName}"` : "this JSON file"} as a project?
+      </p>
+      <p>
+        Your current project progress is saved locally before the new project opens, so you can return to it from local/recent workspace data.
+      </p>
+      <div className="modal__actions">
+        <button type="button" className="tbtn" onClick={() => setPendingJsonDropImport(null)}>
+          Cancel
+        </button>
+        <button type="button" className="tbtn is-primary" onClick={() => { void handleConfirmJsonDropImport(); }}>
+          Open project
+        </button>
+      </div>
+    </Modal>
+  );
+
   if (!isStarted) {
     return (
       <>
@@ -2724,6 +3012,8 @@ export function App() {
           theme={theme}
           onChangeTheme={setTheme}
         />
+        {jsonDropOverlay}
+        {jsonDropImportModal}
         <input
           ref={jsonInputRef}
           className="app__hidden-input"
@@ -2908,7 +3198,11 @@ export function App() {
 
               <section
                 data-asset-panel="true"
-                className={`panel${isAssetsPanelCollapsed ? " panel--collapsed" : ""}`}
+                className={`panel panel--assets${isAssetsPanelCollapsed ? " panel--collapsed" : ""}${isAssetImageDropActive ? " is-image-drop-active" : ""}`}
+                onDragEnter={handleAssetsDragEnter}
+                onDragOver={handleAssetsDragOver}
+                onDragLeave={handleAssetsDragLeave}
+                onDrop={handleAssetsDrop}
               >
                 <div className="panel__hd">
                   <button
@@ -3047,6 +3341,15 @@ export function App() {
                         onRemove={(materialId) => store.removeMaterial(materialId)}
                       />
                     )}
+                  </div>
+                ) : null}
+
+                {isAssetImageDropActive ? (
+                  <div className="asset-drop-overlay" role="status" aria-live="polite">
+                    <div className="asset-drop-overlay__card">
+                      <span className="asset-drop-overlay__label">Drop image asset</span>
+                      <span className="asset-drop-overlay__copy">Release here to add it to Images.</span>
+                    </div>
                   </div>
                 ) : null}
               </section>
@@ -3418,6 +3721,9 @@ export function App() {
           onApplyScene={handleApplyAiScene}
         />
       </Modal>
+
+      {jsonDropOverlay}
+      {jsonDropImportModal}
 
       <LoadingOverlay />
     </div>
