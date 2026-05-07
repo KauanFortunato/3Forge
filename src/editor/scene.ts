@@ -8,6 +8,7 @@ import {
   Clock,
   Color,
   CylinderGeometry,
+  DataTexture,
   DirectionalLight,
   DoubleSide,
   Group,
@@ -178,6 +179,7 @@ export class SceneEditor {
   private readonly sequencePlayers = new Map<string, ImageSequencePlayer>();
   private readonly playerClock = new Clock();
   private debugFallbackImage: HTMLCanvasElement | null = null;
+  private imageMeshLogCount = 0;
   private readonly animationFrameListeners = new Set<(frame: number) => void>();
 
   private animationFrame = 0;
@@ -1436,13 +1438,39 @@ export class SceneEditor {
   private createImageMesh(node: ImageNode): Mesh {
     const geometry = new PlaneGeometry(node.geometry.width, node.geometry.height);
     const mime = node.image.mimeType;
-    const isSequence = mime === "application/x-image-sequence" && !!node.image.sequence;
-    const isVideo = typeof mime === "string" && mime.startsWith("video/");
+    const kind = decideImageMeshKind(node.image);
+    // Forensic log: lets the operator see exactly what mime + sequence shape
+    // the renderer is observing per node. Throttled to first 12 calls per
+    // SceneEditor instance so it doesn't spam in big scenes.
+    if (this.imageMeshLogCount < 12) {
+      this.imageMeshLogCount += 1;
+      // eslint-disable-next-line no-console
+      console.info(
+        `[scene createImageMesh] node=${node.name ?? node.id} mime=${mime} ` +
+        `hasSequenceField=${!!node.image.sequence} ` +
+        `seqFrames=${node.image.sequence?.frameUrls?.length ?? 0} ` +
+        `→ ${kind}`,
+      );
+    }
     let texture: Texture;
-    if (isSequence && node.image.sequence) {
+    if (kind === "image-sequence" && node.image.sequence) {
       const player = this.getOrCreateSequencePlayer(node.id, node.image.sequence);
       texture = player.texture;
-    } else if (isVideo) {
+    } else if (kind === "sequence-payload-missing") {
+      // The mime survived but the sequence payload didn't. This happens
+      // when an autosave round-trip strips frameUrls from localStorage to
+      // dodge the quota limit. The src field still holds the first frame's
+      // blob URL but it may be revoked from a prior session → blank
+      // texture + "needsUpdate but no image" warnings. Bind the magenta
+      // debug checker so the broken layer is obvious in-editor instead of
+      // silently failing into the video branch.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[scene] image-sequence node "${node.name ?? node.id}" lost its sequence payload — ` +
+        `re-import the W3D folder to restore frame URLs. Falling back to placeholder.`,
+      );
+      texture = this.createSequenceMissingPlaceholderTexture();
+    } else if (kind === "video") {
       texture = this.getVideoTexture(node.image.src);
     } else {
       texture = this.getTexture(node.image.src, node.material.textureOptions);
@@ -1453,6 +1481,26 @@ export class SceneEditor {
     };
     const material = buildMaterialFromSpec(baseOptions, node.material);
     return new Mesh(geometry, material);
+  }
+
+  /**
+   * Produces a placeholder Texture for the "sequence-payload-missing"
+   * branch — reuses the magenta/black debug checker when the canvas API
+   * is available (real browser), and falls back to a 1×1 fully-
+   * transparent DataTexture in headless / jsdom-without-canvas
+   * environments so the mesh renders nothing rather than garbage.
+   */
+  private createSequenceMissingPlaceholderTexture(): Texture {
+    const fallback = this.getDebugFallbackImage();
+    if (fallback) {
+      const t = new Texture(fallback);
+      t.colorSpace = SRGBColorSpace;
+      t.needsUpdate = true;
+      return t;
+    }
+    const transparent = new DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+    transparent.needsUpdate = true;
+    return transparent;
   }
 
   private getOrCreateSequencePlayer(
@@ -2409,6 +2457,35 @@ function resolveOriginOffset(
  * tilted 3D plane — which is wrong, the geometry was never designed for any
  * other angle. Pan + zoom stay enabled so canvas navigation still works.
  */
+/**
+ * Discriminator for the four texture-binding paths inside `createImageMesh`.
+ * Extracted as a pure exported helper so the branching can be unit-tested
+ * without instantiating SceneEditor (which needs WebGL + a DOM).
+ */
+export type ImageMeshKind = "image-sequence" | "video" | "image" | "sequence-payload-missing";
+
+/**
+ * Decides which texture-binding branch `createImageMesh` should take for a
+ * given image asset. The new `"sequence-payload-missing"` value surfaces the
+ * regression where mime survives autosave round-tripping but the
+ * `sequence.frameUrls` payload doesn't — we don't want to silently fall to
+ * the video branch with a revoked blob URL.
+ */
+export function decideImageMeshKind(image: {
+  mimeType: string;
+  sequence?: { frameUrls?: string[] };
+}): ImageMeshKind {
+  const mime = image.mimeType;
+  if (mime === "application/x-image-sequence") {
+    if (image.sequence && image.sequence.frameUrls && image.sequence.frameUrls.length > 0) {
+      return "image-sequence";
+    }
+    return "sequence-payload-missing";
+  }
+  if (typeof mime === "string" && mime.startsWith("video/")) return "video";
+  return "image";
+}
+
 export interface OrbitPolicy {
   enableRotate: boolean;
   enablePan: boolean;

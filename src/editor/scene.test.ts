@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Texture } from "three";
 import {
+  decideImageMeshKind,
   formatVideoLoadFailureMessage,
   ImageSequencePlayer,
   orbitPolicyForSceneMode,
@@ -448,5 +449,37 @@ describe("ImageSequencePlayer playback robustness (Pass J)", () => {
     // currentFrameSrc may be null until bind happens — accept either.
     expect("currentFrameSrc" in s).toBe(true);
     player.dispose();
+  });
+});
+
+describe("decideImageMeshKind", () => {
+  it("returns 'image-sequence' when mime is x-image-sequence AND frameUrls populated", () => {
+    expect(decideImageMeshKind({
+      mimeType: "application/x-image-sequence",
+      sequence: { frameUrls: ["blob:f1", "blob:f2"] },
+    })).toBe("image-sequence");
+  });
+
+  it("returns 'sequence-payload-missing' when mime is x-image-sequence but sequence field is undefined (persistence dropped it)", () => {
+    expect(decideImageMeshKind({
+      mimeType: "application/x-image-sequence",
+    })).toBe("sequence-payload-missing");
+  });
+
+  it("returns 'sequence-payload-missing' when sequence is present but frameUrls is empty", () => {
+    expect(decideImageMeshKind({
+      mimeType: "application/x-image-sequence",
+      sequence: { frameUrls: [] },
+    })).toBe("sequence-payload-missing");
+  });
+
+  it("returns 'video' for video/* mime", () => {
+    expect(decideImageMeshKind({ mimeType: "video/quicktime" })).toBe("video");
+    expect(decideImageMeshKind({ mimeType: "video/mp4" })).toBe("video");
+  });
+
+  it("returns 'image' for image mime", () => {
+    expect(decideImageMeshKind({ mimeType: "image/png" })).toBe("image");
+    expect(decideImageMeshKind({ mimeType: "image/jpeg" })).toBe("image");
   });
 });
