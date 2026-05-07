@@ -2475,6 +2475,7 @@ export class ImageSequencePlayer {
   private inFlight = new Set<number>();
   private disposed = false;
   private warned = false;
+  private firstBindLogged = false;
 
   constructor(spec: ImageSequencePlayerSpec) {
     this.frameUrls = spec.frameUrls;
@@ -2535,7 +2536,20 @@ export class ImageSequencePlayer {
 
   private bind(img: HTMLImageElement): void {
     this.texture.image = img;
-    setTextureUpdateIfReady(this.texture);
+    // The image just fired its `onload` callback (the only entry point that
+    // calls bind), so the decoded data is, by contract, already in memory.
+    // `setTextureUpdateIfReady` would otherwise refuse the upload whenever
+    // `img.complete` is still false — which happens in jsdom under tests
+    // and, intermittently, with blob: URLs in production browsers (the
+    // `complete` flag races the onload event in some Chromium builds).
+    // The guard is correct for callers that don't own the image lifecycle;
+    // we do, so we set the version counter directly.
+    this.texture.needsUpdate = true;
+    if (!this.firstBindLogged) {
+      this.firstBindLogged = true;
+      // eslint-disable-next-line no-console
+      console.info(`[seq] first frame bound for sequence (${this.frameUrls.length} frames)`);
+    }
   }
 
   tick(deltaSec: number): void {

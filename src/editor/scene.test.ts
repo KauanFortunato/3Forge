@@ -276,6 +276,61 @@ describe("ImageSequencePlayer", () => {
     expect(s.error).toBeNull();
     player.dispose();
   });
+  it("bind() sets needsUpdate even when the image's complete flag would make the guard no-op", () => {
+    // Regression for FASE F / Pass A. setTextureUpdateIfReady refuses to
+    // bump the version counter when an HTMLImageElement reports
+    // complete === false. In jsdom (and intermittently in real browsers
+    // when a blob: URL races the onload event), this leaves the GPU
+    // upload skipped forever and the sequence renders as an empty white
+    // quad. The player owns the load lifecycle (bind() is only invoked
+    // from img.onload), so it MUST mark the texture dirty unconditionally.
+    const player = new ImageSequencePlayer({
+      frameUrls: makeFrameUrls(1),
+      fps: 25,
+      loop: true,
+      width: 100,
+      height: 100,
+    });
+    const img = document.createElement("img");
+    Object.defineProperty(img, "complete", { value: false, configurable: true });
+    const versionBefore = player.texture.version;
+    // Reach into the private bind() — the public surface (loadFrame +
+    // onload) doesn't fire under jsdom because Image#src doesn't trigger
+    // a real network/decoding pass. Calling bind() directly exercises the
+    // exact line that was silently broken.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (player as any).bind(img);
+    expect(player.texture.image).toBe(img);
+    expect(player.texture.version).toBeGreaterThan(versionBefore);
+    player.dispose();
+  });
+  it("bind() logs '[seq] first frame bound' exactly once per player", () => {
+    // Operator-facing diagnostic: confirms in devtools that the wiring
+    // fired end-to-end. Must NOT spam the console on every frame.
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      const player = new ImageSequencePlayer({
+        frameUrls: makeFrameUrls(3),
+        fps: 25,
+        loop: true,
+        width: 100,
+        height: 100,
+      });
+      const img = document.createElement("img");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (player as any).bind(img);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (player as any).bind(img);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (player as any).bind(img);
+      const seqLogs = infoSpy.mock.calls.filter((c) => typeof c[0] === "string" && c[0].includes("[seq] first frame bound"));
+      expect(seqLogs.length).toBe(1);
+      expect(seqLogs[0][0]).toContain("3 frames");
+      player.dispose();
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
 });
 
 describe("__r3Dump non-disappearance invariant", () => {
