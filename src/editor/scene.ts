@@ -815,6 +815,25 @@ export class SceneEditor {
     const desired = (this.store.blueprint.sceneMode ?? "3d") === "2d" ? "2d" : "3d";
     if (desired !== this.currentSceneMode) {
       this.applySceneMode(desired);
+    } else {
+      // Same mode as before, but re-apply the OrbitControls policy in case
+      // it changed shape between rebuilds (e.g. policy tuning shipped in a
+      // new build). Cheap; no observable effect when policy is unchanged.
+      this.applyOrbitControlsForMode(desired);
+    }
+    // For 2D scenes, clear any leftover orbit-rotation from a prior session:
+    // the camera object is reused across rebuilds, so a user who tilted the
+    // ortho camera before we shipped the rotate-lock would otherwise still
+    // see a tilted view. Preserve the current zoom-distance so user-zoom
+    // doesn't reset on every rebuild.
+    if (desired === "2d" && this.camera instanceof OrthographicCamera) {
+      const distance = this.camera.position.length() || 10;
+      this.camera.position.set(0, 0, distance);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(0, 0, 0);
+      this.camera.updateProjectionMatrix();
+      this.orbitControls.target.set(0, 0, 0);
+      this.orbitControls.update();
     }
     // Detect first apply BEFORE applying so we can frame after mount when no
     // explicit camera pose was authored.
@@ -1807,18 +1826,24 @@ export class SceneEditor {
   }
 
   private applyOrbitControlsForMode(mode: "2d" | "3d"): void {
+    // Rotate/pan/zoom enablement is policy-driven so the rules live in one
+    // pure function (see `orbitPolicyForSceneMode`). The other settings
+    // (panning style, target, distance limits) are mode-specific tuning
+    // that doesn't need to be unit-tested separately.
+    const policy = orbitPolicyForSceneMode(mode);
+    this.orbitControls.enableRotate = policy.enableRotate;
+    this.orbitControls.enablePan = policy.enablePan;
+    this.orbitControls.enableZoom = policy.enableZoom;
     if (mode === "2d") {
-      // SketchUp-style parallel projection: orbit is still free (so you can
-      // peek at depth or roll the layout), pan keeps the axes parallel to the
-      // screen for canvas-style editing, and zoom drives camera.zoom on the
-      // OrthographicCamera (OrbitControls handles that automatically).
-      this.orbitControls.enableRotate = true;
+      // Broadcast-style canvas: pan keeps the axes parallel to the screen,
+      // and zoom drives camera.zoom on the OrthographicCamera (OrbitControls
+      // handles that automatically). Rotate is locked off via the policy
+      // above — _FS layouts are flat 2D and tilt looks broken.
       this.orbitControls.screenSpacePanning = true;
       this.orbitControls.target.set(0, 0, 0);
       this.orbitControls.maxDistance = 200;
       this.orbitControls.minDistance = 0.1;
     } else {
-      this.orbitControls.enableRotate = true;
       this.orbitControls.screenSpacePanning = false;
       this.orbitControls.target.set(0, 1, 0);
       this.orbitControls.maxDistance = 80;
@@ -2336,6 +2361,32 @@ function resolveOriginOffset(
     default:
       return -((min + max) * 0.5);
   }
+}
+
+/**
+ * Returns the OrbitControls policy that should apply for a given scene mode.
+ * Pure — easy to test. The renderer applies the result to the live controls
+ * (see `applyOrbitControlsForMode`).
+ *
+ * Why this exists: a `_FS` (full-screen broadcast) W3D scene is authored as a
+ * flat 2D composition viewed straight-on. With OrbitControls' default
+ * `enableRotate: true`, the user can mouse-drag the OrthographicCamera into a
+ * tilted angle and the layout (e.g. GameName_FS court) starts to look like a
+ * tilted 3D plane — which is wrong, the geometry was never designed for any
+ * other angle. Pan + zoom stay enabled so canvas navigation still works.
+ */
+export interface OrbitPolicy {
+  enableRotate: boolean;
+  enablePan: boolean;
+  enableZoom: boolean;
+}
+export function orbitPolicyForSceneMode(sceneMode: string | undefined): OrbitPolicy {
+  if (sceneMode === "2d") {
+    return { enableRotate: false, enablePan: true, enableZoom: true };
+  }
+  // 3D scenes — and any unknown mode — keep full free orbit so we never
+  // accidentally lock the camera on a scene that didn't declare its mode.
+  return { enableRotate: true, enablePan: true, enableZoom: true };
 }
 
 /**

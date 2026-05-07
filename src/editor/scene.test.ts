@@ -3,6 +3,7 @@ import { Texture } from "three";
 import {
   formatVideoLoadFailureMessage,
   ImageSequencePlayer,
+  orbitPolicyForSceneMode,
   resolveMaskInversion,
   setTextureUpdateIfReady,
   shouldAttachTransformGizmo,
@@ -362,5 +363,26 @@ describe("__r3Dump non-disappearance invariant", () => {
     // out is the bug.
     const videoAssets = bp.images.filter((i) => i.mimeType.startsWith("video/"));
     expect(videoAssets.length).toBe(1);
+  });
+});
+
+describe("orbitPolicyForSceneMode", () => {
+  it("disables rotate for 2D scenes — broadcast layouts are not free-orbit", () => {
+    const policy = orbitPolicyForSceneMode("2d");
+    expect(policy.enableRotate).toBe(false);
+    expect(policy.enablePan).toBe(true);
+    expect(policy.enableZoom).toBe(true);
+  });
+
+  it("allows full free orbit for 3D scenes", () => {
+    const policy = orbitPolicyForSceneMode("3d");
+    expect(policy.enableRotate).toBe(true);
+    expect(policy.enablePan).toBe(true);
+    expect(policy.enableZoom).toBe(true);
+  });
+
+  it("treats unknown / undefined sceneMode as 3D (safe default — don't lock the camera by accident)", () => {
+    const policy = orbitPolicyForSceneMode(undefined);
+    expect(policy.enableRotate).toBe(true);
   });
 });
