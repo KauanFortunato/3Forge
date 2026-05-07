@@ -132,33 +132,28 @@ describe("ImageAssetsPanel - image-sequence support", () => {
     expect(sub?.textContent ?? "").toMatch(/alpha/i);
   });
 
-  it("renders a Play button on the sequence thumbnail", () => {
+  it("autoplays sequence and shows a Pause button by default (sequences play like a video thumbnail)", () => {
     const { container } = renderPanel({ images: [SEQUENCE_ASSET] });
-    const playBtn = container.querySelector('button[aria-label*="Play sequence"]');
-    expect(playBtn).not.toBeNull();
+    // The autoplay effect runs on mount; the Pause button should be visible.
+    const pauseBtn = container.querySelector('button[aria-label*="Pause sequence"]');
+    expect(pauseBtn).not.toBeNull();
   });
 
-  it("clicking Play swaps to the next frame after 1/fps seconds", async () => {
+  it("autoplay advances frames at fps automatically (no click needed)", () => {
     const { container } = renderPanel({ images: [SEQUENCE_ASSET] });
-    const initialImg = container.querySelector(".image-assets-panel__thumb img") as HTMLImageElement;
-    expect(initialImg.src).toContain("blob:frame-1");
-    const playBtn = container.querySelector('button[aria-label*="Play sequence"]') as HTMLButtonElement;
-    fireEvent.click(playBtn);
-    // 25 fps -> 40ms per frame
+    const thumbImg = container.querySelector(".image-assets-panel__thumb img") as HTMLImageElement;
+    expect(thumbImg.src).toContain("blob:frame-1");
+    // 25 fps -> 40ms per frame; advance > 40 should land on frame 2.
     act(() => {
       vi.advanceTimersByTime(50);
     });
-    const advancedImg = container.querySelector(".image-assets-panel__thumb img") as HTMLImageElement;
-    expect(advancedImg.src).toContain("blob:frame-2");
+    const thumbImg2 = container.querySelector(".image-assets-panel__thumb img") as HTMLImageElement;
+    expect(thumbImg2.src).toContain("blob:frame-2");
   });
 
-  it("Pause stops frame advancement", () => {
+  it("clicking Pause stops the autoplay", () => {
     const { container } = renderPanel({ images: [SEQUENCE_ASSET] });
-    const playBtn = container.querySelector('button[aria-label*="Play sequence"]') as HTMLButtonElement;
-    fireEvent.click(playBtn);
-    act(() => {
-      vi.advanceTimersByTime(50);
-    });
+    // Already auto-playing. Click Pause.
     const pauseBtn = container.querySelector('button[aria-label*="Pause sequence"]') as HTMLButtonElement;
     expect(pauseBtn).not.toBeNull();
     fireEvent.click(pauseBtn);

@@ -62,6 +62,55 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
     };
   }, []);
 
+  // Autoplay every image-sequence asset that's currently in the panel like
+  // a video thumbnail (Loom / YouTube preview behaviour). When an asset
+  // leaves the list its interval is torn down. Once the user has interacted
+  // (Pause), the entry exists in previewState and we leave it alone -- no
+  // surprise restart.
+  const sequenceSignature = images
+    .filter((image) => isImageSequence(image))
+    .map((image) => image.id)
+    .join(",");
+  useEffect(() => {
+    setPreviewState((prev) => {
+      const next: Record<string, PreviewEntry> = { ...prev };
+      const knownIds = new Set(images.map((i) => i.id));
+
+      // Stop intervals for assets that no longer exist in the prop list.
+      for (const id of Object.keys(next)) {
+        if (!knownIds.has(id)) {
+          const intervalId = next[id]?.intervalId;
+          if (intervalId != null) clearInterval(intervalId);
+          delete next[id];
+        }
+      }
+
+      // Start intervals for sequence assets that have never been touched.
+      for (const image of images) {
+        if (!isImageSequence(image)) continue;
+        const seq = image.sequence;
+        if (!seq || seq.frameUrls.length === 0) continue;
+        if (next[image.id] != null) continue; // user already interacted, leave alone
+        const fps = seq.fps > 0 ? seq.fps : 25;
+        const intervalId = window.setInterval(() => {
+          setPreviewState((p) => {
+            const c = p[image.id];
+            if (!c || !c.playing) return p;
+            const nextFrame = (c.frame + 1) % seq.frameUrls.length;
+            return { ...p, [image.id]: { ...c, frame: nextFrame } };
+          });
+        }, 1000 / fps);
+        next[image.id] = { frame: 0, playing: true, intervalId };
+      }
+
+      return next;
+    });
+    // sequenceSignature is a derived dep that changes only when the set of
+    // sequence asset ids changes; this avoids re-running on every parent
+    // re-render even if `images` reference identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sequenceSignature]);
+
   const stop = (event: MouseEvent) => {
     event.stopPropagation();
   };
