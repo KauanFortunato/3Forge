@@ -4,7 +4,9 @@
  *
  * Public API:
  *   runMovConversion({ folderPath, force?, onProgress? })
- *     -> { converted[], skipped[], failed[], sequenceJsonPaths[], warnings[] }
+ *     -> { converted[], skipped[], failed[], sequenceJsonPaths[], warnings[],
+ *          ffmpegSource? }
+ *   resolveFfmpegBinary() -> { path, source }
  *
  * Conventions enforced:
  *   - ffmpeg invoked via spawn(cmd, argsArray) — NEVER exec — so paths
@@ -13,12 +15,55 @@
  *   - When ffmpeg is missing (ENOENT), every pending file gets the
  *     FFMPEG_NOT_INSTALLED sentinel so the caller can format a single
  *     install hint instead of N stderr dumps.
+ *   - The ffmpeg binary is resolved via resolveFfmpegBinary() in priority:
+ *     env override -> system PATH -> bundled ffmpeg-static -> none.
  */
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const FRAME_PATTERN = "frame_%06d.png";
+
+/**
+ * Resolves the ffmpeg binary in priority order:
+ *   1. process.env.FFMPEG_PATH   — operator override
+ *   2. "ffmpeg" on system PATH   — what most dev boxes have
+ *   3. ffmpeg-static (npm)       — bundled fallback so the user never has to
+ *                                  install ffmpeg manually
+ *   4. null                      — caller treats as FFMPEG_NOT_INSTALLED
+ *
+ * Returns { path, source } where source is "env" | "system" | "static" | "none".
+ */
+export async function resolveFfmpegBinary() {
+  if (process.env.FFMPEG_PATH) {
+    return { path: process.env.FFMPEG_PATH, source: "env" };
+  }
+  // Probe system PATH by running `ffmpeg -version` — cheapest portable check.
+  const systemAvailable = await new Promise((resolve) => {
+    try {
+      const proc = spawn("ffmpeg", ["-version"], { shell: false });
+      proc.on("error", () => resolve(false));
+      proc.on("close", (code) => resolve(code === 0));
+    } catch {
+      resolve(false);
+    }
+  });
+  if (systemAvailable) return { path: "ffmpeg", source: "system" };
+  // Fallback: ffmpeg-static publishes a path string at default export.
+  // Loaded lazily so that environments without the package installed
+  // (e.g. someone who removed devDependencies) still see source: "none"
+  // rather than throwing on import.
+  try {
+    const mod = await import("ffmpeg-static");
+    const staticPath = mod.default ?? mod;
+    if (typeof staticPath === "string" && staticPath.length > 0) {
+      return { path: staticPath, source: "static" };
+    }
+  } catch {
+    // ffmpeg-static not installed — fall through.
+  }
+  return { path: null, source: "none" };
+}
 
 export async function runMovConversion({ folderPath, force = false, onProgress } = {}) {
   const result = {
@@ -27,6 +72,7 @@ export async function runMovConversion({ folderPath, force = false, onProgress }
     failed: [],
     sequenceJsonPaths: [],
     warnings: [],
+    ffmpegSource: null,
   };
   if (!folderPath) {
     result.warnings.push("folderPath is required");
@@ -48,6 +94,18 @@ export async function runMovConversion({ folderPath, force = false, onProgress }
     return result;
   }
 
+  // Lazily resolve ffmpeg — only probe if at least one file actually
+  // needs conversion. Cache across the loop iterations so we probe once.
+  let ffmpegResolved = null;
+  const resolveOnce = async () => {
+    if (ffmpegResolved !== null) return ffmpegResolved;
+    ffmpegResolved = await resolveFfmpegBinary();
+    if (ffmpegResolved.path) {
+      result.ffmpegSource = ffmpegResolved.source;
+    }
+    return ffmpegResolved;
+  };
+
   for (let i = 0; i < movFiles.length; i += 1) {
     const filename = movFiles[i];
     if (typeof onProgress === "function") {
@@ -59,6 +117,18 @@ export async function runMovConversion({ folderPath, force = false, onProgress }
     if (!force && existsSync(sequenceJsonPath)) {
       result.skipped.push(filename);
       continue;
+    }
+    // Resolve ffmpeg on first file that actually needs conversion. If
+    // nothing is available, short-circuit THIS and every remaining file
+    // with the FFMPEG_NOT_INSTALLED sentinel — saves N stderr dumps and
+    // surfaces a single, actionable hint to the caller.
+    const resolved = await resolveOnce();
+    if (!resolved.path) {
+      result.failed.push({ filename, error: "FFMPEG_NOT_INSTALLED" });
+      for (let j = i + 1; j < movFiles.length; j += 1) {
+        result.failed.push({ filename: movFiles[j], error: "FFMPEG_NOT_INSTALLED" });
+      }
+      return result;
     }
     mkdirSync(framesDir, { recursive: true });
     const movAbs = path.posix.join(texturesDir, filename);
@@ -74,7 +144,7 @@ export async function runMovConversion({ folderPath, force = false, onProgress }
     let stderrBuf = "";
     try {
       await new Promise((resolve, reject) => {
-        const proc = spawn("ffmpeg", args, { shell: false });
+        const proc = spawn(resolved.path, args, { shell: false });
         proc.stderr?.on("data", (chunk) => {
           stderrBuf += chunk.toString();
           if (stderrBuf.length > 16 * 1024) {

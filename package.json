@@ -36,6 +36,7 @@
     "@types/three": "^0.181.0",
     "@vitejs/plugin-react": "^5.1.4",
     "@vitest/coverage-v8": "^4.1.4",
+    "ffmpeg-static": "^5.2.0",
     "jsdom": "^29.0.2",
     "typescript": "~5.9.3",
     "vite": "^7.3.0",
