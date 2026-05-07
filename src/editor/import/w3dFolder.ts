@@ -114,6 +114,11 @@ export async function parseW3DFromFolder(
   console.info(
     `[w3d folder import] scene=${relativePath(chosenScene)} textures=${textureFiles.length} videos=${videoFilenames.size} meshes=${completeMeshGuids.size} lock=${lockPresent}`,
   );
+  // eslint-disable-next-line no-console
+  console.info(
+    `[w3d folder import] collected: textures=${textureFiles.length} videos=${videoFilenames.size} ` +
+      `sequenceJsons=${sequenceFiles.size} sequenceFrames=${[...sequenceFrames.values()].reduce((sum, m) => sum + m.size, 0)}`,
+  );
 
   report(`Reading ${chosenScene.name}…`);
   const xmlText = await chosenScene.text();
@@ -158,15 +163,17 @@ export async function parseW3DFromFolder(
       const text = await jsonFile.text();
       parsed = JSON.parse(text);
     } catch {
-      sequenceWarnings.push(
-        `sequence.json for ${stem} is invalid (parse error) — falling back to .mov.`,
-      );
+      const msg = `sequence.json for ${stem} is invalid (parse error) — falling back to .mov.`;
+      sequenceWarnings.push(msg);
+      // eslint-disable-next-line no-console
+      console.info(`[w3d folder import] ${msg}`);
       continue;
     }
     if (!parsed?.framePattern || typeof parsed.frameCount !== "number") {
-      sequenceWarnings.push(
-        `sequence.json for ${stem} is invalid (missing framePattern/frameCount) — falling back to .mov.`,
-      );
+      const msg = `sequence.json for ${stem} is invalid (missing framePattern/frameCount) — falling back to .mov.`;
+      sequenceWarnings.push(msg);
+      // eslint-disable-next-line no-console
+      console.info(`[w3d folder import] ${msg}`);
       continue;
     }
     const frames = sequenceFrames.get(stem) ?? new Map<string, File>();
@@ -186,9 +193,10 @@ export async function parseW3DFromFolder(
       frameUrls.push(URL.createObjectURL(f));
     }
     if (missing) {
-      sequenceWarnings.push(
-        `sequence.json for ${stem} is invalid (missing frame files) — falling back to .mov.`,
-      );
+      const msg = `sequence.json for ${stem} is invalid (missing frame files) — falling back to .mov.`;
+      sequenceWarnings.push(msg);
+      // eslint-disable-next-line no-console
+      console.info(`[w3d folder import] ${msg}`);
       continue;
     }
     sequences.set(sourceMov, {
@@ -207,6 +215,11 @@ export async function parseW3DFromFolder(
       frameUrls,
     });
   }
+  // eslint-disable-next-line no-console
+  console.info(
+    `[w3d folder import] sequences resolved: ${sequences.size} (` +
+      `${[...sequences.keys()].join(", ") || "none"})`,
+  );
 
   const result = parseW3D(xmlText, {
     sceneName: sceneNameFromFolder,

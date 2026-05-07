@@ -280,7 +280,12 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     videos: normalizeFilenameSet(options.videos),
     sequences: options.sequences ?? new Map(),
     usedImages: new Map(),
-    texturesProvided: !!options.textures && options.textures.size > 0,
+    // The folder-import path passes a textures Map (possibly empty when no
+    // textures decoded successfully — e.g. all .movs are codecs the browser
+    // can't read). Use Map presence as the signal that we're in folder mode,
+    // so the operator gets the precise "Missing N: foo.mov, …" warning
+    // instead of the generic "re-import" hint that would mask the real bug.
+    texturesProvided: !!options.textures,
     missingTextures: new Set(),
     pendingMaskRefs: new Map(),
     missingTextureNodeIds: new Set(),
@@ -682,7 +687,30 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
   const filename = layerId ? ctx.textureLayerToFilename.get(layerId) : undefined;
 
   if (layerId && filename) {
-    const asset = ctx.textures.get(filename) ?? findAssetCaseInsensitive(ctx.textures, filename);
+    let asset = ctx.textures.get(filename) ?? findAssetCaseInsensitive(ctx.textures, filename);
+    // When the .mov failed to load (e.g. browser can't decode ProRes/DNxHR/
+    // animation codecs in videoFileToAsset), the texture map won't have it —
+    // but if we successfully discovered a sibling
+    // <basename>_frames/sequence.json, the sequence IS the asset. Synthesize
+    // a placeholder ImageAsset so the existing sequence-swap branch
+    // downstream produces a proper application/x-image-sequence ImageNode
+    // instead of the missing-texture plane fallback.
+    if (!asset) {
+      const seqForMissing = ctx.sequences.get(filename);
+      if (seqForMissing && seqForMissing.frameUrls.length > 0) {
+        asset = {
+          name: filename,
+          mimeType: "video/quicktime",
+          src: seqForMissing.frameUrls[0],
+          width: seqForMissing.width,
+          height: seqForMissing.height,
+        };
+        // eslint-disable-next-line no-console
+        console.info(
+          `[w3d parser] ${filename} not loadable as a video (likely codec) — using PNG sequence fallback (${seqForMissing.frameCount} frames).`,
+        );
+      }
+    }
     if (asset) {
       const imageNode = createNode("image", parentId);
       imageNode.geometry.width = width;

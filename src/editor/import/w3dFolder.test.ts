@@ -276,6 +276,74 @@ describe("parseW3DFromFolder sequence preference", () => {
     expect(result.warnings.some((w) => /sequence\.json.*missing/i.test(w))).toBe(true);
   });
 
+  it("uses sequence as authoritative when the .mov fails to load (codec not supported)", async () => {
+    // The .mov file is present in the folder but videoFileToAsset throws
+    // (e.g. ProRes/DNxHR codec the browser can't decode). We mock that by
+    // simply NOT including the .mov in the textures map — same end state
+    // as a silent decode failure.
+    const enc = new TextEncoder();
+    const minimalXml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="PITCH_IN.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="PITCH_IN">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const validJson = JSON.stringify({
+      version: 1, type: "image-sequence", source: "PITCH_IN.mov",
+      framePattern: "frame_%06d.png", frameCount: 2,
+      fps: 25, width: 1920, height: 1080, durationSec: 0.08,
+      loop: true, alpha: true, pixelFormat: "rgba",
+    });
+
+    // Note: NO PITCH_IN.mov file in the list — simulates the codec-failure
+    // case where videoFileToAsset would throw and the file gets dropped from
+    // the textures map.
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(minimalXml)),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/sequence.json", enc.encode(validJson)),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/frame_000001.png", png),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/frame_000002.png", png),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "PITCH_IN");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.mimeType).toBe("application/x-image-sequence");
+      expect(node.image.sequence?.frameCount).toBe(2);
+    }
+    // The "Missing texture" warning MUST NOT mention this filename — the
+    // sequence is the asset.
+    const missingWarn = result.warnings.find((w) => /Missing/i.test(w));
+    if (missingWarn) {
+      expect(missingWarn).not.toContain("PITCH_IN.mov");
+    }
+  });
+
+  it("invariant: .mov referenced + neither .mov loadable nor sequence present → clear warning, asset never silently disappears", async () => {
+    const enc = new TextEncoder();
+    const minimalXml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="MISSING.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="MISSING_QUAD">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+    const files = [makeFileWithBytes("Project/scene.w3d", enc.encode(minimalXml))];
+    const result = await parseW3DFromFolder(files);
+    // The Missing warning must mention this filename so the operator knows.
+    const missingWarn = result.warnings.find((w) => /Missing/i.test(w));
+    expect(missingWarn).toContain("MISSING.mov");
+  });
+
   it("invariant: a referenced .mov NEVER vanishes — without sequence, image node still exists with video mime", async () => {
     const enc = new TextEncoder();
     const files = [
