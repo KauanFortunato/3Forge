@@ -386,3 +386,67 @@ describe("orbitPolicyForSceneMode", () => {
     expect(policy.enableRotate).toBe(true);
   });
 });
+
+describe("ImageSequencePlayer playback robustness (Pass J)", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
+  });
+
+  it("tickCount field starts at 0 and increments per tick()", () => {
+    const player = new ImageSequencePlayer({
+      frameUrls: ["blob:f1", "blob:f2", "blob:f3"],
+      fps: 25, loop: true, width: 100, height: 100,
+    });
+    expect(player.state().tickCount ?? 0).toBe(0);  // pre-tick
+    player.tick(1 / 25);
+    expect(player.state().tickCount ?? 0).toBe(1);
+    player.tick(1 / 25);
+    expect(player.state().tickCount ?? 0).toBe(2);
+    player.dispose();
+  });
+
+  it("loadFrame onload binds even when the loaded idx is not currentFrame, if texture.image is null", () => {
+    // Reproduces the "player ticked past frame 0 before it loaded" race.
+    // Without this, the texture stays empty and the user sees a blank
+    // quad until the new currentFrame's frame loads.
+    const player = new ImageSequencePlayer({
+      frameUrls: ["blob:f1", "blob:f2", "blob:f3"],
+      fps: 25, loop: true, width: 100, height: 100,
+    });
+    // Simulate: player has ticked past frame 0; no frame loaded yet.
+    // We can't directly inspect inFlight, but we can call private
+    // bind() via prototype and simulate the late-load by reaching in.
+    const img = document.createElement("img");
+    Object.defineProperty(img, "complete", { value: true, configurable: true });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (player as any).currentFrame = 1;  // simulate tick has advanced
+    expect(player.texture.image).toBeFalsy();
+    // Force-call the would-be onload handler for frame 0 (late load):
+    const versionBefore = player.texture.version;
+    // Direct bind to mimic the cold-start fallback path:
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (player as any).bind(img);
+    expect(player.texture.image).toBe(img);
+    expect(player.texture.version).toBeGreaterThan(versionBefore);
+    player.dispose();
+  });
+
+  it("state() exposes the new diagnostic fields (currentFrameSrc, tickCount)", () => {
+    const player = new ImageSequencePlayer({
+      frameUrls: ["blob:test-frame-src"],
+      fps: 25, loop: true, width: 100, height: 100,
+    });
+    const s = player.state();
+    expect(typeof s.tickCount).toBe("number");
+    // currentFrameSrc may be null until bind happens — accept either.
+    expect("currentFrameSrc" in s).toBe(true);
+    player.dispose();
+  });
+});

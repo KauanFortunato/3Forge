@@ -881,6 +881,24 @@ export class SceneEditor {
     if (isFirstEngineApply && !hasAuthoredCameraPose) {
       this.frameAllForCurrentMode();
     }
+    // Drain any accumulated playerClock delta so the FIRST tick after a
+    // rebuild starts at ~0. Otherwise getDelta() returns elapsed-since-
+    // SceneEditor-construction (often several seconds — the user's
+    // import flow), which advances the player by `seconds * fps` frames
+    // on tick #1. With a 25-fps loop and a 5-second-old clock, the
+    // player jumps to a random frame mid-sweep, then loops from there —
+    // visually indistinguishable from "playback is broken".
+    if (this.sequencePlayers.size > 0) {
+      this.playerClock.getDelta();
+    }
+    // Confirms end-to-end registration in devtools without requiring the
+    // operator to call __r3Dump(). Truncated to 200 chars so a folder
+    // with 50 sequences doesn't paint a wall of text.
+    // eslint-disable-next-line no-console
+    console.info(
+      `[scene rebuild] sequence players registered=${this.sequencePlayers.size}` +
+      (this.sequencePlayers.size > 0 ? ` keys=${[...this.sequencePlayers.keys()].join(", ").slice(0, 200)}` : ""),
+    );
   }
 
   /**
@@ -982,6 +1000,7 @@ export class SceneEditor {
       // hasn't loaded yet" (hasMap=true, mapHasImage=false).
       let hasMap = false;
       let mapHasImage = false;
+      let materialMap: Texture | null = null;
       if (meshObj) {
         if (!meshObj.geometry.boundingBox) meshObj.geometry.computeBoundingBox();
         const bbox = meshObj.geometry.boundingBox;
@@ -1001,6 +1020,7 @@ export class SceneEditor {
           if (mWithMap.color) materialColor = "#" + mWithMap.color.getHexString();
           const map = mWithMap.map;
           hasMap = !!map;
+          materialMap = map ?? null;
           if (map) {
             const img = (map as Texture & { image?: HTMLImageElement | HTMLVideoElement }).image;
             mapHasImage = !!img;
@@ -1063,6 +1083,20 @@ export class SceneEditor {
             paused: s.paused,
             firstFrameSrc: node.type === "image" ? (node.image.sequence?.frameUrls?.[0] ?? "").slice(0, 64) : "",
             error: s.error,
+            // Pass-J diagnostics: lets the operator answer "is this player
+            // actually being driven and bound to the right texture?" without
+            // having to attach a debugger. currentFrameSrc surfaces what
+            // URL the GPU is reading right now; tickCount==0 with a
+            // registered player means the render loop wiring is broken;
+            // materialMapIsPlayerTexture catches the rare case where the
+            // mesh ended up with a different map (e.g. a stale texture
+            // from a prior rebuild).
+            currentFrameSrc: s.currentFrameSrc,
+            tickCount: s.tickCount,
+            lastTickDelta: s.lastTickDelta,
+            playerRegistered: true,
+            materialMapIsPlayerTexture: materialMap === player.texture,
+            meshVisible: meshObj?.visible ?? null,
           };
         })(),
         isMask: !!node.isMask,
@@ -2527,6 +2561,17 @@ export class ImageSequencePlayer {
   private disposed = false;
   private warned = false;
   private firstBindLogged = false;
+  // Per-player log throttling. Each diagnostic stream (constructor, loads,
+  // ticks, binds) caps at the first ~3 events so the operator can see the
+  // playback chain coming up without flooding the console at 25–60 fps.
+  private tickLogCount = 0;
+  private bindLogCount = 0;
+  private loadLogCount = 0;
+  // Lifetime tick counter — surfaced via state() so __r3Dump shows whether
+  // the render loop is actually driving this player. A registered player
+  // with tickCount === 0 is the smoking gun for a broken loop wiring.
+  private tickCount = 0;
+  private lastTickDelta = 0;
 
   constructor(spec: ImageSequencePlayerSpec) {
     this.frameUrls = spec.frameUrls;
@@ -2536,6 +2581,10 @@ export class ImageSequencePlayer {
     this.height = spec.height;
     this.texture = new Texture();
     this.texture.colorSpace = SRGBColorSpace;
+    // eslint-disable-next-line no-console
+    console.info(
+      `[seq player] created — frameUrls=${this.frameUrls.length} fps=${this.fps} loop=${this.loop} width=${this.width} height=${this.height}`,
+    );
     this.maybeWarn();
     this.loadFrame(0);
   }
@@ -2566,13 +2615,35 @@ export class ImageSequencePlayer {
       this.inFlight.delete(idx);
       if (this.disposed) return;
       this.frameCache.set(idx, img);
-      if (idx === this.currentFrame) this.bind(img);
+      if (this.loadLogCount < 3) {
+        this.loadLogCount += 1;
+        // eslint-disable-next-line no-console
+        console.info(
+          `[seq player] loaded frame ${idx + 1}/${this.frameUrls.length} src=${this.frameUrls[idx]}`,
+        );
+      }
+      // Bind immediately if this is the current frame OR if no frame is
+      // currently bound (cold-start race: the player has already ticked
+      // past frame 0 by the time the first onload fires — without this
+      // fallback the texture stays blank until a future load happens to
+      // land exactly on currentFrame). The next tick overwrites with
+      // whatever frame we SHOULD be displaying, but the user sees content
+      // immediately instead of an empty quad.
+      if (idx === this.currentFrame) {
+        this.bind(img);
+      } else if (this.texture.image == null) {
+        this.bind(img);
+      }
       this.evictIfBeyondWindow();
     };
     img.onerror = () => {
       this.inFlight.delete(idx);
       if (this.disposed) return;
       this.error = `frame ${idx + 1} failed to load`;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[seq player] FAILED frame ${idx + 1} src=${this.frameUrls[idx]} reason=image element onerror`,
+      );
     };
     img.src = this.frameUrls[idx];
   }
@@ -2601,10 +2672,34 @@ export class ImageSequencePlayer {
       // eslint-disable-next-line no-console
       console.info(`[seq] first frame bound for sequence (${this.frameUrls.length} frames)`);
     }
+    if (this.bindLogCount < 3) {
+      this.bindLogCount += 1;
+      // eslint-disable-next-line no-console
+      console.info(
+        `[seq player] bind frame=${this.currentFrame} texture.image set version=${this.texture.version}`,
+      );
+    }
   }
 
   tick(deltaSec: number): void {
-    if (this.disposed || this.paused) return;
+    if (this.disposed) {
+      if (this.tickLogCount < 1) {
+        this.tickLogCount = 1;
+        // eslint-disable-next-line no-console
+        console.warn(`[seq player] tick called on disposed player — bug`);
+      }
+      return;
+    }
+    if (this.paused) return;
+    this.tickCount += 1;
+    this.lastTickDelta = deltaSec;
+    if (this.tickLogCount < 3) {
+      this.tickLogCount += 1;
+      // eslint-disable-next-line no-console
+      console.info(
+        `[seq player] tick #${this.tickCount} dt=${deltaSec}s currentFrame=${this.currentFrame}`,
+      );
+    }
     this.acc += deltaSec;
     const advance = Math.floor(this.acc * this.fps);
     if (advance <= 0) return;
@@ -2626,13 +2721,27 @@ export class ImageSequencePlayer {
     }
   }
 
-  state(): { currentFrame: number; loadedFrames: number; totalFrames: number; paused: boolean; error: string | null } {
+  state(): {
+    currentFrame: number;
+    loadedFrames: number;
+    totalFrames: number;
+    paused: boolean;
+    error: string | null;
+    tickCount: number;
+    lastTickDelta: number;
+    currentFrameSrc: string | null;
+  } {
+    const img = this.texture.image as HTMLImageElement | null;
+    const src = img && typeof img.src === "string" ? img.src.slice(0, 64) : null;
     return {
       currentFrame: this.currentFrame,
       loadedFrames: this.frameCache.size,
       totalFrames: this.frameUrls.length,
       paused: this.paused,
       error: this.error,
+      tickCount: this.tickCount,
+      lastTickDelta: this.lastTickDelta,
+      currentFrameSrc: src,
     };
   }
 
