@@ -1461,9 +1461,12 @@ export class SceneEditor {
       // when an autosave round-trip strips frameUrls from localStorage to
       // dodge the quota limit. The src field still holds the first frame's
       // blob URL but it may be revoked from a prior session → blank
-      // texture + "needsUpdate but no image" warnings. Bind the magenta
-      // debug checker so the broken layer is obvious in-editor instead of
-      // silently failing into the video branch.
+      // texture + "needsUpdate but no image" warnings. By default we bind a
+      // 1×1 fully-transparent texture so the mesh stays in the scene tree
+      // (layout unchanged) but writes no visible pixels. Operators who want
+      // the explicit magenta/black "broken layer" indicator can opt in by
+      // setting `window.__r3DebugBrokenTextures = true` in devtools — see
+      // createSequenceMissingPlaceholderTexture.
       // eslint-disable-next-line no-console
       console.warn(
         `[scene] image-sequence node "${node.name ?? node.id}" lost its sequence payload — ` +
@@ -1484,13 +1487,37 @@ export class SceneEditor {
   }
 
   /**
-   * Produces a placeholder Texture for the "sequence-payload-missing"
-   * branch — reuses the magenta/black debug checker when the canvas API
-   * is available (real browser), and falls back to a 1×1 fully-
-   * transparent DataTexture in headless / jsdom-without-canvas
-   * environments so the mesh renders nothing rather than garbage.
+   * Returns a Texture for the sequence-payload-missing fallback. By
+   * default it is a 1×1 fully-transparent DataTexture — the mesh exists
+   * in the scene tree (so layout stays stable) but renders nothing. The
+   * console warning fired from createImageMesh tells the operator to
+   * re-import the W3D folder to refresh the frame URLs.
+   *
+   * The magenta/black checker (`createSequenceMissingDebugTexture`) is
+   * gated behind a debug flag — set `window.__r3DebugBrokenTextures =
+   * true` in devtools to see the explicit "broken layer" indicator. In
+   * normal viewport mode, missing sequences are silently transparent so
+   * a localStorage round-trip that strips frameUrls (Pass K/C) doesn't
+   * blast the viewport with a debug pattern.
    */
   private createSequenceMissingPlaceholderTexture(): Texture {
+    if (
+      typeof window !== "undefined" &&
+      (window as unknown as { __r3DebugBrokenTextures?: boolean }).__r3DebugBrokenTextures
+    ) {
+      return this.createSequenceMissingDebugTexture();
+    }
+    return buildSequencePlaceholderTexture({ debug: false });
+  }
+
+  /**
+   * Magenta/black checker — kept for explicit debugging. Operators opt
+   * in via `window.__r3DebugBrokenTextures = true`. NOT used in normal
+   * viewport rendering. Reuses `getDebugFallbackImage()` when canvas is
+   * available; falls back to 1×1 transparent in jsdom-without-canvas so
+   * the mesh renders nothing rather than garbage.
+   */
+  private createSequenceMissingDebugTexture(): Texture {
     const fallback = this.getDebugFallbackImage();
     if (fallback) {
       const t = new Texture(fallback);
@@ -2484,6 +2511,30 @@ export function decideImageMeshKind(image: {
   }
   if (typeof mime === "string" && mime.startsWith("video/")) return "video";
   return "image";
+}
+
+/**
+ * Pure builder for the sequence-payload-missing placeholder Texture. Pulled
+ * out of `SceneEditor.createSequenceMissingPlaceholderTexture` so the
+ * branching can be unit-tested without instantiating SceneEditor (which
+ * needs WebGL + a DOM). The default branch returns a 1×1 fully-transparent
+ * `DataTexture` — the host mesh stays in the scene tree but writes no
+ * visible pixels. When `debug` is true and a `buildDebugTexture` factory is
+ * provided, that factory is called to produce the magenta/black "broken
+ * layer" checker (Pass K/B's behaviour, now opt-in via
+ * `window.__r3DebugBrokenTextures = true`).
+ */
+export function buildSequencePlaceholderTexture(opts: {
+  debug: boolean;
+  buildDebugTexture?: () => Texture;
+}): Texture {
+  if (opts.debug && opts.buildDebugTexture) {
+    return opts.buildDebugTexture();
+  }
+  const data = new Uint8Array([0, 0, 0, 0]);
+  const tex = new DataTexture(data, 1, 1);
+  tex.needsUpdate = true;
+  return tex;
 }
 
 export interface OrbitPolicy {

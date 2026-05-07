@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Texture } from "three";
+import { DataTexture, Texture } from "three";
 import {
+  buildSequencePlaceholderTexture,
   decideImageMeshKind,
   formatVideoLoadFailureMessage,
   ImageSequencePlayer,
@@ -481,5 +482,70 @@ describe("decideImageMeshKind", () => {
   it("returns 'image' for image mime", () => {
     expect(decideImageMeshKind({ mimeType: "image/png" })).toBe("image");
     expect(decideImageMeshKind({ mimeType: "image/jpeg" })).toBe("image");
+  });
+});
+
+describe("sequence-payload-missing fallback (Pass L — discrete by default)", () => {
+  // Pass K/B's fallback bound the magenta/black checker via
+  // getDebugFallbackImage. After Pass K/C started stripping
+  // image.sequence.frameUrls from localStorage to dodge the quota,
+  // the round-trip on reload triggered the placeholder for every
+  // sequence node — the viewport was dominated by a giant magenta
+  // checker. Pass L splits the placeholder into two paths so the
+  // default is discreet (transparent) and the magenta is opt-in.
+
+  it("decideImageMeshKind still returns 'sequence-payload-missing' (data path unchanged)", () => {
+    expect(decideImageMeshKind({
+      mimeType: "application/x-image-sequence",
+    })).toBe("sequence-payload-missing");
+    expect(decideImageMeshKind({
+      mimeType: "application/x-image-sequence",
+      sequence: { frameUrls: [] },
+    })).toBe("sequence-payload-missing");
+  });
+});
+
+describe("buildSequencePlaceholderTexture", () => {
+  it("returns a 1×1 transparent DataTexture by default (no debug)", () => {
+    const tex = buildSequencePlaceholderTexture({ debug: false });
+    expect(tex).toBeInstanceOf(DataTexture);
+    const data = (tex as DataTexture).image.data as Uint8Array;
+    expect(data.length).toBe(4);
+    // Fully transparent: alpha (4th byte) is 0.
+    expect(data[3]).toBe(0);
+    // RGB channels are zero too — nothing visible even if the GPU
+    // ignored alpha for some reason.
+    expect(data[0]).toBe(0);
+    expect(data[1]).toBe(0);
+    expect(data[2]).toBe(0);
+    // needsUpdate is a write-only setter that bumps version. Confirm we
+    // bumped past the initial 0 so Three uploads the texture once.
+    expect(tex.version).toBeGreaterThan(0);
+  });
+
+  it("ignores buildDebugTexture when debug is false (no accidental magenta)", () => {
+    const debugTex = new Texture();
+    const result = buildSequencePlaceholderTexture({
+      debug: false,
+      buildDebugTexture: () => debugTex,
+    });
+    expect(result).not.toBe(debugTex);
+    expect(result).toBeInstanceOf(DataTexture);
+  });
+
+  it("uses the debug builder when debug flag is true", () => {
+    const debugTex = new Texture();
+    const result = buildSequencePlaceholderTexture({
+      debug: true,
+      buildDebugTexture: () => debugTex,
+    });
+    expect(result).toBe(debugTex);
+  });
+
+  it("falls back to the transparent DataTexture when debug is true but no builder is provided", () => {
+    const tex = buildSequencePlaceholderTexture({ debug: true });
+    expect(tex).toBeInstanceOf(DataTexture);
+    const data = (tex as DataTexture).image.data as Uint8Array;
+    expect(data[3]).toBe(0);
   });
 });
