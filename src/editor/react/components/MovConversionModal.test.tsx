@@ -131,6 +131,53 @@ describe("MovConversionModal", () => {
     }
   });
 
+  it("mix mode: shows both groups with explicit ready vs needs-conversion labels", () => {
+    const MIX: MovClassification = {
+      withSequence: [{ videoName: "READY1.mov", sequencePath: "x/READY1_frames/sequence.json" }],
+      withoutSequence: [{ videoName: "NEEDS1.mov" }],
+    };
+    render(
+      <MovConversionModal
+        isOpen
+        classification={MIX}
+        projectName="Mix"
+        isDevMode
+        onConvert={vi.fn()}
+        onImportWithoutConverting={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    // The list should have explicit ready / needs-conversion sections.
+    expect(screen.getByText(/sequence ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/no sequence/i)).toBeInTheDocument();
+    expect(screen.getByText(/READY1\.mov/)).toBeInTheDocument();
+    expect(screen.getByText(/NEEDS1\.mov/)).toBeInTheDocument();
+    // The body copy should mention how many need conversion.
+    expect(document.body.textContent ?? "").toMatch(/1 .* convert/i);
+  });
+
+  it("mix mode: title reflects 'conversion needed' when there are missing sequences", () => {
+    const MIX: MovClassification = {
+      withSequence: [{ videoName: "READY1.mov", sequencePath: "x/READY1_frames/sequence.json" }],
+      withoutSequence: [{ videoName: "NEEDS1.mov" }],
+    };
+    render(
+      <MovConversionModal
+        isOpen
+        classification={MIX}
+        projectName="Mix"
+        isDevMode
+        onConvert={vi.fn()}
+        onImportWithoutConverting={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    // The Modal renders the title in the header h2 via createPortal to
+    // document.body — check the rendered DOM there rather than `container`.
+    const title = document.body.querySelector(".modal__title");
+    expect(title?.textContent ?? "").toMatch(/conversion needed/i);
+  });
+
   it("falls back to manual folderPath input when convert returns PROJECT_PATH_NOT_FOUND", () => {
     const onConvert = vi.fn();
     render(

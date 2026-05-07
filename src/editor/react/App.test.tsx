@@ -945,6 +945,20 @@ describe("decideMovImportFlow", () => {
     expect(result.action).toBe("direct-import");
   });
 
+  it("returns direct-import when ALL .movs already have sequences", () => {
+    // Locks the contract: with sequence.json siblings present for every
+    // referenced .mov, the modal must NOT open. The user should not be
+    // re-asked to convert what's already converted.
+    const result = decideMovImportFlow([
+      fakeFile("Project/Resources/Textures/A.mov"),
+      fakeFile("Project/Resources/Textures/A_frames/sequence.json"),
+      fakeFile("Project/Resources/Textures/B.mov"),
+      fakeFile("Project/Resources/Textures/B_frames/sequence.json"),
+      fakeFile("Project/Resources/Textures/B_frames/frame_000001.png"),
+    ]);
+    expect(result.action).toBe("direct-import");
+  });
+
   it("returns 'open-modal' with the project name when at least one .mov lacks a sequence", () => {
     const result = decideMovImportFlow([
       fakeFile("GameName_FS/scene.w3d"),

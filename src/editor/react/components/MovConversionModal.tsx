@@ -42,6 +42,13 @@ export function MovConversionModal(props: MovConversionModalProps) {
   if (!isOpen) return null;
   if (classification.withoutSequence.length === 0) return null;
 
+  const readyCount = classification.withSequence.length;
+  const needsCount = classification.withoutSequence.length;
+  const isMixMode = readyCount > 0 && needsCount > 0;
+  const titleText = needsCount > 0
+    ? "MOV videos detected — conversion needed"
+    : "MOV videos detected";
+
   const handleConvertClick = () => {
     if (!isDevMode) { setShowCli(true); return; }
     if (showManualInput && folderPath) { onConvert({ folderPath }); return; }
@@ -54,13 +61,25 @@ export function MovConversionModal(props: MovConversionModalProps) {
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onCancel} title="MOV videos detected" size="wide">
+    <Modal isOpen={isOpen} onClose={onCancel} title={titleText} size="wide">
       <p>
-        This project contains {classification.withoutSequence.length} .mov video asset
-        {classification.withoutSequence.length === 1 ? "" : "s"}. MOV files may not play
-        correctly in the browser, especially with professional codecs or transparency.
-        3Forge can convert them to PNG image sequences for better compatibility and
-        alpha-safe playback. This may increase project size.
+        {isMixMode ? (
+          <>
+            This project contains {readyCount} MOV asset{readyCount === 1 ? "" : "s"}
+            {" "}with PNG sequences ready and {needsCount} that still need conversion.
+            {" "}MOV files may not play correctly in the browser, especially with
+            professional codecs or transparency. Click <strong>Convert and Import</strong>
+            {" "}to convert the remaining {needsCount} now.
+          </>
+        ) : (
+          <>
+            This project contains {needsCount} .mov video asset
+            {needsCount === 1 ? "" : "s"}. MOV files may not play correctly in the
+            browser, especially with professional codecs or transparency. 3Forge
+            can convert them to PNG image sequences for better compatibility and
+            alpha-safe playback. This may increase project size.
+          </>
+        )}
       </p>
 
       <ul className="mov-conv-list">
