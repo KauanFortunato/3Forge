@@ -109,6 +109,41 @@ function safeSetItem(storage: StorageLike, key: string, value: string): boolean 
   }
 }
 
+/**
+ * Strips transient browser-only fields from a blueprint before
+ * persisting to localStorage. Currently:
+ *
+ * - `image.sequence.frameUrls`: array of blob: URLs that are revoked
+ *   between sessions and would push the persisted size past the
+ *   ~5MB localStorage quota for projects with many PNG sequences.
+ *   The rest of the sequence metadata (frameCount, fps, width,
+ *   height, alpha, framePattern, etc.) is kept so the loaded
+ *   blueprint still describes the asset's shape — the renderer
+ *   uses Pass K/B's sequence-payload-missing fallback when frameUrls
+ *   is absent.
+ *
+ * Returns a deep-cloned blueprint; the input is unchanged.
+ */
+export function stripTransientFieldsForPersistence(blueprint: ComponentBlueprint): ComponentBlueprint {
+  const cloned = JSON.parse(JSON.stringify(blueprint)) as ComponentBlueprint;
+  // Strip frameUrls from any image-sequence node
+  for (const node of cloned.nodes) {
+    if (node.type === "image" && node.image?.sequence) {
+      // Replace the whole frameUrls array with an empty one — the
+      // metadata (length, etc.) is preserved via frameCount.
+      node.image.sequence.frameUrls = [];
+    }
+  }
+  // Also strip frameUrls from blueprint.images (the asset library
+  // entries) if those carry sequence metadata.
+  for (const asset of cloned.images) {
+    if (asset.sequence) {
+      asset.sequence.frameUrls = [];
+    }
+  }
+  return cloned;
+}
+
 export function createWorkspaceProjectContext(
   overrides: Partial<WorkspaceProjectContext> = {},
 ): WorkspaceProjectContext {
@@ -195,7 +230,7 @@ export function persistWorkspace(
     return;
   }
 
-  safeSetItem(localStorageObject, EDITOR_AUTOSAVE_KEY, JSON.stringify(blueprint));
+  safeSetItem(localStorageObject, EDITOR_AUTOSAVE_KEY, JSON.stringify(stripTransientFieldsForPersistence(blueprint)));
   safeSetItem(localStorageObject, WORKSPACE_CONTEXT_KEY, JSON.stringify({
     ...context,
     updatedAt: Date.now(),
@@ -316,7 +351,7 @@ export function persistRecentSnapshot(
   localStorageObject: StorageLike | null = canUseBrowserStorage() ? window.localStorage : null,
 ): void {
   if (!localStorageObject) return;
-  safeSetItem(localStorageObject, getRecentSnapshotStorageKey(recentProjectId), JSON.stringify(blueprint));
+  safeSetItem(localStorageObject, getRecentSnapshotStorageKey(recentProjectId), JSON.stringify(stripTransientFieldsForPersistence(blueprint)));
 }
 
 export function readRecentSnapshot(
