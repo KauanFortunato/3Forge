@@ -559,3 +559,8 @@ console signal at all.
   Validation step §14B above is the operator's path.
 
 — end of FASE D / Pass 3 —
+
+---
+
+**See also:** `docs/w3d-mov-conversion.md` for the `.mov` → PNG
+sequence workflow added in FASE D / Pass 4.
