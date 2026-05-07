@@ -199,4 +199,69 @@ describe("W3D import", () => {
       expect(nodeIds.has(track.nodeId)).toBe(true);
     }
   });
+
+  it("invariant: image-sequence assets are treated as alpha-bearing (transparent material)", async () => {
+    // PNG sequences produced by scripts/movConversion.mjs always carry an
+    // alpha channel (ffmpeg -pix_fmt rgba). assetHasAlphaChannel must
+    // recognise them so imageNode.material.transparent fires; otherwise
+    // sequence overlays render as opaque rectangles instead of cutouts.
+    const enc = new TextEncoder();
+    const minimalXml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="PITCH_IN.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="PITCH_IN">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+    void enc;
+
+    // Inject a sequence directly via the parseW3D `sequences` option,
+    // bypassing parseW3DFromFolder's file-walking. This isolates the
+    // parser's material-binding behaviour.
+    const sequences = new Map<string, import("../types").ImageSequenceMetadata>();
+    sequences.set("PITCH_IN.mov", {
+      version: 1,
+      type: "image-sequence",
+      source: "PITCH_IN.mov",
+      framePattern: "frame_%06d.png",
+      frameCount: 3,
+      fps: 25,
+      width: 1920,
+      height: 1080,
+      durationSec: 0.12,
+      loop: true,
+      alpha: true,
+      pixelFormat: "rgba",
+      frameUrls: ["blob:f1", "blob:f2", "blob:f3"],
+    });
+
+    // We also need the asset present in the textures map so the parser
+    // resolves the layer to an asset before applying the sequence swap.
+    const textures = new Map<string, import("../types").ImageAsset>();
+    textures.set("PITCH_IN.mov", {
+      name: "PITCH_IN.mov",
+      mimeType: "video/quicktime",
+      src: "blob:src-mov",
+      width: 0,
+      height: 0,
+    });
+
+    const result = parseW3D(minimalXml, {
+      sceneName: "ASeqAlpha",
+      textures,
+      videos: new Set(["PITCH_IN.mov"]),
+      sequences,
+    });
+
+    const node = result.blueprint.nodes.find((n) => n.name === "PITCH_IN");
+    expect(node?.type).toBe("image");
+    if (node?.type !== "image") return;
+    expect(node.image.mimeType).toBe("application/x-image-sequence");
+    // The actual contract under test:
+    expect(node.material.transparent).toBe(true);
+    expect(node.material.alphaTest).toBeGreaterThan(0);
+  });
 });

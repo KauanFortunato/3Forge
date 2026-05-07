@@ -946,6 +946,13 @@ function assetHasAlphaChannel(asset: ImageAsset): boolean {
   // tagging false here just means the user can flip transparency manually.
   const mime = (asset.mimeType ?? "").toLowerCase();
   if (mime === "image/png" || mime === "image/webp" || mime === "image/svg+xml") return true;
+  // PNG image sequences (produced by scripts/movConversion.mjs with
+  // ffmpeg -pix_fmt rgba) always carry alpha — that's the whole reason
+  // the conversion exists. Honour the sequence metadata's alpha flag
+  // for forward-compatibility with non-RGBA variants.
+  if (mime === "application/x-image-sequence") {
+    return asset.sequence?.alpha !== false;
+  }
   const lowerName = (asset.name ?? "").toLowerCase();
   return lowerName.endsWith(".png") || lowerName.endsWith(".webp") || lowerName.endsWith(".svg");
 }
