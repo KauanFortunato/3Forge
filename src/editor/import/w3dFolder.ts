@@ -116,8 +116,13 @@ export async function parseW3DFromFolder(
   );
   // eslint-disable-next-line no-console
   console.info(
-    `[w3d folder import] collected: textures=${textureFiles.length} videos=${videoFilenames.size} ` +
-      `sequenceJsons=${sequenceFiles.size} sequenceFrames=${[...sequenceFrames.values()].reduce((sum, m) => sum + m.size, 0)}`,
+    `[w3d folder import] file walk:\n` +
+      `  totalFiles=${list.length}\n` +
+      `  textureFiles=${textureFiles.length}\n` +
+      `  videoFilenames=${videoFilenames.size}\n` +
+      `  sequenceJsonFiles=${sequenceFiles.size}\n` +
+      `  sequenceFrameFiles=${[...sequenceFrames.values()].reduce((sum, m) => sum + m.size, 0)}\n` +
+      `  meshAssetFiles=${meshAssets.size}`,
   );
 
   report(`Reading ${chosenScene.name}…`);
@@ -220,6 +225,19 @@ export async function parseW3DFromFolder(
     `[w3d folder import] sequences resolved: ${sequences.size} (` +
       `${[...sequences.keys()].join(", ") || "none"})`,
   );
+  if (sequenceFiles.size > 0) {
+    // eslint-disable-next-line no-console
+    console.info(
+      `[w3d folder import] sequences discovered:\n` +
+        [...sequenceFiles.keys()]
+          .map((stem) => {
+            const seq = sequences.get(`${stem}.mov`);
+            const frames = sequenceFrames.get(stem)?.size ?? 0;
+            return `  ${stem} → frames=${frames} resolved=${seq ? "yes" : "no"} ${seq ? `frameCount=${seq.frameCount}` : ""}`;
+          })
+          .join("\n"),
+    );
+  }
 
   const result = parseW3D(xmlText, {
     sceneName: sceneNameFromFolder,
@@ -340,6 +358,11 @@ export function classifyMovAssets(files: File[] | FileList): MovClassification {
   const list = Array.from(files);
   const movs: { videoName: string; basePath: string; baseName: string }[] = [];
   const sequenceJsons = new Set<string>();
+  // Parallel lower-case set so the expected-path lookup tolerates the
+  // case mismatches that real Windows filesystems produce (e.g. the W3D
+  // XML references PITCH_IN.MOV but disk has PITCH_IN.mov, or the
+  // sequence folder was created with a different stem case).
+  const sequenceJsonsLower = new Set<string>();
   for (const file of list) {
     const rel = relativePath(file).replace(/\\/g, "/");
     const lower = rel.toLowerCase();
@@ -353,13 +376,14 @@ export function classifyMovAssets(files: File[] | FileList): MovClassification {
       // Normalise to the "<basename>_frames/sequence.json" form so we can
       // index by the .mov stem.
       sequenceJsons.add(rel);
+      sequenceJsonsLower.add(lower);
     }
   }
   const withSequence: MovClassification["withSequence"] = [];
   const withoutSequence: MovClassification["withoutSequence"] = [];
   for (const mov of movs) {
     const expected = `${mov.basePath}${mov.baseName}_frames/sequence.json`;
-    if (sequenceJsons.has(expected)) {
+    if (sequenceJsons.has(expected) || sequenceJsonsLower.has(expected.toLowerCase())) {
       withSequence.push({ videoName: mov.videoName, sequencePath: expected });
     } else {
       withoutSequence.push({ videoName: mov.videoName });

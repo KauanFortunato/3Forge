@@ -411,6 +411,33 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
 
   flushSkipWarnings(ctx);
 
+  if (ctx.sequences.size > 0) {
+    // Per-.mov decision table — lets the operator see at a glance whether
+    // each XML-referenced .mov bound to its PNG sequence, fell back to the
+    // raw video, or was dropped as missing. Pairs with the
+    // [w3d folder import] sequences discovered log to make the resolution
+    // chain visible end-to-end.
+    // eslint-disable-next-line no-console
+    console.info(
+      `[w3d parser] sequence resolution per referenced .mov:\n` +
+        [...ctx.sequences.keys()]
+          .map((mov) => {
+            const lower = mov.toLowerCase();
+            const node = ctx.nodes.find(
+              (n) => n.type === "image" && (n.image?.name ?? "").toLowerCase() === lower,
+            );
+            const decision =
+              node && node.type === "image" && node.image.mimeType === "application/x-image-sequence"
+                ? "sequence"
+                : node && node.type === "image" && node.image.mimeType.startsWith("video/")
+                  ? "video"
+                  : "missing";
+            return `  ${mov} → ${decision}`;
+          })
+          .join("\n"),
+    );
+  }
+
   return { blueprint, warnings: ctx.warnings };
 }
 
@@ -710,7 +737,8 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
     // downstream produces a proper application/x-image-sequence ImageNode
     // instead of the missing-texture plane fallback.
     if (!asset) {
-      const seqForMissing = ctx.sequences.get(filename);
+      const seqForMissing =
+        ctx.sequences.get(filename) ?? findSequenceCaseInsensitive(ctx.sequences, filename);
       if (seqForMissing && seqForMissing.frameUrls.length > 0) {
         asset = {
           name: filename,
@@ -735,7 +763,8 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
       // consumer that only reads `.src` (e.g. defensive renderers) gets a
       // renderable image instead of nothing — and the `sequence` payload
       // carries the playback metadata + every frame URL for the player.
-      const seq = ctx.sequences.get(filename);
+      const seq =
+        ctx.sequences.get(filename) ?? findSequenceCaseInsensitive(ctx.sequences, filename);
       let stored: ImageAsset;
       if (seq && seq.frameUrls.length > 0) {
         stored = {
@@ -977,6 +1006,25 @@ function collectAuthoringHelperNodeIds(
 function findAssetCaseInsensitive(map: Map<string, ImageAsset>, filename: string): ImageAsset | undefined {
   const lower = filename.toLowerCase();
   for (const [key, value] of map) {
+    if (key.toLowerCase() === lower) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Look up an ImageSequenceMetadata entry by .mov filename, ignoring case.
+ * Windows filesystems are typically case-insensitive, so the W3D XML may
+ * reference PITCH_IN.MOV while the disk-resolved sequence map keys it as
+ * PITCH_IN.mov (or vice-versa). The folder importer indexes by the
+ * disk-side casing of the .mov file's stem; this helper lets the parser
+ * find the sequence regardless of which side capitalised what.
+ */
+function findSequenceCaseInsensitive(
+  sequences: Map<string, ImageSequenceMetadata>,
+  filename: string,
+): ImageSequenceMetadata | undefined {
+  const lower = filename.toLowerCase();
+  for (const [key, value] of sequences) {
     if (key.toLowerCase() === lower) return value;
   }
   return undefined;

@@ -358,3 +358,124 @@ describe("parseW3DFromFolder sequence preference", () => {
     }
   });
 });
+
+describe("parseW3DFromFolder all-sequences-ready end-to-end", () => {
+  // Simulates the user's actual production scenario after running the
+  // CLI converter: all four GameName_FS .movs have sibling
+  // <basename>_frames/sequence.json + frame_000001.png. The .mov files
+  // themselves may or may not be present (browser may/may not be able
+  // to decode them). The importer must produce 4 image-sequence nodes
+  // either way.
+  //
+  // The folder importer eagerly calls imageFileToAsset on every PNG
+  // under Resources/Textures (so the texture map is hot when parseW3D
+  // walks the scene). jsdom's HTMLImageElement never fires `load` for
+  // raw bytes, so we install the same Image.src spy the
+  // sequence-preference suite above uses — otherwise the test deadlocks
+  // waiting for frame_000001.png to "decode".
+  let imageSrcSetter: PropertyDescriptor | undefined;
+  beforeAll(() => {
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:fixture");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    imageSrcSetter = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+    Object.defineProperty(HTMLImageElement.prototype, "src", {
+      configurable: true,
+      set(this: HTMLImageElement, value: string) {
+        Object.defineProperty(this, "_src", { configurable: true, value });
+        if (!value) return;
+        Object.defineProperty(this, "naturalWidth", { configurable: true, value: 4 });
+        Object.defineProperty(this, "naturalHeight", { configurable: true, value: 4 });
+        queueMicrotask(() => {
+          this.onload?.(new Event("load"));
+        });
+      },
+      get(this: HTMLImageElement) {
+        return (this as unknown as { _src?: string })._src ?? "";
+      },
+    });
+  });
+  afterAll(() => {
+    vi.restoreAllMocks();
+    if (imageSrcSetter) Object.defineProperty(HTMLImageElement.prototype, "src", imageSrcSetter);
+  });
+
+  it("resolves all 4 sequences when sequence.json + frames are present", async () => {
+    const enc = new TextEncoder();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="PITCH_IN.mov"/>
+<ImageSequence Id="seq2" Name="PITCH_OUT.mov"/>
+<ImageSequence Id="seq3" Name="CompLogo.mov"/>
+<ImageSequence Id="seq4" Name="LKL logo.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+<TextureLayer Id="LY2"><TextureMappingOption Texture="seq2"/></TextureLayer>
+<TextureLayer Id="LY3"><TextureMappingOption Texture="seq3"/></TextureLayer>
+<TextureLayer Id="LY4"><TextureMappingOption Texture="seq4"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="PITCH_IN"><Primitive><FaceMappingList><NamedBaseFaceMapping TextureLayerId="LY1"/></FaceMappingList></Primitive></Quad>
+<Quad Id="q2" Name="PITCH_OUT"><Primitive><FaceMappingList><NamedBaseFaceMapping TextureLayerId="LY2"/></FaceMappingList></Primitive></Quad>
+<Quad Id="q3" Name="CompLogo"><Primitive><FaceMappingList><NamedBaseFaceMapping TextureLayerId="LY3"/></FaceMappingList></Primitive></Quad>
+<Quad Id="q4" Name="LKL_LOGO"><Primitive><FaceMappingList><NamedBaseFaceMapping TextureLayerId="LY4"/></FaceMappingList></Primitive></Quad>
+</Children></SceneNode></SceneLayer></Scene>`;
+
+    function makeSeqJson(name: string): string {
+      return JSON.stringify({
+        version: 1, type: "image-sequence", source: name,
+        framePattern: "frame_%06d.png", frameCount: 1,
+        fps: 25, width: 1920, height: 1080, durationSec: 0.04,
+        loop: true, alpha: true, pixelFormat: "rgba",
+      });
+    }
+
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(xml)),
+      // Note: .mov files NOT present (codec-failure simulated; the CLI
+      // would have left them on disk but the browser wouldn't decode).
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/sequence.json", enc.encode(makeSeqJson("PITCH_IN.mov"))),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/frame_000001.png", png),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_OUT_frames/sequence.json", enc.encode(makeSeqJson("PITCH_OUT.mov"))),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_OUT_frames/frame_000001.png", png),
+      makeFileWithBytes("Project/Resources/Textures/CompLogo_frames/sequence.json", enc.encode(makeSeqJson("CompLogo.mov"))),
+      makeFileWithBytes("Project/Resources/Textures/CompLogo_frames/frame_000001.png", png),
+      makeFileWithBytes("Project/Resources/Textures/LKL logo_frames/sequence.json", enc.encode(makeSeqJson("LKL logo.mov"))),
+      makeFileWithBytes("Project/Resources/Textures/LKL logo_frames/frame_000001.png", png),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const sequenceNodes = result.blueprint.nodes.filter(
+      (n) => n.type === "image" && n.image.mimeType === "application/x-image-sequence",
+    );
+    expect(sequenceNodes.length).toBe(4);
+    // No "Missing texture" warning should mention any of these.
+    const missingWarn = result.warnings.find((w) => /Missing/i.test(w));
+    if (missingWarn) {
+      for (const name of ["PITCH_IN.mov", "PITCH_OUT.mov", "CompLogo.mov", "LKL logo.mov"]) {
+        expect(missingWarn).not.toContain(name);
+      }
+    }
+  });
+
+  it("classifyMovAssets recognises sequences regardless of .mov filename case", () => {
+    // Windows filesystems are case-insensitive; the W3D XML might
+    // reference PITCH_IN.MOV while disk has PITCH_IN.mov (or the
+    // sequence folder was created from the disk-case name).
+    const files = [
+      makeFile("Project/Resources/Textures/PITCH_IN.MOV"),
+      makeFile("Project/Resources/Textures/PITCH_IN_frames/sequence.json"),
+    ];
+    const result = classifyMovAssets(files);
+    expect(result.withSequence.length).toBe(1);
+    expect(result.withoutSequence.length).toBe(0);
+  });
+
+  it("classifyMovAssets handles .mov filenames with spaces (NEW LKL logo_LOOP_alt.mov)", () => {
+    const files = [
+      makeFile("Project/Resources/Textures/NEW LKL logo_LOOP_alt.mov"),
+      makeFile("Project/Resources/Textures/NEW LKL logo_LOOP_alt_frames/sequence.json"),
+    ];
+    const result = classifyMovAssets(files);
+    expect(result.withSequence.length).toBe(1);
+    expect(result.withSequence[0].videoName).toBe("NEW LKL logo_LOOP_alt.mov");
+    expect(result.withoutSequence.length).toBe(0);
+  });
+});
