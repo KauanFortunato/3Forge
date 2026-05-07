@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseW3D } from "./w3d";
-import type { ImageAsset } from "../types";
+import { parseW3D, decideSequenceLogStatus } from "./w3d";
+import type { EditorNode, ImageAsset } from "../types";
 // Vite's ?raw import keeps the test runtime self-contained without Node fs.
 import testSceneXml from "../../test/fixtures/w3d/TestScene.w3d?raw";
 import gameNameFsXml from "../../test/fixtures/w3d/GameName_FS.w3d?raw";
@@ -332,5 +332,107 @@ describe("W3D import", () => {
       expect(pitchOut.image.mimeType).toBe("application/x-image-sequence");
     }
     expect(pitchOut?.visible).toBe(false);
+  });
+
+  it("invariant: when a .mov DOES decode AND has a sibling sequence, the sequence-swap fires correctly", () => {
+    // Locks the parser side of the FASE K bug: a .mov that decodes in the
+    // browser (i.e. enters ctx.textures normally) AND has a sibling PNG
+    // sequence on disk MUST come out the parser as
+    // application/x-image-sequence, never video/quicktime. Otherwise the
+    // sequence player never registers and the runtime plays nothing.
+    //
+    // GameName_FS doesn't statically reference CompetitionLogo_In.mov via a
+    // <TextureLayer> (it's wired up at runtime via an <ExportProperty>), so
+    // we can't exercise the contract on that fixture directly. We use a
+    // minimal XML that DOES bind the .mov to a Quad so the swap path is on
+    // the critical path of the parser.
+    const minimalXml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seqHL" Name="HotLogo.mov"/>
+<TextureLayer Id="LYHL"><TextureMappingOption Texture="seqHL"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="qHL" Name="HotLogo">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LYHL"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+
+    // The .mov decoded successfully in the browser → present in textures map.
+    const textures = new Map<string, ImageAsset>();
+    textures.set("HotLogo.mov", {
+      name: "HotLogo.mov",
+      mimeType: "video/quicktime",
+      src: "blob:mock-mov",
+      width: 1920,
+      height: 1080,
+    });
+    const sequences = new Map<string, import("../types").ImageSequenceMetadata>();
+    sequences.set("HotLogo.mov", {
+      version: 1, type: "image-sequence", source: "HotLogo.mov",
+      framePattern: "frame_%06d.png", frameCount: 11,
+      fps: 25, width: 1920, height: 1080, durationSec: 0.44,
+      loop: true, alpha: true, pixelFormat: "rgba",
+      frameUrls: Array.from({ length: 11 }, (_, i) => `blob:mock-${i + 1}`),
+    });
+
+    const result = parseW3D(minimalXml, {
+      sceneName: "HotLogoScene",
+      textures,
+      videos: new Set(["HotLogo.mov"]),
+      sequences,
+    });
+
+    const node = result.blueprint.nodes.find((n) => n.name === "HotLogo");
+    expect(node?.type).toBe("image");
+    if (node?.type !== "image") return;
+    // KEY: even though the .mov decoded, the sequence is authoritative.
+    expect(node.image.mimeType).toBe("application/x-image-sequence");
+    expect(node.image.sequence).toBeDefined();
+    expect(node.image.sequence?.frameCount).toBe(11);
+  });
+
+  describe("decideSequenceLogStatus", () => {
+    // Pure helper that powers the [w3d parser] sequence resolution log.
+    // Lives on its own so the operator-facing diagnostic stays honest:
+    // a sequence on disk that no <TextureLayer> ever referenced should
+    // be reported as "unreferenced" (the runtime ExportProperty will
+    // wire it up later) — NOT as "missing", which implies a parse-time
+    // failure to bind. Pass K's misleading
+    // "CompetitionLogo_In.mov → missing" log was exactly this conflation.
+    const makeImage = (mime: string): EditorNode => ({
+      id: "n1",
+      parentId: null,
+      type: "image",
+      name: "x",
+      visible: true,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      } as never,
+      geometry: { width: 1, height: 1 } as never,
+      material: { type: "basic", color: "#fff", opacity: 1, transparent: false, alphaTest: 0 } as never,
+      image: { name: "x", mimeType: mime, src: "blob:x", width: 1, height: 1 },
+      imageId: "img-x",
+    } as unknown as EditorNode);
+
+    it("reports sequence when the bound node carries the image-sequence mime", () => {
+      expect(decideSequenceLogStatus(makeImage("application/x-image-sequence"), true))
+        .toBe("sequence");
+    });
+    it("reports video when the bound node still carries video/* mime (real bug)", () => {
+      expect(decideSequenceLogStatus(makeImage("video/quicktime"), true))
+        .toBe("video");
+    });
+    it("reports missing when a referenced .mov has no bound image node", () => {
+      expect(decideSequenceLogStatus(undefined, true)).toBe("missing");
+    });
+    it("reports unreferenced when no <TextureLayer> ever pointed at the .mov", () => {
+      // CompetitionLogo_In.mov in GameName_FS: discovered on disk but
+      // wired up via an <ExportProperty> rather than a static layer.
+      // The diagnostic must NOT call this "missing" — it would imply a
+      // parse failure where there isn't one.
+      expect(decideSequenceLogStatus(undefined, false)).toBe("unreferenced");
+    });
   });
 });

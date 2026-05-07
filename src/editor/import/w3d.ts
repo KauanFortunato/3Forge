@@ -417,6 +417,18 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     // raw video, or was dropped as missing. Pairs with the
     // [w3d folder import] sequences discovered log to make the resolution
     // chain visible end-to-end.
+    //
+    // We track the set of .movs that the parser actually attempted to bind
+    // to a node (i.e. some <TextureLayer>'s <TextureMappingOption Texture="…">
+    // resolved to that filename). A .mov on disk that no <TextureLayer> ever
+    // points at (e.g. CompetitionLogo_In.mov in GameName_FS, which is wired
+    // up at runtime via an ExportProperty rather than a static layer) gets
+    // the dedicated "unreferenced" status so it's not conflated with a real
+    // bind failure.
+    const referencedFilenames = new Set<string>();
+    for (const filename of ctx.textureLayerToFilename.values()) {
+      referencedFilenames.add(filename.toLowerCase());
+    }
     // eslint-disable-next-line no-console
     console.info(
       `[w3d parser] sequence resolution per referenced .mov:\n` +
@@ -426,12 +438,7 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
             const node = ctx.nodes.find(
               (n) => n.type === "image" && (n.image?.name ?? "").toLowerCase() === lower,
             );
-            const decision =
-              node && node.type === "image" && node.image.mimeType === "application/x-image-sequence"
-                ? "sequence"
-                : node && node.type === "image" && node.image.mimeType.startsWith("video/")
-                  ? "video"
-                  : "missing";
+            const decision = decideSequenceLogStatus(node, referencedFilenames.has(lower));
             return `  ${mov} → ${decision}`;
           })
           .join("\n"),
@@ -1009,6 +1016,38 @@ function findAssetCaseInsensitive(map: Map<string, ImageAsset>, filename: string
     if (key.toLowerCase() === lower) return value;
   }
   return undefined;
+}
+
+/**
+ * Per-.mov diagnostic status for the `[w3d parser] sequence resolution …` log.
+ *
+ * Distinguishes four cases so the operator can tell at a glance whether
+ * a discovered PNG sequence actually made it onto a scene node:
+ *  - "sequence":    a node is bound and carries application/x-image-sequence
+ *                   mime → the swap fired, the renderer will play frames.
+ *  - "video":       a node is bound but mime is video/* → swap did NOT fire
+ *                   (sequence map missed the lookup); this IS a bug worth
+ *                   investigating.
+ *  - "unreferenced": no <TextureLayer> in the scene resolves to this .mov
+ *                   filename, so by design no node is bound to it. Common
+ *                   when the .mov is wired up at runtime via an
+ *                   <ExportProperty> instead of statically. Not a bug.
+ *  - "missing":     a layer DID reference this .mov but the resulting node
+ *                   wasn't found / isn't an image. Real failure to look at.
+ *
+ * Extracted as a pure helper so the decision table is unit-testable
+ * without parsing the console output stream.
+ */
+export function decideSequenceLogStatus(
+  node: EditorNode | undefined,
+  referenced: boolean,
+): "sequence" | "video" | "missing" | "unreferenced" {
+  if (!node || node.type !== "image") {
+    return referenced ? "missing" : "unreferenced";
+  }
+  if (node.image.mimeType === "application/x-image-sequence") return "sequence";
+  if (node.image.mimeType.startsWith("video/")) return "video";
+  return "missing";
 }
 
 /**
