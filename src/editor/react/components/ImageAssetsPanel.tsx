@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { MouseEvent } from "react";
 import { isVideoMimeType } from "../../images";
 import type { ImageAsset } from "../../types";
@@ -22,6 +22,16 @@ interface ImageAssetsPanelProps {
   canRemoveImage: (imageId: string) => boolean;
 }
 
+interface PreviewEntry {
+  frame: number;
+  playing: boolean;
+  intervalId: number | null;
+}
+
+function isImageSequence(image: ProjectImageAsset): boolean {
+  return image.mimeType === "application/x-image-sequence" && !!image.sequence;
+}
+
 export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
   const {
     images,
@@ -38,6 +48,19 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
   } = props;
 
   const [loadedSrcById, setLoadedSrcById] = useState<Record<string, string>>({});
+  const [previewState, setPreviewState] = useState<Record<string, PreviewEntry>>({});
+
+  useEffect(() => {
+    return () => {
+      setPreviewState((prev) => {
+        for (const k of Object.keys(prev)) {
+          const id = prev[k]?.intervalId;
+          if (id != null) clearInterval(id);
+        }
+        return {};
+      });
+    };
+  }, []);
 
   const stop = (event: MouseEvent) => {
     event.stopPropagation();
@@ -45,6 +68,31 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
 
   const markLoaded = (id: string, src: string) => {
     setLoadedSrcById((prev) => (prev[id] === src ? prev : { ...prev, [id]: src }));
+  };
+
+  const togglePreview = (image: ProjectImageAsset) => {
+    const seq = image.sequence;
+    if (!seq || seq.frameUrls.length === 0) return;
+    setPreviewState((prev) => {
+      const cur = prev[image.id];
+      if (cur?.playing && cur.intervalId != null) {
+        clearInterval(cur.intervalId);
+        return { ...prev, [image.id]: { frame: cur.frame, playing: false, intervalId: null } };
+      }
+      const fps = seq.fps > 0 ? seq.fps : 25;
+      const id = window.setInterval(() => {
+        setPreviewState((p) => {
+          const c = p[image.id];
+          if (!c || !c.playing) return p;
+          const next = (c.frame + 1) % seq.frameUrls.length;
+          return { ...p, [image.id]: { ...c, frame: next } };
+        });
+      }, 1000 / fps);
+      return {
+        ...prev,
+        [image.id]: { frame: cur?.frame ?? 0, playing: true, intervalId: id },
+      };
+    });
   };
 
   return (
@@ -75,8 +123,17 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
             const isActive = image.id === selectedImageId;
             const canApply = selectedImageNodeCount > 0;
             const canRemove = canRemoveImage(image.id);
-            const isVideo = isVideoMimeType(image.mimeType);
-            const kindLabel = isVideo ? "video" : "image";
+            const isSeq = isImageSequence(image);
+            const seq = image.sequence;
+            const seqEmpty = isSeq && (!seq || seq.frameUrls.length === 0);
+            const isVideo = !isSeq && isVideoMimeType(image.mimeType);
+            const kindLabel = isSeq ? "sequence" : isVideo ? "video" : "image";
+            const localFrame = previewState[image.id]?.frame ?? 0;
+            const localPlaying = previewState[image.id]?.playing ?? false;
+            const currentSrc =
+              isSeq && seq && seq.frameUrls[localFrame]
+                ? seq.frameUrls[localFrame]
+                : image.src;
 
             return (
               <div
@@ -90,38 +147,88 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                   aria-label={`Select ${image.name}`}
                   title={`Select ${image.name}`}
                 >
-                  <span className="image-assets-panel__thumb" aria-hidden="true">
-                    {isVideo ? (
-                      <video
-                        src={image.src}
-                        muted
-                        loop
-                        autoPlay
-                        playsInline
-                        onLoadedData={() => markLoaded(image.id, image.src)}
-                        onError={() => markLoaded(image.id, image.src)}
-                      />
-                    ) : (
-                      <img
-                        src={image.src}
-                        alt=""
-                        onLoad={() => markLoaded(image.id, image.src)}
-                        onError={() => markLoaded(image.id, image.src)}
-                      />
-                    )}
-                    {loadedSrcById[image.id] === image.src ? null : (
-                      <span className="image-assets-panel__thumb-loading" aria-label={`Loading ${kindLabel}`} role="status">
-                        <span className="image-assets-panel__thumb-spinner" aria-hidden="true" />
-                      </span>
-                    )}
-                  </span>
+                  {isSeq ? (
+                    <span className="image-assets-panel__thumb" aria-hidden="true">
+                      {seqEmpty ? (
+                        <span className="image-assets-panel__sequence-warning">
+                          Frames missing
+                        </span>
+                      ) : (
+                        <>
+                          <img
+                            src={currentSrc}
+                            alt=""
+                            onLoad={() => markLoaded(image.id, currentSrc)}
+                            onError={() => markLoaded(image.id, currentSrc)}
+                          />
+                          <button
+                            type="button"
+                            className="image-assets-panel__seq-play"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              togglePreview(image);
+                            }}
+                            aria-label={
+                              localPlaying
+                                ? `Pause sequence preview for ${image.name}`
+                                : `Play sequence preview for ${image.name}`
+                            }
+                            title={localPlaying ? "Pause preview" : "Play preview"}
+                          >
+                            {localPlaying ? "⏸" : "▶"}
+                          </button>
+                        </>
+                      )}
+                      {!seqEmpty && loadedSrcById[image.id] !== currentSrc ? (
+                        <span
+                          className="image-assets-panel__thumb-loading"
+                          aria-label="Loading sequence"
+                          role="status"
+                        >
+                          <span className="image-assets-panel__thumb-spinner" aria-hidden="true" />
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="image-assets-panel__thumb" aria-hidden="true">
+                      {isVideo ? (
+                        <video
+                          src={image.src}
+                          muted
+                          loop
+                          autoPlay
+                          playsInline
+                          onLoadedData={() => markLoaded(image.id, image.src)}
+                          onError={() => markLoaded(image.id, image.src)}
+                        />
+                      ) : (
+                        <img
+                          src={image.src}
+                          alt=""
+                          onLoad={() => markLoaded(image.id, image.src)}
+                          onError={() => markLoaded(image.id, image.src)}
+                        />
+                      )}
+                      {loadedSrcById[image.id] === image.src ? null : (
+                        <span className="image-assets-panel__thumb-loading" aria-label={`Loading ${kindLabel}`} role="status">
+                          <span className="image-assets-panel__thumb-spinner" aria-hidden="true" />
+                        </span>
+                      )}
+                    </span>
+                  )}
                   <span className="image-assets-panel__meta">
                     <span className="image-assets-panel__name">
                       {image.name}
-                      {isVideo ? <span className="image-assets-panel__badge">VIDEO</span> : null}
+                      {isSeq ? (
+                        <span className="image-assets-panel__badge">SEQUENCE</span>
+                      ) : isVideo ? (
+                        <span className="image-assets-panel__badge">VIDEO</span>
+                      ) : null}
                     </span>
                     <span className="image-assets-panel__sub">
-                      {image.width} x {image.height}px - {usage} use{usage === 1 ? "" : "s"}
+                      {isSeq && seq
+                        ? `${seq.frameCount} frames @ ${seq.fps || 25} fps · ${seq.alpha ? "alpha" : "no alpha"}`
+                        : `${image.width} x ${image.height}px - ${usage} use${usage === 1 ? "" : "s"}`}
                     </span>
                   </span>
                   <span className="image-assets-panel__icon" aria-hidden="true">
@@ -167,7 +274,7 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                     aria-label={`Remove ${kindLabel} asset`}
                     title={canRemove
                       ? `Remove ${kindLabel} asset`
-                      : `${kindLabel === "video" ? "Video" : "Image"} asset is in use`}
+                      : `${kindLabel === "video" ? "Video" : kindLabel === "sequence" ? "Sequence" : "Image"} asset is in use`}
                   >
                     <TrashIcon width={11} height={11} />
                   </button>
