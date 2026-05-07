@@ -2,9 +2,11 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { createPwaHeadTags, pwaManifest } from "./scripts/pwa-config.mjs";
+import { movConvertPlugin } from "./scripts/movConvertPlugin.mjs";
 
 export default defineConfig({
   plugins: [
+    movConvertPlugin(),
     react(),
     {
       name: "3forge-pwa-head",
