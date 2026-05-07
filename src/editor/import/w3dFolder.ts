@@ -1,5 +1,5 @@
 import { imageFileToAsset, isVideoFileName, videoFileToAsset } from "../images";
-import type { ComponentBlueprint, ImageAsset } from "../types";
+import type { ComponentBlueprint, ImageAsset, ImageSequenceMetadata } from "../types";
 import { parseW3D } from "./w3d";
 
 export interface W3DFolderImportResult {
@@ -34,6 +34,11 @@ export async function parseW3DFromFolder(
   // accurate "asset present, loader missing" warnings instead of silently
   // dropping every <Mesh>.
   const meshAssets = new Map<string, { vert?: File; ind?: File }>();
+  // Sibling PNG-sequence outputs of `<basename>.mov` files, indexed by stem
+  // (e.g. "PITCH_IN" → sequence.json file + frame_*.png files). Resolved
+  // below after we know which .mov files the scene references.
+  const sequenceFiles = new Map<string, File>();
+  const sequenceFrames = new Map<string, Map<string, File>>();
 
   for (const file of list) {
     const relPath = relativePath(file);
@@ -62,6 +67,23 @@ export async function parseW3DFromFolder(
       }
       if (VIDEO_EXTENSIONS.includes(ext)) {
         videoFilenames.add(baseName);
+      }
+      // Capture the converted-PNG-sequence siblings of any .mov:
+      //   Resources/Textures/<stem>_frames/sequence.json
+      //   Resources/Textures/<stem>_frames/frame_NNNNNN.png
+      const sequenceMatch = relPath
+        .replace(/\\/g, "/")
+        .match(/Resources\/Textures\/([^/]+)_frames\/(.+)$/i);
+      if (sequenceMatch) {
+        const stem = sequenceMatch[1];
+        const tail = sequenceMatch[2];
+        if (tail.toLowerCase() === "sequence.json") {
+          sequenceFiles.set(stem, file);
+        } else if (/^frame_\d+\.png$/i.test(tail)) {
+          const inner = sequenceFrames.get(stem) ?? new Map<string, File>();
+          inner.set(tail, file);
+          sequenceFrames.set(stem, inner);
+        }
       }
     }
 
@@ -120,14 +142,81 @@ export async function parseW3DFromFolder(
 
   const sceneNameFromFolder = topLevelFolder(chosenScene) ?? stripExtension(chosenScene.name);
 
+  // Resolve every <stem>_frames/sequence.json into an in-memory
+  // `ImageSequenceMetadata` keyed by the source .mov filename. Each frame
+  // becomes a session-scoped blob URL — the renderer will swap them onto
+  // the texture in playback order. Any failure (parse error, missing
+  // framePattern/frameCount, frame-count mismatch on disk) is logged as a
+  // warning and the .mov falls back through the existing video path so we
+  // never drop the asset entirely (Task 1 invariant).
+  const sequenceWarnings: string[] = [];
+  const sequences = new Map<string, ImageSequenceMetadata>();
+  for (const [stem, jsonFile] of sequenceFiles) {
+    const sourceMov = `${stem}.mov`;
+    let parsed: Partial<ImageSequenceMetadata> | null = null;
+    try {
+      const text = await jsonFile.text();
+      parsed = JSON.parse(text);
+    } catch {
+      sequenceWarnings.push(
+        `sequence.json for ${stem} is invalid (parse error) — falling back to .mov.`,
+      );
+      continue;
+    }
+    if (!parsed?.framePattern || typeof parsed.frameCount !== "number") {
+      sequenceWarnings.push(
+        `sequence.json for ${stem} is invalid (missing framePattern/frameCount) — falling back to .mov.`,
+      );
+      continue;
+    }
+    const frames = sequenceFrames.get(stem) ?? new Map<string, File>();
+    const frameUrls: string[] = [];
+    let missing = false;
+    for (let i = 1; i <= parsed.frameCount; i += 1) {
+      const fname = formatFramePattern(parsed.framePattern, i);
+      const f = frames.get(fname);
+      if (!f) {
+        missing = true;
+        break;
+      }
+      // Use a direct object URL — image dimensions live in the
+      // metadata block, so we don't need the synchronous-decode path
+      // imageFileToAsset takes (and that path can be flaky for large
+      // PNG fleets in tests / older browsers).
+      frameUrls.push(URL.createObjectURL(f));
+    }
+    if (missing) {
+      sequenceWarnings.push(
+        `sequence.json for ${stem} is invalid (missing frame files) — falling back to .mov.`,
+      );
+      continue;
+    }
+    sequences.set(sourceMov, {
+      version: 1,
+      type: "image-sequence",
+      source: sourceMov,
+      framePattern: parsed.framePattern,
+      frameCount: parsed.frameCount,
+      fps: typeof parsed.fps === "number" ? parsed.fps : 0,
+      width: typeof parsed.width === "number" ? parsed.width : 0,
+      height: typeof parsed.height === "number" ? parsed.height : 0,
+      durationSec: typeof parsed.durationSec === "number" ? parsed.durationSec : 0,
+      loop: parsed.loop !== false,
+      alpha: parsed.alpha !== false,
+      pixelFormat: "rgba",
+      frameUrls,
+    });
+  }
+
   const result = parseW3D(xmlText, {
     sceneName: sceneNameFromFolder,
     textures,
     videos: videoFilenames,
     meshAssets: completeMeshGuids,
+    sequences,
   });
 
-  const warnings = [...result.warnings];
+  const warnings = [...sequenceWarnings, ...result.warnings];
   if (lockPresent) {
     warnings.unshift(
       "scene.lock present — Designer may have the project open; saving back may not be picked up until Designer releases the lock.",
@@ -209,6 +298,17 @@ function topLevelFolder(file: File): string | null {
 function stripExtension(name: string): string {
   const idx = name.lastIndexOf(".");
   return idx <= 0 ? name : name.slice(0, idx);
+}
+
+/**
+ * Resolve a 1-based frame index against an ffmpeg-style %0Nd pattern.
+ * Matches the convention scripts/movConversion.mjs uses (default
+ * "frame_%06d.png") and is forgiving of alternate widths.
+ */
+function formatFramePattern(pattern: string, n: number): string {
+  return pattern.replace(/%0(\d+)d/, (_, digits) =>
+    String(n).padStart(parseInt(digits, 10), "0"),
+  );
 }
 
 export interface MovClassification {

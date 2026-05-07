@@ -31,6 +31,7 @@ import type {
   ExposedProperty,
   ExposedPropertyType,
   ImageAsset,
+  ImageSequenceMetadata,
   ImportedLight,
   ImportMetadata,
   MaterialSpec,
@@ -135,6 +136,12 @@ interface ParseContext {
   textures: Map<string, ImageAsset>;
   /** Filenames of video textures present in the folder (skipped, with clearer warning). */
   videos: Set<string>;
+  /**
+   * `<basename>.mov` filename → resolved PNG-sequence metadata. When present,
+   * createQuadNode binds an `application/x-image-sequence` ImageAsset instead
+   * of the original .mov, so the renderer can play the converted frames.
+   */
+  sequences: Map<string, ImageSequenceMetadata>;
   /** Image assets actually used by converted Quads, keyed by stable id. */
   usedImages: Map<string, ImageAsset>;
   /** True when caller passed any textures at all (i.e. folder import path). */
@@ -163,6 +170,14 @@ export interface W3DParseOptions {
   sceneName?: string;
   textures?: Map<string, ImageAsset>;
   videos?: Set<string>;
+  /**
+   * Optional map of `<basename>.mov` filename → PNG-sequence metadata.
+   * When present, the parser swaps the resolved .mov ImageAsset for an
+   * `application/x-image-sequence` asset whose `sequence` field carries
+   * the schema-v1 metadata + already-resolved blob URLs for every frame.
+   * Provided by parseW3DFromFolder; defaults to an empty map.
+   */
+  sequences?: Map<string, ImageSequenceMetadata>;
   /**
    * Lower-cased GUIDs of mesh resources available on disk (.vert + .ind pairs
    * under Resources/Meshes). Currently used only for clearer warnings —
@@ -263,6 +278,7 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     textureLayerToNodeIds: new Map(),
     textures: normalizeFilenameMap(options.textures),
     videos: normalizeFilenameSet(options.videos),
+    sequences: options.sequences ?? new Map(),
     usedImages: new Map(),
     texturesProvided: !!options.textures && options.textures.size > 0,
     missingTextures: new Set(),
@@ -672,7 +688,26 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
       imageNode.geometry.width = width;
       imageNode.geometry.height = height;
       const stableId = asset.id ?? toImageId(filename);
-      const stored: ImageAsset = { ...asset, id: stableId };
+      // Prefer a converted PNG sequence over the original .mov when one
+      // is available. The first frame's blob URL doubles as `src` so any
+      // consumer that only reads `.src` (e.g. defensive renderers) gets a
+      // renderable image instead of nothing — and the `sequence` payload
+      // carries the playback metadata + every frame URL for the player.
+      const seq = ctx.sequences.get(filename);
+      let stored: ImageAsset;
+      if (seq && seq.frameUrls.length > 0) {
+        stored = {
+          ...asset,
+          id: stableId,
+          mimeType: "application/x-image-sequence",
+          src: seq.frameUrls[0],
+          width: seq.width || asset.width,
+          height: seq.height || asset.height,
+          sequence: seq,
+        };
+      } else {
+        stored = { ...asset, id: stableId };
+      }
       imageNode.image = stored;
       imageNode.imageId = stableId;
       if (!ctx.usedImages.has(stableId)) {
