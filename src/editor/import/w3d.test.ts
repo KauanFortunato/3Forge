@@ -264,4 +264,73 @@ describe("W3D import", () => {
     expect(node.material.transparent).toBe(true);
     expect(node.material.alphaTest).toBeGreaterThan(0);
   });
+
+  it("invariant: initially-disabled video/image-sequence nodes stay hidden (broadcast take-out animations are content, not scaffolding)", () => {
+    // GameName_FS's PITCH_Out is Enable="False" in the XML — it's the
+    // take-out sweep animation, intended to render only when the
+    // runtime triggers it. The "design-view" rule that promotes
+    // scaffolding (HELPERS/ESCONDER) to visible should NOT apply here.
+    const videoFilenames = [
+      "04_Game_Name_PITCH_IN.mov",
+      "04_Game_Name_PITCH_OUT.mov",
+      "CompetitionLogo_In.mov",
+      "NEW LKL logo_LOOP_alt.mov",
+    ];
+    const textures = new Map<string, ImageAsset>();
+    for (const name of videoFilenames) {
+      textures.set(name, {
+        name,
+        mimeType: "video/quicktime",
+        src: `blob:mock-${name}`,
+        width: 1920,
+        height: 1080,
+      });
+    }
+    const result = parseW3D(gameNameFsXml, {
+      sceneName: "GameName_FS",
+      textures,
+      videos: new Set(videoFilenames),
+    });
+    const pitchOut = result.blueprint.nodes.find((n) => n.name === "PITCH_Out");
+    expect(pitchOut?.type).toBe("image");
+    expect(pitchOut?.visible).toBe(false);  // ← KEY: stays hidden
+
+    // PITCH_IN is Enable=True; must remain visible.
+    const pitchIn = result.blueprint.nodes.find((n) => n.name === "PITCH_IN");
+    expect(pitchIn?.visible).toBe(true);
+
+    // Static plane nodes that were Enable=False (HELPERS scaffolding etc.)
+    // should still be promoted to visible — that's the existing design-view
+    // contract for non-content nodes.
+    // (No assertion here unless GameName_FS happens to have one — it
+    // doesn't, per the offline dump's helperNodeCount: 0.)
+  });
+
+  it("invariant: image-sequence nodes also respect Enable=False (consistency with video)", () => {
+    // Same contract as the test above, but exercising the
+    // application/x-image-sequence mime path explicitly. Even though
+    // GameName_FS's PITCH_Out is loaded as video/quicktime in this test
+    // setup, we want the rule to fire for sequences too — they're
+    // semantically identical (broadcast content with playback intent).
+    const sequences = new Map<string, import("../types").ImageSequenceMetadata>();
+    sequences.set("04_Game_Name_PITCH_OUT.mov", {
+      version: 1, type: "image-sequence", source: "04_Game_Name_PITCH_OUT.mov",
+      framePattern: "frame_%06d.png", frameCount: 2, fps: 25,
+      width: 1920, height: 1080, durationSec: 0.08,
+      loop: true, alpha: true, pixelFormat: "rgba",
+      frameUrls: ["blob:f1", "blob:f2"],
+    });
+    const result = parseW3D(gameNameFsXml, {
+      sceneName: "GameName_FS",
+      textures: new Map(),
+      videos: new Set(),
+      sequences,
+    });
+    const pitchOut = result.blueprint.nodes.find((n) => n.name === "PITCH_Out");
+    expect(pitchOut?.type).toBe("image");
+    if (pitchOut?.type === "image") {
+      expect(pitchOut.image.mimeType).toBe("application/x-image-sequence");
+    }
+    expect(pitchOut?.visible).toBe(false);
+  });
 });

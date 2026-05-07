@@ -608,13 +608,27 @@ function handleNode(el: Element, parentId: string, ctx: ParseContext): void {
   }
 
   node.name = w3dName;
-  // Design-view: import everything visible. R3 broadcast templates park
-  // design-time scaffolding (HELPERS, ESCONDER, REFERENCE) under a parent
-  // Group with `Enable="False"`, which would otherwise hide >50% of what
-  // the operator is supposed to *see* in the editor. We track the original
+  // Design-view: import most nodes visible so authors can see what's
+  // in the scene. R3 broadcast templates park design-time scaffolding
+  // (HELPERS, ESCONDER, REFERENCE) under a parent Group with
+  // `Enable="False"`, which would otherwise hide >50% of what the
+  // operator is supposed to *see* in the editor. We track the original
   // disabled state in the shadow data so the exporter restores
   // Enable="False" for nodes the user didn't explicitly re-enable.
-  node.visible = true;
+  //
+  // EXCEPTION: video / image-sequence nodes that the XML disables are
+  // CONTENT (typically the take-out animation: a sweep that clears the
+  // stage). Those must respect Enable=False — promoting them paints
+  // frame 1 of the take-out onto the canvas as a static white diagonal,
+  // which is exactly the FASE H bug. createQuadNode binds the image
+  // asset before returning, so node.image is already populated by the
+  // time we read its mime type here.
+  const isContentMimeType = node.type === "image"
+    && (
+      (node.image?.mimeType ?? "").startsWith("video/")
+      || node.image?.mimeType === "application/x-image-sequence"
+    );
+  node.visible = enabled || !isContentMimeType;
   if (!enabled) {
     ctx.initialDisabledNodeIds.add(node.id);
   }
