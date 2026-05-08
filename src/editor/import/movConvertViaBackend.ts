@@ -1,0 +1,136 @@
+import type { ImageSequenceMetadata } from "../types";
+
+/**
+ * Convert a list of `.mov` Files via the dev backend, returning a
+ * `Map<sourceMov, ImageSequenceMetadata>` whose `frameUrls` point at
+ * the dev server's GET endpoint. The browser fetches each frame
+ * lazily when the renderer loads textures — no disk write on the
+ * user's project folder.
+ *
+ * Throws `ConvertViaBackendError` with a recognisable `code` so the
+ * caller can pivot to a fallback UI.
+ */
+export type ConvertProgress =
+  | { phase: "uploading"; movName: string; movIndex: number; movTotal: number }
+  | { phase: "converted"; movName: string; movIndex: number; movTotal: number }
+  | { phase: "done" }
+  | { phase: "cancelled" };
+
+export interface ConvertViaBackendOptions {
+  movFiles: File[];
+  signal: AbortSignal;
+  onProgress?: (p: ConvertProgress) => void;
+}
+
+export interface ConvertViaBackendResult {
+  /** Keyed by source `.mov` filename, ready to merge into the parser's sequences map. */
+  sequences: Map<string, ImageSequenceMetadata>;
+  /** Per-mov failures; the import can still proceed for the converted ones. */
+  failed: { mov: string; error: string }[];
+}
+
+interface BackendManifest {
+  jobId: string;
+  source: string;
+  sequenceJson: {
+    framePattern: string;
+    frameCount: number;
+    width: number;
+    height: number;
+    fps: number;
+    durationSec: number;
+    loop: boolean;
+    alpha: boolean;
+    pixelFormat: string;
+  };
+  frameCount: number;
+  fps: number;
+  alpha: boolean;
+  frames: { index: number; filename: string; url: string; sizeBytes: number }[];
+  ffmpegSource?: string;
+}
+
+export class ConvertViaBackendError extends Error {
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "ConvertViaBackendError";
+    this.code = code;
+  }
+}
+
+export async function convertMovsViaBackend(
+  opts: ConvertViaBackendOptions,
+): Promise<ConvertViaBackendResult> {
+  const { movFiles, signal, onProgress } = opts;
+  const sequences = new Map<string, ImageSequenceMetadata>();
+  const failed: { mov: string; error: string }[] = [];
+
+  for (let i = 0; i < movFiles.length; i += 1) {
+    if (signal.aborted) {
+      onProgress?.({ phase: "cancelled" });
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    }
+    const file = movFiles[i];
+    onProgress?.({ phase: "uploading", movName: file.name, movIndex: i, movTotal: movFiles.length });
+    let manifest: BackendManifest;
+    try {
+      const buf = await file.arrayBuffer();
+      const resp = await fetch("/api/w3d/convert-mov", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Filename": file.name,
+        },
+        body: buf,
+        signal,
+      });
+      if (!resp.ok) {
+        let errBody: { code?: string; message?: string; installHint?: string } = {};
+        try { errBody = await resp.json(); } catch { /* non-json */ }
+        if (resp.status === 404) {
+          throw new ConvertViaBackendError("NO_BACKEND", "Conversion endpoint unreachable.");
+        }
+        if (errBody.code === "FFMPEG_NOT_INSTALLED") {
+          throw new ConvertViaBackendError("FFMPEG_NOT_INSTALLED", errBody.installHint ?? "ffmpeg not installed");
+        }
+        throw new ConvertViaBackendError(errBody.code ?? `HTTP_${resp.status}`, errBody.message ?? `HTTP ${resp.status}`);
+      }
+      manifest = await resp.json() as BackendManifest;
+    } catch (err) {
+      const e = err as { name?: string; code?: string; message?: string };
+      if (e.name === "AbortError") {
+        onProgress?.({ phase: "cancelled" });
+        throw err;
+      }
+      // Hard errors (NO_BACKEND, FFMPEG_NOT_INSTALLED) propagate to the caller —
+      // the caller pivots the modal to "error" phase. Per-mov soft failures
+      // (bad codec, etc.) are collected.
+      if (e.code === "NO_BACKEND" || e.code === "FFMPEG_NOT_INSTALLED") {
+        throw err;
+      }
+      failed.push({ mov: file.name, error: e.message ?? String(err) });
+      continue;
+    }
+
+    sequences.set(file.name, {
+      version: 1,
+      type: "image-sequence",
+      source: file.name,
+      framePattern: manifest.sequenceJson.framePattern,
+      frameCount: manifest.frameCount,
+      fps: manifest.fps,
+      width: manifest.sequenceJson.width,
+      height: manifest.sequenceJson.height,
+      durationSec: manifest.sequenceJson.durationSec,
+      loop: manifest.sequenceJson.loop !== false,
+      alpha: manifest.alpha,
+      pixelFormat: "rgba",
+      frameUrls: manifest.frames.map((f) => f.url),
+    });
+    onProgress?.({ phase: "converted", movName: file.name, movIndex: i, movTotal: movFiles.length });
+  }
+
+  onProgress?.({ phase: "done" });
+  return { sequences, failed };
+}

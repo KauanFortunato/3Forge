@@ -15,6 +15,14 @@ const VIDEO_EXTENSIONS = [".mov", ".mp4", ".webm"];
 export interface W3DFolderProgress {
   /** Called with a human-readable status string at each stage. */
   onProgress?: (label: string) => void;
+  /**
+   * Pre-resolved sequences keyed by source `.mov` filename — merged into
+   * the in-memory `sequences` map after the on-disk `sequence.json`
+   * resolution step. Used by the browser→backend MOV converter to inject
+   * just-converted sequences without writing to the user's project folder.
+   * Entries here win over any same-keyed entry resolved from disk.
+   */
+  additionalSequences?: Map<string, ImageSequenceMetadata>;
 }
 
 export async function parseW3DFromFolder(
@@ -257,6 +265,17 @@ export async function parseW3DFromFolder(
     // eslint-disable-next-line no-console
     console.info(
       `[w3d folder import] auto-detected sequence: ${ordered.length} frames in ${stem}_frames (no sequence.json)`,
+    );
+  }
+  // Merge any pre-resolved sequences from the caller (e.g. browser→backend
+  // MOV conversion). They win over disk-resolved entries with the same key.
+  if (progress.additionalSequences) {
+    for (const [k, v] of progress.additionalSequences) {
+      sequences.set(k, v);
+    }
+    // eslint-disable-next-line no-console
+    console.info(
+      `[w3d folder import] additionalSequences merged: ${progress.additionalSequences.size}`,
     );
   }
   // eslint-disable-next-line no-console

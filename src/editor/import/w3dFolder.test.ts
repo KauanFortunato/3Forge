@@ -437,6 +437,54 @@ describe("parseW3DFromFolder sequence preference", () => {
     }
   });
 
+  it("uses additionalSequences provided by the caller (browser→backend conversion)", async () => {
+    const enc = new TextEncoder();
+    const minimalXml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="PITCH_IN.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="PITCH_IN">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+    // No .mov file on disk and no _frames/ — but caller passes a pre-built
+    // sequence (mimicking browser→backend conversion).
+    const files = [makeFileWithBytes("Project/scene.w3d", enc.encode(minimalXml))];
+    const additionalSequences = new Map<string, import("../types").ImageSequenceMetadata>([
+      ["PITCH_IN.mov", {
+        version: 1,
+        type: "image-sequence",
+        source: "PITCH_IN.mov",
+        framePattern: "frame_%06d.png",
+        frameCount: 4,
+        fps: 0,
+        width: 0,
+        height: 0,
+        durationSec: 0,
+        loop: true,
+        alpha: true,
+        pixelFormat: "rgba",
+        frameUrls: [
+          "/api/w3d/convert-mov/jobs/abc/frames/frame_000001.png",
+          "/api/w3d/convert-mov/jobs/abc/frames/frame_000002.png",
+          "/api/w3d/convert-mov/jobs/abc/frames/frame_000003.png",
+          "/api/w3d/convert-mov/jobs/abc/frames/frame_000004.png",
+        ],
+      }],
+    ]);
+    const result = await parseW3DFromFolder(files, { additionalSequences });
+    const node = result.blueprint.nodes.find((n) => n.name === "PITCH_IN");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.mimeType).toBe("application/x-image-sequence");
+      expect(node.image.sequence?.frameCount).toBe(4);
+      expect(node.image.sequence?.frameUrls.length).toBe(4);
+      expect(node.image.sequence?.frameUrls[0]).toMatch(/jobs\/abc\/frames\/frame_000001\.png$/);
+    }
+  });
+
   it("does NOT upgrade a single PNG without numbered siblings (stays static)", async () => {
     const enc = new TextEncoder();
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);

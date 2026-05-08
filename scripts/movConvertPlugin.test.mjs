@@ -1,13 +1,17 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("./movConversion.mjs", () => ({ runMovConversion: vi.fn() }));
+vi.mock("./movConversion.mjs", () => ({
+  runMovConversion: vi.fn(),
+  runMovConversionInTemp: vi.fn(),
+  frameSizeBytes: vi.fn(() => 1024),
+}));
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual("node:fs");
   return { ...actual, existsSync: vi.fn() };
 });
 
-import { runMovConversion } from "./movConversion.mjs";
+import { runMovConversion, runMovConversionInTemp } from "./movConversion.mjs";
 import { existsSync } from "node:fs";
 import { movConvertPlugin } from "./movConvertPlugin.mjs";
 
@@ -145,3 +149,92 @@ describe("movConvertPlugin", () => {
     expect(body.failed.length).toBe(1);
   });
 });
+
+describe("movConvertPlugin (octet-stream upload)", () => {
+  function makeBufferReq(buffer, headers = {}) {
+    return {
+      method: "POST",
+      url: "/api/w3d/convert-mov",
+      headers: { "content-type": "application/octet-stream", ...headers },
+      on(event, cb) {
+        if (event === "data") cb(buffer);
+        if (event === "end") cb();
+      },
+    };
+  }
+
+  it("converts uploaded MOV bytes and returns a manifest with per-frame URLs", async () => {
+    existsSync.mockReturnValue(true);
+    runMovConversionInTemp.mockResolvedValue({
+      framesDir: "/tmp/r3-mov/abc/frames",
+      framePaths: [
+        "/tmp/r3-mov/abc/frames/frame_000001.png",
+        "/tmp/r3-mov/abc/frames/frame_000002.png",
+        "/tmp/r3-mov/abc/frames/frame_000003.png",
+      ],
+      sequenceJson: {
+        version: 1, type: "image-sequence", source: "intro.mov",
+        framePattern: "frame_%06d.png", frameCount: 3,
+        fps: 0, width: 0, height: 0, durationSec: 0,
+        loop: true, alpha: true, pixelFormat: "rgba",
+      },
+      ffmpegSource: "static",
+    });
+    const plugin = movConvertPlugin();
+    plugin.config({}, { command: "serve" });
+    const mw = getMiddleware(plugin);
+    const res = makeRes();
+    await mw(
+      makeBufferReq(Buffer.from("fake-mov-bytes"), { "x-filename": "intro.mov" }),
+      res,
+    );
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.jobId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(body.source).toBe("intro.mov");
+    expect(body.frameCount).toBe(3);
+    expect(body.frames).toHaveLength(3);
+    expect(body.frames[0]).toMatchObject({
+      index: 1,
+      filename: "frame_000001.png",
+      sizeBytes: 1024,
+    });
+    expect(body.frames[0].url).toMatch(
+      new RegExp(`^/api/w3d/convert-mov/jobs/${body.jobId}/frames/frame_000001\\.png$`),
+    );
+    expect(body.sequenceJson.framePattern).toBe("frame_%06d.png");
+    expect(runMovConversionInTemp).toHaveBeenCalledWith(expect.objectContaining({
+      filename: "intro.mov",
+      jobId: body.jobId,
+    }));
+  });
+
+  it("rejects octet-stream POST without an X-Filename header", async () => {
+    const plugin = movConvertPlugin();
+    plugin.config({}, { command: "serve" });
+    const mw = getMiddleware(plugin);
+    const res = makeRes();
+    await mw(makeBufferReq(Buffer.from("x"), {}), res);
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).code).toBe("MISSING_FILENAME");
+  });
+
+  it("returns FFMPEG_NOT_INSTALLED when conversion throws that code", async () => {
+    runMovConversionInTemp.mockRejectedValue(
+      Object.assign(new Error("ffmpeg required"), { code: "FFMPEG_NOT_INSTALLED" }),
+    );
+    const plugin = movConvertPlugin();
+    plugin.config({}, { command: "serve" });
+    const mw = getMiddleware(plugin);
+    const res = makeRes();
+    await mw(
+      makeBufferReq(Buffer.from("x"), { "x-filename": "intro.mov" }),
+      res,
+    );
+    expect(res.statusCode).toBe(500);
+    const body = JSON.parse(res.body);
+    expect(body.code).toBe("FFMPEG_NOT_INSTALLED");
+    expect(body.installHint).toMatch(/install/i);
+  });
+});
+

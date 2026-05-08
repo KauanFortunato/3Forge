@@ -17,30 +17,97 @@ export interface MovConvertError {
   installHint?: string;
 }
 
+export interface MovConvertProgress {
+  /** Name of the .mov currently being converted. */
+  current: string;
+  /** 1-based index of the .mov currently being converted. */
+  index: number;
+  /** Total number of .mov files queued. */
+  total: number;
+}
+
+export type MovModalPhase =
+  | { kind: "ask" }
+  | { kind: "converting"; progress: MovConvertProgress }
+  | { kind: "error"; reason: "no-backend" | "ffmpeg-missing" | "decode-failed" | "unknown" };
+
 export interface MovConversionModalProps {
   isOpen: boolean;
   classification: MovClassification;
   projectName: string;
   isDevMode: boolean;
+  /** New: drives which simplified UI to show. Defaults to "ask" for legacy callers. */
+  phase?: MovModalPhase;
   conversionResult?: MovConversionResult;
   lastError?: MovConvertError;
   onConvert: (req: { projectName: string } | { folderPath: string }) => void;
   onImportWithoutConverting: () => void;
   onCancel: () => void;
+  /** New: called when user clicks Cancel during the converting phase. */
+  onAbort?: () => void;
+  /** New: called when user clicks Retry during the error phase. */
+  onRetry?: () => void;
 }
+
+const ERROR_TEXT: Record<string, string> = {
+  "no-backend": "Não foi possível contactar o conversor local. Podes importar sem conversão.",
+  "ffmpeg-missing": "Ferramenta de conversão (ffmpeg) não disponível. Podes importar sem conversão.",
+  "decode-failed": "Não foi possível converter este vídeo. Podes importar sem conversão ou tentar novamente.",
+  "unknown": "Não foi possível converter este vídeo. Podes importar sem conversão.",
+};
 
 export function MovConversionModal(props: MovConversionModalProps) {
   const {
     isOpen, classification, projectName, isDevMode,
+    phase = { kind: "ask" } as MovModalPhase,
     conversionResult, lastError,
-    onConvert, onImportWithoutConverting, onCancel,
+    onConvert, onImportWithoutConverting, onCancel, onAbort, onRetry,
   } = props;
   const [folderPath, setFolderPath] = useState("");
   const [showCli, setShowCli] = useState(false);
+
+  if (!isOpen) return null;
+
+  // ---------- "converting" phase: minimal progress UI ----------
+  if (phase.kind === "converting") {
+    const { current, index, total } = phase.progress;
+    const label = total > 1
+      ? `A converter vídeo ${index}/${total}…`
+      : "A converter media…";
+    return (
+      <Modal isOpen={isOpen} onClose={onAbort ?? onCancel} title="A preparar import" size="wide">
+        <p>{label}</p>
+        <p className="mov-conv-current"><code>{current}</code></p>
+        <progress max={total} value={Math.max(0, index - 1)} style={{ width: "100%" }} />
+        <div className="modal__actions">
+          <button type="button" onClick={onAbort ?? onCancel}>Cancel</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  // ---------- "error" phase: simple message + recovery options ----------
+  if (phase.kind === "error") {
+    const text = ERROR_TEXT[phase.reason] ?? ERROR_TEXT.unknown;
+    return (
+      <Modal isOpen={isOpen} onClose={onCancel} title="Conversão indisponível" size="wide">
+        <p>{text}</p>
+        <div className="modal__actions">
+          {onRetry && phase.reason !== "no-backend" && phase.reason !== "ffmpeg-missing" && (
+            <button type="button" onClick={onRetry}>Tentar novamente</button>
+          )}
+          <button type="button" onClick={onImportWithoutConverting}>Import Without Converting</button>
+          <button type="button" onClick={onCancel}>Cancel</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  // ---------- "ask" phase (legacy, kept as fallback for browsers without
+  // FSA or for explicit retries from error phase) ----------
+  if (classification.withoutSequence.length === 0) return null;
   const showManualInput = lastError?.code === "PROJECT_PATH_NOT_FOUND" && lastError.manualPathAllowed === true;
   const cliCommand = `node scripts/convert-w3d-mov-to-sequence.mjs "<folder path>"`;
-  if (!isOpen) return null;
-  if (classification.withoutSequence.length === 0) return null;
 
   const readyCount = classification.withSequence.length;
   const needsCount = classification.withoutSequence.length;

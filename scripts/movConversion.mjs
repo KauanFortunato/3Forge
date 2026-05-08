@@ -19,10 +19,92 @@
  *     env override -> system PATH -> bundled ffmpeg-static -> none.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const FRAME_PATTERN = "frame_%06d.png";
+
+/**
+ * Buffer-based variant: convert a .mov already in memory to a PNG sequence
+ * inside `<tempRoot>/<jobId>/frames/`. Does NOT write sequence.json — the
+ * Vite plugin returns the manifest object to the browser, which keeps the
+ * frames in-memory only (no disk write on the user's project folder).
+ *
+ * Returns { framesDir, framePaths[], sequenceJson, ffmpegSource }.
+ * Throws { code: "FFMPEG_NOT_INSTALLED" } / { code: "MOV_DECODE_FAILED" }.
+ */
+export async function runMovConversionInTemp({ movBuffer, filename, jobId, tempRoot }) {
+  if (!movBuffer || !filename || !jobId || !tempRoot) {
+    throw Object.assign(new Error("missing argument"), { code: "INVALID_ARGS" });
+  }
+  const ff = await resolveFfmpegBinary();
+  if (!ff.path) {
+    throw Object.assign(new Error("ffmpeg is required"), {
+      code: "FFMPEG_NOT_INSTALLED",
+    });
+  }
+  const jobDir = path.join(tempRoot, jobId);
+  const framesDir = path.join(jobDir, "frames");
+  mkdirSync(framesDir, { recursive: true });
+  const sourcePath = path.join(jobDir, "source.mov");
+  writeFileSync(sourcePath, movBuffer);
+  const args = [
+    "-y",
+    "-i", sourcePath,
+    "-vsync", "0",
+    "-pix_fmt", "rgba",
+    "-start_number", "1",
+    path.join(framesDir, FRAME_PATTERN),
+  ];
+  let stderrBuf = "";
+  try {
+    await new Promise((resolve, reject) => {
+      const proc = spawn(ff.path, args, { shell: false });
+      proc.stderr?.on("data", (c) => {
+        stderrBuf += c.toString();
+        if (stderrBuf.length > 16 * 1024) stderrBuf = stderrBuf.slice(-16 * 1024);
+      });
+      proc.on("error", reject);
+      proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}`)));
+    });
+  } catch (err) {
+    const tail = stderrBuf.split(/\r?\n/).filter(Boolean).slice(-3).join(" | ");
+    throw Object.assign(new Error(`MOV_DECODE_FAILED: ${tail || err.message}`), {
+      code: "MOV_DECODE_FAILED",
+    });
+  }
+  const framePaths = readdirSync(framesDir)
+    .filter((n) => /^frame_\d+\.png$/i.test(n))
+    .sort()
+    .map((n) => path.join(framesDir, n));
+  if (framePaths.length === 0) {
+    throw Object.assign(new Error("MOV_DECODE_FAILED: zero frames produced"), {
+      code: "MOV_DECODE_FAILED",
+    });
+  }
+  const sequenceJson = {
+    version: 1,
+    type: "image-sequence",
+    source: filename,
+    framePattern: FRAME_PATTERN,
+    frameCount: framePaths.length,
+    fps: 0,
+    width: 0,
+    height: 0,
+    durationSec: 0,
+    loop: true,
+    alpha: true,
+    pixelFormat: "rgba",
+  };
+  return { framesDir, framePaths, sequenceJson, ffmpegSource: ff.source };
+}
+
+/**
+ * Frame size lookup helper for the manifest.
+ */
+export function frameSizeBytes(framePath) {
+  try { return statSync(framePath).size; } catch { return 0; }
+}
 
 /**
  * Resolves the ffmpeg binary in priority order:

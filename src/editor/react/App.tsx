@@ -93,7 +93,8 @@ import { ShortcutDialog } from "./components/ShortcutDialog";
 import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { classifyMovAssets, collectFilesFromDirectory, parseW3DFromFolder } from "../import/w3dFolder";
-import { MovConversionModal, type MovConversionResult, type MovConvertError } from "./components/MovConversionModal";
+import { convertMovsViaBackend, ConvertViaBackendError, type ConvertProgress } from "../import/movConvertViaBackend";
+import { MovConversionModal, type MovConversionResult, type MovConvertError, type MovModalPhase } from "./components/MovConversionModal";
 import { exportToW3D } from "../export/w3d";
 import { runTask } from "./hooks/useAsyncTask";
 import { useTheme } from "./hooks/useTheme";
@@ -1354,10 +1355,14 @@ export function App() {
     }
   }, [blueprintSnapshot, setTransientStatus, showToast]);
 
-  const importW3DFromFolder = useCallback(async (files: FileList | File[]) => {
+  const importW3DFromFolder = useCallback(async (
+    files: FileList | File[],
+    options: { additionalSequences?: Map<string, import("../types").ImageSequenceMetadata> } = {},
+  ) => {
     await runTask(`Importing W3D scene…`, async (setLabel) => {
       const result = await parseW3DFromFolder(files, {
         onProgress: (label) => setLabel(label),
+        additionalSequences: options.additionalSequences,
       });
       // eslint-disable-next-line no-console
       console.info(
@@ -1396,9 +1401,91 @@ export function App() {
     classification: ReturnType<typeof classifyMovAssets>;
     projectName: string;
     directoryHandle: FileSystemDirectoryHandle | null;
+    phase: MovModalPhase;
+    abortController?: AbortController;
     conversionResult?: MovConversionResult;
     lastError?: MovConvertError;
   } | null>(null);
+
+  /**
+   * Browser→backend MOV conversion flow used when we have File objects in
+   * memory (the showDirectoryPicker / <input webkitdirectory> happy path).
+   * Uploads each .mov as octet-stream, gets back a manifest with per-frame
+   * fetch URLs, and re-runs the importer with those sequences merged in.
+   * On hard failure, pivots the modal to "error" phase. No commit needed
+   * to disk; frame URLs resolve to the dev server's GET handler.
+   */
+  const runBrowserBackendConversion = useCallback(async (
+    files: File[],
+    classification: ReturnType<typeof classifyMovAssets>,
+    projectName: string,
+    directoryHandle: FileSystemDirectoryHandle | null,
+  ) => {
+    const movsToConvert = files.filter((f) =>
+      classification.withoutSequence.some((c) => c.videoName.toLowerCase() === f.name.toLowerCase()),
+    );
+    if (movsToConvert.length === 0) {
+      await importW3DFromFolder(files);
+      return;
+    }
+    const ctrl = new AbortController();
+    const initialProgress = { current: movsToConvert[0].name, index: 1, total: movsToConvert.length };
+    setMovModalState({
+      open: true,
+      files,
+      classification,
+      projectName,
+      directoryHandle,
+      phase: { kind: "converting", progress: initialProgress },
+      abortController: ctrl,
+    });
+    try {
+      const onProgress = (p: ConvertProgress) => {
+        if (p.phase === "uploading") {
+          setMovModalState((s) => s ? {
+            ...s,
+            phase: { kind: "converting", progress: { current: p.movName, index: p.movIndex + 1, total: p.movTotal } },
+          } : s);
+        }
+      };
+      const result = await convertMovsViaBackend({
+        movFiles: movsToConvert,
+        signal: ctrl.signal,
+        onProgress,
+      });
+      // eslint-disable-next-line no-console
+      console.info(
+        `[mov-convert] backend conversion complete: ${result.sequences.size} converted, ${result.failed.length} failed`,
+      );
+      if (result.failed.length > 0) {
+        for (const f of result.failed) {
+          // eslint-disable-next-line no-console
+          console.warn(`[mov-convert] ${f.mov} failed: ${f.error}`);
+        }
+      }
+      // Close modal immediately on success and run the import with merged sequences.
+      setMovModalState(null);
+      await importW3DFromFolder(files, { additionalSequences: result.sequences });
+    } catch (err) {
+      const e = err as { name?: string; code?: string; message?: string };
+      if (e.name === "AbortError") {
+        setMovModalState(null);
+        return;
+      }
+      // eslint-disable-next-line no-console
+      console.warn("[mov-convert] backend conversion failed:", err);
+      let reason: "no-backend" | "ffmpeg-missing" | "decode-failed" | "unknown" = "unknown";
+      if (e.code === "NO_BACKEND") reason = "no-backend";
+      else if (e.code === "FFMPEG_NOT_INSTALLED") reason = "ffmpeg-missing";
+      else if (e.code === "MOV_DECODE_FAILED") reason = "decode-failed";
+      else if (err instanceof ConvertViaBackendError) reason = "decode-failed";
+      setMovModalState((s) => s ? {
+        ...s,
+        phase: { kind: "error", reason },
+        abortController: undefined,
+      } : s);
+    }
+  }, [importW3DFromFolder]);
 
   const importW3DFromFolderWithModalCheck = useCallback(async (
     files: File[],
@@ -1409,14 +1496,25 @@ export function App() {
       await importW3DFromFolder(files);
       return;
     }
+    // Happy path: when we have File objects (always true via showDirectoryPicker
+    // OR <input webkitdirectory>), skip the technical "ask" modal entirely and
+    // auto-trigger the browser→backend converter. The modal opens directly in
+    // "converting" phase showing simple progress.
+    if (files.some((f) => f.name.toLowerCase().endsWith(".mov"))) {
+      await runBrowserBackendConversion(files, decision.classification, decision.projectName, directoryHandle);
+      return;
+    }
+    // Edge case: classification says we need conversion but no .mov File is
+    // present — drop to legacy ask modal as a safety net.
     setMovModalState({
       open: true,
       files,
       classification: decision.classification,
       projectName: decision.projectName,
       directoryHandle,
+      phase: { kind: "ask" },
     });
-  }, [importW3DFromFolder]);
+  }, [importW3DFromFolder, runBrowserBackendConversion]);
 
   const handleMovConvert = useCallback(async (
     req: { projectName: string } | { folderPath: string },
@@ -3165,6 +3263,7 @@ export function App() {
           classification={movModalState.classification}
           projectName={movModalState.projectName}
           isDevMode={import.meta.env.DEV}
+          phase={movModalState.phase}
           conversionResult={movModalState.conversionResult}
           lastError={movModalState.lastError}
           onConvert={handleMovConvert}
@@ -3173,7 +3272,22 @@ export function App() {
             setMovModalState(null);
             void importW3DFromFolder(files);
           }}
-          onCancel={() => setMovModalState(null)}
+          onCancel={() => {
+            movModalState.abortController?.abort();
+            setMovModalState(null);
+          }}
+          onAbort={() => {
+            movModalState.abortController?.abort();
+            setMovModalState(null);
+          }}
+          onRetry={() => {
+            void runBrowserBackendConversion(
+              movModalState.files,
+              movModalState.classification,
+              movModalState.projectName,
+              movModalState.directoryHandle,
+            );
+          }}
         />
       )}
     </div>
