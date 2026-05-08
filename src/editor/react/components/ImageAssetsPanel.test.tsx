@@ -314,3 +314,16 @@ it("calls onRepairSequence when Repair button is clicked on a sequence with no f
   button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   expect(onRepair).toHaveBeenCalledWith(seq.id);
 });
+
+// ---------------------------------------------------------------------------
+// Task 16: Preview failure isolation — regression lock
+// ---------------------------------------------------------------------------
+
+it("preview keeps SEQUENCE badge even after a frame fails to load", () => {
+  const { container } = renderPanel([baseSeqAsset()]);
+  const img = container.querySelector("img")!;
+  // Simulate a load failure on the first frame.
+  img.dispatchEvent(new Event("error"));
+  const badge = container.querySelector(".image-assets-panel__badge");
+  expect(badge?.textContent).toBe("SEQUENCE");
+});
