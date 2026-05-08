@@ -99,7 +99,7 @@ import {
   installFfmpegViaBackend,
   type ConvertProgress,
 } from "../import/movConvertViaBackend";
-import { MovConversionModal, type MovConversionResult, type MovConvertError, type MovModalPhase } from "./components/MovConversionModal";
+import { MovConversionModal, type MovConvertedFile, type MovConversionResult, type MovConvertError, type MovModalPhase } from "./components/MovConversionModal";
 import { exportToW3D } from "../export/w3d";
 import { runTask } from "./hooks/useAsyncTask";
 import { useTheme } from "./hooks/useTheme";
@@ -1468,9 +1468,32 @@ export function App() {
           console.warn(`[mov-convert] ${f.mov} failed: ${f.error}`);
         }
       }
-      // Close modal immediately on success and run the import with merged sequences.
-      setMovModalState(null);
+      // Build per-file MovConvertedFile[] from the sequences map.
+      const finalConverted: MovConvertedFile[] = [];
+      for (const [movName, seq] of result.sequences) {
+        finalConverted.push({
+          mov: movName,
+          format: seq.format,
+          fallbackReason: seq.fallbackReason ?? null,
+          frameCount: seq.frameCount,
+          fps: seq.fps > 0 ? seq.fps : 25,
+          alpha: seq.alpha,
+        });
+      }
+      // Run the import with merged sequences, then show the done phase.
       await importW3DFromFolder(files, { additionalSequences: result.sequences });
+      setMovModalState((s) => s ? {
+        ...s,
+        phase: { kind: "done" },
+        abortController: undefined,
+        conversionResult: {
+          converted: finalConverted,
+          skipped: [],
+          failed: result.failed.map((f) => ({ filename: f.mov, error: f.error })),
+          sequenceJsonPaths: [],
+          warnings: [],
+        },
+      } : s);
     } catch (err) {
       const e = err as { name?: string; code?: string; message?: string };
       if (e.name === "AbortError") {
