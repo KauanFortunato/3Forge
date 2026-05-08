@@ -40,7 +40,9 @@ vi.mock("ffmpeg-static", () => ({
 
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
-import { runMovConversion, resolveFfmpegBinary, probeWebpEncoder, _resetEncoderProbeCache } from "./movConversion.mjs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { runMovConversion, resolveFfmpegBinary, runMovConversionInTemp, probeWebpEncoder, _resetEncoderProbeCache } from "./movConversion.mjs";
 
 function fakeProc({ exitCode = 0, error = null } = {}) {
   const proc = new EventEmitter();
@@ -222,6 +224,66 @@ describe("runMovConversion", () => {
     expect(result.skipped.length).toBe(0);
     expect(result.converted).toEqual(["PITCH_IN.mov"]);
     expect(spawn).toHaveBeenCalled();
+  });
+});
+
+describe("runMovConversionInTemp dual format", () => {
+  it("emits .webp frames + format:webp when preferredFormat=webp and probe is available", async () => {
+    _resetEncoderProbeCache();
+    // mkdirSync and writeFileSync are mocked (no-op); readdirSync must return frames.
+    // First call to readdirSync is the cleanup loop (returns []); second is the frame scan.
+    readdirSync
+      .mockReturnValueOnce([])          // cleanup: no existing files to wipe
+      .mockReturnValueOnce(["frame_000001.webp"]);  // frame scan after ffmpeg run
+    const capturedArgs = [];
+    const result = await runMovConversionInTemp({
+      movBuffer: Buffer.from([0x00, 0x00, 0x00, 0x14]),
+      filename: "x.mov",
+      jobId: "job-1",
+      tempRoot: join(tmpdir(), "r3-mov-test-task8"),
+      preferredFormat: "webp",
+      _ffmpegOverride: {
+        run: async (args, _framesDir) => {
+          capturedArgs.push(...args);
+        },
+      },
+      _probeOverride: { available: true },
+      _smokeOverride: { ok: true },
+    });
+    expect(capturedArgs).toContain("-c:v");
+    expect(capturedArgs).toContain("libwebp");
+    expect(capturedArgs).toContain("-lossless");
+    expect(capturedArgs).toContain("1");
+    expect(result.sequenceJson.format).toBe("webp");
+    expect(result.sequenceJson.framePattern).toBe("frame_%06d.webp");
+    expect(result.sequenceJson.fps).toBe(25);
+    expect(result.framePaths[0].endsWith(".webp")).toBe(true);
+    expect(result.fallbackReason ?? null).toBeNull();
+  });
+
+  it("falls back to png with reason webp_encoder_unavailable when probe says no", async () => {
+    _resetEncoderProbeCache();
+    readdirSync
+      .mockReturnValueOnce([])           // cleanup loop
+      .mockReturnValueOnce(["frame_000001.png"]);  // frame scan
+    const capturedArgs = [];
+    const result = await runMovConversionInTemp({
+      movBuffer: Buffer.from([0x00]),
+      filename: "x.mov",
+      jobId: "job-2",
+      tempRoot: join(tmpdir(), "r3-mov-test-task8"),
+      preferredFormat: "webp",
+      _ffmpegOverride: {
+        run: async (args, _framesDir) => {
+          capturedArgs.push(...args);
+        },
+      },
+      _probeOverride: { available: false },
+    });
+    expect(capturedArgs).not.toContain("-c:v");
+    expect(result.sequenceJson.format).toBe("png");
+    expect(result.sequenceJson.framePattern).toBe("frame_%06d.png");
+    expect(result.fallbackReason).toBe("webp_encoder_unavailable");
   });
 });
 

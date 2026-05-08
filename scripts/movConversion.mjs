@@ -19,10 +19,15 @@
  *     env override -> system PATH -> bundled ffmpeg-static -> none.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const FRAME_PATTERN = "frame_%06d.png";
+const FRAME_PATTERN_PNG = "frame_%06d.png";
+const FRAME_PATTERN_WEBP = "frame_%06d.webp";
+
+// Stub replaced by real implementation in Task 9.
+async function smokeTestWebpFrame() { return { ok: true }; }
 
 /**
  * Buffer-based variant: convert a .mov already in memory to a PNG sequence
@@ -33,33 +38,110 @@ const FRAME_PATTERN = "frame_%06d.png";
  * Returns { framesDir, framePaths[], sequenceJson, ffmpegSource }.
  * Throws { code: "FFMPEG_NOT_INSTALLED" } / { code: "MOV_DECODE_FAILED" }.
  */
-export async function runMovConversionInTemp({ movBuffer, filename, jobId, tempRoot }) {
+export async function runMovConversionInTemp({
+  movBuffer, filename, jobId, tempRoot, preferredFormat = "webp",
+  _probeOverride, _ffmpegOverride, _smokeOverride,
+} = {}) {
   if (!movBuffer || !filename || !jobId || !tempRoot) {
     throw Object.assign(new Error("missing argument"), { code: "INVALID_ARGS" });
   }
   const ff = await resolveFfmpegBinary();
   if (!ff.path) {
-    throw Object.assign(new Error("ffmpeg is required"), {
-      code: "FFMPEG_NOT_INSTALLED",
-    });
+    throw Object.assign(new Error("ffmpeg is required"), { code: "FFMPEG_NOT_INSTALLED" });
   }
+  const probe = _probeOverride ?? (await probeWebpEncoder());
+  let chosenFormat = preferredFormat === "webp" && probe.available ? "webp" : "png";
+  let fallbackReason = null;
+  if (preferredFormat === "webp" && !probe.available) {
+    fallbackReason = "webp_encoder_unavailable";
+  }
+
   const jobDir = path.join(tempRoot, jobId);
   const framesDir = path.join(jobDir, "frames");
   mkdirSync(framesDir, { recursive: true });
   const sourcePath = path.join(jobDir, "source.mov");
   writeFileSync(sourcePath, movBuffer);
-  const args = [
-    "-y",
-    "-i", sourcePath,
-    "-vsync", "0",
-    "-pix_fmt", "rgba",
-    "-start_number", "1",
-    path.join(framesDir, FRAME_PATTERN),
-  ];
+
+  const runOnce = async (format) => {
+    // Wipe the frames dir between attempts so a failed webp run does not
+    // leave .webp files alongside a fallback .png run.
+    for (const n of readdirSync(framesDir)) {
+      const p = path.join(framesDir, n);
+      try { statSync(p).isFile() && unlinkSync(p); } catch { /* ignore */ }
+    }
+    const pattern = format === "webp" ? FRAME_PATTERN_WEBP : FRAME_PATTERN_PNG;
+    const baseArgs = [
+      "-y", "-i", sourcePath, "-vsync", "0",
+    ];
+    const formatArgs = format === "webp"
+      ? [
+          "-c:v", "libwebp",
+          "-lossless", "1",
+          "-compression_level", "6",
+          "-pix_fmt", "rgba",
+        ]
+      : ["-pix_fmt", "rgba"];
+    const tailArgs = ["-start_number", "1", path.join(framesDir, pattern)];
+    const args = [...baseArgs, ...formatArgs, ...tailArgs];
+    if (_ffmpegOverride) {
+      await _ffmpegOverride.run(args, framesDir);
+    } else {
+      await runFfmpeg(ff.path, args);
+    }
+  };
+
+  await runOnce(chosenFormat);
+
+  // WebP smoke-test: round-trip frame 1 against a ground-truth PNG re-encode
+  // of the same input frame. Only enforced when we picked webp.
+  if (chosenFormat === "webp") {
+    const smoke = _smokeOverride ?? (await smokeTestWebpFrame({
+      ffmpegPath: ff.path,
+      sourcePath,
+      webpFrame: path.join(framesDir, "frame_000001.webp"),
+    }));
+    if (!smoke.ok) {
+      chosenFormat = "png";
+      fallbackReason = "webp_validation_failed";
+      await runOnce("png");
+    }
+  }
+
+  const ext = chosenFormat === "webp" ? "webp" : "png";
+  const framePaths = readdirSync(framesDir)
+    .filter((n) => new RegExp(`^frame_\\d+\\.${ext}$`, "i").test(n))
+    .sort()
+    .map((n) => path.join(framesDir, n));
+  if (framePaths.length === 0) {
+    throw Object.assign(new Error("MOV_DECODE_FAILED: zero frames produced"), {
+      code: "MOV_DECODE_FAILED",
+    });
+  }
+
+  const sequenceJson = {
+    version: 2,
+    type: "image-sequence",
+    format: chosenFormat,
+    source: filename,
+    framePattern: chosenFormat === "webp" ? FRAME_PATTERN_WEBP : FRAME_PATTERN_PNG,
+    frameCount: framePaths.length,
+    fps: 25,
+    width: 0,
+    height: 0,
+    durationSec: 0,
+    loop: true,
+    alpha: true,
+    pixelFormat: "rgba",
+    ...(fallbackReason ? { fallbackReason } : {}),
+  };
+  return { framesDir, framePaths, sequenceJson, ffmpegSource: ff.source, fallbackReason };
+}
+
+async function runFfmpeg(bin, args) {
   let stderrBuf = "";
   try {
     await new Promise((resolve, reject) => {
-      const proc = spawn(ff.path, args, { shell: false });
+      const proc = spawn(bin, args, { shell: false });
       proc.stderr?.on("data", (c) => {
         stderrBuf += c.toString();
         if (stderrBuf.length > 16 * 1024) stderrBuf = stderrBuf.slice(-16 * 1024);
@@ -73,30 +155,6 @@ export async function runMovConversionInTemp({ movBuffer, filename, jobId, tempR
       code: "MOV_DECODE_FAILED",
     });
   }
-  const framePaths = readdirSync(framesDir)
-    .filter((n) => /^frame_\d+\.png$/i.test(n))
-    .sort()
-    .map((n) => path.join(framesDir, n));
-  if (framePaths.length === 0) {
-    throw Object.assign(new Error("MOV_DECODE_FAILED: zero frames produced"), {
-      code: "MOV_DECODE_FAILED",
-    });
-  }
-  const sequenceJson = {
-    version: 1,
-    type: "image-sequence",
-    source: filename,
-    framePattern: FRAME_PATTERN,
-    frameCount: framePaths.length,
-    fps: 0,
-    width: 0,
-    height: 0,
-    durationSec: 0,
-    loop: true,
-    alpha: true,
-    pixelFormat: "rgba",
-  };
-  return { framesDir, framePaths, sequenceJson, ffmpegSource: ff.source };
 }
 
 /**
