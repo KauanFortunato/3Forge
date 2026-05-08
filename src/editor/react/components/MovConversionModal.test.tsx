@@ -93,7 +93,8 @@ describe("MovConversionModal", () => {
         isOpen classification={NO_SEQ} projectName="GameName_FS" isDevMode
         onConvert={vi.fn()} onImportWithoutConverting={vi.fn()} onCancel={vi.fn()}
         conversionResult={{
-          converted: ["A.mov"], skipped: ["B.mov"],
+          converted: [{ mov: "A.mov", format: "png", fallbackReason: null, frameCount: 1, fps: 25, alpha: true }],
+          skipped: ["B.mov"],
           failed: [{ filename: "C.mov", error: "ffmpeg exited with code 1" }],
           sequenceJsonPaths: [], warnings: [],
         }}
@@ -154,6 +155,31 @@ describe("MovConversionModal", () => {
     expect(screen.getByText(/NEEDS1\.mov/)).toBeInTheDocument();
     // The body copy should mention how many need conversion.
     expect(document.body.textContent ?? "").toMatch(/1 .* convert/i);
+  });
+
+  it("renders per-file Converted to WebP / Converted to PNG / Reason: <reason>", () => {
+    render(
+      <MovConversionModal
+        isOpen
+        classification={{ withSequence: [], withoutSequence: [{ videoName: "a.mov" }, { videoName: "b.mov" }] }}
+        projectName="x"
+        isDevMode
+        phase={{ kind: "done" }}
+        conversionResult={{
+          converted: [
+            { mov: "a.mov", format: "webp", fallbackReason: null, frameCount: 10, fps: 25, alpha: true },
+            { mov: "b.mov", format: "png", fallbackReason: "webp_encoder_unavailable", frameCount: 12, fps: 25, alpha: true },
+          ],
+          skipped: [], failed: [], sequenceJsonPaths: [], warnings: [],
+        }}
+        onConvert={vi.fn()} onImportWithoutConverting={vi.fn()} onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/a\.mov/)).toBeInTheDocument();
+    expect(screen.getByText(/Converted to WebP sequence · 10 frames @ 25fps · alpha/)).toBeInTheDocument();
+    expect(screen.getByText(/b\.mov/)).toBeInTheDocument();
+    expect(screen.getByText(/Converted to PNG sequence · 12 frames @ 25fps · alpha/)).toBeInTheDocument();
+    expect(screen.getByText(/Reason: WebP encoder unavailable in this build/)).toBeInTheDocument();
   });
 
   it("mix mode: title reflects 'conversion needed' when there are missing sequences", () => {

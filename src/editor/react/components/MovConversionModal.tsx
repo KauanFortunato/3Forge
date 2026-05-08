@@ -1,13 +1,30 @@
 import { useState } from "react";
 import { Modal } from "./Modal";
 import type { MovClassification } from "../../import/w3dFolder";
+import type { SequenceFormat, SequenceFallbackReason } from "../../types";
+
+export interface MovConvertedFile {
+  mov: string;
+  format: SequenceFormat;
+  fallbackReason: SequenceFallbackReason | null;
+  frameCount: number;
+  fps: number;
+  alpha: boolean;
+}
 
 export interface MovConversionResult {
-  converted: string[];
+  converted: MovConvertedFile[];
   skipped: string[];
   failed: { filename: string; error: string }[];
   sequenceJsonPaths: string[];
   warnings: string[];
+}
+
+function reasonText(r: SequenceFallbackReason): string {
+  switch (r) {
+    case "webp_encoder_unavailable": return "WebP encoder unavailable in this build";
+    case "webp_validation_failed": return "WebP validation failed";
+  }
 }
 
 export interface MovConvertError {
@@ -30,6 +47,7 @@ export type MovModalPhase =
   | { kind: "ask" }
   | { kind: "converting"; progress: MovConvertProgress }
   | { kind: "installing" }
+  | { kind: "done" }
   | { kind: "error"; reason: "no-backend" | "ffmpeg-missing" | "decode-failed" | "install-failed" | "unknown" };
 
 export interface MovConversionModalProps {
@@ -126,6 +144,44 @@ export function MovConversionModal(props: MovConversionModalProps) {
     );
   }
 
+  // ---------- "done" phase: per-file format/reason copy ----------
+  if (phase.kind === "done") {
+    return (
+      <Modal isOpen={isOpen} onClose={onCancel} title="Conversion complete" size="wide">
+        <div className="mov-conv-final">
+          {conversionResult?.converted.map((c) => (
+            <div key={c.mov} className="mov-conv-final__row">
+              <code>{c.mov}</code>
+              <div>
+                Converted to {c.format === "webp" ? "WebP" : "PNG"} sequence &middot; {c.frameCount} frames @ {c.fps}fps &middot; {c.alpha ? "alpha" : "no alpha"}
+              </div>
+              {c.fallbackReason ? (
+                <div className="mov-conv-final__reason">
+                  Reason: {reasonText(c.fallbackReason)}
+                </div>
+              ) : null}
+            </div>
+          ))}
+          {conversionResult && conversionResult.failed.length > 0 && (
+            <div className="mov-conv-result__failed">
+              <h3>Failed ({conversionResult.failed.length})</h3>
+              <ul>
+                {conversionResult.failed.map((f) => (
+                  <li key={f.filename} className="mov-conv-failed">
+                    {f.filename}: {f.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+        <div className="modal__actions">
+          <button type="button" onClick={onCancel}>Close</button>
+        </div>
+      </Modal>
+    );
+  }
+
   // ---------- "ask" phase (legacy, kept as fallback for browsers without
   // FSA or for explicit retries from error phase) ----------
   if (classification.withoutSequence.length === 0) return null;
@@ -192,7 +248,7 @@ export function MovConversionModal(props: MovConversionModalProps) {
       {conversionResult && (
         <div className="mov-conv-result">
           <h3>Converted ({conversionResult.converted.length})</h3>
-          <ul>{conversionResult.converted.map((f) => <li key={f}>{f}</li>)}</ul>
+          <ul>{conversionResult.converted.map((f) => <li key={f.mov}>{f.mov}</li>)}</ul>
           <h3>Skipped ({conversionResult.skipped.length})</h3>
           <ul>{conversionResult.skipped.map((f) => <li key={f}>{f} — already had sequence.json</li>)}</ul>
           <h3>Failed ({conversionResult.failed.length})</h3>
