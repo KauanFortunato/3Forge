@@ -3,7 +3,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import ts from "typescript";
 import { BackSide, Group, Mesh, MeshPhysicalMaterial } from "three";
-import { afterEach, describe, expect, it } from "vitest";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack, createDefaultAnimation } from "./animation";
 import { generateTypeScriptComponent } from "./exports";
 import { createNode, ROOT_NODE_ID } from "./state";
@@ -31,6 +32,46 @@ afterEach(async () => {
 });
 
 describe("exported component runtime", () => {
+  it("loads external GLB assets once per asset and preserves model node transforms", async () => {
+    const blueprint = createExternalModelBlueprint();
+    const loadAsync = vi.spyOn(GLTFLoader.prototype, "loadAsync").mockImplementation(async (url) => {
+      const scene = new Group();
+      scene.name = `Loaded ${String(url)}`;
+      return { scene } as never;
+    });
+
+    try {
+      const ExportedComponent = await loadExportedComponent(blueprint, {
+        modelAssetPathsById: {
+          "shared-ship": "./assets/models/shared-ship.glb",
+          "drone-model": "./assets/models/drone.glb",
+        },
+      });
+      const instance = new ExportedComponent();
+
+      await instance.build();
+
+      expect(loadAsync).toHaveBeenCalledTimes(2);
+      expect(loadAsync).toHaveBeenNthCalledWith(1, "./assets/models/shared-ship.glb");
+      expect(loadAsync).toHaveBeenNthCalledWith(2, "./assets/models/drone.glb");
+
+      const shipA = findNode(instance.group, "Ship A");
+      const shipB = findNode(instance.group, "Ship B");
+      const drone = findNode(instance.group, "Drone");
+      expect(shipA).not.toBe(shipB);
+      expect(shipA.position.x).toBeCloseTo(1, 5);
+      expect(shipA.rotation.y).toBeCloseTo(0.5, 5);
+      expect(shipA.scale.z).toBeCloseTo(1.5, 5);
+      expect(shipB.position.x).toBeCloseTo(-2, 5);
+      expect(shipB.visible).toBe(false);
+      expect(drone.position.z).toBeCloseTo(3, 5);
+
+      instance.dispose();
+    } finally {
+      loadAsync.mockRestore();
+    }
+  });
+
   it("reuses cached timelines, supports clip switching, and preserves multi-node animation fidelity", async () => {
     const blueprint = createAnimatedBlueprint();
     const ExportedComponent = await loadExportedComponent(blueprint);
@@ -391,8 +432,11 @@ describe("exported component runtime", () => {
   });
 });
 
-async function loadExportedComponent(blueprint: ComponentBlueprint): Promise<new () => ExportedComponentInstance> {
-  const source = generateTypeScriptComponent(blueprint);
+async function loadExportedComponent(
+  blueprint: ComponentBlueprint,
+  options: Parameters<typeof generateTypeScriptComponent>[1] = {},
+): Promise<new () => ExportedComponentInstance> {
+  const source = generateTypeScriptComponent(blueprint, options);
   const transpiled = ts.transpileModule(source, {
     compilerOptions: {
       target: ts.ScriptTarget.ESNext,
@@ -419,6 +463,55 @@ async function loadExportedComponent(blueprint: ComponentBlueprint): Promise<new
 
   expect(constructor).toBeTruthy();
   return constructor as new () => ExportedComponentInstance;
+}
+
+function createExternalModelBlueprint(): ComponentBlueprint {
+  const root = createNode("group", null, ROOT_NODE_ID);
+  root.name = "Component Root";
+
+  const shipA = createNode("model", ROOT_NODE_ID, "ship-a");
+  shipA.name = "Ship A";
+  shipA.modelId = "shared-ship";
+  shipA.transform.position.x = 1;
+  shipA.transform.rotation.y = 0.5;
+  shipA.transform.scale.z = 1.5;
+
+  const shipB = createNode("model", ROOT_NODE_ID, "ship-b");
+  shipB.name = "Ship B";
+  shipB.modelId = "shared-ship";
+  shipB.visible = false;
+  shipB.transform.position.x = -2;
+
+  const drone = createNode("model", ROOT_NODE_ID, "drone");
+  drone.name = "Drone";
+  drone.modelId = "drone-model";
+  drone.transform.position.z = 3;
+
+  return {
+    version: 1,
+    componentName: "External Model Runtime Sample",
+    fonts: [],
+    materials: [],
+    images: [],
+    models: [
+      {
+        id: "shared-ship",
+        name: "Shared Ship.glb",
+        mimeType: "model/gltf-binary",
+        src: "data:model/gltf-binary;base64,c2hpcA==",
+        format: "glb",
+      },
+      {
+        id: "drone-model",
+        name: "Drone.glb",
+        mimeType: "model/gltf-binary",
+        src: "data:model/gltf-binary;base64,ZHJvbmU=",
+        format: "glb",
+      },
+    ],
+    nodes: [root, shipA, shipB, drone],
+    animation: createDefaultAnimation(),
+  };
 }
 
 function createAnimatedBlueprint(): ComponentBlueprint {
