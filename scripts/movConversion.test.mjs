@@ -124,7 +124,7 @@ describe("runMovConversion", () => {
     expect(result.converted).toEqual(["PITCH_IN.mov"]);
   });
 
-  it("writes sequence.json with the locked v1 schema (type, alpha, pixelFormat)", async () => {
+  it("writes sequence.json with v2 schema (type, format, alpha, pixelFormat, fps)", async () => {
     existsSync.mockImplementation((p) => String(p).endsWith("Resources/Textures"));
     readdirSync
       .mockReturnValueOnce(["PITCH_IN.mov"])
@@ -136,11 +136,13 @@ describe("runMovConversion", () => {
     const writeCall = writeFileSync.mock.calls.find(([p]) => String(p).endsWith("sequence.json"));
     expect(writeCall).toBeDefined();
     const written = JSON.parse(writeCall[1]);
-    expect(written.version).toBe(1);
+    expect(written.version).toBe(2);
     expect(written.type).toBe("image-sequence");
+    expect(written.format).toBe("png");
     expect(written.source).toBe("PITCH_IN.mov");
     expect(written.framePattern).toBe("frame_%06d.png");
     expect(written.frameCount).toBe(2);
+    expect(written.fps).toBe(25);
     expect(written.alpha).toBe(true);
     expect(written.pixelFormat).toBe("rgba");
     expect(written.loop).toBe(true);
@@ -371,6 +373,26 @@ describe("probeWebpEncoder", () => {
     await probeWebpEncoder(opts);
     await probeWebpEncoder(opts);
     expect(calls).toBe(1);
+  });
+});
+
+describe("runMovConversion v2 schema (CLI)", () => {
+  it("writes sequence.json with version: 2 and format: png on the cli path", async () => {
+    existsSync.mockImplementation((p) => String(p).endsWith("Resources/Textures"));
+    readdirSync
+      .mockReturnValueOnce(["intro.mov"])
+      .mockReturnValueOnce(["frame_000001.png", "frame_000002.png"]);
+    spawn.mockImplementation(() => fakeProc({ exitCode: 0 }));
+
+    const result = await runMovConversion({ folderPath: "C:/proj" });
+
+    const writeCall = writeFileSync.mock.calls.find(([p]) => String(p).endsWith("sequence.json"));
+    expect(writeCall).toBeDefined();
+    const seq = JSON.parse(writeCall[1]);
+    expect(seq.version).toBe(2);
+    expect(["webp", "png"]).toContain(seq.format);
+    expect(seq.fps).toBeGreaterThan(0);
+    expect(result.converted).toContain("intro.mov");
   });
 });
 

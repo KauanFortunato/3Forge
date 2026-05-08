@@ -390,15 +390,13 @@ export async function runMovConversion({ folderPath, force = false, onProgress }
       // Count the actual PNG files written — never trust ffprobe alone.
       const written = readdirSync(framesDir).filter((n) => /^frame_\d+\.png$/i.test(n));
       const sequence = {
-        version: 1,
+        version: 2,
         type: "image-sequence",
+        format: "png",
         source: filename,
         framePattern: FRAME_PATTERN,
         frameCount: written.length,
-        // ffprobe wiring is intentionally minimal in this round; values
-        // stay 0 if the operator doesn't have ffprobe. The renderer's
-        // player handles fps=0 by falling back to 25.
-        fps: 0,
+        fps: 25,
         width: 0,
         height: 0,
         durationSec: 0,
