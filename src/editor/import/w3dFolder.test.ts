@@ -756,7 +756,7 @@ describe("parseW3DFromFolder resolver priority", () => {
       makeFileWithBytes("Project/Resources/Textures/intro.mov", new Uint8Array([0])),
       makeFileWithBytes("Project/Resources/Textures/intro_frames/sequence.json",
         enc.encode(JSON.stringify({ version: 1, type: "image-sequence", source: "intro.mov",
-          framePattern: "frame_%06d.png", frameCount: 1, fps: 0, width: 0, height: 0,
+          framePattern: "frame_%06d.png", frameCount: 1, fps: 25, width: 0, height: 0,
           durationSec: 0, loop: true, alpha: true, pixelFormat: "rgba" }))),
       makeFileWithBytes("Project/Resources/Textures/intro_frames/frame_000001.png", new Uint8Array([0x89, 0x50])),
     ];
@@ -785,5 +785,44 @@ describe("parseW3DFromFolder resolver priority", () => {
       expect(node.image.sequence?.frameCount).toBe(2);
       expect(node.image.sequence?.fps).toBe(25);
     }
+  });
+
+  it("skips a layer whose sequence.json fails validation (fps <= 0)", async () => {
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(INTRO_W3D)),
+      makeFileWithBytes("Project/Resources/Textures/intro.mov", new Uint8Array([0])),
+      // webp layer: fps=0 — should be rejected by the validator
+      makeFileWithBytes(
+        "Project/Resources/Textures/intro_webp_frames/sequence.json",
+        enc.encode(JSON.stringify({
+          version: 2, type: "image-sequence", format: "webp",
+          source: "intro.mov", framePattern: "frame_%06d.webp",
+          frameCount: 1, fps: 0,
+          width: 0, height: 0, durationSec: 0, loop: true, alpha: true, pixelFormat: "rgba",
+        })),
+      ),
+      makeFileWithBytes("Project/Resources/Textures/intro_webp_frames/frame_000001.webp", new Uint8Array([0x52])),
+      // legacy _frames layer: fps=25 — valid, should be accepted as fallback
+      makeFileWithBytes(
+        "Project/Resources/Textures/intro_frames/sequence.json",
+        enc.encode(JSON.stringify({
+          version: 1, type: "image-sequence",
+          source: "intro.mov", framePattern: "frame_%06d.png",
+          frameCount: 1, fps: 25, width: 0, height: 0, durationSec: 0,
+          loop: true, alpha: true, pixelFormat: "rgba",
+        })),
+      ),
+      makeFileWithBytes("Project/Resources/Textures/intro_frames/frame_000001.png", new Uint8Array([0x89, 0x50])),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "intro");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      // webp layer rejected, fell through to legacy png layer
+      expect(node.image.sequence?.format).toBe("png");
+      expect(node.image.sequence?.legacy).toBe(true);
+    }
+    // A validation warning must mention the rejected layer
+    expect(result.warnings.some((w) => /webp_frames.*validation/i.test(w) || /validation.*webp_frames/i.test(w))).toBe(true);
   });
 });

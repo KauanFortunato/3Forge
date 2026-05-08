@@ -2,6 +2,7 @@ import { imageFileToAsset, isVideoFileName, videoFileToAsset } from "../images";
 import type { ComponentBlueprint, ImageAsset, ImageSequenceMetadata } from "../types";
 import type { SequenceFormat, SequenceFallbackReason } from "../types";
 import { parseW3D } from "./w3d";
+import { parseSequenceJson, validateSequenceJson, SequenceValidationError } from "./sequenceSchema";
 
 export interface W3DFolderImportResult {
   blueprint: ComponentBlueprint;
@@ -198,20 +199,30 @@ export async function parseW3DFromFolder(
 
       // Path A: sequence.json present — parse, validate, build frameUrls.
       if (jsonFile) {
-        let parsed: Partial<ImageSequenceMetadata> & { format?: string; fallbackReason?: string } | null = null;
+        let parsed: ReturnType<typeof parseSequenceJson> | null = null;
         try {
-          parsed = JSON.parse(await jsonFile.text());
-        } catch {
-          sequenceWarnings.push(`sequence.json for ${stem} (${layer}) is invalid — skipping this layer.`);
+          parsed = parseSequenceJson(await jsonFile.text());
+        } catch (err) {
+          if (err instanceof SyntaxError) {
+            sequenceWarnings.push(`sequence.json for ${stem} (${layer}) is invalid — skipping this layer.`);
+          } else {
+            sequenceWarnings.push(`sequence.json for ${stem} (${layer}) is invalid — skipping this layer.`);
+          }
           continue;
         }
-        if (!parsed?.framePattern || typeof parsed.frameCount !== "number") {
-          sequenceWarnings.push(`sequence.json for ${stem} (${layer}) missing framePattern/frameCount — skipping this layer.`);
+        try {
+          validateSequenceJson(parsed);
+        } catch (err) {
+          if (err instanceof SequenceValidationError) {
+            sequenceWarnings.push(
+              `sequence.json for ${stem} (${layer}) failed validation [${err.code}]: ${err.message} — skipping this layer.`,
+            );
+          } else {
+            sequenceWarnings.push(`sequence.json for ${stem} (${layer}) failed validation — skipping this layer.`);
+          }
           continue;
         }
-        const detectedFormat: SequenceFormat =
-          typeof parsed.format === "string" && parsed.format === "webp" ? "webp" : "png";
-        const fps = typeof parsed.fps === "number" && parsed.fps > 0 ? parsed.fps : 25;
+        const fps = parsed.fps > 0 ? parsed.fps : 25;
         const frameUrls: string[] = [];
         let missing = false;
         for (let i = 1; i <= parsed.frameCount; i += 1) {
@@ -227,20 +238,20 @@ export async function parseW3DFromFolder(
         resolved = {
           version: 2,
           type: "image-sequence",
-          format: detectedFormat,
+          format: parsed.format,
           source: sourceMov,
           framePattern: parsed.framePattern,
           frameCount: parsed.frameCount,
           fps,
-          width: typeof parsed.width === "number" ? parsed.width : 0,
-          height: typeof parsed.height === "number" ? parsed.height : 0,
-          durationSec: typeof parsed.durationSec === "number" ? parsed.durationSec : 0,
-          loop: parsed.loop !== false,
-          alpha: parsed.alpha !== false,
+          width: parsed.width,
+          height: parsed.height,
+          durationSec: parsed.durationSec,
+          loop: parsed.loop,
+          alpha: parsed.alpha,
           pixelFormat: "rgba",
           frameUrls,
-          ...(typeof parsed.fallbackReason === "string"
-            ? { fallbackReason: parsed.fallbackReason as SequenceFallbackReason }
+          ...(parsed.fallbackReason != null
+            ? { fallbackReason: parsed.fallbackReason }
             : {}),
           ...(isLegacy ? { legacy: true } : {}),
         };
@@ -284,7 +295,7 @@ export async function parseW3DFromFolder(
           ...(isLegacy ? { legacy: true } : {}),
         };
         // eslint-disable-next-line no-console
-        console.info(
+        console.debug(
           `[w3d folder import] sequence metadata was missing for ${stem}${layer} and has been auto-generated (${ordered.length} frames, fps=25).`,
         );
       }
