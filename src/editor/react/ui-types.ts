@@ -41,7 +41,7 @@ export interface TreeBranch {
 }
 
 export interface TreeDropTarget {
-  parentId: string;
+  parentId: string | null;
   index: number;
   position: "before" | "inside" | "after" | "end";
   rowNodeId?: string;

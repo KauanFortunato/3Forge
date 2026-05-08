@@ -97,6 +97,60 @@ describe("exportPackage", () => {
     expect(typeScriptContent.match(/\.\/assets\/images\/shared-poster\.png/g)).toHaveLength(2);
   });
 
+  it("packages GLB model assets and points TypeScript exports at assets/models", () => {
+    const blueprint = createBlueprintFixture();
+    blueprint.componentName = "Model Package";
+    const sharedModel = {
+      id: "shared-ship",
+      name: "Shared Ship.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,c2hpcA==",
+      format: "glb" as const,
+    };
+    blueprint.models = [sharedModel];
+    blueprint.nodes.push({
+      id: "ship-a",
+      name: "Ship A",
+      type: "model",
+      parentId: null,
+      visible: true,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      origin: { x: "center", y: "center", z: "center" },
+      editable: {},
+      modelId: sharedModel.id,
+    } as never);
+    blueprint.nodes.push({
+      id: "ship-b",
+      name: "Ship B",
+      type: "model",
+      parentId: null,
+      visible: true,
+      transform: {
+        position: { x: 2, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      origin: { x: "center", y: "center", z: "center" },
+      editable: {},
+      modelId: sharedModel.id,
+    } as never);
+
+    const packageData = createExportPackageData(blueprint);
+    const modelFiles = packageData.files.filter((file) => file.path.startsWith("assets/models/"));
+    const typeScriptContent = String(packageData.files.find((file) => file.path === packageData.typeScriptFileName)?.content ?? "");
+
+    expect(modelFiles).toHaveLength(1);
+    expect(modelFiles[0]?.path).toBe("assets/models/shared-ship.glb");
+    expect(modelFiles[0]?.content).toBeInstanceOf(Uint8Array);
+    expect(typeScriptContent).toContain('import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";');
+    expect(typeScriptContent).toContain('"./assets/models/shared-ship.glb"');
+    expect(typeScriptContent).toContain("gltfLoader.loadAsync");
+  });
+
   it("packages the generated files into a ZIP archive", async () => {
     const blueprint = createBlueprintFixture();
     blueprint.componentName = "Hero Banner";

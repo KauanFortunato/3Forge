@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import type { EditorNode } from "../../types";
+import { ROOT_NODE_ID } from "../../state";
 import type { TreeBranch, TreeDropTarget } from "../ui-types";
 import {
   BoxIcon,
@@ -299,7 +300,8 @@ function SceneGraphRow(props: SceneGraphRowProps) {
   } = props;
   const { branch, depth, siblingIndex, siblingCount } = row;
 
-  const isRoot = branch.node.parentId === null;
+  const isSceneRootNode = branch.node.parentId === null;
+  const isLegacyRootGroup = branch.node.id === ROOT_NODE_ID && branch.node.type === "group" && branch.node.parentId === null;
   const isGroup = branch.node.type === "group";
   const hasChildren = branch.children.length > 0;
   const isCollapsed = isGroup && collapsedIds.has(branch.node.id);
@@ -318,7 +320,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
         isSelected ? "is-selected" : "",
         isPrimary ? "is-primary" : "",
         isAncestor ? "is-ancestor" : "",
-        isRoot ? "is-root" : "",
+        isSceneRootNode ? "is-root" : "",
         isGroup ? "is-group" : "is-mesh",
         rowDropState ? `is-drop-${rowDropState}` : "",
         draggedNodeId === branch.node.id ? "is-dragging" : "",
@@ -328,7 +330,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
       tabIndex={isSelected ? 0 : -1}
       aria-selected={isSelected}
       aria-expanded={isGroup ? !isCollapsed : undefined}
-      draggable={!isRoot}
+      draggable={!isLegacyRootGroup}
       onClick={(event) => onSelectNode(branch.node.id, event.shiftKey)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -349,7 +351,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
         onContextMenu(event, branch.node.id);
       }}
       onDragStart={(event) => {
-        if (isRoot) {
+        if (isLegacyRootGroup) {
           event.preventDefault();
           return;
         }
@@ -431,7 +433,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
           }}
           title="Duplicate"
           tabIndex={-1}
-          disabled={isRoot}
+          disabled={isLegacyRootGroup}
         >
           <CopyIcon width={11} height={11} />
         </button>
@@ -444,7 +446,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
           }}
           title="Delete"
           tabIndex={-1}
-          disabled={isRoot}
+          disabled={false}
         >
           <TrashIcon width={11} height={11} />
         </button>
@@ -556,19 +558,10 @@ function resolveDropTarget(
   siblingIndex: number,
   siblingCount: number,
 ): TreeDropTarget | null {
-  if (branch.node.parentId === null) {
-    return {
-      parentId: branch.node.id,
-      index: branch.children.length,
-      position: "inside",
-      rowNodeId: branch.node.id,
-    };
-  }
-
   const rect = event.currentTarget.getBoundingClientRect();
   const offsetY = event.clientY - rect.top;
   const ratio = rect.height > 0 ? offsetY / rect.height : 0.5;
-  const parentId = branch.node.parentId ?? "root";
+  const parentId = branch.node.parentId ?? null;
 
   if (ratio <= 0.24) {
     return {

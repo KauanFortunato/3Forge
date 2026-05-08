@@ -64,7 +64,7 @@ function indexNodesByStableKey(nodes: EditorNode[]): Map<string, EditorNode> {
   const entries: Array<[string, EditorNode]> = [];
 
   for (const node of nodes) {
-    if (node.parentId === null) {
+    if (node.id === "root" && node.type === "group" && node.parentId === null) {
       continue;
     }
 

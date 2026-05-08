@@ -6,6 +6,7 @@ import { exportBlueprintToJson } from "./exports";
 import { computeGroupContentBounds, computeNodeWorldBounds, computeNodeWorldPosition } from "./spatial";
 import {
   createDefaultBlueprint,
+  createNode,
   EditorStore,
   getPropertyDefinitions,
   ROOT_NODE_ID,
@@ -138,16 +139,14 @@ describe("EditorStore", () => {
       },
     });
 
-    const root = store.getNode(ROOT_NODE_ID);
     const nodes = store.blueprint.nodes;
     const ids = nodes.map((node) => node.id);
     const box = nodes.find((node) => node.type === "box");
     const text = nodes.find((node) => node.type === "text");
 
-    expect(root?.type).toBe("group");
-    expect(root?.parentId).toBeNull();
+    expect(store.getNode(ROOT_NODE_ID)).toBeUndefined();
     expect(new Set(ids).size).toBe(ids.length);
-    expect(box?.parentId).toBe(ROOT_NODE_ID);
+    expect(box?.parentId).toBeNull();
     expect(box?.geometry.width).toBe(0.01);
     expect(box?.geometry.height).toBe(0.01);
     expect(box?.material.color).toBe("#112233");
@@ -357,8 +356,8 @@ describe("EditorStore", () => {
 
   it("groups, moves, and rejects cyclical hierarchy changes", () => {
     const store = new EditorStore(createDefaultBlueprint());
-    const circleId = store.insertNode("circle", ROOT_NODE_ID);
-    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+    const circleId = store.insertNode("circle", null);
+    const sphereId = store.insertNode("sphere", null);
 
     const groupId = store.groupNodes([circleId, sphereId]);
 
@@ -368,13 +367,35 @@ describe("EditorStore", () => {
     expect(store.reparentNode(groupId!, circleId)).toBe(false);
     expect(store.moveNode(groupId!, circleId, 0)).toBe(false);
 
-    const rootChildrenBefore = store.getNodeChildren(ROOT_NODE_ID).map((node) => node.id);
+    const rootChildrenBefore = store.getNodeChildren(null).map((node) => node.id);
     expect(rootChildrenBefore.at(-1)).toBe(groupId);
 
-    expect(store.moveNode(groupId!, ROOT_NODE_ID, 1)).toBe(true);
+    expect(store.moveNode(groupId!, null, 0)).toBe(true);
 
-    const rootChildrenAfter = store.getNodeChildren(ROOT_NODE_ID).map((node) => node.id);
-    expect(rootChildrenAfter[1]).toBe(groupId);
+    const rootChildrenAfter = store.getNodeChildren(null).map((node) => node.id);
+    expect(rootChildrenAfter[0]).toBe(groupId);
+  });
+
+  it("supports root-level nodes and deleting the legacy root group without deleting children", () => {
+    const legacyRoot = createNode("group", null, ROOT_NODE_ID);
+    legacyRoot.name = "Component Root";
+    const panel = createNode("box", ROOT_NODE_ID, "legacy-panel");
+    panel.name = "Hero Panel";
+    const store = new EditorStore({
+      ...createDefaultBlueprint(),
+      nodes: [legacyRoot, panel],
+    });
+    const rootChildrenBefore = store.getNodeChildren(ROOT_NODE_ID);
+
+    expect(rootChildrenBefore.length).toBeGreaterThan(0);
+    store.deleteNode(ROOT_NODE_ID);
+
+    expect(store.getNode(ROOT_NODE_ID)).toBeUndefined();
+    expect(store.getNodeChildren(null).map((node) => node.name)).toContain("Hero Panel");
+    expect(store.blueprint.nodes.every((node) => node.id !== ROOT_NODE_ID)).toBe(true);
+
+    const sphereId = store.insertNode("sphere", null);
+    expect(store.getNode(sphereId)?.parentId).toBeNull();
   });
 
   it("updates properties, editable bindings, transforms, fonts, and images", () => {
@@ -500,7 +521,7 @@ describe("EditorStore", () => {
   it("exposes node visibility in the object group and keeps material visibility distinct", () => {
     const store = new EditorStore(createBlueprintFixture());
     const box = store.blueprint.nodes.find((node) => node.type === "box");
-    const group = store.getNode(ROOT_NODE_ID);
+    const group = createNode("group", null, ROOT_NODE_ID);
 
     expect(box).toBeTruthy();
     expect(group?.type).toBe("group");
@@ -1017,23 +1038,24 @@ describe("EditorStore", () => {
     expect(store.selectedNodeId).toBe(sphereId);
   });
 
-  it("clearSelection resets selection to the ROOT node", () => {
+  it("clearSelection resets selection to the first node", () => {
     const store = new EditorStore(createDefaultBlueprint());
-    const boxId = store.insertNode("box", ROOT_NODE_ID);
-    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+    const initialNodeId = store.blueprint.nodes[0]?.id;
+    const boxId = store.insertNode("box", null);
+    const sphereId = store.insertNode("sphere", null);
 
     store.setSelectedNodes([boxId, sphereId]);
     store.clearSelection();
 
-    expect(store.selectedNodeIds).toEqual([ROOT_NODE_ID]);
-    expect(store.selectedNodeId).toBe(ROOT_NODE_ID);
+    expect(store.selectedNodeIds).toEqual([initialNodeId]);
+    expect(store.selectedNodeId).toBe(initialNodeId);
   });
 
   it("moveSelectedNodes moves all selected root ids into the target parent, preserving order, in a single undo step", () => {
     const store = new EditorStore(createDefaultBlueprint());
-    const groupId = store.insertNode("group", ROOT_NODE_ID);
-    const boxId = store.insertNode("box", ROOT_NODE_ID);
-    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+    const groupId = store.insertNode("group", null);
+    const boxId = store.insertNode("box", null);
+    const sphereId = store.insertNode("sphere", null);
 
     store.setSelectedNodes([boxId, sphereId], "ui", sphereId);
 
@@ -1045,7 +1067,7 @@ describe("EditorStore", () => {
 
     // A single undo restores both nodes to their original parent (one history entry).
     store.undo();
-    const rootChildren = store.getNodeChildren(ROOT_NODE_ID).map((node) => node.id);
+    const rootChildren = store.getNodeChildren(null).map((node) => node.id);
     expect(rootChildren).toContain(boxId);
     expect(rootChildren).toContain(sphereId);
     expect(store.getNodeChildren(groupId).map((node) => node.id)).toEqual([]);

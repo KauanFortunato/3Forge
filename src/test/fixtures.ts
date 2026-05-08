@@ -17,7 +17,7 @@ export function createBlueprintFixture(): ComponentBlueprint {
     headline.editable["material.opacity"] = createBinding(headline.name, "material.opacity", "Headline Opacity", "number");
   }
 
-  const image = createNode("image", ROOT_NODE_ID);
+  const image = createNode("image", null);
   image.name = "Hero Image";
   image.geometry.width = 2.4;
   image.geometry.height = 1.4;

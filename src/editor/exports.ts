@@ -1,10 +1,10 @@
 import { frameToSeconds, getTrackSegments, isTrackMuted, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
-import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageAsset, ImageNode } from "./types";
+import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageAsset, ImageNode, ModelAsset, TransformSpec } from "./types";
 import { ROOT_NODE_ID, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
 
 interface CollectedBinding {
-  node: EditorNode;
+  node: ExportNode;
   binding: EditableBinding;
 }
 
@@ -19,6 +19,13 @@ interface CollectedImage {
   image: ImageAsset;
   dataVariableName: string;
   textureVariableName: string;
+}
+
+interface CollectedModel {
+  key: string;
+  model: ModelAsset;
+  dataVariableName: string;
+  gltfVariableName: string;
 }
 
 type TimelineTargetKey = "position" | "rotation" | "scale" | "visible";
@@ -47,15 +54,40 @@ interface CollectedAnimationClip {
   tracks: CollectedAnimationTrack[];
 }
 
+interface ExportModelNode {
+  id: string;
+  name: string;
+  type: "model";
+  parentId: string | null;
+  visible: boolean;
+  transform: TransformSpec;
+  editable: Record<string, EditableBinding>;
+  modelId?: string;
+  model?: ModelAsset;
+}
+
+type ExportNode = EditorNode | ExportModelNode;
+type MaterialEditorNode = Exclude<EditorNode, { type: "group" }>;
+
 interface ExportCollections {
   bindings: CollectedBinding[];
   fonts: CollectedFont[];
   images: CollectedImage[];
+  models: CollectedModel[];
+}
+
+function isModelNode(node: ExportNode): node is ExportModelNode {
+  return node.type === "model";
+}
+
+function isMaterialNode(node: ExportNode): node is MaterialEditorNode {
+  return node.type !== "group" && node.type !== "model";
 }
 
 export interface GenerateTypeScriptComponentOptions {
   fontAssetPathsById?: Record<string, string>;
   imageAssetPathsByNodeId?: Record<string, string>;
+  modelAssetPathsById?: Record<string, string>;
 }
 
 export function exportBlueprintToJson(blueprint: ComponentBlueprint): string {
@@ -70,24 +102,26 @@ export function generateTypeScriptComponent(
   const componentTypeName = toPascalCase(componentName);
   const optionTypeName = `${componentTypeName}Options`;
   const resolvedTypeName = `${componentTypeName}ResolvedOptions`;
-  const nodes = blueprint.nodes;
-  const animationClips = collectAnimationClips(blueprint, nodes);
+  const nodes = blueprint.nodes as ExportNode[];
+  const animationClips = collectAnimationClips(blueprint, blueprint.nodes);
   const hasAnimations = animationClips.length > 0;
   const usesNodeOriginHelper = nodes.some((node) => node.type !== "group");
-  const rootNode = nodes.find((node) => node.id === ROOT_NODE_ID) ?? nodes[0];
+  const rootNode = nodes.find((node) => node.id === ROOT_NODE_ID && node.type === "group");
   const childrenByParent = buildChildrenMap(nodes);
   const variableNames = createVariableNames(nodes);
   const groupContentVariableNames = createGroupContentVariableNames(nodes, variableNames);
-  const { bindings, fonts, images } = collectExportCollections(blueprint, nodes);
-  const materialNodes = nodes.filter((node): node is Exclude<EditorNode, { type: "group" }> => node.type !== "group");
+  const { bindings, fonts, images, models } = collectExportCollections(blueprint, nodes);
+  const materialNodes = nodes.filter(isMaterialNode);
   const usesDepthPackingHelper = materialNodes.some((node) =>
     node.material.type === "depth" || Boolean(node.editable["material.type"]) || Boolean(node.editable["material.depthPacking"]),
   );
   const importNames = collectImports(nodes, bindings);
   const fontVariables = new Map(fonts.map((font) => [font.font.id, font.fontVariableName]));
   const imageVariables = new Map(images.map((image) => [image.key, image.textureVariableName]));
+  const modelVariables = new Map(models.map((model) => [model.key, model.gltfVariableName]));
   const fontAssetPathsById = options.fontAssetPathsById ?? {};
   const imageAssetPathsByNodeId = options.imageAssetPathsByNodeId ?? {};
+  const modelAssetPathsById = options.modelAssetPathsById ?? {};
   const imagesById = new Map((blueprint.images ?? []).map((image) => [image.id, image] as const));
   const inlineFonts = fonts.filter((font) => !fontAssetPathsById[font.font.id]);
   const externalFonts = fonts.filter((font) => Boolean(fontAssetPathsById[font.font.id]));
@@ -100,6 +134,9 @@ export function generateTypeScriptComponent(
   if (fonts.length > 0) {
     lines.push(`import { FontLoader } from "three/examples/jsm/loaders/FontLoader.js";`);
     lines.push(`import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";`);
+  }
+  if (models.length > 0) {
+    lines.push(`import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";`);
   }
   lines.push("");
 
@@ -185,6 +222,18 @@ export function generateTypeScriptComponent(
     lines.push("");
   }
 
+  if (models.length > 0) {
+    for (const model of models) {
+      const modelSource = model.key.startsWith("asset:")
+        ? modelAssetPathsById[model.key.slice("asset:".length)] ?? model.model.src
+        : model.model.src;
+      lines.push(`const ${model.dataVariableName} = ${JSON.stringify(modelSource)} as const;`);
+    }
+    lines.push("");
+    lines.push("const gltfLoader = new GLTFLoader();");
+    lines.push("");
+  }
+
   lines.push(`export interface ${optionTypeName} {`);
   if (bindings.length > 0) {
     for (const { binding } of bindings) {
@@ -198,7 +247,7 @@ export function generateTypeScriptComponent(
   lines.push(`const defaults: ${resolvedTypeName} = {`);
   if (bindings.length > 0) {
     for (const { node, binding } of bindings) {
-      const value = getPropertyValue(node, binding.path);
+      const value = isModelNode(node) ? getModelPropertyValue(node, binding.path) : getPropertyValue(node, binding.path);
       lines.push(`  ${binding.key}: ${serializeLiteral(value, binding.type)},`);
     }
   }
@@ -272,6 +321,18 @@ export function generateTypeScriptComponent(
     lines.push("    ]);");
   }
 
+  if (models.length > 0) {
+    lines.push("    const [");
+    for (const model of models) {
+      lines.push(`      ${model.gltfVariableName},`);
+    }
+    lines.push("    ] = await Promise.all([");
+    for (const model of models) {
+      lines.push(`      gltfLoader.loadAsync(${model.dataVariableName}),`);
+    }
+    lines.push("    ]);");
+  }
+
   if (inlineFonts.length > 0) {
     for (const font of inlineFonts) {
       lines.push(`    const ${font.fontVariableName} = fontLoader.parse(${font.dataVariableName});`);
@@ -284,7 +345,13 @@ export function generateTypeScriptComponent(
     lines.push(`    root.scale.set(${propertyExpression(rootNode, "transform.scale.x", "this.options")}, ${propertyExpression(rootNode, "transform.scale.y", "this.options")}, ${propertyExpression(rootNode, "transform.scale.z", "this.options")});`);
   }
 
-  emitNode(rootNode, lines, childrenByParent, variableNames, groupContentVariableNames, fontVariables, imageVariables, "this.options", hasAnimations, true);
+  if (rootNode) {
+    emitNode(rootNode, lines, childrenByParent, variableNames, groupContentVariableNames, fontVariables, imageVariables, modelVariables, "this.options", hasAnimations, true);
+  } else {
+    for (const node of childrenByParent.get(null) ?? []) {
+      emitNode(node, lines, childrenByParent, variableNames, groupContentVariableNames, fontVariables, imageVariables, modelVariables, "this.options", hasAnimations);
+    }
+  }
 
   lines.push("  }");
   lines.push("");
@@ -340,17 +407,21 @@ export function generateTypeScriptComponent(
   return lines.join("\n");
 }
 
-function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNode[]): ExportCollections {
+function collectExportCollections(blueprint: ComponentBlueprint, nodes: ExportNode[]): ExportCollections {
   const bindings: CollectedBinding[] = [];
   const availableFonts = getAvailableFonts(blueprint.fonts);
   const fontsById = new Map(availableFonts.map((font) => [font.id, font]));
   const imagesById = new Map((blueprint.images ?? []).map((image) => [image.id, image] as const));
+  const modelsById = new Map((blueprint.models ?? []).map((model) => [model.id, model] as const));
   const collectedFontIds = new Set<string>();
   const fontUsedNames = new Set<string>();
   const imageUsedNames = new Set<string>();
+  const modelUsedNames = new Set<string>();
   const collectedImageKeys = new Set<string>();
+  const collectedModelKeys = new Set<string>();
   const fonts: CollectedFont[] = [];
   const images: CollectedImage[] = [];
+  const models: CollectedModel[] = [];
 
   const collectImage = (key: string, image: ImageAsset, baseName: string) => {
     if (collectedImageKeys.has(key)) {
@@ -373,8 +444,42 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNo
     images.push({ key, image, dataVariableName, textureVariableName });
   };
 
+  const collectModel = (key: string, model: ModelAsset, baseName: string) => {
+    if (collectedModelKeys.has(key)) {
+      return;
+    }
+    const base = toCamelCase(baseName || model.name) || "model";
+    let dataVariableName = `${base}ModelData`;
+    let gltfVariableName = `${base}Gltf`;
+    let suffix = 2;
+
+    while (modelUsedNames.has(dataVariableName) || modelUsedNames.has(gltfVariableName)) {
+      dataVariableName = `${base}ModelData${suffix}`;
+      gltfVariableName = `${base}Gltf${suffix}`;
+      suffix += 1;
+    }
+
+    modelUsedNames.add(dataVariableName);
+    modelUsedNames.add(gltfVariableName);
+    collectedModelKeys.add(key);
+    models.push({ key, model, dataVariableName, gltfVariableName });
+  };
+
   for (const node of nodes) {
-    const validPaths = new Set(getPropertyDefinitions(node).map((definition) => definition.path));
+    const validPaths = node.type === "model"
+      ? new Set([
+        "visible",
+        "transform.position.x",
+        "transform.position.y",
+        "transform.position.z",
+        "transform.rotation.x",
+        "transform.rotation.y",
+        "transform.rotation.z",
+        "transform.scale.x",
+        "transform.scale.y",
+        "transform.scale.z",
+      ])
+      : new Set(getPropertyDefinitions(node).map((definition) => definition.path));
     const nodeBindings = Object.values(node.editable)
       .filter((binding) => validPaths.has(binding.path))
       .sort((left, right) => left.key.localeCompare(right.key))
@@ -409,7 +514,12 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNo
       collectImage(`node:${node.id}`, image, node.name || image.name);
     }
 
-    if (node.type !== "group" && node.material.mapImageId) {
+    if (node.type === "model") {
+      const model = resolveModelAssetForNode(node, modelsById);
+      collectModel(node.modelId ? `asset:${node.modelId}` : `node:${node.id}`, model, node.name || model.name);
+    }
+
+    if (isMaterialNode(node) && node.material.mapImageId) {
       const image = imagesById.get(node.material.mapImageId);
       if (image) {
         collectImage(`material:${node.material.mapImageId}`, image, image.name);
@@ -421,6 +531,7 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: EditorNo
     bindings,
     fonts,
     images,
+    models,
   };
 }
 
@@ -435,11 +546,26 @@ function resolveImageAssetForNode(node: ImageNode, imagesById: Map<string | unde
   return node.image;
 }
 
-function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<string> {
+function resolveModelAssetForNode(node: ExportModelNode, modelsById: Map<string | undefined, ModelAsset>): ModelAsset {
+  if (node.modelId) {
+    const asset = modelsById.get(node.modelId);
+    if (asset) {
+      return asset;
+    }
+  }
+
+  if (node.model) {
+    return node.model;
+  }
+
+  throw new Error(`Model asset not found for model node "${node.name}".`);
+}
+
+function collectImports(nodes: ExportNode[], bindings: CollectedBinding[]): Set<string> {
   const imports = new Set<string>(["Group", "Mesh"]);
-  const types = new Set<EditorNodeType>(nodes.map((node) => node.type));
+  const types = new Set<EditorNodeType | "model">(nodes.map((node) => node.type));
   const hasRenderableNodes = nodes.some((node) => node.type !== "group");
-  const materialNodes = nodes.filter((node): node is Exclude<EditorNode, { type: "group" }> => node.type !== "group");
+  const materialNodes = nodes.filter(isMaterialNode);
   const hasRuntimeMaterialType = materialNodes.some((node) => Boolean(node.editable["material.type"]));
   const materialClassFor: Record<string, string> = {
     basic: "MeshBasicMaterial",
@@ -496,8 +622,8 @@ function collectImports(nodes: EditorNode[], bindings: CollectedBinding[]): Set<
   return imports;
 }
 
-function buildChildrenMap(nodes: EditorNode[]): Map<string | null, EditorNode[]> {
-  const map = new Map<string | null, EditorNode[]>();
+function buildChildrenMap(nodes: ExportNode[]): Map<string | null, ExportNode[]> {
+  const map = new Map<string | null, ExportNode[]>();
 
   for (const node of nodes) {
     const bucket = map.get(node.parentId) ?? [];
@@ -508,7 +634,7 @@ function buildChildrenMap(nodes: EditorNode[]): Map<string | null, EditorNode[]>
   return map;
 }
 
-function createVariableNames(nodes: EditorNode[]): Map<string, string> {
+function createVariableNames(nodes: ExportNode[]): Map<string, string> {
   const variables = new Map<string, string>();
   const used = new Set<string>(["root"]);
 
@@ -535,13 +661,14 @@ function createVariableNames(nodes: EditorNode[]): Map<string, string> {
 }
 
 function emitNode(
-  node: EditorNode | undefined,
+  node: ExportNode | undefined,
   lines: string[],
-  childrenByParent: Map<string | null, EditorNode[]>,
+  childrenByParent: Map<string | null, ExportNode[]>,
   variableNames: Map<string, string>,
   groupContentVariableNames: Map<string, string>,
   fontVariables: Map<string, string>,
   imageVariables: Map<string, string>,
+  modelVariables: Map<string, string>,
   bindingAccessor: string,
   captureNodeRefs: boolean,
   skipCreation = false,
@@ -550,15 +677,15 @@ function emitNode(
 
   const variableName = variableNames.get(node.id) ?? toCamelCase(node.name);
   if (!skipCreation) {
-    for (const line of emitCreationLines(node, variableName, fontVariables, imageVariables, bindingAccessor)) {
+    for (const line of emitCreationLines(node, variableName, fontVariables, imageVariables, modelVariables, bindingAccessor)) {
       lines.push(`    ${line}`);
     }
   }
 
   if (node.id !== ROOT_NODE_ID) {
-    const parentVariable = groupContentVariableNames.get(node.parentId ?? ROOT_NODE_ID)
-      ?? variableNames.get(node.parentId ?? ROOT_NODE_ID)
-      ?? "root";
+    const parentVariable = node.parentId
+      ? groupContentVariableNames.get(node.parentId) ?? variableNames.get(node.parentId) ?? "root"
+      : "root";
     lines.push(`    ${parentVariable}.add(${variableName});`);
   }
 
@@ -567,15 +694,16 @@ function emitNode(
   }
 
   for (const child of childrenByParent.get(node.id) ?? []) {
-    emitNode(child, lines, childrenByParent, variableNames, groupContentVariableNames, fontVariables, imageVariables, bindingAccessor, captureNodeRefs);
+    emitNode(child, lines, childrenByParent, variableNames, groupContentVariableNames, fontVariables, imageVariables, modelVariables, bindingAccessor, captureNodeRefs);
   }
 }
 
 function emitCreationLines(
-  node: EditorNode,
+  node: ExportNode,
   variableName: string,
   fontVariables: Map<string, string>,
   imageVariables: Map<string, string>,
+  modelVariables: Map<string, string>,
   bindingAccessor: string,
 ): string[] {
   const lines: string[] = [];
@@ -585,6 +713,12 @@ function emitCreationLines(
     lines.push(`const ${variableName}Content = new Group();`);
     lines.push(`${variableName}Content.position.set(${node.pivotOffset.x}, ${node.pivotOffset.y}, ${node.pivotOffset.z});`);
     lines.push(`${variableName}.add(${variableName}Content);`);
+  } else if (node.type === "model") {
+    const modelVariable = modelVariables.get(node.modelId ? `asset:${node.modelId}` : `node:${node.id}`);
+    if (!modelVariable) {
+      throw new Error(`Model asset not found for model node "${node.name}".`);
+    }
+    lines.push(`const ${variableName} = ${modelVariable}.scene.clone(true) as Group;`);
   } else {
     const geometryVariable = `${variableName}Geometry`;
     const materialVariable = `${variableName}Material`;
@@ -633,9 +767,10 @@ function emitCreationLines(
       }
     }
 
+    const materialNode = node;
     const nodeTextureVariable = imageVariables.get(`node:${node.id}`);
     const materialTextureVariable = node.material.mapImageId ? imageVariables.get(`material:${node.material.mapImageId}`) : undefined;
-    for (const line of emitMaterialCreationLines(node, materialVariable, bindingAccessor, materialTextureVariable ?? nodeTextureVariable, Boolean(materialTextureVariable))) {
+    for (const line of emitMaterialCreationLines(materialNode, materialVariable, bindingAccessor, materialTextureVariable ?? nodeTextureVariable, Boolean(materialTextureVariable))) {
       lines.push(line);
     }
     lines.push(`const ${meshVariable} = new Mesh(${geometryVariable}, ${materialVariable});`);
@@ -656,7 +791,7 @@ function emitCreationLines(
   return lines;
 }
 
-function createGroupContentVariableNames(nodes: EditorNode[], variableNames: Map<string, string>): Map<string, string> {
+function createGroupContentVariableNames(nodes: ExportNode[], variableNames: Map<string, string>): Map<string, string> {
   const names = new Map<string, string>();
   names.set(ROOT_NODE_ID, "rootContent");
 
@@ -672,7 +807,7 @@ function createGroupContentVariableNames(nodes: EditorNode[], variableNames: Map
 }
 
 function emitMaterialCreationLines(
-  node: Exclude<EditorNode, { type: "group" }>,
+  node: MaterialEditorNode,
   materialVariable: string,
   bindingAccessor: string,
   textureVariable?: string,
@@ -1179,14 +1314,41 @@ function toTimelineAxisKey(property: string): TimelineAxisKey {
   return propertyKey === "y" || propertyKey === "z" ? propertyKey : "x";
 }
 
-function propertyExpression(node: EditorNode, path: string, bindingAccessor = "resolved"): string {
+function propertyExpression(node: ExportNode, path: string, bindingAccessor = "resolved"): string {
   const binding = node.editable[path];
   if (binding) {
     return `${bindingAccessor}.${binding.key}`;
   }
 
-  const value = getPropertyValue(node, path);
+  const value = isModelNode(node) ? getModelPropertyValue(node, path) : getPropertyValue(node, path);
   return serializeLiteral(value, inferTypeFromValue(value));
+}
+
+function getModelPropertyValue(node: ExportModelNode, path: string): unknown {
+  switch (path) {
+    case "visible":
+      return node.visible;
+    case "transform.position.x":
+      return node.transform.position.x;
+    case "transform.position.y":
+      return node.transform.position.y;
+    case "transform.position.z":
+      return node.transform.position.z;
+    case "transform.rotation.x":
+      return node.transform.rotation.x;
+    case "transform.rotation.y":
+      return node.transform.rotation.y;
+    case "transform.rotation.z":
+      return node.transform.rotation.z;
+    case "transform.scale.x":
+      return node.transform.scale.x;
+    case "transform.scale.y":
+      return node.transform.scale.y;
+    case "transform.scale.z":
+      return node.transform.scale.z;
+    default:
+      return "";
+  }
 }
 
 function inferTypeFromValue(value: unknown): EditableBinding["type"] {

@@ -106,6 +106,64 @@ describe("SceneGraphPanel", () => {
     expect(handleSelectNode).toHaveBeenCalledWith(ROOT_NODE_ID, false);
   });
 
+  it("allows deleting the legacy root group but keeps it non-draggable", () => {
+    const store = createHierarchyStore();
+    const handleDeleteNode = vi.fn();
+    const { container } = render(
+      <SceneGraphPanel
+        nodes={store.blueprint.nodes}
+        animatedNodeIds={new Set()}
+        selectedNodeId={ROOT_NODE_ID}
+        selectedNodeIds={[ROOT_NODE_ID]}
+        collapsedIds={new Set()}
+        onCollapsedIdsChange={vi.fn()}
+        onSelectNode={vi.fn()}
+        onMoveNode={vi.fn()}
+        onToggleVisibility={vi.fn()}
+        onDeleteNode={handleDeleteNode}
+        onContextMenu={vi.fn()}
+      />,
+    );
+
+    const rootRow = screen.getByText("Component Root").closest(".sg-row") as HTMLElement;
+    expect(rootRow.getAttribute("draggable")).toBe("false");
+    const deleteButton = rootRow.querySelector('button[title="Delete"]') as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(false);
+
+    fireEvent.click(deleteButton);
+    expect(handleDeleteNode).toHaveBeenCalledWith(ROOT_NODE_ID);
+    expect(container.querySelector(".sg-row.is-root .sg-row__name")?.textContent).toBe("Component Root");
+  });
+
+  it("treats normal scene-root nodes as draggable and deletable", () => {
+    const box = createNode("box", null, "box-root");
+    box.name = "Root Box";
+    const handleDeleteNode = vi.fn();
+    render(
+      <SceneGraphPanel
+        nodes={[box]}
+        animatedNodeIds={new Set()}
+        selectedNodeId="box-root"
+        selectedNodeIds={["box-root"]}
+        collapsedIds={new Set()}
+        onCollapsedIdsChange={vi.fn()}
+        onSelectNode={vi.fn()}
+        onMoveNode={vi.fn()}
+        onToggleVisibility={vi.fn()}
+        onDeleteNode={handleDeleteNode}
+        onContextMenu={vi.fn()}
+      />,
+    );
+
+    const boxRow = screen.getByText("Root Box").closest(".sg-row") as HTMLElement;
+    expect(boxRow.getAttribute("draggable")).toBe("true");
+    const deleteButton = boxRow.querySelector('button[title="Delete"]') as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(false);
+
+    fireEvent.click(deleteButton);
+    expect(handleDeleteNode).toHaveBeenCalledWith("box-root");
+  });
+
   it("adds the is-primary class only to the primary row when multiple nodes are selected", () => {
     const store = createHierarchyStore();
 

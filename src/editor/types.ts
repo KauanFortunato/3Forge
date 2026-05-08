@@ -131,6 +131,14 @@ export interface ImageAsset {
   height: number;
 }
 
+export interface ModelAsset {
+  id?: string;
+  name: string;
+  mimeType: "model/gltf-binary" | "model/gltf+json" | string;
+  src: string;
+  format: "glb" | "gltf";
+}
+
 export interface EditableBinding {
   path: NodePropertyPath;
   key: string;
@@ -271,6 +279,7 @@ export interface ComponentBlueprint {
   fonts: FontAsset[];
   materials: MaterialAsset[];
   images: ImageAsset[];
+  models?: ModelAsset[];
   nodes: EditorNode[];
   animation: ComponentAnimation;
 }

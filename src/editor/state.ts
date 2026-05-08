@@ -154,10 +154,7 @@ const GROUP_PIVOT_PRESET_ORIGINS: Record<GroupPivotPreset, NodeOriginSpec> = {
 };
 
 export function createDefaultBlueprint(): ComponentBlueprint {
-  const root = createNode("group", null, ROOT_NODE_ID);
-  root.name = "Component Root";
-
-  const panel = createNode("box", root.id);
+  const panel = createNode("box", null);
   panel.name = "Hero Panel";
   panel.geometry.width = 2.6;
   panel.geometry.height = 1.2;
@@ -166,7 +163,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
   panel.material.opacity = 0.9;
   panel.transform.position.y = 0.8;
 
-  const accent = createNode("plane", panel.id);
+  const accent = createNode("plane", null);
   accent.name = "Accent Plate";
   accent.geometry.width = 2.1;
   accent.geometry.height = 0.35;
@@ -174,7 +171,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
   accent.transform.position.y = 0.55;
   accent.transform.position.z = 0.14;
 
-  const title = createNode("text", panel.id);
+  const title = createNode("text", null);
   title.name = "Headline";
   title.geometry.text = "3Forge";
   title.geometry.size = 0.28;
@@ -189,7 +186,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
     fonts: [],
     materials: [],
     images: [],
-    nodes: [root, panel, accent, title],
+    nodes: [panel, accent, title],
     animation: createDefaultAnimation(),
   };
 }
@@ -720,7 +717,7 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
 
   const node = createNode(
     type,
-    source.parentId === null || typeof source.parentId === "string" ? source.parentId : ROOT_NODE_ID,
+    source.parentId === null || typeof source.parentId === "string" ? source.parentId : null,
     typeof source.id === "string" ? source.id : generateId(type),
   );
 
@@ -818,12 +815,8 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     usedIds.add(node.id);
   }
 
-  let root = importedNodes.find((node) => node.id === ROOT_NODE_ID && node.type === "group");
-  if (!root) {
-    root = createNode("group", null, ROOT_NODE_ID);
-    root.name = "Component Root";
-    importedNodes.unshift(root);
-  } else {
+  const root = importedNodes.find((node) => node.id === ROOT_NODE_ID && node.type === "group");
+  if (root) {
     root.parentId = null;
   }
 
@@ -835,7 +828,7 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     }
 
     if (!node.parentId || !groupIds.has(node.parentId)) {
-      node.parentId = ROOT_NODE_ID;
+      node.parentId = null;
     }
 
     if (node.type === "text" && !availableFontIds.has(node.fontId)) {
@@ -1141,9 +1134,7 @@ export class EditorStore extends EventTarget {
   }
 
   getSelectionRootIds(nodeIds: string[] = this._selectedNodeIds): string[] {
-    const selection = new Set(
-      this.sanitizeSelectionIds(nodeIds, this._selectedNodeId).filter((nodeId) => nodeId !== ROOT_NODE_ID),
-    );
+    const selection = new Set(this.sanitizeSelectionIds(nodeIds, this._selectedNodeId));
 
     return this._blueprint.nodes
       .filter((node) => selection.has(node.id) && !this.hasSelectedAncestor(node.parentId, selection))
@@ -1840,12 +1831,10 @@ export class EditorStore extends EventTarget {
   }
 
   selectAll(source: EditorStoreChange["source"] = "ui"): void {
-    const selectableIds = this._blueprint.nodes
-      .filter((node) => node.id !== ROOT_NODE_ID)
-      .map((node) => node.id);
+    const selectableIds = this._blueprint.nodes.map((node) => node.id);
 
     if (selectableIds.length === 0) {
-      this.setSelectedNodes([ROOT_NODE_ID], source, ROOT_NODE_ID);
+      this.setSelectedNodes([], source, undefined);
       return;
     }
 
@@ -1856,7 +1845,8 @@ export class EditorStore extends EventTarget {
   }
 
   clearSelection(source: EditorStoreChange["source"] = "ui"): void {
-    this.setSelectedNodes([ROOT_NODE_ID], source, ROOT_NODE_ID);
+    const fallbackId = this._blueprint.nodes[0]?.id;
+    this.setSelectedNodes(fallbackId ? [fallbackId] : [], source, fallbackId);
   }
 
   moveSelectedNodes(
@@ -1865,7 +1855,10 @@ export class EditorStore extends EventTarget {
     source: EditorStoreChange["source"] = "ui",
   ): boolean {
     const rootIds = this.getSelectionRootIds();
-    const movableIds = rootIds.filter((nodeId) => nodeId !== ROOT_NODE_ID);
+    const movableIds = rootIds.filter((nodeId) => {
+      const node = this.getNode(nodeId);
+      return !(node?.id === ROOT_NODE_ID && node.type === "group" && node.parentId === null);
+    });
     if (movableIds.length === 0) {
       return false;
     }
@@ -1874,15 +1867,14 @@ export class EditorStore extends EventTarget {
       return this.moveNode(movableIds[0], parentId, siblingIndex, source);
     }
 
-    const targetParentId = parentId ?? ROOT_NODE_ID;
-    const parent = this.getNode(targetParentId);
-    if (!parent || parent.type !== "group") {
+    const targetParentId = this.resolveContainerParentId(parentId);
+    if (targetParentId === undefined) {
       return false;
     }
 
     for (const nodeId of movableIds) {
       const descendants = new Set(this.getDescendantIds(nodeId));
-      if (descendants.has(targetParentId) || targetParentId === nodeId) {
+      if ((targetParentId !== null && descendants.has(targetParentId)) || targetParentId === nodeId) {
         return false;
       }
     }
@@ -1911,7 +1903,7 @@ export class EditorStore extends EventTarget {
     const selected = this.selectedNode;
     const parentId = selected?.type === "group"
       ? selected.id
-      : selected?.parentId ?? ROOT_NODE_ID;
+      : selected?.parentId ?? null;
 
     return this.insertNode(type, parentId, undefined, source);
   }
@@ -1920,7 +1912,7 @@ export class EditorStore extends EventTarget {
     const selected = this.selectedNode;
     const parentId = selected?.type === "group"
       ? selected.id
-      : selected?.parentId ?? ROOT_NODE_ID;
+      : selected?.parentId ?? null;
 
     return this.insertImageNode(image, parentId, undefined, source);
   }
@@ -2012,7 +2004,7 @@ export class EditorStore extends EventTarget {
     source: EditorStoreChange["source"] = "ui",
   ): string[] {
     const targetParentId = this.resolvePasteParentId(parentId);
-    if (!targetParentId) {
+    if (targetParentId === undefined) {
       return [];
     }
 
@@ -2097,7 +2089,7 @@ export class EditorStore extends EventTarget {
       .map((nodeId) => this.getNode(nodeId))
       .filter((node): node is EditorNode => Boolean(node));
 
-    const parentId = rootNodes[0]?.parentId ?? ROOT_NODE_ID;
+    const parentId = rootNodes[0]?.parentId ?? null;
     if (!rootNodes.every((node) => node.parentId === parentId)) {
       return null;
     }
@@ -2148,7 +2140,7 @@ export class EditorStore extends EventTarget {
     }
 
     const idsToDelete = new Set(rootIds.flatMap((nodeId) => [nodeId, ...this.getDescendantIds(nodeId)]));
-    const fallbackParentId = this.getNode(rootIds[0])?.parentId ?? ROOT_NODE_ID;
+    const fallbackParentId = this.getNode(rootIds[0])?.parentId ?? null;
 
     this.recordHistorySnapshot();
     this._blueprint.nodes = this._blueprint.nodes.filter((node) => !idsToDelete.has(node.id));
@@ -2156,46 +2148,56 @@ export class EditorStore extends EventTarget {
       ...clip,
       tracks: clip.tracks.filter((track) => !idsToDelete.has(track.nodeId)),
     }));
-    this._selectedNodeIds = this.sanitizeSelectionIds([fallbackParentId], fallbackParentId);
+    this._selectedNodeIds = this.sanitizeSelectionIds([fallbackParentId].filter((id): id is string => Boolean(id)), fallbackParentId);
     this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, fallbackParentId);
     this.ensureUniqueBindingKeys();
     this.notify({ reason: "structure", source, nodeId: rootIds[0] });
   }
 
   deleteNode(nodeId: string, source: EditorStoreChange["source"] = "ui"): void {
-    if (nodeId === ROOT_NODE_ID || !this.getNode(nodeId)) {
+    const removedNode = this.getNode(nodeId);
+    if (!removedNode) {
       return;
     }
 
-    const idsToDelete = new Set([nodeId, ...this.getDescendantIds(nodeId)]);
-    const removedNode = this.getNode(nodeId);
+    const isLegacyRootGroup = removedNode.id === ROOT_NODE_ID && removedNode.type === "group" && removedNode.parentId === null;
+    const idsToDelete = isLegacyRootGroup
+      ? new Set([nodeId])
+      : new Set([nodeId, ...this.getDescendantIds(nodeId)]);
+    const fallbackParentId = removedNode.parentId ?? null;
 
     this.recordHistorySnapshot();
+    if (isLegacyRootGroup) {
+      for (const child of this._blueprint.nodes) {
+        if (child.parentId === nodeId) {
+          child.parentId = null;
+        }
+      }
+    }
     this._blueprint.nodes = this._blueprint.nodes.filter((node) => !idsToDelete.has(node.id));
     this._blueprint.animation.clips = this._blueprint.animation.clips.map((clip) => ({
       ...clip,
       tracks: clip.tracks.filter((track) => !idsToDelete.has(track.nodeId)),
     }));
-    this._selectedNodeIds = this.sanitizeSelectionIds([removedNode?.parentId ?? ROOT_NODE_ID], removedNode?.parentId ?? ROOT_NODE_ID);
-    this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, removedNode?.parentId ?? ROOT_NODE_ID);
+    this._selectedNodeIds = this.sanitizeSelectionIds([fallbackParentId].filter((id): id is string => Boolean(id)), fallbackParentId);
+    this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, fallbackParentId);
     this.ensureUniqueBindingKeys();
     this.notify({ reason: "structure", source, nodeId });
   }
 
   reparentNode(nodeId: string, parentId: string | null, source: EditorStoreChange["source"] = "ui"): boolean {
     const node = this.getNode(nodeId);
-    if (!node || node.id === ROOT_NODE_ID) {
+    if (!node) {
       return false;
     }
 
-    const targetParentId = parentId ?? ROOT_NODE_ID;
-    const parent = this.getNode(targetParentId);
-    if (!parent || parent.type !== "group") {
+    const targetParentId = this.resolveContainerParentId(parentId);
+    if (targetParentId === undefined) {
       return false;
     }
 
     const blocked = new Set(this.getDescendantIds(nodeId));
-    if (blocked.has(targetParentId) || targetParentId === nodeId || node.parentId === targetParentId) {
+    if ((targetParentId !== null && blocked.has(targetParentId)) || targetParentId === nodeId || node.parentId === targetParentId) {
       return false;
     }
 
@@ -2212,18 +2214,17 @@ export class EditorStore extends EventTarget {
     source: EditorStoreChange["source"] = "ui",
   ): boolean {
     const node = this.getNode(nodeId);
-    if (!node || node.id === ROOT_NODE_ID) {
+    if (!node) {
       return false;
     }
 
-    const targetParentId = parentId ?? ROOT_NODE_ID;
-    const parent = this.getNode(targetParentId);
-    if (!parent || parent.type !== "group") {
+    const targetParentId = this.resolveContainerParentId(parentId);
+    if (targetParentId === undefined) {
       return false;
     }
 
     const blocked = new Set(this.getDescendantIds(nodeId));
-    if (blocked.has(targetParentId) || targetParentId === nodeId) {
+    if ((targetParentId !== null && blocked.has(targetParentId)) || targetParentId === nodeId) {
       return false;
     }
 
@@ -3298,27 +3299,24 @@ export class EditorStore extends EventTarget {
     }
   }
 
-  private resolvePasteParentId(parentId: string | null): string | null {
-    const targetParentId = parentId ?? ROOT_NODE_ID;
-    const parent = this.getNode(targetParentId);
-    if (!parent || parent.type !== "group") {
+  private resolveContainerParentId(parentId: string | null): string | null | undefined {
+    if (parentId === null) {
       return null;
     }
 
-    return targetParentId;
+    const parent = this.getNode(parentId);
+    return parent?.type === "group" ? parentId : undefined;
   }
 
-  private resolveInsertParentId(parentId: string | null): string {
-    const targetParentId = parentId ?? ROOT_NODE_ID;
-    const parent = this.getNode(targetParentId);
-    if (!parent || parent.type !== "group") {
-      return ROOT_NODE_ID;
-    }
-
-    return targetParentId;
+  private resolvePasteParentId(parentId: string | null): string | null | undefined {
+    return this.resolveContainerParentId(parentId);
   }
 
-  private sanitizeSelectionIds(nodeIds: string[], fallbackNodeId: string): string[] {
+  private resolveInsertParentId(parentId: string | null): string | null {
+    return this.resolveContainerParentId(parentId) ?? null;
+  }
+
+  private sanitizeSelectionIds(nodeIds: string[], fallbackNodeId: string | null): string[] {
     const nextNodeIds: string[] = [];
     const seen = new Set<string>();
 
@@ -3335,7 +3333,7 @@ export class EditorStore extends EventTarget {
       return nextNodeIds;
     }
 
-    const fallbackId = this.getNode(fallbackNodeId)?.id ?? this._blueprint.nodes[0]?.id ?? ROOT_NODE_ID;
+    const fallbackId = (fallbackNodeId ? this.getNode(fallbackNodeId)?.id : undefined) ?? this._blueprint.nodes[0]?.id;
     return this.getNode(fallbackId) ? [fallbackId] : [];
   }
 
@@ -3559,7 +3557,7 @@ function stripExtension(fileName: string): string {
 function insertSubtreeIntoBlueprint(
   nodes: EditorNode[],
   subtree: EditorNode[],
-  parentId: string,
+  parentId: string | null,
   siblingIndex?: number,
 ): EditorNode[] {
   const insertionIndex = findInsertionIndex(nodes, parentId, siblingIndex);
@@ -3572,14 +3570,14 @@ function insertSubtreeIntoBlueprint(
 
 function findInsertionIndex(
   nodes: EditorNode[],
-  parentId: string,
+  parentId: string | null,
   siblingIndex?: number,
 ): number {
   const siblings = nodes.filter((node) => node.parentId === parentId);
   const normalizedIndex = clampInteger(siblingIndex ?? siblings.length, 0, siblings.length);
 
   if (normalizedIndex === 0) {
-    const parentIndex = nodes.findIndex((node) => node.id === parentId);
+    const parentIndex = parentId ? nodes.findIndex((node) => node.id === parentId) : -1;
     if (parentIndex >= 0) {
       return parentIndex + 1;
     }

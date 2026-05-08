@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "../animation";
-import { createDefaultBlueprint } from "../state";
+import { createDefaultBlueprint, createNode, ROOT_NODE_ID } from "../state";
 import {
   createWorkspaceProjectContext,
   markWorkspaceSessionActive,
@@ -597,7 +597,7 @@ describe("App", () => {
 
     await screen.findByText("Imported animation hero-animation.json.");
     expect(screen.getByDisplayValue("3Forge-Component")).toBeTruthy();
-    expect(screen.getByText("blueprint / 4 nodes")).toBeTruthy();
+    expect(screen.getByText("blueprint / 3 nodes")).toBeTruthy();
   });
 
   it("keeps a history of multiple recent projects instead of overwriting the current one", async () => {
@@ -787,7 +787,15 @@ describe("App", () => {
   });
 
   it("toggles collapse and expand all from the hierarchy header", () => {
-    persistLocalWorkspace("Hierarchy Toggle");
+    const root = createNode("group", null, ROOT_NODE_ID);
+    root.name = "Component Root";
+    const panel = createNode("box", ROOT_NODE_ID, "hero-panel");
+    panel.name = "Hero Panel";
+    persistWorkspace({
+      ...createDefaultBlueprint(),
+      componentName: "Hierarchy Toggle",
+      nodes: [root, panel],
+    }, createWorkspaceProjectContext());
     markWorkspaceSessionActive();
     mockNavigationType("reload");
 

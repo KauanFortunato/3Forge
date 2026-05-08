@@ -42,7 +42,7 @@ interface InspectorPanelProps {
   materials?: MaterialAsset[];
   images?: Array<ImageAsset & { id: string }>;
   onNodeNameChange: (nodeId: string, value: string) => void;
-  onParentChange: (nodeId: string, parentId: string) => void;
+  onParentChange: (nodeId: string, parentId: string | null) => void;
   onNodeOriginChange: (nodeId: string, origin: Partial<NodeOriginSpec>) => void;
   onGroupPivotPresetApply: (nodeId: string, preset: GroupPivotPreset) => void;
   getEligibleParents: (nodeId: string) => EditorNode[];
@@ -68,6 +68,7 @@ interface InspectorPanelProps {
 }
 
 const NUMERIC_INPUT_TYPES = new Set<NodePropertyDefinition["input"]>(["number", "degrees"]);
+const SCENE_ROOT_PARENT_VALUE = "__scene_root__";
 const POSITION_DRAG_STEP_MULTIPLIER = 0.25;
 type AnimationOverrideMap = Record<string, { frame: number; value: number }>;
 
@@ -294,11 +295,13 @@ export function InspectorPanel(props: InspectorPanelProps) {
           <div className="row">
             <span className="row__lbl">Parent</span>
             <CustomSelect
-              value={primaryNode.parentId ?? ROOT_NODE_ID}
-              disabled={primaryNode.id === ROOT_NODE_ID}
-              onChange={(value) => onParentChange(primaryNode.id, value)}
+              value={primaryNode.parentId ?? SCENE_ROOT_PARENT_VALUE}
+              onChange={(value) => onParentChange(primaryNode.id, value === SCENE_ROOT_PARENT_VALUE ? null : value)}
               ariaLabel="Parent Group"
-              options={getEligibleParents(primaryNode.id).map((group) => ({ value: group.id, label: group.name }))}
+              options={[
+                { value: SCENE_ROOT_PARENT_VALUE, label: "Scene Root" },
+                ...getEligibleParents(primaryNode.id).map((group) => ({ value: group.id, label: group.name })),
+              ]}
             />
             <span aria-hidden="true" />
           </div>

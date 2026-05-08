@@ -22,10 +22,59 @@ describe("exports", () => {
     expect(JSON.parse(json)).toEqual(blueprint);
   });
 
+  it("generates TypeScript that loads external GLB model assets", () => {
+    const blueprint = createBlueprintFixture();
+    blueprint.componentName = "Model Export";
+    blueprint.models = [{
+      id: "model-ship",
+      name: "Ship.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,c2hpcA==",
+      format: "glb",
+    }];
+    blueprint.nodes.push({
+      id: "ship-node",
+      name: "Hero Ship",
+      type: "model",
+      parentId: null,
+      visible: true,
+      transform: {
+        position: { x: 1, y: 2, z: 3 },
+        rotation: { x: 0.1, y: 0.2, z: 0.3 },
+        scale: { x: 2, y: 2, z: 2 },
+      },
+      origin: { x: "center", y: "center", z: "center" },
+      editable: {},
+      modelId: "model-ship",
+    } as never);
+
+    const output = generateTypeScriptComponent(blueprint, {
+      modelAssetPathsById: {
+        "model-ship": "./assets/models/ship.glb",
+      },
+    });
+    const transpiled = ts.transpileModule(output, {
+      compilerOptions: {
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.ESNext,
+      },
+      reportDiagnostics: true,
+    });
+
+    expect(output).toContain('import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";');
+    expect(output).toContain('const heroShipModelData = "./assets/models/ship.glb" as const;');
+    expect(output).toContain("const gltfLoader = new GLTFLoader();");
+    expect(output).toContain("gltfLoader.loadAsync(heroShipModelData)");
+    expect(output).toContain("const heroShip = heroShipGltf.scene.clone(true) as Group;");
+    expect(output).toContain("heroShip.position.set(1, 2, 3);");
+    expect(output).toContain("heroShip.scale.set(2, 2, 2);");
+    expect(transpiled.diagnostics ?? []).toEqual([]);
+  });
+
   it("generates a TypeScript component that covers runtime bindings, assets, fonts, and animation", () => {
     const blueprint = createBlueprintFixture();
     blueprint.componentName = "Hero Banner";
-    const groupNode = createNode("group", ROOT_NODE_ID, "group-1");
+    const groupNode = createNode("group", null, "group-1");
     groupNode.name = "Panel Group";
     groupNode.pivotOffset = { x: -1.5, y: 0.75, z: 2 };
     blueprint.nodes.push(groupNode);
@@ -200,12 +249,16 @@ describe("exports", () => {
 
   it("uses editable root visibility bindings in exported options and runtime assignment", () => {
     const blueprint = createBlueprintFixture();
-    const rootNode = blueprint.nodes.find((node) => node.id === ROOT_NODE_ID);
+    const rootNode = createNode("group", null, ROOT_NODE_ID);
+    rootNode.name = "Component Root";
+    for (const node of blueprint.nodes) {
+      if (node.parentId === null) {
+        node.parentId = ROOT_NODE_ID;
+      }
+    }
+    blueprint.nodes.unshift(rootNode);
 
     expect(rootNode).toBeTruthy();
-    if (!rootNode) {
-      throw new Error("Expected root node.");
-    }
 
     rootNode.visible = false;
     rootNode.editable = {

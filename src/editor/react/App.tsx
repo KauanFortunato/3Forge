@@ -244,7 +244,7 @@ const TRANSFORM_ANIMATION_PROPERTIES = [
 
 type PendingImageImport =
   | { mode: "asset" }
-  | { mode: "create"; parentId: string; index?: number }
+  | { mode: "create"; parentId: string | null; index?: number }
   | { mode: "replace"; nodeId: string }
   | { mode: "replaceAsset"; imageId: string };
 
@@ -254,7 +254,7 @@ interface PendingJsonDropImport {
 }
 
 interface InsertTarget {
-  parentId: string;
+  parentId: string | null;
   index?: number;
 }
 
@@ -970,13 +970,13 @@ export function App() {
       return false;
     }
 
-    const parentId = store.getNode(nodeIds[0])?.parentId ?? ROOT_NODE_ID;
+    const parentId = store.getNode(nodeIds[0])?.parentId ?? null;
     return nodeIds.every((nodeId) => store.getNode(nodeId)?.parentId === parentId);
   }, [store]);
 
   const resolveSelectionInsertTarget = useCallback((): InsertTarget => {
     if (!selectedNode) {
-      return { parentId: ROOT_NODE_ID };
+      return { parentId: null };
     }
 
     if (selectedNode.type === "group") {
@@ -987,7 +987,7 @@ export function App() {
     }
 
     return {
-      parentId: selectedNode.parentId ?? ROOT_NODE_ID,
+      parentId: selectedNode.parentId,
       index: getSiblingIndex(selectedNode.id) + 1,
     };
   }, [getSiblingIndex, selectedNode, store]);
@@ -1010,7 +1010,7 @@ export function App() {
     }
 
     return {
-      parentId: node.parentId ?? ROOT_NODE_ID,
+      parentId: node.parentId,
       index: getSiblingIndex(node.id) + 1,
     };
   }, [getSiblingIndex, resolveSelectionInsertTarget, store]);
@@ -1493,7 +1493,7 @@ export function App() {
   }, [activeClip, currentFrame, handleInspectorPropertyPreview, store]);
 
   const handleCopy = useCallback(() => {
-    const targetRootIds = selectedRootIds.filter((nodeId) => nodeId !== ROOT_NODE_ID);
+    const targetRootIds = selectedRootIds;
     if (targetRootIds.length === 0) {
       return;
     }
@@ -1536,7 +1536,7 @@ export function App() {
 
   const handleCopyProperties = useCallback(() => {
     const primary = store.selectedNode;
-    if (!primary || primary.id === ROOT_NODE_ID) {
+    if (!primary) {
       return;
     }
 
@@ -1579,7 +1579,7 @@ export function App() {
 
   const handleDelete = useCallback((nodeId?: string | null) => {
     const targetRootIds = resolveContextSelectionRootIds(nodeId ?? null);
-    if (targetRootIds.length === 0 || (targetRootIds.length === 1 && targetRootIds[0] === ROOT_NODE_ID)) {
+    if (targetRootIds.length === 0) {
       return;
     }
 
@@ -1617,7 +1617,7 @@ export function App() {
 
   const handleDuplicate = useCallback((nodeId?: string | null) => {
     const targetId = nodeId ?? storeView.selectedNodeId;
-    if (!targetId || targetId === ROOT_NODE_ID) {
+    if (!targetId) {
       return;
     }
 
@@ -1626,12 +1626,12 @@ export function App() {
       return;
     }
 
-    const newRootId = store.pasteNodes(collectSubtreeNodes(targetId), node.parentId ?? ROOT_NODE_ID);
+    const newRootId = store.pasteNodes(collectSubtreeNodes(targetId), node.parentId);
     if (!newRootId) {
       return;
     }
 
-    store.moveNode(newRootId, node.parentId ?? ROOT_NODE_ID, getSiblingIndex(targetId) + 1);
+    store.moveNode(newRootId, node.parentId, getSiblingIndex(targetId) + 1);
     const duplicated = store.getNode(newRootId);
     setTransientStatus(duplicated ? `Duplicated "${duplicated.name}".` : "Duplicated selection.");
   }, [collectSubtreeNodes, getSiblingIndex, setTransientStatus, store, storeView.selectedNodeId]);
@@ -2552,9 +2552,9 @@ export function App() {
       : (nodeId ? store.getSelectionRootIds([nodeId]) : []);
     const canGroupSelection = canGroupNodeIds(contextRootIds);
     const contextTargetId = contextRootIds.length === 1 ? contextRootIds[0] : nodeId;
-    const propertyTargetIds = contextRootIds.filter((id) => id !== ROOT_NODE_ID);
+    const propertyTargetIds = contextRootIds;
     const primaryForCopy = contextTargetId ? store.getNode(contextTargetId) : null;
-    const canCopyProperties = Boolean(primaryForCopy) && contextTargetId !== ROOT_NODE_ID;
+    const canCopyProperties = Boolean(primaryForCopy);
     const hasClipboard = Boolean(store.propertyClipboard);
     const canPasteAny = hasClipboard
       && propertyTargetIds.length > 0
@@ -2574,7 +2574,7 @@ export function App() {
         shortcut: "Ctrl+Shift+C",
         disabled: !canCopyProperties,
         onSelect: () => {
-          if (contextTargetId && contextTargetId !== ROOT_NODE_ID) {
+          if (contextTargetId) {
             store.selectNode(contextTargetId);
           }
           handleCopyProperties();
@@ -2628,9 +2628,9 @@ export function App() {
         }
         : { id: "ctx-paste-special", label: "Paste Special", icon: <FileIcon width={14} height={14} />, disabled: true },
       { id: "ctx-divider-2", separator: true },
-      { id: "ctx-duplicate", label: "Duplicate", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C / Ctrl+V", disabled: !contextTargetId || contextTargetId === ROOT_NODE_ID || contextRootIds.length > 1, onSelect: () => handleDuplicate(contextTargetId) },
+      { id: "ctx-duplicate", label: "Duplicate", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C / Ctrl+V", disabled: !contextTargetId || contextRootIds.length > 1, onSelect: () => handleDuplicate(contextTargetId) },
       { id: "ctx-frame", label: "Frame", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: contextRootIds.length === 0 && !targetNode, onSelect: () => { if (nodeId && !shouldUseExistingSelection) store.selectNode(nodeId); handleFrameSelection(); } },
-      { id: "ctx-delete", label: contextRootIds.length > 1 ? "Delete Selected" : "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: contextRootIds.length === 0 || (contextRootIds.length === 1 && contextRootIds[0] === ROOT_NODE_ID), onSelect: () => handleDelete(nodeId ?? undefined) },
+      { id: "ctx-delete", label: contextRootIds.length > 1 ? "Delete Selected" : "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: contextRootIds.length === 0, onSelect: () => handleDelete(nodeId ?? undefined) },
     ];
 
     setContextMenu({ x: event.clientX, y: event.clientY, items });
@@ -2855,14 +2855,14 @@ export function App() {
         { id: "edit-undo", label: "Undo", icon: <UndoIcon width={14} height={14} />, shortcut: "Ctrl+Z", disabled: !storeView.canUndo, onSelect: () => store.undo() },
         { id: "edit-redo", label: "Redo", icon: <RedoIcon width={14} height={14} />, shortcut: "Ctrl+Y", disabled: !storeView.canRedo, onSelect: () => store.redo() },
         { id: "edit-divider-1", separator: true },
-        { id: "edit-copy", label: "Copy", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C", disabled: selectedRootIds.length === 0 || (selectedRootIds.length === 1 && selectedRootIds[0] === ROOT_NODE_ID), onSelect: handleCopy },
+        { id: "edit-copy", label: "Copy", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C", disabled: selectedRootIds.length === 0, onSelect: handleCopy },
         { id: "edit-paste", label: "Paste", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+V", disabled: !clipboardRef.current, onSelect: () => handlePaste() },
         {
           id: "edit-copy-properties",
           label: "Copy Properties",
           icon: <CopyIcon width={14} height={14} />,
           shortcut: "Ctrl+Shift+C",
-          disabled: !selectedNode || selectedNode.id === ROOT_NODE_ID,
+          disabled: !selectedNode,
           onSelect: handleCopyProperties,
         },
         {
@@ -2912,7 +2912,7 @@ export function App() {
             ],
           }
           : { id: "edit-paste-special", label: "Paste Special", icon: <FileIcon width={14} height={14} />, disabled: true },
-        { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: (!selectedTrackId || !selectedKeyframeId) && (selectedRootIds.length === 0 || (selectedRootIds.length === 1 && selectedRootIds[0] === ROOT_NODE_ID)), onSelect: handleDeleteSelection },
+        { id: "edit-delete", label: "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: (!selectedTrackId || !selectedKeyframeId) && selectedRootIds.length === 0, onSelect: handleDeleteSelection },
         { id: "edit-divider-2", separator: true },
         { id: "edit-frame", label: "Frame Selection", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: selectedRootIds.length === 0, onSelect: handleFrameSelection },
       ],
