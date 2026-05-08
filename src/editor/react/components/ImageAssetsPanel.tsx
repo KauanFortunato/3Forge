@@ -83,11 +83,16 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
         return { ...prev, [image.id]: { frame: cur.frame, playing: false, intervalId: null } };
       }
       const fps = seq.fps > 0 ? seq.fps : 25;
+      // Capture length at interval-creation time. A Repair-driven asset replacement
+      // always creates a new asset id (React identity changes), which causes the old
+      // interval to be cleared in the cleanup effect — so the captured length can
+      // never go stale for the asset it was created for.
+      const captured = { length: seq.frameUrls.length };
       const id = window.setInterval(() => {
         setPreviewState((p) => {
           const c = p[image.id];
           if (!c || !c.playing) return p;
-          const next = (c.frame + 1) % seq.frameUrls.length;
+          const next = (c.frame + 1) % captured.length;
           return { ...p, [image.id]: { ...c, frame: next } };
         });
       }, 1000 / fps);
@@ -128,7 +133,7 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
             const canRemove = canRemoveImage(image.id);
             const isSeq = isImageSequence(image);
             const seq = image.sequence;
-            const seqEmpty = isSeq && (!seq || seq.frameUrls.length === 0);
+            const seqEmpty = isSeq && seq!.frameUrls.length === 0;
             const isVideo = !isSeq && isVideoMimeType(image.mimeType);
             const kindLabel = isSeq ? "sequence" : isVideo ? "video" : "image";
             const localFrame = previewState[image.id]?.frame ?? 0;
