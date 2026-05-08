@@ -226,9 +226,16 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                       ) : null}
                     </span>
                     <span className="image-assets-panel__sub">
-                      {isSeq && seq
-                        ? `${seq.frameCount} frames @ ${seq.fps || 25} fps · ${seq.alpha ? "alpha" : "no alpha"}`
-                        : `${image.width} x ${image.height}px - ${usage} use${usage === 1 ? "" : "s"}`}
+                      {isSeq && seq ? (
+                        <>
+                          <span>{`${seq.frameCount} frames @ ${seq.fps || 25}fps`}</span>
+                          <span className="image-assets-panel__sub-meta">
+                            {`${seq.format} · ${seq.alpha ? "alpha" : "no alpha"}`}
+                          </span>
+                        </>
+                      ) : (
+                        `${image.width} x ${image.height}px - ${usage} use${usage === 1 ? "" : "s"}`
+                      )}
                     </span>
                   </span>
                   <span className="image-assets-panel__icon" aria-hidden="true">

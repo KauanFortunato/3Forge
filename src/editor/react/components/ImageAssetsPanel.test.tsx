@@ -262,3 +262,14 @@ it("renders the first frame as a static thumbnail (no autoplay) when a sequence 
   const playBtn = container.querySelector(".image-assets-panel__seq-play");
   expect(playBtn?.getAttribute("aria-label")).toMatch(/Play sequence preview/);
 });
+
+// ---------------------------------------------------------------------------
+// Task 13: Subline format · alpha
+// ---------------------------------------------------------------------------
+
+it("renders subline `<frameCount> frames @ <fps>fps` and `<format> · <alpha>`", () => {
+  const { container } = renderPanel([baseSeqAsset()]);
+  const sub = container.querySelector(".image-assets-panel__sub");
+  expect(sub?.textContent).toMatch(/4 frames @ 25fps/);
+  expect(sub?.textContent).toMatch(/webp · alpha/);
+});
