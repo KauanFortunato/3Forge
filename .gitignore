@@ -9,6 +9,7 @@ dist-export-runner
 .serena
 .codex
 .claude
+.gemini
 graphify-out
 skills-lock.json
 /documents
