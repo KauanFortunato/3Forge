@@ -321,6 +321,7 @@ export type EditorStoreChangeReason =
   | "font"
   | "material"
   | "image"
+  | "model"
   | "view"
   | "animation"
   | "propertyClipboard";

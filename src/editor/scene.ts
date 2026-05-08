@@ -44,6 +44,7 @@ import {
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import {
   animationValueToBoolean,
@@ -61,6 +62,7 @@ import type {
   EditorStoreChange,
   ImageNode,
   MaterialSpec,
+  ModelNode,
   NodeOriginSpec,
   TextNode,
 } from "./types";
@@ -221,6 +223,7 @@ export class SceneEditor {
   private readonly viewportRoot = new Group();
   private readonly objectMap = new Map<string, Object3D>();
   private readonly childContainerMap = new Map<string, Object3D>();
+  private readonly gltfLoader = new GLTFLoader();
   private readonly selectionBounds = new Box3();
   private readonly selectionSize = new Vector3();
   private readonly selectionCenter = new Vector3();
@@ -898,7 +901,7 @@ export class SceneEditor {
     const object = node.type === "group"
       ? this.buildGroupObject(node)
       : node.type === "model"
-        ? new Group()
+        ? this.buildModelObject(node)
       : this.buildWrappedNodeObject(node);
     object.name = node.name;
     object.visible = node.visible;
@@ -916,6 +919,35 @@ export class SceneEditor {
     content.position.set(node.pivotOffset.x, node.pivotOffset.y, node.pivotOffset.z);
     wrapper.add(content);
     this.childContainerMap.set(node.id, content);
+    return wrapper;
+  }
+
+  private buildModelObject(node: ModelNode): Object3D {
+    const wrapper = new Group();
+    const asset = this.store.getModelAsset(node.modelId);
+    if (!asset) {
+      return wrapper;
+    }
+
+    this.gltfLoader.load(
+      asset.src,
+      (gltf) => {
+        wrapper.clear();
+        const scene = gltf.scene.clone(true);
+        scene.traverse((child) => {
+          child.userData.nodeId = node.id;
+          child.userData.nodeType = node.type;
+          if (child instanceof Mesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        wrapper.add(scene);
+      },
+      undefined,
+      () => {},
+    );
+
     return wrapper;
   }
 

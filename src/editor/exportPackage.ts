@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { getAvailableFonts, getFontData } from "./fonts";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "./exports";
+import { MAX_MODEL_FILE_SIZE_BYTES, MODEL_FILE_TOO_LARGE_MESSAGE } from "./models";
 import type { ComponentBlueprint, EditableBinding, FontAsset, ImageAsset, ImageNode, ModelAsset, TransformSpec } from "./types";
 
 interface ExportModelNode {
@@ -234,9 +235,14 @@ function resolvePackagedModelPath(
 
   const extension = resolveModelExtension(model.name, model.mimeType, model.format);
   const path = createUniquePath(usedPaths, "assets/models", model.name || modelNode.name, extension);
+  const content = decodeDataUrl(model.src);
+  if (content.byteLength > MAX_MODEL_FILE_SIZE_BYTES) {
+    throw new Error(MODEL_FILE_TOO_LARGE_MESSAGE);
+  }
+
   const file = {
     path,
-    content: decodeDataUrl(model.src),
+    content,
   };
 
   modelAssetPathsBySource.set(model.src, path);

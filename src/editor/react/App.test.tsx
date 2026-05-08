@@ -551,6 +551,37 @@ describe("App", () => {
     expect(screen.queryByText("Drop image asset")).toBeNull();
   });
 
+  it("imports GLB files from the hidden model picker as linked model nodes", async () => {
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /New project/i }));
+    const modelInput = container.querySelector(
+      'input[type="file"][accept=".glb,.gltf,model/gltf-binary,model/gltf+json"]',
+    ) as HTMLInputElement;
+    const file = new File(["glb"], "hero-ship.glb", { type: "model/gltf-binary" });
+
+    fireEvent.change(modelInput, { target: { files: [file] } });
+
+    expect(await screen.findByText('Imported model "hero-ship.glb".')).toBeTruthy();
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    expect(within(hierarchyTree).getByText("hero-ship")).toBeTruthy();
+    expect(screen.getByDisplayValue("hero-ship")).toBeTruthy();
+  });
+
+  it("imports dropped GLTF files into the scene hierarchy", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /New project/i }));
+
+    const file = new File(["{}"], "layout.gltf", { type: "model/gltf+json" });
+    const dataTransfer = createDropDataTransfer([file]);
+
+    fireEvent.dragEnter(window, { dataTransfer });
+    fireEvent.drop(window, { dataTransfer });
+
+    expect(await screen.findByText('Imported model "layout.gltf".')).toBeTruthy();
+    const hierarchyTree = screen.getByRole("tree", { name: "Scene hierarchy" });
+    expect(within(hierarchyTree).getByText("layout")).toBeTruthy();
+  });
+
   it("imports an AI scene spec JSON as a real blueprint", async () => {
     const { container } = render(<App />);
     const jsonInput = container.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;

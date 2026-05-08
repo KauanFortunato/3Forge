@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultFontAsset } from "./fonts";
 import { generateTypeScriptComponent } from "./exports";
 import { createExportPackageData, createExportPackageZipBlob } from "./exportPackage";
+import { MAX_MODEL_FILE_SIZE_BYTES, MODEL_FILE_TOO_LARGE_MESSAGE } from "./models";
 import { createBlueprintFixture } from "../test/fixtures";
 
 describe("exportPackage", () => {
@@ -149,6 +150,37 @@ describe("exportPackage", () => {
     expect(typeScriptContent).toContain('import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";');
     expect(typeScriptContent).toContain('"./assets/models/shared-ship.glb"');
     expect(typeScriptContent).toContain("gltfLoader.loadAsync");
+  });
+
+  it("rejects ZIP packages with oversized embedded model assets", () => {
+    const blueprint = createBlueprintFixture();
+    const oversizedBase64Length = Math.ceil((MAX_MODEL_FILE_SIZE_BYTES + 1) / 3) * 4;
+    const oversizedBase64 = "A".repeat(oversizedBase64Length);
+    const model = {
+      id: "oversized-model",
+      name: "Oversized.glb",
+      mimeType: "model/gltf-binary",
+      src: `data:model/gltf-binary;base64,${oversizedBase64}`,
+      format: "glb" as const,
+    };
+    blueprint.models = [model];
+    blueprint.nodes.push({
+      id: "oversized-node",
+      name: "Oversized",
+      type: "model",
+      parentId: null,
+      visible: true,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      origin: { x: "center", y: "center", z: "center" },
+      editable: {},
+      modelId: model.id,
+    } as never);
+
+    expect(() => createExportPackageData(blueprint)).toThrow(MODEL_FILE_TOO_LARGE_MESSAGE);
   });
 
   it("packages the generated files into a ZIP archive", async () => {

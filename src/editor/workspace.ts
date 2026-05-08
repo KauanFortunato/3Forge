@@ -131,16 +131,17 @@ export function persistWorkspace(
   blueprint: ComponentBlueprint,
   context: WorkspaceProjectContext,
   localStorageObject: StorageLike | null = canUseBrowserStorage() ? window.localStorage : null,
-): void {
+): boolean {
   if (!localStorageObject) {
-    return;
+    return false;
   }
 
-  localStorageObject.setItem(EDITOR_AUTOSAVE_KEY, JSON.stringify(blueprint));
-  localStorageObject.setItem(WORKSPACE_CONTEXT_KEY, JSON.stringify({
+  const didPersistBlueprint = setStorageItem(localStorageObject, EDITOR_AUTOSAVE_KEY, JSON.stringify(blueprint));
+  const didPersistContext = setStorageItem(localStorageObject, WORKSPACE_CONTEXT_KEY, JSON.stringify({
     ...context,
     updatedAt: Date.now(),
   }));
+  return didPersistBlueprint && didPersistContext;
 }
 
 export function readWorkspaceProjectContext(
@@ -233,7 +234,7 @@ export function upsertRecentProject(
     .slice(0, MAX_RECENT_PROJECTS);
 
   if (localStorageObject) {
-    localStorageObject.setItem(RECENT_PROJECTS_KEY, JSON.stringify(nextEntries));
+    setStorageItem(localStorageObject, RECENT_PROJECTS_KEY, JSON.stringify(nextEntries));
   }
 
   return nextEntries;
@@ -245,7 +246,7 @@ export function removeRecentProject(
 ): RecentProjectEntry[] {
   const nextEntries = readRecentProjects(localStorageObject).filter((entry) => entry.id !== recentProjectId);
   if (localStorageObject) {
-    localStorageObject.setItem(RECENT_PROJECTS_KEY, JSON.stringify(nextEntries));
+    setStorageItem(localStorageObject, RECENT_PROJECTS_KEY, JSON.stringify(nextEntries));
     localStorageObject.removeItem(getRecentSnapshotStorageKey(recentProjectId));
   }
   return nextEntries;
@@ -255,8 +256,12 @@ export function persistRecentSnapshot(
   recentProjectId: string,
   blueprint: ComponentBlueprint,
   localStorageObject: StorageLike | null = canUseBrowserStorage() ? window.localStorage : null,
-): void {
-  localStorageObject?.setItem(getRecentSnapshotStorageKey(recentProjectId), JSON.stringify(blueprint));
+): boolean {
+  if (!localStorageObject) {
+    return false;
+  }
+
+  return setStorageItem(localStorageObject, getRecentSnapshotStorageKey(recentProjectId), JSON.stringify(blueprint));
 }
 
 export function readRecentSnapshot(
@@ -294,4 +299,13 @@ export function getRecentSnapshotStorageKey(recentProjectId: string): string {
 function getNavigationType(performanceObject: NavigationPerformanceLike | null): string {
   const entry = performanceObject?.getEntriesByType?.("navigation")?.[0] as { type?: string } | undefined;
   return entry?.type ?? "navigate";
+}
+
+function setStorageItem(storage: StorageLike, key: string, value: string): boolean {
+  try {
+    storage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
 }

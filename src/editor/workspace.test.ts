@@ -105,4 +105,19 @@ describe("workspace", () => {
     expect(persistedWorkspace?.context.fileName).toBe("fixture.json");
     expect(persistedWorkspace?.context.fileHandleId).toBe("handle-1");
   });
+
+  it("returns false instead of throwing when browser storage quota is exceeded", () => {
+    const storage = {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException("Quota exceeded", "QuotaExceededError");
+      },
+      removeItem: () => undefined,
+    };
+
+    const blueprint = createDefaultBlueprint();
+
+    expect(persistWorkspace(blueprint, createWorkspaceProjectContext(), storage)).toBe(false);
+    expect(persistRecentSnapshot("recent-quota", blueprint, storage)).toBe(false);
+  });
 });

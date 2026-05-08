@@ -19,6 +19,7 @@ import {
 } from "../fileAccess";
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
+import { isModelFile, modelFileToAsset } from "../models";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
 import {
@@ -370,6 +371,21 @@ function isImageFile(file: File): boolean {
   return file.type.startsWith("image/") || /\.(png|jpe?g|webp|svg)$/i.test(file.name);
 }
 
+function dataTransferHasModelFile(dataTransfer: DataTransfer): boolean {
+  const files = Array.from(dataTransfer.files ?? []);
+  if (files.some(isModelFile)) {
+    return true;
+  }
+
+  return Array.from(dataTransfer.items ?? []).some((item) => (
+    item.kind === "file" && (
+      item.type === "model/gltf-binary"
+      || item.type === "model/gltf+json"
+      || item.type === ""
+    )
+  ));
+}
+
 function dataTransferHasJsonFile(dataTransfer: DataTransfer): boolean {
   const files = Array.from(dataTransfer.files ?? []);
   if (files.some(isJsonFile)) {
@@ -668,6 +684,7 @@ export function App() {
   const activeFileHandleRef = useRef<BrowserFileSystemFileHandle | null>(null);
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const modelInputRef = useRef<HTMLInputElement | null>(null);
   const fontInputRef = useRef<HTMLInputElement | null>(null);
   const jsonDragDepthRef = useRef(0);
   const imageDragDepthRef = useRef(0);
@@ -826,7 +843,10 @@ export function App() {
       return;
     }
 
-    persistWorkspace(blueprintSnapshot, projectContext);
+    const didPersistWorkspace = persistWorkspace(blueprintSnapshot, projectContext);
+    if (!didPersistWorkspace) {
+      setTransientStatus("Project is too large for browser autosave. Save or export it manually.");
+    }
     setPersistedWorkspace({
       blueprint: blueprintSnapshot,
       context: {
@@ -836,7 +856,10 @@ export function App() {
     });
 
     if (projectContext.recentProjectId) {
-      persistRecentSnapshot(projectContext.recentProjectId, blueprintSnapshot);
+      const didPersistRecentSnapshot = persistRecentSnapshot(projectContext.recentProjectId, blueprintSnapshot);
+      if (!didPersistRecentSnapshot) {
+        setTransientStatus("Project is too large for recent-project storage. Save or export it manually.");
+      }
       const entry = createRecentProjectEntry({
         id: projectContext.recentProjectId,
         label: buildRecentProjectLabel(projectContext.fileName, blueprintSnapshot.componentName),
@@ -847,7 +870,7 @@ export function App() {
       });
       setRecentProjects(upsertRecentProject(entry));
     }
-  }, [blueprintSnapshot, projectContext, shouldPersistWorkspace]);
+  }, [blueprintSnapshot, projectContext, setTransientStatus, shouldPersistWorkspace]);
 
   useEffect(() => {
     if (isStarted) {
@@ -1767,8 +1790,8 @@ export function App() {
       const archive = await runTask("Packaging export ZIP…", () => createExportPackageZip(blueprintSnapshot));
       downloadBlobFile(archive.blob, archive.fileName);
       setTransientStatus(`Downloaded ${archive.fileName}.`);
-    } catch {
-      setTransientStatus("Unable to build ZIP package.");
+    } catch (error) {
+      setTransientStatus(error instanceof Error ? error.message : "Unable to build ZIP package.");
     }
   }, [blueprintSnapshot, setTransientStatus]);
 
@@ -1842,6 +1865,37 @@ export function App() {
     }
   }, [setTransientStatus, store]);
 
+  const importModelFiles = useCallback(async (files: File[]) => {
+    const modelFiles = files.filter(isModelFile);
+    if (modelFiles.length === 0) {
+      setTransientStatus("Unsupported model file. Use .glb or .gltf.");
+      return;
+    }
+
+    try {
+      let importedCount = 0;
+      let lastNodeId: string | null = null;
+      const target = resolveSelectionInsertTarget();
+      for (const file of modelFiles) {
+        const asset = await runTask(`Importing ${file.name}...`, () => modelFileToAsset(file));
+        const modelId = store.addModelAsset(asset);
+        const insertionIndex = target.index === undefined ? undefined : target.index + importedCount;
+        lastNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
+        importedCount += 1;
+      }
+
+      if (lastNodeId) {
+        store.selectNode(lastNodeId);
+      }
+
+      setTransientStatus(importedCount === 1
+        ? `Imported model "${modelFiles[0].name}".`
+        : `Imported ${importedCount} models.`);
+    } catch (error) {
+      setTransientStatus(error instanceof Error ? error.message : "Unable to import model. Use a valid .glb or embedded .gltf file.");
+    }
+  }, [resolveSelectionInsertTarget, setTransientStatus, store]);
+
   const clearAssetImageDropState = useCallback(() => {
     assetImageDragDepthRef.current = 0;
     setIsAssetImageDropActive(false);
@@ -1911,6 +1965,11 @@ export function App() {
         return;
       }
 
+      if (dataTransferHasModelFile(event.dataTransfer)) {
+        event.preventDefault();
+        return;
+      }
+
       if (dataTransferHasImageFile(event.dataTransfer)) {
         event.preventDefault();
         imageDragDepthRef.current += 1;
@@ -1929,6 +1988,12 @@ export function App() {
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
         setIsJsonDropOverlayVisible(true);
+        return;
+      }
+
+      if (dataTransferHasModelFile(event.dataTransfer)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
         return;
       }
 
@@ -1965,6 +2030,7 @@ export function App() {
     const handleDrop = (event: DragEvent) => {
       const files = Array.from(event.dataTransfer?.files ?? []);
       const jsonFile = files.find(isJsonFile) ?? null;
+      const modelFiles = files.filter(isModelFile);
       const hasImageFile = files.some(isImageFile);
 
       jsonDragDepthRef.current = 0;
@@ -1975,6 +2041,12 @@ export function App() {
       if (jsonFile) {
         event.preventDefault();
         setPendingJsonDropImport({ file: jsonFile, fileName: jsonFile.name });
+        return;
+      }
+
+      if (modelFiles.length > 0) {
+        event.preventDefault();
+        void importModelFiles(modelFiles);
         return;
       }
 
@@ -1993,7 +2065,7 @@ export function App() {
       window.removeEventListener("dragleave", handleDragLeave);
       window.removeEventListener("drop", handleDrop);
     };
-  }, []);
+  }, [importModelFiles]);
 
   const handleConfirmJsonDropImport = useCallback(async () => {
     if (!pendingJsonDropImport) {
@@ -2831,6 +2903,7 @@ export function App() {
         { id: "file-divider-2", separator: true },
         { id: "file-import-json", label: "Import JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
         { id: "file-import-image", label: "Import Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
+        { id: "file-import-model", label: "Import Model", icon: <MeshIcon width={14} height={14} />, onSelect: () => modelInputRef.current?.click() },
         { id: "file-import-font", label: "Import Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
         { id: "file-divider-3", separator: true },
         {
@@ -3639,6 +3712,23 @@ export function App() {
             pendingImageImportRef.current = null;
             setTransientStatus("Unable to import image.");
           }
+        }}
+      />
+
+      <input
+        ref={modelInputRef}
+        className="app__hidden-input"
+        type="file"
+        accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+        multiple
+        onChange={async (event) => {
+          const files = Array.from(event.target.files ?? []);
+          event.currentTarget.value = "";
+          if (files.length === 0) {
+            return;
+          }
+
+          await importModelFiles(files);
         }}
       />
 

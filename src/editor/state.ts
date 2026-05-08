@@ -1021,6 +1021,10 @@ export class EditorStore extends EventTarget {
     return this._blueprint.images;
   }
 
+  get models(): ModelAsset[] {
+    return this._blueprint.models ?? [];
+  }
+
   get canUndo(): boolean {
     return this._undoStack.length > 0;
   }
@@ -1159,6 +1163,10 @@ export class EditorStore extends EventTarget {
     return this._blueprint.images.find((image) => image.id === imageId);
   }
 
+  getModelAsset(modelId: string): ModelAsset | undefined {
+    return this.models.find((model) => model.id === modelId);
+  }
+
   getNodesUsingMaterial(materialId: string): EditorNode[] {
     return this._blueprint.nodes.filter((node) => {
       if (node.type === "group") {
@@ -1171,6 +1179,12 @@ export class EditorStore extends EventTarget {
   getNodesUsingImageAsset(imageId: string): ImageNode[] {
     return this._blueprint.nodes.filter((node): node is ImageNode => {
       return node.type === "image" && node.imageId === imageId;
+    });
+  }
+
+  getNodesUsingModelAsset(modelId: string): ModelNode[] {
+    return this._blueprint.nodes.filter((node): node is ModelNode => {
+      return node.type === "model" && node.modelId === modelId;
     });
   }
 
@@ -2075,6 +2089,35 @@ export class EditorStore extends EventTarget {
     return node.id;
   }
 
+  insertModelAssetNode(
+    modelAssetId: string,
+    parentId: string | null = ROOT_NODE_ID,
+    siblingIndex?: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): string | null {
+    const asset = this.getModelAsset(modelAssetId);
+    if (!asset) {
+      return null;
+    }
+
+    const targetParentId = this.resolveInsertParentId(parentId);
+    const node = createNode("model", targetParentId);
+    node.modelId = modelAssetId;
+    node.name = stripExtension(asset.name) || node.name;
+
+    this.recordHistorySnapshot();
+    this._blueprint.nodes = insertSubtreeIntoBlueprint(
+      this._blueprint.nodes,
+      [node],
+      targetParentId,
+      siblingIndex,
+    );
+    this._selectedNodeId = node.id;
+    this._selectedNodeIds = [node.id];
+    this.notify({ reason: "structure", source, nodeId: node.id });
+    return node.id;
+  }
+
   pasteNodes(nodes: EditorNode[], parentId: string | null, source: EditorStoreChange["source"] = "ui"): string | null {
     return this.pasteNodeSubtrees([nodes], parentId, undefined, source)[0] ?? null;
   }
@@ -2233,6 +2276,7 @@ export class EditorStore extends EventTarget {
     this._selectedNodeIds = this.sanitizeSelectionIds([fallbackParentId].filter((id): id is string => Boolean(id)), fallbackParentId);
     this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, fallbackParentId);
     this.ensureUniqueBindingKeys();
+    this.pruneUnusedModelAssets();
     this.notify({ reason: "structure", source, nodeId: rootIds[0] });
   }
 
@@ -2264,6 +2308,7 @@ export class EditorStore extends EventTarget {
     this._selectedNodeIds = this.sanitizeSelectionIds([fallbackParentId].filter((id): id is string => Boolean(id)), fallbackParentId);
     this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, fallbackParentId);
     this.ensureUniqueBindingKeys();
+    this.pruneUnusedModelAssets();
     this.notify({ reason: "structure", source, nodeId });
   }
 
@@ -3004,6 +3049,34 @@ export class EditorStore extends EventTarget {
     return true;
   }
 
+  addModelAsset(
+    model: ModelAsset,
+    options: { name?: string; id?: string } = {},
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    const id = this.makeUniqueModelId(options.id ?? model.id);
+    const proposedName = (options.name ?? model.name ?? "").trim() || "Model";
+    const name = this.makeUniqueModelName(proposedName);
+    const format = model.format === "gltf" ? "gltf" : "glb";
+    const mimeType = model.mimeType || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary");
+
+    this.recordHistorySnapshot();
+    this._blueprint.models = [
+      ...this.models,
+      {
+        id,
+        name,
+        mimeType,
+        src: model.src,
+        format,
+        ...(model.originalFileName ? { originalFileName: model.originalFileName } : {}),
+        ...(model.source ? { source: model.source } : {}),
+      },
+    ];
+    this.notify({ reason: "model", source });
+    return id;
+  }
+
   addFont(font: FontAsset, source: EditorStoreChange["source"] = "ui"): string {
     const matchingFont = this.fonts.find((item) => getFontData(item) === getFontData(font));
     if (matchingFont) {
@@ -3236,6 +3309,47 @@ export class EditorStore extends EventTarget {
       counter += 1;
     }
     return `${base} ${counter}`;
+  }
+
+  private makeUniqueModelId(proposed?: string): string {
+    const existing = new Set(this.models.map((model) => model.id));
+    const trimmed = proposed?.trim();
+    if (trimmed && !existing.has(trimmed)) {
+      return trimmed;
+    }
+
+    let id = generateId("model-asset");
+    while (existing.has(id)) {
+      id = generateId("model-asset");
+    }
+    return id;
+  }
+
+  private makeUniqueModelName(proposed: string, excludeId: string | null = null): string {
+    const base = proposed.trim() || "Model";
+    const taken = new Set(
+      this.models
+        .filter((model) => model.id !== excludeId)
+        .map((model) => model.name),
+    );
+    if (!taken.has(base)) {
+      return base;
+    }
+    let counter = 2;
+    while (taken.has(`${base} ${counter}`)) {
+      counter += 1;
+    }
+    return `${base} ${counter}`;
+  }
+
+  private pruneUnusedModelAssets(): void {
+    const usedModelIds = new Set(
+      this._blueprint.nodes
+        .filter((node): node is ModelNode => node.type === "model" && Boolean(node.modelId))
+        .map((node) => node.modelId),
+    );
+
+    this._blueprint.models = this.models.filter((model) => usedModelIds.has(model.id));
   }
 
   setNodeTransformFromObject(nodeId: string, object: Object3D, source: EditorStoreChange["source"] = "scene"): void {

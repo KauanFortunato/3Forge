@@ -388,6 +388,61 @@ describe("EditorStore", () => {
     expect(reloaded.getSnapshot()).toEqual(store.getSnapshot());
   });
 
+  it("adds model assets and inserts linked model nodes", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const firstId = store.addModelAsset({
+      id: "ship-model",
+      name: "Hero Ship.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,c2hpcA==",
+      format: "glb",
+      originalFileName: "Hero Ship.glb",
+      source: "imported",
+    });
+    const duplicateId = store.addModelAsset({
+      id: "ship-model",
+      name: "Hero Ship.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,ZHVwZQ==",
+      format: "glb",
+    });
+
+    expect(firstId).toBe("ship-model");
+    expect(duplicateId).not.toBe(firstId);
+    expect(store.models.map((model) => model.name)).toEqual(["Hero Ship.glb", "Hero Ship.glb 2"]);
+
+    const nodeId = store.insertModelAssetNode(firstId, ROOT_NODE_ID);
+    expect(nodeId).toBeTruthy();
+    expect(store.insertModelAssetNode("missing-model", ROOT_NODE_ID)).toBeNull();
+
+    const node = store.getNode(nodeId!);
+    expect(node?.type).toBe("model");
+    if (node?.type !== "model") {
+      throw new Error("Expected linked model node.");
+    }
+    expect(node.modelId).toBe(firstId);
+    expect(node.name).toBe("Hero Ship");
+    expect(store.getNodesUsingModelAsset(firstId).map((entry) => entry.id)).toEqual([nodeId]);
+  });
+
+  it("removes imported model assets when their last model node is deleted", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const modelId = store.addModelAsset({
+      id: "temporary-model",
+      name: "Temporary.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,dGVtcA==",
+      format: "glb",
+      source: "imported",
+    });
+    const nodeId = store.insertModelAssetNode(modelId, ROOT_NODE_ID);
+
+    expect(store.models).toHaveLength(1);
+    store.deleteNode(nodeId!);
+
+    expect(store.models).toHaveLength(0);
+  });
+
   it("inserts image nodes linked to existing project image assets", () => {
     const store = new EditorStore(createDefaultBlueprint());
     const assetId = store.addImageAsset({
