@@ -134,3 +134,39 @@ export async function convertMovsViaBackend(
   onProgress?.({ phase: "done" });
   return { sequences, failed };
 }
+
+/**
+ * Ask the dev backend to run `npm install` so the bundled `ffmpeg-static`
+ * dependency is materialised. Used by the editor's "Install" affordance
+ * after FFMPEG_NOT_INSTALLED. Resolves only when the backend confirms
+ * ffmpeg is now reachable; throws ConvertViaBackendError otherwise.
+ *
+ * Notes:
+ *   - This calls a dev-only endpoint; in production builds it 404s.
+ *   - The npm install can take 10-60 seconds. Caller should show a
+ *     "A instalar…" UI and avoid extra concurrent fetches.
+ */
+export async function installFfmpegViaBackend(signal: AbortSignal): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch("/api/w3d/convert-mov/install-ffmpeg", {
+      method: "POST",
+      signal,
+    });
+  } catch (err) {
+    const e = err as { name?: string };
+    if (e.name === "AbortError") throw err;
+    throw new ConvertViaBackendError("NO_BACKEND", "Conversion endpoint unreachable.");
+  }
+  if (resp.status === 404) {
+    throw new ConvertViaBackendError("NO_BACKEND", "Install endpoint not available in this build.");
+  }
+  if (!resp.ok) {
+    let body: { code?: string; message?: string } = {};
+    try { body = await resp.json(); } catch { /* non-json */ }
+    throw new ConvertViaBackendError(
+      body.code ?? `HTTP_${resp.status}`,
+      body.message ?? "Install failed",
+    );
+  }
+}

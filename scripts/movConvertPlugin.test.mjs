@@ -5,14 +5,21 @@ vi.mock("./movConversion.mjs", () => ({
   runMovConversion: vi.fn(),
   runMovConversionInTemp: vi.fn(),
   frameSizeBytes: vi.fn(() => 1024),
+  resolveFfmpegBinary: vi.fn(),
 }));
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual("node:child_process");
+  return { ...actual, spawn: vi.fn() };
+});
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual("node:fs");
   return { ...actual, existsSync: vi.fn() };
 });
 
-import { runMovConversion, runMovConversionInTemp } from "./movConversion.mjs";
+import { runMovConversion, runMovConversionInTemp, resolveFfmpegBinary } from "./movConversion.mjs";
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { movConvertPlugin } from "./movConvertPlugin.mjs";
 
 function makeReq(body) {
@@ -238,3 +245,84 @@ describe("movConvertPlugin (octet-stream upload)", () => {
   });
 });
 
+describe("movConvertPlugin (install-ffmpeg endpoint)", () => {
+  function makeFakeProc({ exitCode = 0 } = {}) {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    setImmediate(() => proc.emit("close", exitCode));
+    return proc;
+  }
+
+  function makeInstallReq() {
+    return {
+      method: "POST",
+      url: "/api/w3d/convert-mov/install-ffmpeg",
+      headers: {},
+      on(event, cb) {
+        if (event === "end") cb();
+      },
+    };
+  }
+
+  it("returns ok immediately if ffmpeg is already available", async () => {
+    resolveFfmpegBinary.mockResolvedValueOnce({ path: "/path/to/ffmpeg", source: "static" });
+    const plugin = movConvertPlugin();
+    plugin.config({}, { command: "serve" });
+    const mw = getMiddleware(plugin);
+    const res = makeRes();
+    await mw(makeInstallReq(), res);
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(true);
+    expect(body.alreadyAvailable).toBe(true);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("runs npm install and re-probes when ffmpeg is missing", async () => {
+    resolveFfmpegBinary
+      .mockResolvedValueOnce({ path: null, source: "none" }) // before
+      .mockResolvedValueOnce({ path: "/path/to/ffmpeg", source: "static" }); // after
+    spawn.mockImplementationOnce(() => makeFakeProc({ exitCode: 0 }));
+    const plugin = movConvertPlugin();
+    plugin.config({}, { command: "serve" });
+    const mw = getMiddleware(plugin);
+    const res = makeRes();
+    await mw(makeInstallReq(), res);
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(true);
+    expect(body.source).toBe("static");
+    expect(spawn).toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining(["install"]),
+      expect.objectContaining({ shell: true }),
+    );
+  });
+
+  it("returns INSTALL_FAILED when npm install exits non-zero", async () => {
+    resolveFfmpegBinary.mockResolvedValueOnce({ path: null, source: "none" });
+    spawn.mockImplementationOnce(() => makeFakeProc({ exitCode: 1 }));
+    const plugin = movConvertPlugin();
+    plugin.config({}, { command: "serve" });
+    const mw = getMiddleware(plugin);
+    const res = makeRes();
+    await mw(makeInstallReq(), res);
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body).code).toBe("INSTALL_FAILED");
+  });
+
+  it("returns STILL_MISSING when npm install succeeds but ffmpeg still not resolvable", async () => {
+    resolveFfmpegBinary
+      .mockResolvedValueOnce({ path: null, source: "none" }) // before
+      .mockResolvedValueOnce({ path: null, source: "none" }); // after — still nothing
+    spawn.mockImplementationOnce(() => makeFakeProc({ exitCode: 0 }));
+    const plugin = movConvertPlugin();
+    plugin.config({}, { command: "serve" });
+    const mw = getMiddleware(plugin);
+    const res = makeRes();
+    await mw(makeInstallReq(), res);
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body).code).toBe("STILL_MISSING");
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { convertMovsViaBackend, ConvertViaBackendError } from "./movConvertViaBackend";
+import { convertMovsViaBackend, ConvertViaBackendError, installFfmpegViaBackend } from "./movConvertViaBackend";
 
 function mockMovFile(name: string): File {
   return new File([new Uint8Array([0x6d, 0x6f, 0x76])], name, { type: "video/quicktime" });
@@ -142,6 +142,35 @@ describe("convertMovsViaBackend", () => {
     expect(result.sequences.has("good.mov")).toBe(true);
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0].mov).toBe("bad.mov");
+  });
+});
+
+describe("installFfmpegViaBackend", () => {
+  it("resolves silently when the backend reports ok", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, source: "static" }), { status: 200 }),
+    ) as typeof globalThis.fetch;
+    await expect(
+      installFfmpegViaBackend(new AbortController().signal),
+    ).resolves.toBeUndefined();
+  });
+
+  it("throws NO_BACKEND on 404", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response("not found", { status: 404 }),
+    ) as typeof globalThis.fetch;
+    await expect(
+      installFfmpegViaBackend(new AbortController().signal),
+    ).rejects.toMatchObject({ name: "ConvertViaBackendError", code: "NO_BACKEND" });
+  });
+
+  it("throws ConvertViaBackendError with the backend code on install failure", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ code: "INSTALL_FAILED", message: "exit 1" }), { status: 500 }),
+    ) as typeof globalThis.fetch;
+    await expect(
+      installFfmpegViaBackend(new AbortController().signal),
+    ).rejects.toMatchObject({ name: "ConvertViaBackendError", code: "INSTALL_FAILED" });
   });
 });
 

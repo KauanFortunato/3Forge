@@ -29,7 +29,8 @@ export interface MovConvertProgress {
 export type MovModalPhase =
   | { kind: "ask" }
   | { kind: "converting"; progress: MovConvertProgress }
-  | { kind: "error"; reason: "no-backend" | "ffmpeg-missing" | "decode-failed" | "unknown" };
+  | { kind: "installing" }
+  | { kind: "error"; reason: "no-backend" | "ffmpeg-missing" | "decode-failed" | "install-failed" | "unknown" };
 
 export interface MovConversionModalProps {
   isOpen: boolean;
@@ -47,12 +48,15 @@ export interface MovConversionModalProps {
   onAbort?: () => void;
   /** New: called when user clicks Retry during the error phase. */
   onRetry?: () => void;
+  /** New: called when user clicks "Instalar e converter" in the ffmpeg-missing error. */
+  onInstall?: () => void;
 }
 
 const ERROR_TEXT: Record<string, string> = {
   "no-backend": "Não foi possível contactar o conversor local. Podes importar sem conversão.",
-  "ffmpeg-missing": "Ferramenta de conversão (ffmpeg) não disponível. Podes importar sem conversão.",
+  "ffmpeg-missing": "Ferramenta de conversão (ffmpeg) não está instalada. Podes instalar agora ou importar sem conversão.",
   "decode-failed": "Não foi possível converter este vídeo. Podes importar sem conversão ou tentar novamente.",
+  "install-failed": "A instalação automática falhou. Podes importar sem conversão ou tentar novamente.",
   "unknown": "Não foi possível converter este vídeo. Podes importar sem conversão.",
 };
 
@@ -61,7 +65,7 @@ export function MovConversionModal(props: MovConversionModalProps) {
     isOpen, classification, projectName, isDevMode,
     phase = { kind: "ask" } as MovModalPhase,
     conversionResult, lastError,
-    onConvert, onImportWithoutConverting, onCancel, onAbort, onRetry,
+    onConvert, onImportWithoutConverting, onCancel, onAbort, onRetry, onInstall,
   } = props;
   const [folderPath, setFolderPath] = useState("");
   const [showCli, setShowCli] = useState(false);
@@ -86,14 +90,33 @@ export function MovConversionModal(props: MovConversionModalProps) {
     );
   }
 
+  // ---------- "installing" phase: shown while npm install runs in the backend ----------
+  if (phase.kind === "installing") {
+    return (
+      <Modal isOpen={isOpen} onClose={onAbort ?? onCancel} title="A preparar import" size="wide">
+        <p>A instalar ferramenta de conversão…</p>
+        <p className="mov-conv-current"><small>Este passo pode demorar até um minuto.</small></p>
+        <progress style={{ width: "100%" }} />
+        <div className="modal__actions">
+          <button type="button" onClick={onAbort ?? onCancel}>Cancel</button>
+        </div>
+      </Modal>
+    );
+  }
+
   // ---------- "error" phase: simple message + recovery options ----------
   if (phase.kind === "error") {
     const text = ERROR_TEXT[phase.reason] ?? ERROR_TEXT.unknown;
+    const showInstall = phase.reason === "ffmpeg-missing" && Boolean(onInstall);
+    const showRetry = Boolean(onRetry) && phase.reason !== "no-backend";
     return (
       <Modal isOpen={isOpen} onClose={onCancel} title="Conversão indisponível" size="wide">
         <p>{text}</p>
         <div className="modal__actions">
-          {onRetry && phase.reason !== "no-backend" && phase.reason !== "ffmpeg-missing" && (
+          {showInstall && (
+            <button type="button" onClick={onInstall}>Instalar e converter</button>
+          )}
+          {showRetry && phase.reason !== "ffmpeg-missing" && (
             <button type="button" onClick={onRetry}>Tentar novamente</button>
           )}
           <button type="button" onClick={onImportWithoutConverting}>Import Without Converting</button>

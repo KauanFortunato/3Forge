@@ -93,7 +93,12 @@ import { ShortcutDialog } from "./components/ShortcutDialog";
 import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { classifyMovAssets, collectFilesFromDirectory, parseW3DFromFolder } from "../import/w3dFolder";
-import { convertMovsViaBackend, ConvertViaBackendError, type ConvertProgress } from "../import/movConvertViaBackend";
+import {
+  convertMovsViaBackend,
+  ConvertViaBackendError,
+  installFfmpegViaBackend,
+  type ConvertProgress,
+} from "../import/movConvertViaBackend";
 import { MovConversionModal, type MovConversionResult, type MovConvertError, type MovModalPhase } from "./components/MovConversionModal";
 import { exportToW3D } from "../export/w3d";
 import { runTask } from "./hooks/useAsyncTask";
@@ -1515,6 +1520,50 @@ export function App() {
       phase: { kind: "ask" },
     });
   }, [importW3DFromFolder, runBrowserBackendConversion]);
+
+  /**
+   * Driver for the "Instalar e converter" affordance shown in the
+   * ffmpeg-missing error phase. Pivots the modal to "installing", asks
+   * the dev backend to run npm install (which materialises ffmpeg-static),
+   * and on success re-runs the browser→backend conversion automatically.
+   * On failure pivots the modal to error phase with reason install-failed
+   * so the user can retry or fall through to import-without-converting.
+   */
+  const handleInstallAndConvert = useCallback(async () => {
+    const state = movModalState;
+    if (!state) return;
+    const ctrl = new AbortController();
+    setMovModalState({
+      ...state,
+      phase: { kind: "installing" },
+      abortController: ctrl,
+    });
+    try {
+      await installFfmpegViaBackend(ctrl.signal);
+    } catch (err) {
+      const e = err as { name?: string; code?: string; message?: string };
+      if (e.name === "AbortError") {
+        setMovModalState(null);
+        return;
+      }
+      // eslint-disable-next-line no-console
+      console.warn("[mov-convert] install failed:", err);
+      const reason = e.code === "NO_BACKEND" ? "no-backend" : "install-failed";
+      setMovModalState((s) => s ? {
+        ...s,
+        phase: { kind: "error", reason },
+        abortController: undefined,
+      } : s);
+      return;
+    }
+    // Install succeeded — fall through to a fresh conversion run.
+    await runBrowserBackendConversion(
+      state.files,
+      state.classification,
+      state.projectName,
+      state.directoryHandle,
+    );
+  }, [movModalState, runBrowserBackendConversion]);
 
   const handleMovConvert = useCallback(async (
     req: { projectName: string } | { folderPath: string },
@@ -3287,6 +3336,9 @@ export function App() {
               movModalState.projectName,
               movModalState.directoryHandle,
             );
+          }}
+          onInstall={() => {
+            void handleInstallAndConvert();
           }}
         />
       )}

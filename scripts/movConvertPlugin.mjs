@@ -18,8 +18,10 @@ import path from "node:path";
 import { createReadStream, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import {
   frameSizeBytes,
+  resolveFfmpegBinary,
   runMovConversion,
   runMovConversionInTemp,
 } from "./movConversion.mjs";
@@ -160,6 +162,9 @@ export function movConvertPlugin() {
           if (req.method === "DELETE" && delJob) {
             return handleDeleteJob(res, registry, delJob[1]);
           }
+          if (req.method === "POST" && pathPart === "/install-ffmpeg") {
+            return await handleInstallFfmpeg(res);
+          }
           return send(res, 405, { code: "METHOD_NOT_ALLOWED" });
         } catch (err) {
           return send(res, 500, {
@@ -267,4 +272,62 @@ function handleGetFrame(req, res, registry, jobId, frameName) {
 function handleDeleteJob(res, registry, jobId) {
   registry.delete(jobId);
   return send(res, 200, { ok: true });
+}
+
+/**
+ * Run `npm install` in the project root so the bundled `ffmpeg-static`
+ * dependency is materialised on disk. Used by the editor's "Instalar e
+ * converter" affordance — fresh checkouts often hit FFMPEG_NOT_INSTALLED
+ * just because the user picked the project folder before running
+ * `npm install`. After install we re-probe ffmpeg and only return ok
+ * when the binary actually resolves; otherwise the modal stays in error.
+ *
+ * Safety: the only command spawned is `npm install` (no user input is
+ * concatenated into the args), and it runs in the dev-only Vite plugin
+ * which is never registered in production builds.
+ */
+async function handleInstallFfmpeg(res) {
+  // Up-front: maybe ffmpeg is already there (the user might have
+  // installed since the modal opened). Skip the npm install in that case.
+  const before = await resolveFfmpegBinary();
+  if (before.path) {
+    return send(res, 200, { ok: true, source: before.source, alreadyAvailable: true });
+  }
+  let stderr = "";
+  let stdout = "";
+  try {
+    await new Promise((resolve, reject) => {
+      // npm on Windows is `npm.cmd`; let the OS resolve via shell.
+      const proc = spawn("npm", ["install", "--no-audit", "--no-fund"], {
+        shell: true,
+        cwd: process.cwd(),
+      });
+      proc.stdout?.on("data", (c) => {
+        stdout += c.toString();
+        if (stdout.length > 32 * 1024) stdout = stdout.slice(-32 * 1024);
+      });
+      proc.stderr?.on("data", (c) => {
+        stderr += c.toString();
+        if (stderr.length > 32 * 1024) stderr = stderr.slice(-32 * 1024);
+      });
+      proc.on("error", reject);
+      proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`npm install exit ${code}`)));
+    });
+  } catch (err) {
+    const tail = stderr.split(/\r?\n/).filter(Boolean).slice(-5).join(" | ");
+    return send(res, 500, {
+      code: "INSTALL_FAILED",
+      message: tail || err?.message || "npm install failed",
+    });
+  }
+  // Re-probe so the next conversion attempt actually finds ffmpeg.
+  const after = await resolveFfmpegBinary();
+  if (!after.path) {
+    return send(res, 500, {
+      code: "STILL_MISSING",
+      message:
+        "npm install completed but ffmpeg is still not available. Verify ffmpeg-static is in package.json dependencies.",
+    });
+  }
+  return send(res, 200, { ok: true, source: after.source });
 }
