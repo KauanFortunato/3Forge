@@ -731,3 +731,40 @@ describe("Agent A5 — Task 19: no-magenta invariant", () => {
     }
   });
 });
+
+describe("Agent A5 — Task 20: PITCH_Out / PITCH_IN regression", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
+  });
+
+  it("PITCH_Out (Enable=False) registers a player but the player never advances", () => {
+    const scene = loadFixtureScene("GameName_FS");
+    const players = scene._sequencePlayers();
+
+    const pitchOutId = findNodeIdByName(scene, "PITCH_Out")!;
+    expect(pitchOutId).toBeDefined();
+    const pitchOut = players.get(pitchOutId)!;
+    expect(pitchOut).toBeDefined();
+
+    const before = pitchOut.state().currentFrame;
+    // Simulate 60 frames of animation — PITCH_Out is hidden so it must NOT advance.
+    scene._simulateFrames(60);
+    expect(pitchOut.state().currentFrame).toBe(before);
+
+    const pitchInId = findNodeIdByName(scene, "PITCH_IN")!;
+    expect(pitchInId).toBeDefined();
+    const pitchIn = players.get(pitchInId)!;
+    expect(pitchIn).toBeDefined();
+
+    // PITCH_IN is visible — its tickCount must have incremented (currentFrame
+    // can wrap to 0 with 10 frames, so we check the monotonic tick counter).
+    expect(pitchIn.state().tickCount).toBeGreaterThan(0);
+  });
+});
