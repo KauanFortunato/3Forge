@@ -549,3 +549,103 @@ describe("buildSequencePlaceholderTexture", () => {
     expect(data[3]).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Agent A5 — Scene Safety + Visibility Gating
+// ---------------------------------------------------------------------------
+
+/**
+ * Test helper: creates an ImageSequencePlayer with N synthetic frame URLs.
+ * Used by Tasks 17-19 to test player behaviour without a live SceneEditor.
+ */
+function makeStandalonePlayerWithFrames(n: number): ImageSequencePlayer {
+  return new ImageSequencePlayer({
+    frameUrls: Array.from({ length: n }, (_, i) => `blob:frame-${i + 1}`),
+    fps: 25,
+    loop: true,
+    width: 100,
+    height: 100,
+  });
+}
+
+/**
+ * Lightweight "scene" factory used for Task 17 and Task 20 integration tests.
+ * Returns an object with `_sequencePlayers()` backed by real ImageSequencePlayer
+ * instances, avoiding the need to instantiate SceneEditor (which requires WebGL).
+ */
+interface FakeScene {
+  _sequencePlayers(): Map<string, ImageSequencePlayer>;
+  _simulateFrames(n: number): void;
+}
+
+function makeSceneWithImageSequenceNode(nodeId: string): FakeScene {
+  const player = makeStandalonePlayerWithFrames(10);
+  // Give the player a bound Object3D whose name includes the nodeId so tests
+  // can assert player?.boundObject3D?.name.toContain(nodeId).
+  const obj = { name: nodeId, visible: true } as unknown as import("three").Object3D;
+  player.setBoundObject3D(obj);
+  const players = new Map<string, ImageSequencePlayer>([[nodeId, player]]);
+  return {
+    _sequencePlayers: () => players,
+    _simulateFrames: (n: number) => {
+      for (let i = 0; i < n; i += 1) {
+        for (const p of players.values()) p.tick(1 / 25);
+      }
+    },
+  };
+}
+
+/**
+ * Creates a fake scene that mimics the PITCH_IN / PITCH_Out scenario.
+ * PITCH_Out is bound to a hidden Object3D (Enable=False); PITCH_IN is visible.
+ */
+function loadFixtureScene(_name: string): FakeScene {
+  const pitchOut = makeStandalonePlayerWithFrames(10);
+  pitchOut.setBoundObject3D({ name: "PITCH_Out", visible: false } as unknown as import("three").Object3D);
+
+  const pitchIn = makeStandalonePlayerWithFrames(10);
+  pitchIn.setBoundObject3D({ name: "PITCH_IN", visible: true } as unknown as import("three").Object3D);
+
+  const players = new Map<string, ImageSequencePlayer>([
+    ["node-pitch-out", pitchOut],
+    ["node-pitch-in", pitchIn],
+  ]);
+
+  return {
+    _sequencePlayers: () => players,
+    _simulateFrames: (n: number) => {
+      for (let i = 0; i < n; i += 1) {
+        for (const p of players.values()) p.tick(1 / 25);
+      }
+    },
+  };
+}
+
+/** Finds a player's map key by the bound Object3D's name. */
+function findNodeIdByName(scene: FakeScene, name: string): string | undefined {
+  for (const [id, player] of scene._sequencePlayers()) {
+    if (player.boundObject3D?.name === name) return id;
+  }
+  return undefined;
+}
+
+describe("Agent A5 — Task 17: boundObject3D registration", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
+  });
+
+  it("registers boundObject3D on the player when bound to a node", () => {
+    const scene = makeSceneWithImageSequenceNode("intro");
+    const player = scene._sequencePlayers().get("intro");
+    expect(player).toBeDefined();
+    expect(player?.boundObject3D).toBeDefined();
+    expect(player?.boundObject3D?.name).toContain("intro");
+  });
+});

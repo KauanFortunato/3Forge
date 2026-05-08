@@ -852,6 +852,12 @@ export class SceneEditor {
     for (const node of this.store.blueprint.nodes) {
       const object = this.createObject(node);
       this.objectMap.set(node.id, object);
+      // Wire the sequence player's bound Object3D so tick() can gate on
+      // visibility. The player was created (or reused) inside createObject →
+      // createImageMesh → getOrCreateSequencePlayer, so it is already in the
+      // map by the time we reach here.
+      const player = this.sequencePlayers.get(node.id);
+      if (player) player.setBoundObject3D(object);
     }
 
     for (const node of this.store.blueprint.nodes) {
@@ -2680,6 +2686,9 @@ export class ImageSequencePlayer {
   private readonly loop: boolean;
   private readonly width: number;
   private readonly height: number;
+  /** The Object3D in the scene that this player drives. Ticking is gated on its visibility. */
+  boundObject3D: import("three").Object3D | null = null;
+
   private currentFrame = 0;
   private acc = 0;
   private paused = false;
@@ -2807,6 +2816,10 @@ export class ImageSequencePlayer {
         `[seq player] bind frame=${this.currentFrame} texture.image set version=${this.texture.version}`,
       );
     }
+  }
+
+  setBoundObject3D(obj: import("three").Object3D | null): void {
+    this.boundObject3D = obj;
   }
 
   tick(deltaSec: number): void {
