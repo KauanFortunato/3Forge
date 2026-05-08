@@ -32,7 +32,11 @@ export interface ConvertViaBackendResult {
 interface BackendManifest {
   jobId: string;
   source: string;
+  format?: "webp" | "png";
+  fallbackReason?: "webp_encoder_unavailable" | "webp_validation_failed" | null;
   sequenceJson: {
+    version?: number;
+    format?: "webp" | "png";
     framePattern: string;
     frameCount: number;
     width: number;
@@ -42,6 +46,7 @@ interface BackendManifest {
     loop: boolean;
     alpha: boolean;
     pixelFormat: string;
+    fallbackReason?: "webp_encoder_unavailable" | "webp_validation_failed";
   };
   frameCount: number;
   fps: number;
@@ -113,14 +118,17 @@ export async function convertMovsViaBackend(
       continue;
     }
 
-    sequences.set(file.name, {
+    const detectedFormat: "webp" | "png" =
+      manifest.format === "webp" || manifest.sequenceJson.format === "webp" ? "webp" : "png";
+    const fps = manifest.fps > 0 ? manifest.fps : 25;
+    const seq: ImageSequenceMetadata = {
       version: 2,
       type: "image-sequence",
-      format: "png",
+      format: detectedFormat,
       source: file.name,
       framePattern: manifest.sequenceJson.framePattern,
       frameCount: manifest.frameCount,
-      fps: manifest.fps,
+      fps,
       width: manifest.sequenceJson.width,
       height: manifest.sequenceJson.height,
       durationSec: manifest.sequenceJson.durationSec,
@@ -128,7 +136,10 @@ export async function convertMovsViaBackend(
       alpha: manifest.alpha,
       pixelFormat: "rgba",
       frameUrls: manifest.frames.map((f) => f.url),
-    });
+    };
+    const reason = manifest.fallbackReason ?? manifest.sequenceJson.fallbackReason;
+    if (reason) seq.fallbackReason = reason;
+    sequences.set(file.name, seq);
     onProgress?.({ phase: "converted", movName: file.name, movIndex: i, movTotal: movFiles.length });
   }
 

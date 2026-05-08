@@ -182,3 +182,69 @@ describe("ConvertViaBackendError", () => {
     expect(err instanceof Error).toBe(true);
   });
 });
+
+describe("convertMovsViaBackend format propagation", () => {
+  it("propagates manifest.format and manifest.fallbackReason into the resulting sequence", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const filename = String((init?.headers as Record<string, string>)?.["X-Filename"] ?? "");
+      return new Response(JSON.stringify({
+        jobId: "job-1",
+        source: filename,
+        format: "png",
+        fallbackReason: "webp_encoder_unavailable",
+        sequenceJson: {
+          version: 2, type: "image-sequence", format: "png",
+          source: filename, framePattern: "frame_%06d.png", frameCount: 1,
+          fps: 25, width: 0, height: 0, durationSec: 0,
+          loop: true, alpha: true, pixelFormat: "rgba",
+          fallbackReason: "webp_encoder_unavailable",
+        },
+        frameCount: 1, fps: 25, alpha: true,
+        frames: [{ index: 1, filename: "frame_000001.png",
+          url: "/api/w3d/convert-mov/jobs/job-1/frames/frame_000001.png", sizeBytes: 100 }],
+        ffmpegSource: "static",
+      }), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const result = await convertMovsViaBackend({
+      movFiles: [mockMovFile("intro.mov")],
+      signal: new AbortController().signal,
+    });
+    const seq = result.sequences.get("intro.mov")!;
+    expect(seq.format).toBe("png");
+    expect(seq.fallbackReason).toBe("webp_encoder_unavailable");
+    expect(seq.fps).toBe(25);
+    expect(seq.framePattern).toBe("frame_%06d.png");
+    expect(seq.frameUrls[0]).toMatch(/\.png$/);
+  });
+
+  it("emits a webp sequence with no fallbackReason on the happy path", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const filename = String((init?.headers as Record<string, string>)?.["X-Filename"] ?? "");
+      return new Response(JSON.stringify({
+        jobId: "job-2", source: filename, format: "webp", fallbackReason: null,
+        sequenceJson: {
+          version: 2, type: "image-sequence", format: "webp",
+          source: filename, framePattern: "frame_%06d.webp", frameCount: 2,
+          fps: 25, width: 0, height: 0, durationSec: 0,
+          loop: true, alpha: true, pixelFormat: "rgba",
+        },
+        frameCount: 2, fps: 25, alpha: true,
+        frames: [
+          { index: 1, filename: "frame_000001.webp", url: "/api/.../frame_000001.webp", sizeBytes: 100 },
+          { index: 2, filename: "frame_000002.webp", url: "/api/.../frame_000002.webp", sizeBytes: 100 },
+        ],
+        ffmpegSource: "static",
+      }), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const result = await convertMovsViaBackend({
+      movFiles: [mockMovFile("intro.mov")],
+      signal: new AbortController().signal,
+    });
+    const seq = result.sequences.get("intro.mov")!;
+    expect(seq.format).toBe("webp");
+    expect(seq.fallbackReason).toBeUndefined();
+    expect(seq.framePattern).toBe("frame_%06d.webp");
+  });
+});
