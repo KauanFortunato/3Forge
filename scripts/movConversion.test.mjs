@@ -263,6 +263,42 @@ describe("runMovConversionInTemp dual format", () => {
     expect(result.fallbackReason ?? null).toBeNull();
   });
 
+  it("falls back to png with reason webp_validation_failed when smoke test rejects the webp output", async () => {
+    _resetEncoderProbeCache();
+    // readdirSync calls in order:
+    //   1. cleanup loop before first ffmpeg run (webp) -> []
+    //   2. cleanup loop before second ffmpeg run (png fallback) -> []
+    //   3. frame scan after second run -> ["frame_000001.png"]
+    readdirSync
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce(["frame_000001.png"]);
+    const ffmpegArgs = [];
+    const result = await runMovConversionInTemp({
+      movBuffer: Buffer.from([0x00]),
+      filename: "x.mov",
+      jobId: "job-smoke-fail",
+      tempRoot: join(tmpdir(), "r3-mov-test-smoke"),
+      preferredFormat: "webp",
+      _ffmpegOverride: {
+        run: async (args, _framesDir) => {
+          ffmpegArgs.push(args.slice());
+        },
+      },
+      _probeOverride: { available: true },
+      _smokeOverride: { ok: false, reason: "rgba_mismatch" },
+    });
+    expect(result.sequenceJson.format).toBe("png");
+    expect(result.sequenceJson.framePattern).toBe("frame_%06d.png");
+    expect(result.fallbackReason).toBe("webp_validation_failed");
+    expect(result.framePaths[0].endsWith(".png")).toBe(true);
+    expect(result.framePaths[0].endsWith(".webp")).toBe(false);
+    // ffmpeg called twice: once for webp, once for png re-run
+    expect(ffmpegArgs.length).toBe(2);
+    expect(ffmpegArgs[0].some((a) => typeof a === "string" && a.includes("libwebp"))).toBe(true);
+    expect(ffmpegArgs[1].some((a) => typeof a === "string" && a.includes("libwebp"))).toBe(false);
+  });
+
   it("falls back to png with reason webp_encoder_unavailable when probe says no", async () => {
     _resetEncoderProbeCache();
     readdirSync

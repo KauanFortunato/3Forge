@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync
 import path from "node:path";
 
 const FRAME_PATTERN = "frame_%06d.png";
-const FRAME_PATTERN_PNG = "frame_%06d.png";
+const FRAME_PATTERN_PNG = FRAME_PATTERN;
 const FRAME_PATTERN_WEBP = "frame_%06d.webp";
 
 /**
