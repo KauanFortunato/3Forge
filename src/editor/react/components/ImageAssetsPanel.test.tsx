@@ -300,3 +300,17 @@ it("renders the fallback png pill when fallbackReason is set", () => {
   const pill = container.querySelector(".image-assets-panel__pill--fallback");
   expect(pill?.textContent).toBe("fallback png");
 });
+
+// ---------------------------------------------------------------------------
+// Task 15: Repair affordance for sequences with no frameUrls
+// ---------------------------------------------------------------------------
+
+it("calls onRepairSequence when Repair button is clicked on a sequence with no frameUrls", () => {
+  const onRepair = vi.fn();
+  const seq = baseSeqAsset({ sequence: baseSeq({ frameUrls: [] }) });
+  const { container } = renderPanel([seq], { onRepairSequence: onRepair });
+  const button = container.querySelector(".image-assets-panel__repair-btn");
+  expect(button?.textContent).toBe("Repair");
+  button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  expect(onRepair).toHaveBeenCalledWith(seq.id);
+});

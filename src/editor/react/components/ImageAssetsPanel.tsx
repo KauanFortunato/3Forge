@@ -20,6 +20,8 @@ interface ImageAssetsPanelProps {
   onReplace: (imageId: string) => void;
   onRemove: (imageId: string) => void;
   canRemoveImage: (imageId: string) => boolean;
+  /** Optional: invoked when the user clicks Repair on a sequence with no resolved frame URLs. */
+  onRepairSequence?: (imageId: string) => void;
 }
 
 interface PreviewEntry {
@@ -45,6 +47,7 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
     onReplace,
     onRemove,
     canRemoveImage,
+    onRepairSequence,
   } = props;
 
   const [loadedSrcById, setLoadedSrcById] = useState<Record<string, string>>({});
@@ -151,7 +154,19 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                     <span className="image-assets-panel__thumb" aria-hidden="true">
                       {seqEmpty ? (
                         <span className="image-assets-panel__sequence-warning">
-                          Frames missing
+                          Sequence metadata missing
+                          {onRepairSequence ? (
+                            <button
+                              type="button"
+                              className="image-assets-panel__repair-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRepairSequence(image.id);
+                              }}
+                            >
+                              Repair
+                            </button>
+                          ) : null}
                         </span>
                       ) : (
                         <>
@@ -219,9 +234,10 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                   <span className="image-assets-panel__meta">
                     <span className="image-assets-panel__name">
                       {image.name}
-                      {isSeq ? (
+                      {isSeq && !seqEmpty ? (
                         <span className="image-assets-panel__badge">SEQUENCE</span>
-                      ) : isVideo ? (
+                      ) : null}
+                      {!isSeq && isVideo ? (
                         <span className="image-assets-panel__badge">VIDEO</span>
                       ) : null}
                       {isSeq && seq ? (
