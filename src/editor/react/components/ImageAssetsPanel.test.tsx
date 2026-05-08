@@ -1,7 +1,68 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ImageAssetsPanel, type ProjectImageAsset } from "./ImageAssetsPanel";
+import type { ImageSequenceMetadata } from "../../types";
 
+// ---------------------------------------------------------------------------
+// Shared A4 test helpers (baseSeq, baseSeqAsset, renderPanel)
+// ---------------------------------------------------------------------------
+
+function baseSeq(overrides: Partial<ImageSequenceMetadata> = {}): ImageSequenceMetadata {
+  return {
+    version: 2,
+    type: "image-sequence",
+    format: "webp",
+    source: "intro.mov",
+    framePattern: "frame_%06d.webp",
+    frameCount: 4,
+    fps: 25,
+    width: 320,
+    height: 180,
+    durationSec: 0,
+    loop: true,
+    alpha: true,
+    pixelFormat: "rgba",
+    frameUrls: ["blob:first", "blob:second", "blob:third", "blob:fourth"],
+    ...overrides,
+  };
+}
+
+function baseSeqAsset(overrides: Partial<ProjectImageAsset> = {}): ProjectImageAsset {
+  return {
+    id: "seq-1",
+    name: "intro.mov",
+    mimeType: "application/x-image-sequence",
+    src: "blob:first",
+    width: 320,
+    height: 180,
+    sequence: baseSeq(),
+    ...overrides,
+  };
+}
+
+function renderPanel(
+  images: ProjectImageAsset[],
+  extra: Partial<{ onRepairSequence: (id: string) => void }> = {},
+) {
+  return render(
+    <ImageAssetsPanel
+      images={images}
+      selectedImageId={null}
+      selectedImageNodeCount={0}
+      usageById={{}}
+      onSelectImage={() => {}}
+      onImport={() => {}}
+      onApplyToSelection={() => {}}
+      onCreateNode={() => {}}
+      onReplace={() => {}}
+      onRemove={() => {}}
+      canRemoveImage={() => true}
+      onRepairSequence={extra.onRepairSequence}
+    />,
+  );
+}
+
+// Legacy helper for original describe blocks below
 const fixtureImage: ProjectImageAsset = {
   id: "image-hero",
   name: "hero.png",
@@ -11,7 +72,7 @@ const fixtureImage: ProjectImageAsset = {
   height: 256,
 };
 
-function renderPanel(overrides: Partial<Parameters<typeof ImageAssetsPanel>[0]> = {}) {
+function renderPanelWithOverrides(overrides: Partial<Parameters<typeof ImageAssetsPanel>[0]> = {}) {
   const props: Parameters<typeof ImageAssetsPanel>[0] = {
     images: [],
     selectedImageId: null,
@@ -33,7 +94,7 @@ function renderPanel(overrides: Partial<Parameters<typeof ImageAssetsPanel>[0]> 
 
 describe("ImageAssetsPanel", () => {
   it("renders the empty state and import action", () => {
-    const props = renderPanel().props;
+    const props = renderPanelWithOverrides().props;
 
     expect(screen.getByText("No reusable media yet. Import an image or video to place it in the scene.")).toBeTruthy();
 
@@ -43,7 +104,7 @@ describe("ImageAssetsPanel", () => {
   });
 
   it("lists image metadata and selects an asset", () => {
-    const props = renderPanel({
+    const props = renderPanelWithOverrides({
       images: [fixtureImage],
       usageById: { [fixtureImage.id]: 2 },
     }).props;
@@ -57,7 +118,7 @@ describe("ImageAssetsPanel", () => {
   });
 
   it("applies, creates, replaces, and removes assets through item actions", () => {
-    const props = renderPanel({
+    const props = renderPanelWithOverrides({
       images: [fixtureImage],
       selectedImageNodeCount: 1,
     }).props;
@@ -74,7 +135,7 @@ describe("ImageAssetsPanel", () => {
   });
 
   it("disables apply without image node selection and remove when the asset is protected", () => {
-    renderPanel({
+    renderPanelWithOverrides({
       images: [fixtureImage],
       selectedImageNodeCount: 0,
       canRemoveImage: vi.fn(() => false),
@@ -119,31 +180,37 @@ describe("ImageAssetsPanel - image-sequence support", () => {
   });
 
   it("renders a SEQUENCE badge for image-sequence assets (not VIDEO)", () => {
-    const { container } = renderPanel({ images: [SEQUENCE_ASSET] });
+    const { container } = renderPanelWithOverrides({ images: [SEQUENCE_ASSET] });
     const badges = container.querySelectorAll(".image-assets-panel__badge");
     expect([...badges].some((b) => b.textContent === "SEQUENCE")).toBe(true);
     expect([...badges].some((b) => b.textContent === "VIDEO")).toBe(false);
   });
 
   it("shows frameCount / fps / alpha in the sub-line", () => {
-    const { container } = renderPanel({ images: [SEQUENCE_ASSET] });
+    const { container } = renderPanelWithOverrides({ images: [SEQUENCE_ASSET] });
     const sub = container.querySelector(".image-assets-panel__sub");
     expect(sub?.textContent ?? "").toMatch(/5\s*frames/i);
     expect(sub?.textContent ?? "").toMatch(/25\s*fps/i);
     expect(sub?.textContent ?? "").toMatch(/alpha/i);
   });
 
-  it("autoplays sequence and shows a Pause button by default (sequences play like a video thumbnail)", () => {
-    const { container } = renderPanel({ images: [SEQUENCE_ASSET] });
-    // The autoplay effect runs on mount; the Pause button should be visible.
+  it("shows a Play button by default (no autoplay — static thumbnail)", () => {
+    const { container } = renderPanelWithOverrides({ images: [SEQUENCE_ASSET] });
+    // Static thumbnail: Play button (not Pause) visible
+    const playBtn = container.querySelector('button[aria-label*="Play sequence"]');
+    expect(playBtn).not.toBeNull();
+    // No pause button present initially
     const pauseBtn = container.querySelector('button[aria-label*="Pause sequence"]');
-    expect(pauseBtn).not.toBeNull();
+    expect(pauseBtn).toBeNull();
   });
 
-  it("autoplay advances frames at fps automatically (no click needed)", () => {
-    const { container } = renderPanel({ images: [SEQUENCE_ASSET] });
+  it("clicking Play starts the preview and advances frames", () => {
+    const { container } = renderPanelWithOverrides({ images: [SEQUENCE_ASSET] });
     const thumbImg = container.querySelector(".image-assets-panel__thumb img") as HTMLImageElement;
     expect(thumbImg.src).toContain("blob:frame-1");
+    // Click Play to start
+    const playBtn = container.querySelector('button[aria-label*="Play sequence"]') as HTMLButtonElement;
+    fireEvent.click(playBtn);
     // 25 fps -> 40ms per frame; advance > 40 should land on frame 2.
     act(() => {
       vi.advanceTimersByTime(50);
@@ -152,9 +219,12 @@ describe("ImageAssetsPanel - image-sequence support", () => {
     expect(thumbImg2.src).toContain("blob:frame-2");
   });
 
-  it("clicking Pause stops the autoplay", () => {
-    const { container } = renderPanel({ images: [SEQUENCE_ASSET] });
-    // Already auto-playing. Click Pause.
+  it("clicking Pause after Play stops the preview", () => {
+    const { container } = renderPanelWithOverrides({ images: [SEQUENCE_ASSET] });
+    // Click Play first
+    const playBtn = container.querySelector('button[aria-label*="Play sequence"]') as HTMLButtonElement;
+    fireEvent.click(playBtn);
+    // Now pause
     const pauseBtn = container.querySelector('button[aria-label*="Pause sequence"]') as HTMLButtonElement;
     expect(pauseBtn).not.toBeNull();
     fireEvent.click(pauseBtn);
@@ -172,8 +242,23 @@ describe("ImageAssetsPanel - image-sequence support", () => {
       ...SEQUENCE_ASSET,
       sequence: { ...SEQUENCE_ASSET.sequence!, frameUrls: [], frameCount: 0 },
     };
-    const { container } = renderPanel({ images: [broken] });
+    const { container } = renderPanelWithOverrides({ images: [broken] });
     const warning = container.querySelector(".image-assets-panel__sequence-warning");
     expect(warning).not.toBeNull();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Task 12: Static first-frame thumbnail (no autoplay)
+// ---------------------------------------------------------------------------
+
+it("renders the first frame as a static thumbnail (no autoplay) when a sequence is added", async () => {
+  const { container } = renderPanel([baseSeqAsset()]);
+  // Wait one tick to make sure no interval started.
+  await new Promise((r) => setTimeout(r, 50));
+  const img = container.querySelector("img");
+  expect(img?.getAttribute("src")).toBe("blob:first");
+  // Play overlay must be visible.
+  const playBtn = container.querySelector(".image-assets-panel__seq-play");
+  expect(playBtn?.getAttribute("aria-label")).toMatch(/Play sequence preview/);
 });
