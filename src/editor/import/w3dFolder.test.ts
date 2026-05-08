@@ -634,3 +634,156 @@ describe("parseW3DFromFolder all-sequences-ready end-to-end", () => {
     expect(result.withoutSequence.length).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Resolver priority + auto-repair tests (Tasks 5 + 6)
+// ---------------------------------------------------------------------------
+
+const INTRO_W3D = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="intro.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="intro">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+
+function seqJsonV2(opts: { format: "webp" | "png"; frameCount: number; framePattern: string }) {
+  return {
+    version: 2, type: "image-sequence", format: opts.format,
+    source: "intro.mov", framePattern: opts.framePattern, frameCount: opts.frameCount,
+    fps: 25, width: 0, height: 0, durationSec: 0, loop: true, alpha: true, pixelFormat: "rgba",
+  };
+}
+
+describe("parseW3DFromFolder resolver priority", () => {
+  let videoSrcSetter: PropertyDescriptor | undefined;
+  let imageSrcSetter: PropertyDescriptor | undefined;
+  beforeAll(() => {
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:fixture");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    videoSrcSetter = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "src");
+    Object.defineProperty(HTMLMediaElement.prototype, "src", {
+      configurable: true,
+      set(this: HTMLMediaElement, value: string) {
+        Object.defineProperty(this, "_src", { configurable: true, value });
+        if (!value) return;
+        Object.defineProperty(this, "videoWidth", { configurable: true, value: 1920 });
+        Object.defineProperty(this, "videoHeight", { configurable: true, value: 1080 });
+        queueMicrotask(() => { this.onloadedmetadata?.(new Event("loadedmetadata")); });
+      },
+      get(this: HTMLMediaElement) { return (this as unknown as { _src?: string })._src ?? ""; },
+    });
+    imageSrcSetter = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+    Object.defineProperty(HTMLImageElement.prototype, "src", {
+      configurable: true,
+      set(this: HTMLImageElement, value: string) {
+        Object.defineProperty(this, "_src", { configurable: true, value });
+        if (!value) return;
+        Object.defineProperty(this, "naturalWidth", { configurable: true, value: 4 });
+        Object.defineProperty(this, "naturalHeight", { configurable: true, value: 4 });
+        queueMicrotask(() => { this.onload?.(new Event("load")); });
+      },
+      get(this: HTMLImageElement) { return (this as unknown as { _src?: string })._src ?? ""; },
+    });
+  });
+  afterAll(() => {
+    vi.restoreAllMocks();
+    if (videoSrcSetter) Object.defineProperty(HTMLMediaElement.prototype, "src", videoSrcSetter);
+    if (imageSrcSetter) Object.defineProperty(HTMLImageElement.prototype, "src", imageSrcSetter);
+  });
+
+  const enc = new TextEncoder();
+
+  it("resolves a _webp_frames sibling as a webp sequence", async () => {
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(INTRO_W3D)),
+      makeFileWithBytes("Project/Resources/Textures/intro.mov", new Uint8Array([0])),
+      makeFileWithBytes(
+        "Project/Resources/Textures/intro_webp_frames/sequence.json",
+        enc.encode(JSON.stringify({
+          version: 2,
+          type: "image-sequence",
+          format: "webp",
+          source: "intro.mov",
+          framePattern: "frame_%06d.webp",
+          frameCount: 2,
+          fps: 25,
+          width: 0,
+          height: 0,
+          durationSec: 0,
+          loop: true,
+          alpha: true,
+          pixelFormat: "rgba",
+        })),
+      ),
+      makeFileWithBytes("Project/Resources/Textures/intro_webp_frames/frame_000001.webp", new Uint8Array([0x52, 0x49, 0x46, 0x46])),
+      makeFileWithBytes("Project/Resources/Textures/intro_webp_frames/frame_000002.webp", new Uint8Array([0x52, 0x49, 0x46, 0x46])),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "intro");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.sequence?.format).toBe("webp");
+      expect(node.image.sequence?.frameCount).toBe(2);
+    }
+  });
+
+  it("prefers _webp_frames over _png_frames when both exist", async () => {
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(INTRO_W3D)),
+      makeFileWithBytes("Project/Resources/Textures/intro.mov", new Uint8Array([0])),
+      makeFileWithBytes("Project/Resources/Textures/intro_webp_frames/sequence.json",
+        enc.encode(JSON.stringify(seqJsonV2({ format: "webp", frameCount: 1, framePattern: "frame_%06d.webp" })))),
+      makeFileWithBytes("Project/Resources/Textures/intro_webp_frames/frame_000001.webp", new Uint8Array([0x52])),
+      makeFileWithBytes("Project/Resources/Textures/intro_png_frames/sequence.json",
+        enc.encode(JSON.stringify(seqJsonV2({ format: "png", frameCount: 1, framePattern: "frame_%06d.png" })))),
+      makeFileWithBytes("Project/Resources/Textures/intro_png_frames/frame_000001.png", new Uint8Array([0x89, 0x50])),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "intro");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.sequence?.format).toBe("webp");
+    }
+  });
+
+  it("falls back to legacy _frames and tags it legacy:true", async () => {
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(INTRO_W3D)),
+      makeFileWithBytes("Project/Resources/Textures/intro.mov", new Uint8Array([0])),
+      makeFileWithBytes("Project/Resources/Textures/intro_frames/sequence.json",
+        enc.encode(JSON.stringify({ version: 1, type: "image-sequence", source: "intro.mov",
+          framePattern: "frame_%06d.png", frameCount: 1, fps: 0, width: 0, height: 0,
+          durationSec: 0, loop: true, alpha: true, pixelFormat: "rgba" }))),
+      makeFileWithBytes("Project/Resources/Textures/intro_frames/frame_000001.png", new Uint8Array([0x89, 0x50])),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "intro");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.sequence?.format).toBe("png");
+      expect(node.image.sequence?.legacy).toBe(true);
+    }
+  });
+
+  it("auto-repairs a _webp_frames folder with no sequence.json", async () => {
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(INTRO_W3D)),
+      makeFileWithBytes("Project/Resources/Textures/intro.mov", new Uint8Array([0])),
+      makeFileWithBytes("Project/Resources/Textures/intro_webp_frames/frame_000001.webp", new Uint8Array([0x52])),
+      makeFileWithBytes("Project/Resources/Textures/intro_webp_frames/frame_000002.webp", new Uint8Array([0x52])),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "intro");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.sequence?.format).toBe("webp");
+      expect(node.image.sequence?.autoRepaired).toBe(true);
+      expect(node.image.sequence?.frameCount).toBe(2);
+      expect(node.image.sequence?.fps).toBe(25);
+    }
+  });
+});

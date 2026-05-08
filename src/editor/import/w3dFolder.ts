@@ -77,21 +77,27 @@ export async function parseW3DFromFolder(
       if (VIDEO_EXTENSIONS.includes(ext)) {
         videoFilenames.add(baseName);
       }
-      // Capture the converted-PNG-sequence siblings of any .mov:
-      //   Resources/Textures/<stem>_frames/sequence.json
-      //   Resources/Textures/<stem>_frames/frame_NNNNNN.png
+      // Capture the converted-frame-sequence siblings of any .mov:
+      //   Resources/Textures/<stem>_webp_frames/sequence.json (priority 1)
+      //   Resources/Textures/<stem>_png_frames/sequence.json  (priority 2)
+      //   Resources/Textures/<stem>_frames/sequence.json      (priority 3, legacy)
       const sequenceMatch = relPath
         .replace(/\\/g, "/")
-        .match(/Resources\/Textures\/([^/]+)_frames\/(.+)$/i);
+        .match(/Resources\/Textures\/([^/]+?)(_webp_frames|_png_frames|_frames)\/(.+)$/i);
       if (sequenceMatch) {
         const stem = sequenceMatch[1];
-        const tail = sequenceMatch[2];
+        const layer = sequenceMatch[2].toLowerCase() as
+          | "_webp_frames"
+          | "_png_frames"
+          | "_frames";
+        const tail = sequenceMatch[3];
+        const layerKey = `${stem}::${layer}`;
         if (tail.toLowerCase() === "sequence.json") {
-          sequenceFiles.set(stem, file);
-        } else if (/^frame_\d+\.png$/i.test(tail)) {
-          const inner = sequenceFrames.get(stem) ?? new Map<string, File>();
+          sequenceFiles.set(layerKey, file);
+        } else if (/^frame_\d+\.(webp|png)$/i.test(tail)) {
+          const inner = sequenceFrames.get(layerKey) ?? new Map<string, File>();
           inner.set(tail, file);
-          sequenceFrames.set(stem, inner);
+          sequenceFrames.set(layerKey, inner);
         }
       }
     }
@@ -161,121 +167,134 @@ export async function parseW3DFromFolder(
 
   const sceneNameFromFolder = topLevelFolder(chosenScene) ?? stripExtension(chosenScene.name);
 
-  // Resolve every <stem>_frames/sequence.json into an in-memory
-  // `ImageSequenceMetadata` keyed by the source .mov filename. Each frame
-  // becomes a session-scoped blob URL — the renderer will swap them onto
-  // the texture in playback order. Any failure (parse error, missing
-  // framePattern/frameCount, frame-count mismatch on disk) is logged as a
-  // warning and the .mov falls back through the existing video path so we
-  // never drop the asset entirely (Task 1 invariant).
+  // Resolve sequences using a priority chain per stem:
+  //   Priority 1: <stem>_webp_frames/  (WebP v2)
+  //   Priority 2: <stem>_png_frames/   (PNG v2)
+  //   Priority 3: <stem>_frames/       (legacy v1 or v2)
+  // Keys in sequenceFiles and sequenceFrames are "${stem}::${layer}".
   const sequenceWarnings: string[] = [];
   const sequences = new Map<string, ImageSequenceMetadata>();
-  for (const [stem, jsonFile] of sequenceFiles) {
+
+  const PRIORITY: ReadonlyArray<"_webp_frames" | "_png_frames" | "_frames"> = [
+    "_webp_frames", "_png_frames", "_frames",
+  ];
+
+  const stems = new Set<string>();
+  for (const k of sequenceFiles.keys()) stems.add(k.split("::")[0]);
+  for (const k of sequenceFrames.keys()) stems.add(k.split("::")[0]);
+
+  for (const stem of stems) {
     const sourceMov = `${stem}.mov`;
-    let parsed: Partial<ImageSequenceMetadata> | null = null;
-    try {
-      const text = await jsonFile.text();
-      parsed = JSON.parse(text);
-    } catch {
-      const msg = `sequence.json for ${stem} is invalid (parse error) — falling back to .mov.`;
-      sequenceWarnings.push(msg);
-      // eslint-disable-next-line no-console
-      console.info(`[w3d folder import] ${msg}`);
-      continue;
-    }
-    if (!parsed?.framePattern || typeof parsed.frameCount !== "number") {
-      const msg = `sequence.json for ${stem} is invalid (missing framePattern/frameCount) — falling back to .mov.`;
-      sequenceWarnings.push(msg);
-      // eslint-disable-next-line no-console
-      console.info(`[w3d folder import] ${msg}`);
-      continue;
-    }
-    const frames = sequenceFrames.get(stem) ?? new Map<string, File>();
-    const frameUrls: string[] = [];
-    let missing = false;
-    for (let i = 1; i <= parsed.frameCount; i += 1) {
-      const fname = formatFramePattern(parsed.framePattern, i);
-      const f = frames.get(fname);
-      if (!f) {
-        missing = true;
-        break;
+    let resolved: ImageSequenceMetadata | null = null;
+
+    for (const layer of PRIORITY) {
+      if (resolved) break;
+      const layerKey = `${stem}::${layer}`;
+      const jsonFile = sequenceFiles.get(layerKey);
+      const frames = sequenceFrames.get(layerKey);
+      if (!jsonFile && !frames) continue;
+
+      const isLegacy = layer === "_frames";
+
+      // Path A: sequence.json present — parse, validate, build frameUrls.
+      if (jsonFile) {
+        let parsed: Partial<ImageSequenceMetadata> & { format?: string; fallbackReason?: string } | null = null;
+        try {
+          parsed = JSON.parse(await jsonFile.text());
+        } catch {
+          sequenceWarnings.push(`sequence.json for ${stem} (${layer}) is invalid — skipping this layer.`);
+          continue;
+        }
+        if (!parsed?.framePattern || typeof parsed.frameCount !== "number") {
+          sequenceWarnings.push(`sequence.json for ${stem} (${layer}) missing framePattern/frameCount — skipping this layer.`);
+          continue;
+        }
+        const detectedFormat: SequenceFormat =
+          typeof parsed.format === "string" && parsed.format === "webp" ? "webp" : "png";
+        const fps = typeof parsed.fps === "number" && parsed.fps > 0 ? parsed.fps : 25;
+        const frameUrls: string[] = [];
+        let missing = false;
+        for (let i = 1; i <= parsed.frameCount; i += 1) {
+          const fname = formatFramePattern(parsed.framePattern, i);
+          const f = frames?.get(fname);
+          if (!f) { missing = true; break; }
+          frameUrls.push(URL.createObjectURL(f));
+        }
+        if (missing) {
+          sequenceWarnings.push(`sequence.json for ${stem} (${layer}) missing frame files — skipping this layer.`);
+          continue;
+        }
+        resolved = {
+          version: 2,
+          type: "image-sequence",
+          format: detectedFormat,
+          source: sourceMov,
+          framePattern: parsed.framePattern,
+          frameCount: parsed.frameCount,
+          fps,
+          width: typeof parsed.width === "number" ? parsed.width : 0,
+          height: typeof parsed.height === "number" ? parsed.height : 0,
+          durationSec: typeof parsed.durationSec === "number" ? parsed.durationSec : 0,
+          loop: parsed.loop !== false,
+          alpha: parsed.alpha !== false,
+          pixelFormat: "rgba",
+          frameUrls,
+          ...(typeof parsed.fallbackReason === "string"
+            ? { fallbackReason: parsed.fallbackReason as SequenceFallbackReason }
+            : {}),
+          ...(isLegacy ? { legacy: true } : {}),
+        };
+        continue;
       }
-      // Use a direct object URL — image dimensions live in the
-      // metadata block, so we don't need the synchronous-decode path
-      // imageFileToAsset takes (and that path can be flaky for large
-      // PNG fleets in tests / older browsers).
-      frameUrls.push(URL.createObjectURL(f));
+
+      // Path B: frames present, sequence.json missing — auto-repair Branch A.
+      if (frames && frames.size >= 1) {
+        const ordered = [...frames.entries()]
+          .map(([name, file]) => {
+            const m = name.match(/^frame_(\d+)\.(webp|png)$/i);
+            return m ? { name, file, idx: parseInt(m[1], 10), digits: m[1].length, ext: m[2].toLowerCase() } : null;
+          })
+          .filter((e): e is { name: string; file: File; idx: number; digits: number; ext: string } => e !== null);
+        if (ordered.length < 1) continue;
+        // Branch B (ambiguous): mixed extensions in the same layer folder.
+        const exts = new Set(ordered.map((o) => o.ext));
+        if (exts.size > 1) {
+          sequenceWarnings.push(`Mixed-extension frames in ${stem}${layer} — Sequence metadata missing.`);
+          continue;
+        }
+        ordered.sort((a, b) => a.idx - b.idx);
+        const ext = ordered[0].ext as "webp" | "png";
+        const digits = ordered[0].digits;
+        resolved = {
+          version: 2,
+          type: "image-sequence",
+          format: ext as SequenceFormat,
+          source: sourceMov,
+          framePattern: `frame_%0${digits}d.${ext}`,
+          frameCount: ordered.length,
+          fps: 25,
+          width: 0,
+          height: 0,
+          durationSec: 0,
+          loop: true,
+          alpha: true,
+          pixelFormat: "rgba",
+          frameUrls: ordered.map((o) => URL.createObjectURL(o.file)),
+          autoRepaired: true,
+          ...(isLegacy ? { legacy: true } : {}),
+        };
+        // eslint-disable-next-line no-console
+        console.info(
+          `[w3d folder import] sequence metadata was missing for ${stem}${layer} and has been auto-generated (${ordered.length} frames, fps=25).`,
+        );
+      }
     }
-    if (missing) {
-      const msg = `sequence.json for ${stem} is invalid (missing frame files) — falling back to .mov.`;
-      sequenceWarnings.push(msg);
-      // eslint-disable-next-line no-console
-      console.info(`[w3d folder import] ${msg}`);
-      continue;
+
+    if (resolved) {
+      sequences.set(sourceMov, resolved);
     }
-    const parsedFormat: SequenceFormat =
-      typeof parsed.format === "string" && parsed.format === "webp" ? "webp" : "png";
-    sequences.set(sourceMov, {
-      version: 2,
-      type: "image-sequence",
-      format: parsedFormat,
-      source: sourceMov,
-      framePattern: parsed.framePattern,
-      frameCount: parsed.frameCount,
-      fps: typeof parsed.fps === "number" && parsed.fps > 0 ? parsed.fps : 25,
-      width: typeof parsed.width === "number" ? parsed.width : 0,
-      height: typeof parsed.height === "number" ? parsed.height : 0,
-      durationSec: typeof parsed.durationSec === "number" ? parsed.durationSec : 0,
-      loop: parsed.loop !== false,
-      alpha: parsed.alpha !== false,
-      pixelFormat: "rgba",
-      frameUrls,
-      ...(typeof parsed.fallbackReason === "string"
-        ? { fallbackReason: parsed.fallbackReason as SequenceFallbackReason }
-        : {}),
-    });
   }
-  // Auto-detect: when a <stem>_frames/ folder has frame_NNN.png files but
-  // no sequence.json sidecar, synthesize an in-memory ImageSequenceMetadata
-  // so the .mov reference still resolves into an animated sequence. This
-  // does NOT touch the user's files on disk — only the in-memory map.
-  for (const [stem, frames] of sequenceFrames) {
-    const sourceMov = `${stem}.mov`;
-    if (sequences.has(sourceMov)) continue; // already resolved via sequence.json
-    if (sequenceFiles.has(stem)) continue;  // sequence.json existed but failed — preserve .mov fallback
-    if (frames.size < 1) continue;
-    const ordered = [...frames.entries()]
-      .map(([name, file]) => {
-        const m = name.match(/^frame_(\d+)\.png$/i);
-        return m ? { name, file, idx: parseInt(m[1], 10), digits: m[1].length } : null;
-      })
-      .filter((e): e is { name: string; file: File; idx: number; digits: number } => e !== null)
-      .sort((a, b) => a.idx - b.idx);
-    if (ordered.length < 1) continue;
-    const frameUrls = ordered.map((e) => URL.createObjectURL(e.file));
-    const digits = ordered[0].digits;
-    sequences.set(sourceMov, {
-      version: 2,
-      type: "image-sequence",
-      format: "png",
-      source: sourceMov,
-      framePattern: `frame_%0${digits}d.png`,
-      frameCount: ordered.length,
-      fps: 25,
-      width: 0,
-      height: 0,
-      durationSec: 0,
-      loop: true,
-      alpha: true,
-      pixelFormat: "rgba",
-      frameUrls,
-      autoRepaired: true,
-    });
-    // eslint-disable-next-line no-console
-    console.info(
-      `[w3d folder import] auto-detected sequence: ${ordered.length} frames in ${stem}_frames (no sequence.json)`,
-    );
-  }
+
   // Merge any pre-resolved sequences from the caller (e.g. browser→backend
   // MOV conversion). They win over disk-resolved entries with the same key.
   if (progress.additionalSequences) {
@@ -297,10 +316,11 @@ export async function parseW3DFromFolder(
     console.info(
       `[w3d folder import] sequences discovered:\n` +
         [...sequenceFiles.keys()]
-          .map((stem) => {
+          .map((layerKey) => {
+            const stem = layerKey.split("::")[0];
             const seq = sequences.get(`${stem}.mov`);
-            const frames = sequenceFrames.get(stem)?.size ?? 0;
-            return `  ${stem} → frames=${frames} resolved=${seq ? "yes" : "no"} ${seq ? `frameCount=${seq.frameCount}` : ""}`;
+            const frames = sequenceFrames.get(layerKey)?.size ?? 0;
+            return `  ${layerKey} → frames=${frames} resolved=${seq ? "yes" : "no"} ${seq ? `frameCount=${seq.frameCount}` : ""}`;
           })
           .join("\n"),
     );
