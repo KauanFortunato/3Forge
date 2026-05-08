@@ -770,8 +770,15 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
       // consumer that only reads `.src` (e.g. defensive renderers) gets a
       // renderable image instead of nothing — and the `sequence` payload
       // carries the playback metadata + every frame URL for the player.
-      const seq =
+      let seq =
         ctx.sequences.get(filename) ?? findSequenceCaseInsensitive(ctx.sequences, filename);
+      // Auto-upgrade: filename like "frame_000001.png" with numbered siblings
+      // in ctx.textures gets a synthesized sequence so it plays as animated
+      // media instead of a single static PNG. No-op for plain images.
+      if (!seq) {
+        const synthesized = synthesizeSequenceFromSiblings(filename, ctx.textures);
+        if (synthesized) seq = synthesized;
+      }
       let stored: ImageAsset;
       if (seq && seq.frameUrls.length > 0) {
         stored = {
@@ -1067,6 +1074,58 @@ function findSequenceCaseInsensitive(
     if (key.toLowerCase() === lower) return value;
   }
   return undefined;
+}
+
+/**
+ * If `filename` matches a numbered-frame pattern (e.g. "frame_000001.png",
+ * "idle_001.png") AND at least one sibling with the same prefix+extension
+ * exists in `textures`, synthesize an in-memory ImageSequenceMetadata
+ * pointing at every sibling sorted by index. Returns null if the filename
+ * isn't a frame name, isn't a supported image type, or has fewer than 2
+ * matching siblings. Does NOT touch any files on disk.
+ */
+function synthesizeSequenceFromSiblings(
+  filename: string,
+  textures: Map<string, ImageAsset>,
+): ImageSequenceMetadata | null {
+  const m = filename.match(/^(.+?)_(\d+)\.([A-Za-z0-9]+)$/);
+  if (!m) return null;
+  const [, prefix, , ext] = m;
+  if (!/^(png|jpe?g|webp)$/i.test(ext)) return null;
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^${escaped}_(\\d+)\\.${ext}$`, "i");
+  const siblings: { name: string; idx: number; src: string; width: number; height: number }[] = [];
+  for (const [name, asset] of textures) {
+    const sm = name.match(re);
+    if (sm) {
+      siblings.push({
+        name,
+        idx: parseInt(sm[1], 10),
+        src: asset.src,
+        width: asset.width,
+        height: asset.height,
+      });
+    }
+  }
+  if (siblings.length < 2) return null;
+  siblings.sort((a, b) => a.idx - b.idx);
+  const digitsMatch = siblings[0].name.match(/_(\d+)\./);
+  const digits = digitsMatch ? digitsMatch[1].length : 6;
+  return {
+    version: 1,
+    type: "image-sequence",
+    source: filename,
+    framePattern: `${prefix}_%0${digits}d.${ext.toLowerCase()}`,
+    frameCount: siblings.length,
+    fps: 0,
+    width: siblings[0].width,
+    height: siblings[0].height,
+    durationSec: 0,
+    loop: true,
+    alpha: true,
+    pixelFormat: "rgba",
+    frameUrls: siblings.map((s) => s.src),
+  };
 }
 
 function assetHasAlphaChannel(asset: ImageAsset): boolean {

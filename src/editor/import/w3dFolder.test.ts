@@ -357,6 +357,112 @@ describe("parseW3DFromFolder sequence preference", () => {
       expect(node.image.mimeType).toBe("video/quicktime");
     }
   });
+
+  it("auto-detects an image sequence from <stem>_frames/ PNGs even without sequence.json", async () => {
+    const enc = new TextEncoder();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(MIN_W3D)),
+      // No sequence.json, no .mov — only the bare frames in _frames/
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/frame_000001.png", png),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/frame_000002.png", png),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/frame_000003.png", png),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "PITCH_IN");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.mimeType).toBe("application/x-image-sequence");
+      expect(node.image.sequence?.frameCount).toBe(3);
+      expect(node.image.sequence?.frameUrls.length).toBe(3);
+      expect(node.image.sequence?.framePattern).toBe("frame_%06d.png");
+    }
+  });
+
+  it("upgrades a directly-referenced frame_NNN.png into a sequence when siblings exist", async () => {
+    const enc = new TextEncoder();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const flatPngXml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<Texture Id="tex1" Filename="frame_000001.png"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="tex1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="FRAME_QUAD">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(flatPngXml)),
+      makeFileWithBytes("Project/Resources/Textures/frame_000001.png", png),
+      makeFileWithBytes("Project/Resources/Textures/frame_000002.png", png),
+      makeFileWithBytes("Project/Resources/Textures/frame_000003.png", png),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "FRAME_QUAD");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.mimeType).toBe("application/x-image-sequence");
+      expect(node.image.sequence?.frameCount).toBe(3);
+      expect(node.image.sequence?.frameUrls.length).toBe(3);
+    }
+  });
+
+  it("upgrades a directly-referenced <stem>_NNN.png (non-frame_ prefix) into a sequence", async () => {
+    const enc = new TextEncoder();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<Texture Id="tex1" Filename="idle_001.png"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="tex1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="IDLE_QUAD">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(xml)),
+      makeFileWithBytes("Project/Resources/Textures/idle_001.png", png),
+      makeFileWithBytes("Project/Resources/Textures/idle_002.png", png),
+      makeFileWithBytes("Project/Resources/Textures/idle_003.png", png),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "IDLE_QUAD");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.mimeType).toBe("application/x-image-sequence");
+      expect(node.image.sequence?.frameCount).toBe(3);
+      expect(node.image.sequence?.framePattern).toBe("idle_%03d.png");
+    }
+  });
+
+  it("does NOT upgrade a single PNG without numbered siblings (stays static)", async () => {
+    const enc = new TextEncoder();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<Texture Id="tex1" Filename="logo.png"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="tex1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="LOGO_QUAD">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(xml)),
+      makeFileWithBytes("Project/Resources/Textures/logo.png", png),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "LOGO_QUAD");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      // Plain PNG with no siblings — must remain a static image node.
+      expect(node.image.mimeType).not.toBe("application/x-image-sequence");
+      expect(node.image.sequence).toBeUndefined();
+    }
+  });
 });
 
 describe("parseW3DFromFolder all-sequences-ready end-to-end", () => {

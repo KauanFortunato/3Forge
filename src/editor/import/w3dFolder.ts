@@ -220,6 +220,45 @@ export async function parseW3DFromFolder(
       frameUrls,
     });
   }
+  // Auto-detect: when a <stem>_frames/ folder has frame_NNN.png files but
+  // no sequence.json sidecar, synthesize an in-memory ImageSequenceMetadata
+  // so the .mov reference still resolves into an animated sequence. This
+  // does NOT touch the user's files on disk — only the in-memory map.
+  for (const [stem, frames] of sequenceFrames) {
+    const sourceMov = `${stem}.mov`;
+    if (sequences.has(sourceMov)) continue; // already resolved via sequence.json
+    if (sequenceFiles.has(stem)) continue;  // sequence.json existed but failed — preserve .mov fallback
+    if (frames.size < 1) continue;
+    const ordered = [...frames.entries()]
+      .map(([name, file]) => {
+        const m = name.match(/^frame_(\d+)\.png$/i);
+        return m ? { name, file, idx: parseInt(m[1], 10), digits: m[1].length } : null;
+      })
+      .filter((e): e is { name: string; file: File; idx: number; digits: number } => e !== null)
+      .sort((a, b) => a.idx - b.idx);
+    if (ordered.length < 1) continue;
+    const frameUrls = ordered.map((e) => URL.createObjectURL(e.file));
+    const digits = ordered[0].digits;
+    sequences.set(sourceMov, {
+      version: 1,
+      type: "image-sequence",
+      source: sourceMov,
+      framePattern: `frame_%0${digits}d.png`,
+      frameCount: ordered.length,
+      fps: 0,
+      width: 0,
+      height: 0,
+      durationSec: 0,
+      loop: true,
+      alpha: true,
+      pixelFormat: "rgba",
+      frameUrls,
+    });
+    // eslint-disable-next-line no-console
+    console.info(
+      `[w3d folder import] auto-detected sequence: ${ordered.length} frames in ${stem}_frames (no sequence.json)`,
+    );
+  }
   // eslint-disable-next-line no-console
   console.info(
     `[w3d folder import] sequences resolved: ${sequences.size} (` +
