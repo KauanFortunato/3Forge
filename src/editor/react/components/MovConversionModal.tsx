@@ -23,7 +23,11 @@ export interface MovConversionResult {
 function reasonText(r: SequenceFallbackReason): string {
   switch (r) {
     case "webp_encoder_unavailable": return "WebP encoder unavailable in this build";
-    case "webp_validation_failed": return "WebP validation failed";
+    case "webp_validation_failed":   return "WebP validation failed";
+    default: {
+      const _exhaustive: never = r;
+      return _exhaustive;
+    }
   }
 }
 

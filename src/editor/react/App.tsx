@@ -1476,7 +1476,7 @@ export function App() {
           format: seq.format,
           fallbackReason: seq.fallbackReason ?? null,
           frameCount: seq.frameCount,
-          fps: seq.fps > 0 ? seq.fps : 25,
+          fps: seq.fps,
           alpha: seq.alpha,
         });
       }
@@ -1488,6 +1488,7 @@ export function App() {
         abortController: undefined,
         conversionResult: {
           converted: finalConverted,
+          // Walker pre-filters via classifyMovAssets; skipped is always empty here.
           skipped: [],
           failed: result.failed.map((f) => ({ filename: f.mov, error: f.error })),
           sequenceJsonPaths: [],
