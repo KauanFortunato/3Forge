@@ -114,8 +114,9 @@ export async function convertMovsViaBackend(
     }
 
     sequences.set(file.name, {
-      version: 1,
+      version: 2,
       type: "image-sequence",
+      format: "png",
       source: file.name,
       framePattern: manifest.sequenceJson.framePattern,
       frameCount: manifest.frameCount,

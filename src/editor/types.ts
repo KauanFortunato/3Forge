@@ -127,32 +127,46 @@ export interface FontAsset {
   data?: string;
 }
 
+export type {
+  SequenceFormat,
+  SequenceFallbackReason,
+} from "./import/sequenceSchema";
+import type { SequenceFormat, SequenceFallbackReason } from "./import/sequenceSchema";
+
 export interface ImageSequenceMetadata {
-  /** Discriminator. Always "image-sequence" for v1. */
+  /** Discriminator. Always "image-sequence". */
   type: "image-sequence";
-  /** sequence.json schema version. */
-  version: 1;
+  /** sequence.json schema version. v1 is read-only legacy; v2 writes the format field. */
+  version: 1 | 2;
+  /** Image format used for every frame. Implicit "png" on legacy v1. */
+  format: SequenceFormat;
   /** Source .mov filename the sequence was generated from. */
   source: string;
-  /** ffmpeg %d-style pattern, e.g. "frame_%06d.png". */
+  /** ffmpeg %d-style pattern. Extension must match `format`. */
   framePattern: string;
-  /** Count of PNG files actually written by the conversion. */
+  /** Count of frame files actually written by the conversion. */
   frameCount: number;
-  /** Frames per second, 0 when ffprobe is unavailable. */
+  /** Frames per second. v2 writers must emit > 0 (defaulting to 25). */
   fps: number;
-  /** Pixel width / height (0 when unknown). */
+  /** Pixel width / height (0 when ffprobe is unavailable). */
   width: number;
   height: number;
   /** Duration in seconds (0 when unknown). */
   durationSec: number;
   /** Loop on the last frame. */
   loop: boolean;
-  /** Always true for PNG sequences (alpha is the reason we exist). */
+  /** True when the encoder produced an alpha channel. */
   alpha: boolean;
-  /** Always "rgba" for v1. */
+  /** Always "rgba" for both webp and png paths. */
   pixelFormat: "rgba";
-  /** Resolved blob: URLs for each frame, in order. Browser-only. */
+  /** Resolved blob: URLs for each frame, in order. Browser-only, never persisted. */
   frameUrls: string[];
+  /** Set when the conversion fell back from webp to png. */
+  fallbackReason?: SequenceFallbackReason;
+  /** Set in-memory only: resolver auto-generated this metadata because sequence.json was missing. Never persisted. */
+  autoRepaired?: boolean;
+  /** Set in-memory only: resolved via the legacy `<basename>_frames/` layer (priority 3). */
+  legacy?: boolean;
 }
 
 export interface ImageAsset {

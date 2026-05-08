@@ -1,5 +1,6 @@
 import { imageFileToAsset, isVideoFileName, videoFileToAsset } from "../images";
 import type { ComponentBlueprint, ImageAsset, ImageSequenceMetadata } from "../types";
+import type { SequenceFormat, SequenceFallbackReason } from "../types";
 import { parseW3D } from "./w3d";
 
 export interface W3DFolderImportResult {
@@ -212,13 +213,16 @@ export async function parseW3DFromFolder(
       console.info(`[w3d folder import] ${msg}`);
       continue;
     }
+    const parsedFormat: SequenceFormat =
+      typeof parsed.format === "string" && parsed.format === "webp" ? "webp" : "png";
     sequences.set(sourceMov, {
-      version: 1,
+      version: 2,
       type: "image-sequence",
+      format: parsedFormat,
       source: sourceMov,
       framePattern: parsed.framePattern,
       frameCount: parsed.frameCount,
-      fps: typeof parsed.fps === "number" ? parsed.fps : 0,
+      fps: typeof parsed.fps === "number" && parsed.fps > 0 ? parsed.fps : 25,
       width: typeof parsed.width === "number" ? parsed.width : 0,
       height: typeof parsed.height === "number" ? parsed.height : 0,
       durationSec: typeof parsed.durationSec === "number" ? parsed.durationSec : 0,
@@ -226,6 +230,9 @@ export async function parseW3DFromFolder(
       alpha: parsed.alpha !== false,
       pixelFormat: "rgba",
       frameUrls,
+      ...(typeof parsed.fallbackReason === "string"
+        ? { fallbackReason: parsed.fallbackReason as SequenceFallbackReason }
+        : {}),
     });
   }
   // Auto-detect: when a <stem>_frames/ folder has frame_NNN.png files but
@@ -248,12 +255,13 @@ export async function parseW3DFromFolder(
     const frameUrls = ordered.map((e) => URL.createObjectURL(e.file));
     const digits = ordered[0].digits;
     sequences.set(sourceMov, {
-      version: 1,
+      version: 2,
       type: "image-sequence",
+      format: "png",
       source: sourceMov,
       framePattern: `frame_%0${digits}d.png`,
       frameCount: ordered.length,
-      fps: 0,
+      fps: 25,
       width: 0,
       height: 0,
       durationSec: 0,
@@ -261,6 +269,7 @@ export async function parseW3DFromFolder(
       alpha: true,
       pixelFormat: "rgba",
       frameUrls,
+      autoRepaired: true,
     });
     // eslint-disable-next-line no-console
     console.info(

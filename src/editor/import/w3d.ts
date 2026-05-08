@@ -39,6 +39,7 @@ import type {
   TextureSamplingOptions,
   TransformSpec,
 } from "../types";
+import type { SequenceFormat } from "../types";
 
 export interface W3DImportResult {
   blueprint: ComponentBlueprint;
@@ -1111,13 +1112,16 @@ function synthesizeSequenceFromSiblings(
   siblings.sort((a, b) => a.idx - b.idx);
   const digitsMatch = siblings[0].name.match(/_(\d+)\./);
   const digits = digitsMatch ? digitsMatch[1].length : 6;
+  const lowerExt = ext.toLowerCase();
+  const format: SequenceFormat = lowerExt === "webp" ? "webp" : "png";
   return {
-    version: 1,
+    version: 2,
     type: "image-sequence",
+    format,
     source: filename,
-    framePattern: `${prefix}_%0${digits}d.${ext.toLowerCase()}`,
+    framePattern: `${prefix}_%0${digits}d.${lowerExt}`,
     frameCount: siblings.length,
-    fps: 0,
+    fps: 25,
     width: siblings[0].width,
     height: siblings[0].height,
     durationSec: 0,
@@ -1125,6 +1129,7 @@ function synthesizeSequenceFromSiblings(
     alpha: true,
     pixelFormat: "rgba",
     frameUrls: siblings.map((s) => s.src),
+    autoRepaired: true,
   };
 }
 

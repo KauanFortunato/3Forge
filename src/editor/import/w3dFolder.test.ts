@@ -454,12 +454,13 @@ describe("parseW3DFromFolder sequence preference", () => {
     const files = [makeFileWithBytes("Project/scene.w3d", enc.encode(minimalXml))];
     const additionalSequences = new Map<string, import("../types").ImageSequenceMetadata>([
       ["PITCH_IN.mov", {
-        version: 1,
+        version: 2,
         type: "image-sequence",
+        format: "png",
         source: "PITCH_IN.mov",
         framePattern: "frame_%06d.png",
         frameCount: 4,
-        fps: 0,
+        fps: 25,
         width: 0,
         height: 0,
         durationSec: 0,

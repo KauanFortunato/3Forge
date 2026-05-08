@@ -93,8 +93,9 @@ const SEQUENCE_ASSET: ProjectImageAsset = {
   width: 1920,
   height: 1080,
   sequence: {
-    version: 1,
+    version: 2,
     type: "image-sequence",
+    format: "png",
     source: "PITCH_IN.mov",
     framePattern: "frame_%06d.png",
     frameCount: 5,

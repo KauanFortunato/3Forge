@@ -223,8 +223,9 @@ describe("W3D import", () => {
     // parser's material-binding behaviour.
     const sequences = new Map<string, import("../types").ImageSequenceMetadata>();
     sequences.set("PITCH_IN.mov", {
-      version: 1,
+      version: 2,
       type: "image-sequence",
+      format: "png",
       source: "PITCH_IN.mov",
       framePattern: "frame_%06d.png",
       frameCount: 3,
@@ -314,7 +315,7 @@ describe("W3D import", () => {
     // semantically identical (broadcast content with playback intent).
     const sequences = new Map<string, import("../types").ImageSequenceMetadata>();
     sequences.set("04_Game_Name_PITCH_OUT.mov", {
-      version: 1, type: "image-sequence", source: "04_Game_Name_PITCH_OUT.mov",
+      version: 2, type: "image-sequence", format: "png", source: "04_Game_Name_PITCH_OUT.mov",
       framePattern: "frame_%06d.png", frameCount: 2, fps: 25,
       width: 1920, height: 1080, durationSec: 0.08,
       loop: true, alpha: true, pixelFormat: "rgba",
@@ -368,7 +369,7 @@ describe("W3D import", () => {
     });
     const sequences = new Map<string, import("../types").ImageSequenceMetadata>();
     sequences.set("HotLogo.mov", {
-      version: 1, type: "image-sequence", source: "HotLogo.mov",
+      version: 2, type: "image-sequence", format: "png", source: "HotLogo.mov",
       framePattern: "frame_%06d.png", frameCount: 11,
       fps: 25, width: 1920, height: 1080, durationSec: 0.44,
       loop: true, alpha: true, pixelFormat: "rgba",
