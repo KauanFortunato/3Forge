@@ -7,6 +7,27 @@ import {
 } from "./sequenceSchema";
 
 describe("sequenceSchema v2", () => {
+  it("reads v1 legacy as format=png in v2 normalised shape", () => {
+    const v1Text = JSON.stringify({
+      version: 1,
+      type: "image-sequence",
+      source: "legacy.mov",
+      framePattern: "frame_%06d.png",
+      frameCount: 60,
+      fps: 0,
+      width: 0,
+      height: 0,
+      durationSec: 0,
+      loop: true,
+      alpha: true,
+      pixelFormat: "rgba",
+    });
+    const parsed = parseSequenceJson(v1Text);
+    expect(parsed.version).toBe(2);
+    expect(parsed.format).toBe("png");
+    expect(parsed.frameCount).toBe(60);
+  });
+
   it("round-trips a webp sequence.json without losing fields", () => {
     const json: SequenceJsonV2 = {
       version: 2,
