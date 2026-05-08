@@ -629,6 +629,46 @@ function findNodeIdByName(scene: FakeScene, name: string): string | undefined {
   return undefined;
 }
 
+describe("Agent A5 — Task 18: visibility-gated tick", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
+  });
+
+  it("does not advance currentFrame while boundObject3D.visible is false", () => {
+    const player = makeStandalonePlayerWithFrames(10);
+    player.setBoundObject3D({ visible: false } as unknown as import("three").Object3D);
+    const before = player.state().currentFrame;
+    // 25 ticks at 1/25 = 25 frames advanced without gate; with gate = 0.
+    // Use 25 (not 30) so the expected frame without gate is 5 (not 0 after wrap),
+    // making the assertion actually discriminate.
+    for (let i = 0; i < 25; i += 1) player.tick(1 / 25);
+    expect(player.state().currentFrame).toBe(before);
+  });
+
+  it("resumes from the same currentFrame when visibility flips back to true", () => {
+    const player = makeStandalonePlayerWithFrames(10);
+    const obj = { visible: true } as unknown as import("three").Object3D;
+    player.setBoundObject3D(obj);
+    for (let i = 0; i < 5; i += 1) player.tick(1 / 25);
+    const mid = player.state().currentFrame;  // should be 5
+    obj.visible = false;
+    // 7 hidden ticks: without gate these would advance to frame 2 (not mid).
+    // With gate, frame is preserved at mid.
+    for (let i = 0; i < 7; i += 1) player.tick(1 / 25);
+    expect(player.state().currentFrame).toBe(mid);
+    obj.visible = true;
+    player.tick(1 / 25);
+    expect(player.state().currentFrame).toBe(mid + 1);
+  });
+});
+
 describe("Agent A5 — Task 17: boundObject3D registration", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
   let infoSpy: ReturnType<typeof vi.spyOn>;

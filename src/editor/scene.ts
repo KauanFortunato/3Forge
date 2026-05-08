@@ -2831,6 +2831,14 @@ export class ImageSequencePlayer {
       }
       return;
     }
+    // Visibility gate: when the bound Object3D exists and is invisible,
+    // freeze the player. State (currentFrame, acc, frameCache, texture.image)
+    // is preserved so the user gets immediate playback resumption when
+    // visibility flips back to true. This deliberately does NOT consult
+    // frustum / occlusion.
+    if (this.boundObject3D && this.boundObject3D.visible === false) {
+      return;
+    }
     if (this.paused) return;
     this.tickCount += 1;
     this.lastTickDelta = deltaSec;
