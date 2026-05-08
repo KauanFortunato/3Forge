@@ -224,6 +224,32 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
                       ) : isVideo ? (
                         <span className="image-assets-panel__badge">VIDEO</span>
                       ) : null}
+                      {isSeq && seq ? (
+                        <>
+                          {seq.autoRepaired ? (
+                            <span
+                              className="image-assets-panel__pill image-assets-panel__pill--auto-repaired"
+                              title="Sequence metadata was missing and has been auto-generated"
+                            >
+                              auto-repaired
+                            </span>
+                          ) : seq.legacy ? (
+                            <span
+                              className="image-assets-panel__pill image-assets-panel__pill--legacy"
+                              title="Legacy PNG sequence — convert to WebP from the asset menu (future feature)"
+                            >
+                              legacy png
+                            </span>
+                          ) : seq.fallbackReason ? (
+                            <span
+                              className="image-assets-panel__pill image-assets-panel__pill--fallback"
+                              title={seq.fallbackReason}
+                            >
+                              fallback png
+                            </span>
+                          ) : null}
+                        </>
+                      ) : null}
                     </span>
                     <span className="image-assets-panel__sub">
                       {isSeq && seq ? (

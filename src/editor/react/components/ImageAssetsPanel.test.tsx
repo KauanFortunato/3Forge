@@ -273,3 +273,30 @@ it("renders subline `<frameCount> frames @ <fps>fps` and `<format> · <alpha>`",
   expect(sub?.textContent).toMatch(/4 frames @ 25fps/);
   expect(sub?.textContent).toMatch(/webp · alpha/);
 });
+
+// ---------------------------------------------------------------------------
+// Task 14: Status pills
+// ---------------------------------------------------------------------------
+
+it("renders the auto-repaired pill when sequence.autoRepaired is true", () => {
+  const seq = baseSeqAsset({ sequence: baseSeq({ autoRepaired: true }) });
+  const { container } = renderPanel([seq]);
+  const pill = container.querySelector(".image-assets-panel__pill--auto-repaired");
+  expect(pill?.textContent).toBe("auto-repaired");
+});
+
+it("renders the legacy png pill when sequence.legacy is true", () => {
+  const seq = baseSeqAsset({ sequence: baseSeq({ legacy: true, format: "png" }) });
+  const { container } = renderPanel([seq]);
+  const pill = container.querySelector(".image-assets-panel__pill--legacy");
+  expect(pill?.textContent).toBe("legacy png");
+});
+
+it("renders the fallback png pill when fallbackReason is set", () => {
+  const seq = baseSeqAsset({
+    sequence: baseSeq({ format: "png", fallbackReason: "webp_encoder_unavailable" }),
+  });
+  const { container } = renderPanel([seq]);
+  const pill = container.querySelector(".image-assets-panel__pill--fallback");
+  expect(pill?.textContent).toBe("fallback png");
+});
