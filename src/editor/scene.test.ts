@@ -574,7 +574,7 @@ function makeStandalonePlayerWithFrames(n: number): ImageSequencePlayer {
  * instances, avoiding the need to instantiate SceneEditor (which requires WebGL).
  */
 interface FakeScene {
-  _sequencePlayers(): Map<string, ImageSequencePlayer>;
+  _sequencePlayers(): ReadonlyMap<string, ImageSequencePlayer>;
   _simulateFrames(n: number): void;
 }
 

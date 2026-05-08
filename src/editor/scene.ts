@@ -2725,7 +2725,11 @@ export class ImageSequencePlayer {
   private readonly width: number;
   private readonly height: number;
   /** The Object3D in the scene that this player drives. Ticking is gated on its visibility. */
-  boundObject3D: import("three").Object3D | null = null;
+  private _boundObject3D: import("three").Object3D | null = null;
+
+  get boundObject3D(): import("three").Object3D | null {
+    return this._boundObject3D;
+  }
 
   private currentFrame = 0;
   private acc = 0;
@@ -2864,7 +2868,7 @@ export class ImageSequencePlayer {
   }
 
   setBoundObject3D(obj: import("three").Object3D | null): void {
-    this.boundObject3D = obj;
+    this._boundObject3D = obj;
   }
 
   /** @internal test-only — simulates a frame load error and applies the fallback image. */
