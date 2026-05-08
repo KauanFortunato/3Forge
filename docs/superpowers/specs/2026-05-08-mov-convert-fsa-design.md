@@ -76,7 +76,7 @@ only writer to the user's chosen folder, via FSA `createWritable()`.
 
 | Method | Path | Body / Params | Response |
 |---|---|---|---|
-| `POST`   | `/api/w3d/convert-mov`                              | `multipart/form-data` with field `file` (the `.mov` blob) and `filename` | `Manifest` JSON (see below) |
+| `POST`   | `/api/w3d/convert-mov`                              | `Content-Type: application/octet-stream`, `X-Filename: <name>.mov` header, raw `.mov` bytes in body | `Manifest` JSON (see below) |
 | `GET`    | `/api/w3d/convert-mov/jobs/:jobId/frames/:name`     | —                          | `image/png` for one frame |
 | `DELETE` | `/api/w3d/convert-mov/jobs/:jobId`                  | —                          | `{ ok: true }` |
 
@@ -203,8 +203,9 @@ export async function convertAndWriteFrames(
       — if it resolves and parse succeeds, push to `skipped` and continue
       to the next .mov. (Belt-and-braces: the modal already filters via
       `classifyMovAssets`, but a race between scan and convert is possible.)
-   3. POST upload to `/api/w3d/convert-mov` with the File blob; get manifest.
-      Honour `signal` — abort the fetch on cancel.
+   3. POST upload to `/api/w3d/convert-mov` with the File blob as raw body
+      (`Content-Type: application/octet-stream`, `X-Filename: <file.name>`);
+      get manifest. Honour `signal` — abort the fetch on cancel.
    4. Write `sequence.json`: stringify `manifest.sequenceJson`,
       `framesDir.getFileHandle("sequence.json", {create:true})
         .createWritable() → write → close`.
