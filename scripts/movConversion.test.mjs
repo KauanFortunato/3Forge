@@ -42,7 +42,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runMovConversion, resolveFfmpegBinary, runMovConversionInTemp, probeWebpEncoder, _resetEncoderProbeCache } from "./movConversion.mjs";
+import { runMovConversion, resolveFfmpegBinary, runMovConversionInTemp, probeWebpEncoder, _resetEncoderProbeCache, smokeTestWebpFrame } from "./movConversion.mjs";
 
 function fakeProc({ exitCode = 0, error = null } = {}) {
   const proc = new EventEmitter();
@@ -284,6 +284,44 @@ describe("runMovConversionInTemp dual format", () => {
     expect(result.sequenceJson.format).toBe("png");
     expect(result.sequenceJson.framePattern).toBe("frame_%06d.png");
     expect(result.fallbackReason).toBe("webp_encoder_unavailable");
+  });
+});
+
+describe("smokeTestWebpFrame", () => {
+  it("returns ok:true when the webp and png decoded RGBA buffers match", async () => {
+    const result = await smokeTestWebpFrame({
+      ffmpegPath: "/fake/ffmpeg",
+      sourcePath: "/fake/source.mov",
+      webpFrame: "/fake/frame.webp",
+      _decode: async (_target) => {
+        // Same buffer for both webp and png paths -> match.
+        return Buffer.from([1, 2, 3, 4]);
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("returns ok:false when buffers differ", async () => {
+    let i = 0;
+    const result = await smokeTestWebpFrame({
+      ffmpegPath: "/fake/ffmpeg",
+      sourcePath: "/fake/source.mov",
+      webpFrame: "/fake/frame.webp",
+      _decode: async () => Buffer.from(i++ === 0 ? [1, 2, 3, 4] : [9, 9, 9, 9]),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("rgba_mismatch");
+  });
+
+  it("returns ok:false when decode throws", async () => {
+    const result = await smokeTestWebpFrame({
+      ffmpegPath: "/fake/ffmpeg",
+      sourcePath: "/fake/source.mov",
+      webpFrame: "/fake/frame.webp",
+      _decode: async () => { throw new Error("boom"); },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("decode_error");
   });
 });
 

@@ -26,8 +26,53 @@ const FRAME_PATTERN = "frame_%06d.png";
 const FRAME_PATTERN_PNG = "frame_%06d.png";
 const FRAME_PATTERN_WEBP = "frame_%06d.webp";
 
-// Stub replaced by real implementation in Task 9.
-async function smokeTestWebpFrame() { return { ok: true }; }
+/**
+ * Round-trip frame 1: encode the source's first frame to PNG via ffmpeg
+ * (`-vframes 1` ground truth), decode both the produced WebP and the
+ * ground-truth PNG to raw RGBA via two more ffmpeg invocations, and
+ * `Buffer.compare()` the two raw buffers. With `-c:v libwebp -lossless 1`,
+ * the bytes MUST match -- any difference means the encoder is buggy.
+ */
+export async function smokeTestWebpFrame({
+  ffmpegPath, sourcePath, webpFrame, _decode,
+}) {
+  const decode = _decode ?? defaultDecodeRgba;
+  let webpRgba, pngRgba;
+  try {
+    webpRgba = await decode({ ffmpegPath, target: webpFrame, kind: "webp" });
+    pngRgba = await decode({ ffmpegPath, target: sourcePath, kind: "source-frame-1" });
+  } catch {
+    return { ok: false, reason: "decode_error" };
+  }
+  if (!webpRgba || !pngRgba || webpRgba.length === 0 || pngRgba.length === 0) {
+    return { ok: false, reason: "decode_error" };
+  }
+  if (Buffer.compare(webpRgba, pngRgba) !== 0) {
+    return { ok: false, reason: "rgba_mismatch" };
+  }
+  return { ok: true };
+}
+
+async function defaultDecodeRgba({ ffmpegPath, target, kind }) {
+  const args = kind === "source-frame-1"
+    ? ["-y", "-i", target, "-vframes", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]
+    : ["-y", "-i", target, "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"];
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let stderrBuf = "";
+    const proc = spawn(ffmpegPath, args, { shell: false });
+    proc.stdout?.on("data", (c) => chunks.push(c));
+    proc.stderr?.on("data", (c) => {
+      stderrBuf += c.toString();
+      if (stderrBuf.length > 8 * 1024) stderrBuf = stderrBuf.slice(-8 * 1024);
+    });
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code === 0) resolve(Buffer.concat(chunks));
+      else reject(new Error(`decode exit ${code}: ${stderrBuf.slice(-200)}`));
+    });
+  });
+}
 
 /**
  * Buffer-based variant: convert a .mov already in memory to a PNG sequence
