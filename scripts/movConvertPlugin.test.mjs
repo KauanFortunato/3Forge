@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createServer } from "node:http";
 
 vi.mock("./movConversion.mjs", () => ({
   runMovConversion: vi.fn(),
@@ -242,6 +243,92 @@ describe("movConvertPlugin (octet-stream upload)", () => {
     const body = JSON.parse(res.body);
     expect(body.code).toBe("FFMPEG_NOT_INSTALLED");
     expect(body.installHint).toMatch(/install/i);
+  });
+});
+
+/**
+ * Creates a real HTTP server that hosts the movConvertPlugin middleware,
+ * with an injected runConversion function for deterministic testing.
+ */
+async function createTestPlugin({ runConversion } = {}) {
+  const plugin = movConvertPlugin({ _runConversion: runConversion });
+  plugin.config({}, { command: "serve" });
+  let middleware;
+  const fakeViteServer = {
+    middlewares: {
+      use(path, fn) {
+        if (path === "/api/w3d/convert-mov") middleware = fn;
+      },
+    },
+  };
+  plugin.configureServer(fakeViteServer);
+  const httpServer = createServer((req, res) => {
+    // Strip the mount prefix so middleware sees the sub-path.
+    middleware(req, res);
+  });
+  await new Promise((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+  const { port } = httpServer.address();
+  const url = `http://127.0.0.1:${port}`;
+  return {
+    server: {
+      url,
+      close: () => new Promise((resolve) => httpServer.close(resolve)),
+    },
+  };
+}
+
+describe("movConvertPlugin (manifest format/fallbackReason)", () => {
+  it("returns manifest with format=webp and matching frame URLs when conversion produced webp", async () => {
+    const { server } = await createTestPlugin({
+      runConversion: async () => ({
+        framesDir: "/tmp/x", framePaths: ["/tmp/x/frame_000001.webp"],
+        sequenceJson: {
+          version: 2, type: "image-sequence", format: "webp",
+          source: "x.mov", framePattern: "frame_%06d.webp", frameCount: 1,
+          fps: 25, width: 0, height: 0, durationSec: 0, loop: true, alpha: true,
+          pixelFormat: "rgba",
+        },
+        ffmpegSource: "static",
+        fallbackReason: null,
+      }),
+    });
+    const res = await fetch(`${server.url}/api/w3d/convert-mov`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "X-Filename": "x.mov" },
+      body: new Uint8Array([0]),
+    });
+    const manifest = await res.json();
+    expect(manifest.format).toBe("webp");
+    expect(manifest.fallbackReason).toBeNull();
+    expect(manifest.sequenceJson.format).toBe("webp");
+    expect(manifest.frames[0].filename).toBe("frame_000001.webp");
+    expect(manifest.frames[0].url).toMatch(/\/frames\/frame_000001\.webp$/);
+    await server.close();
+  });
+
+  it("returns manifest with fallbackReason=webp_encoder_unavailable on png fallback", async () => {
+    const { server } = await createTestPlugin({
+      runConversion: async () => ({
+        framesDir: "/tmp/x", framePaths: ["/tmp/x/frame_000001.png"],
+        sequenceJson: {
+          version: 2, type: "image-sequence", format: "png",
+          source: "x.mov", framePattern: "frame_%06d.png", frameCount: 1,
+          fps: 25, width: 0, height: 0, durationSec: 0, loop: true, alpha: true,
+          pixelFormat: "rgba", fallbackReason: "webp_encoder_unavailable",
+        },
+        ffmpegSource: "static",
+        fallbackReason: "webp_encoder_unavailable",
+      }),
+    });
+    const res = await fetch(`${server.url}/api/w3d/convert-mov`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "X-Filename": "x.mov" },
+      body: new Uint8Array([0]),
+    });
+    const manifest = await res.json();
+    expect(manifest.format).toBe("png");
+    expect(manifest.fallbackReason).toBe("webp_encoder_unavailable");
+    await server.close();
   });
 });
 

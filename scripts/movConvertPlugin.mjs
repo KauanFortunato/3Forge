@@ -27,7 +27,7 @@ import {
 } from "./movConversion.mjs";
 
 const PROJECT_NAME_RE = /^[A-Za-z0-9_.\- ]+$/;
-const FRAME_NAME_RE = /^frame_\d+\.png$/i;
+const FRAME_NAME_RE = /^frame_\d+\.(png|webp)$/i;
 
 const INSTALL_HINT =
   "Install ffmpeg and ensure it is on PATH:\n" +
@@ -123,9 +123,10 @@ function createJobRegistry({ rootDir }) {
   };
 }
 
-export function movConvertPlugin() {
+export function movConvertPlugin({ _runConversion } = {}) {
   let isServe = false;
   const registry = createJobRegistry({ rootDir: TEMP_ROOT });
+  const runConversionFn = _runConversion ?? null;
   return {
     name: "3forge-w3d-mov-convert",
     config(_userConfig, env) {
@@ -150,7 +151,7 @@ export function movConvertPlugin() {
           if (req.method === "POST" && (pathPart === "/" || pathPart === "")) {
             const ct = String((req.headers && req.headers["content-type"]) ?? "").toLowerCase();
             if (ct.startsWith("application/octet-stream")) {
-              return await handleOctetStreamPost(req, res, registry);
+              return await handleOctetStreamPost(req, res, registry, runConversionFn);
             }
             return await handleLegacyPost(req, res);
           }
@@ -197,7 +198,7 @@ async function handleLegacyPost(req, res) {
   return send(res, 200, result);
 }
 
-async function handleOctetStreamPost(req, res, registry) {
+async function handleOctetStreamPost(req, res, registry, runConversionFn) {
   const filename = String((req.headers && req.headers["x-filename"]) ?? "");
   if (!filename || !filename.toLowerCase().endsWith(".mov")) {
     return send(res, 400, { code: "MISSING_FILENAME", message: "X-Filename header with a .mov filename is required." });
@@ -209,7 +210,8 @@ async function handleOctetStreamPost(req, res, registry) {
   const jobId = randomUUID();
   let result;
   try {
-    result = await runMovConversionInTemp({
+    const convertFn = runConversionFn ?? runMovConversionInTemp;
+    result = await convertFn({
       movBuffer: buf,
       filename,
       jobId,
@@ -235,25 +237,26 @@ async function handleOctetStreamPost(req, res, registry) {
     framesDir: result.framesDir,
     totalFrames: result.framePaths.length,
   });
-  const frames = result.framePaths.map((p, i) => {
-    const name = path.basename(p);
-    return {
-      index: i + 1,
-      filename: name,
-      url: `/api/w3d/convert-mov/jobs/${jobId}/frames/${name}`,
-      sizeBytes: frameSizeBytes(p),
-    };
-  });
-  return send(res, 200, {
+  const manifest = {
     jobId,
     source: filename,
+    format: result.sequenceJson.format,
+    fallbackReason: result.fallbackReason ?? null,
+    frameCount: result.sequenceJson.frameCount,
+    alpha: result.sequenceJson.alpha,
+    encoderSource: result.ffmpegSource,
     sequenceJson: result.sequenceJson,
-    frameCount: result.framePaths.length,
-    fps: 0,
-    alpha: true,
-    frames,
-    ffmpegSource: result.ffmpegSource,
-  });
+    frames: result.framePaths.map((p, idx) => {
+      const frameName = path.basename(p);
+      return {
+        index: idx + 1,
+        filename: frameName,
+        url: `/api/w3d/convert-mov/jobs/${jobId}/frames/${frameName}`,
+        sizeBytes: frameSizeBytes(p),
+      };
+    }),
+  };
+  return send(res, 200, manifest);
 }
 
 function handleGetFrame(req, res, registry, jobId, frameName) {
@@ -264,8 +267,9 @@ function handleGetFrame(req, res, registry, jobId, frameName) {
   if (!job) return send(res, 404, { code: "JOB_NOT_FOUND" });
   const filePath = path.join(job.framesDir, frameName);
   if (!existsSync(filePath)) return send(res, 404, { code: "FRAME_NOT_FOUND" });
+  const ct = filePath.toLowerCase().endsWith(".webp") ? "image/webp" : "image/png";
   res.statusCode = 200;
-  res.setHeader("content-type", "image/png");
+  res.setHeader("content-type", ct);
   createReadStream(filePath).pipe(res);
 }
 
