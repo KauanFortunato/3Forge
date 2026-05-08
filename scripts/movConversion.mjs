@@ -147,6 +147,51 @@ export async function resolveFfmpegBinary() {
   return { path: null, source: "none" };
 }
 
+// Cached result of the libwebp probe. `null` means "not probed yet".
+let _encoderProbeCache = null;
+
+/**
+ * One-time probe: does the resolved ffmpeg ship with libwebp?
+ * Caches the answer for the lifetime of the process. Tests can pass
+ * `_spawn` / `_readStdout` overrides and `_resetEncoderProbeCache()`
+ * to drive deterministic outcomes.
+ */
+export async function probeWebpEncoder(opts = {}) {
+  if (_encoderProbeCache !== null) return _encoderProbeCache;
+  const ff = await resolveFfmpegBinary();
+  if (!ff.path) {
+    _encoderProbeCache = { available: false };
+    return _encoderProbeCache;
+  }
+  const spawnFn = opts._spawn ?? spawn;
+  const readStdout = opts._readStdout ?? defaultReadStdout;
+  let stdoutText = "";
+  try {
+    const proc = spawnFn(ff.path, ["-hide_banner", "-encoders"], { shell: false });
+    stdoutText = await readStdout(proc);
+    await new Promise((resolve) => {
+      proc.on("close", () => resolve());
+    });
+  } catch {
+    _encoderProbeCache = { available: false };
+    return _encoderProbeCache;
+  }
+  _encoderProbeCache = { available: /\blibwebp\b/.test(stdoutText) };
+  return _encoderProbeCache;
+}
+
+export function _resetEncoderProbeCache() {
+  _encoderProbeCache = null;
+}
+
+function defaultReadStdout(proc) {
+  return new Promise((resolve) => {
+    let buf = "";
+    proc.stdout?.on("data", (c) => { buf += c.toString(); });
+    proc.on("close", () => resolve(buf));
+  });
+}
+
 export async function runMovConversion({ folderPath, force = false, onProgress } = {}) {
   const result = {
     converted: [],

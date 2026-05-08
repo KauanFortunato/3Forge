@@ -40,7 +40,7 @@ vi.mock("ffmpeg-static", () => ({
 
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
-import { runMovConversion, resolveFfmpegBinary } from "./movConversion.mjs";
+import { runMovConversion, resolveFfmpegBinary, probeWebpEncoder, _resetEncoderProbeCache } from "./movConversion.mjs";
 
 function fakeProc({ exitCode = 0, error = null } = {}) {
   const proc = new EventEmitter();
@@ -222,6 +222,55 @@ describe("runMovConversion", () => {
     expect(result.skipped.length).toBe(0);
     expect(result.converted).toEqual(["PITCH_IN.mov"]);
     expect(spawn).toHaveBeenCalled();
+  });
+});
+
+describe("probeWebpEncoder", () => {
+  beforeEach(() => _resetEncoderProbeCache());
+
+  it("returns { available: true } when libwebp is present in -encoders output", async () => {
+    const r = await probeWebpEncoder({
+      _spawn: (_bin, args) => ({
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (ev, cb) => {
+          if (ev === "close") setImmediate(() => cb(0, args));
+        },
+        _stdoutPayload: "V..... libwebp              libwebp WebP image\n",
+      }),
+      _readStdout: async (proc) => proc._stdoutPayload,
+    });
+    expect(r).toEqual({ available: true });
+  });
+
+  it("returns { available: false } when ffmpeg has no libwebp encoder line", async () => {
+    const r = await probeWebpEncoder({
+      _spawn: (_bin, _args) => ({
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (ev, cb) => { if (ev === "close") setImmediate(() => cb(0)); },
+        _stdoutPayload: "V..... png_pipe              PNG (Portable Network Graphics)\n",
+      }),
+      _readStdout: async (proc) => proc._stdoutPayload,
+    });
+    expect(r).toEqual({ available: false });
+  });
+
+  it("caches the probe result across calls", async () => {
+    let calls = 0;
+    const fakeSpawn = () => {
+      calls += 1;
+      return {
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (ev, cb) => { if (ev === "close") setImmediate(() => cb(0)); },
+        _stdoutPayload: "V..... libwebp\n",
+      };
+    };
+    const opts = { _spawn: fakeSpawn, _readStdout: async (p) => p._stdoutPayload };
+    await probeWebpEncoder(opts);
+    await probeWebpEncoder(opts);
+    expect(calls).toBe(1);
   });
 });
 
