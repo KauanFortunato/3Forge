@@ -480,10 +480,18 @@ export function classifyMovAssets(files: File[] | FileList): MovClassification {
   const withSequence: MovClassification["withSequence"] = [];
   const withoutSequence: MovClassification["withoutSequence"] = [];
   for (const mov of movs) {
-    const expected = `${mov.basePath}${mov.baseName}_frames/sequence.json`;
-    if (sequenceJsons.has(expected) || sequenceJsonsLower.has(expected.toLowerCase())) {
-      withSequence.push({ videoName: mov.videoName, sequencePath: expected });
-    } else {
+    // Check all three priority layers: _webp_frames, _png_frames, _frames.
+    const layers = ["_webp_frames", "_png_frames", "_frames"] as const;
+    let found = false;
+    for (const layer of layers) {
+      const expected = `${mov.basePath}${mov.baseName}${layer}/sequence.json`;
+      if (sequenceJsons.has(expected) || sequenceJsonsLower.has(expected.toLowerCase())) {
+        withSequence.push({ videoName: mov.videoName, sequencePath: expected });
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
       withoutSequence.push({ videoName: mov.videoName });
     }
   }
