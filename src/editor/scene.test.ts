@@ -689,3 +689,45 @@ describe("Agent A5 — Task 17: boundObject3D registration", () => {
     expect(player?.boundObject3D?.name).toContain("intro");
   });
 });
+
+/**
+ * Helper: returns true if the canvas is tagged as a magenta debug fallback.
+ * `makeSequenceFallbackImage()` stamps `data-r3-fallback="magenta"` when the
+ * debug flag is on, so this works in jsdom (which cannot draw pixels) as well
+ * as in a real browser where pixel inspection is also possible.
+ */
+function isMagentaDebugImage(image: unknown): boolean {
+  if (!(image instanceof HTMLCanvasElement)) return false;
+  return image.dataset["r3Fallback"] === "magenta";
+}
+
+describe("Agent A5 — Task 19: no-magenta invariant", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
+  });
+
+  it("never assigns a magenta default when an image-sequence frame fails to load", () => {
+    const player = makeStandalonePlayerWithFrames(3);
+    player._simulateFrameError(0);
+    const tex = player.texture;
+    expect(isMagentaDebugImage(tex.image)).toBe(false);
+  });
+
+  it("__r3DebugBrokenTextures=true opts back into magenta debug imagery", () => {
+    (window as unknown as Record<string, unknown>).__r3DebugBrokenTextures = true;
+    try {
+      const player = makeStandalonePlayerWithFrames(3);
+      player._simulateFrameError(0);
+      expect(isMagentaDebugImage(player.texture.image)).toBe(true);
+    } finally {
+      delete (window as unknown as Record<string, unknown>).__r3DebugBrokenTextures;
+    }
+  });
+});

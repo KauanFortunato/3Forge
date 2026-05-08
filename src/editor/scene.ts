@@ -2671,6 +2671,44 @@ const DEFAULT_PLAYER_FPS = 25;
 const FRAME_WINDOW = 60;
 const MEMORY_WARN_BYTES = 200 * 1024 * 1024;
 
+/**
+ * Returns a 4x4 canvas that the player uses whenever a frame fails to load.
+ * By default it is fully transparent so no visible pixel escapes to the viewport.
+ * When `window.__r3DebugBrokenTextures === true` it returns a magenta+grid
+ * canvas for debugging — this is an explicit opt-in by the operator; it is
+ * NEVER active in normal rendering.
+ *
+ * The canvas is tagged with a `data-r3-fallback` attribute:
+ *   "transparent" — normal path (invisible to the user)
+ *   "magenta"     — debug path (only when __r3DebugBrokenTextures is set)
+ * This lets tests inspect the intent without needing pixel reads (which are
+ * not available in jsdom without the `canvas` npm package).
+ */
+function makeSequenceFallbackImage(): HTMLCanvasElement {
+  const dbg =
+    typeof window !== "undefined" &&
+    (window as { __r3DebugBrokenTextures?: boolean }).__r3DebugBrokenTextures === true;
+  const canvas = document.createElement("canvas");
+  canvas.width = 4;
+  canvas.height = 4;
+  canvas.dataset["r3Fallback"] = dbg ? "magenta" : "transparent";
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    if (dbg) {
+      // Magenta + grid: only when the debug flag is explicitly enabled in the
+      // browser console. Off by default. NEVER painted in normal viewports.
+      ctx.fillStyle = "#ff00ff";
+      ctx.fillRect(0, 0, 4, 4);
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(1, 1, 1, 1);
+      ctx.fillRect(3, 3, 1, 1);
+    } else {
+      ctx.clearRect(0, 0, 4, 4);
+    }
+  }
+  return canvas;
+}
+
 export interface ImageSequencePlayerSpec {
   frameUrls: string[];
   fps: number;
@@ -2781,6 +2819,13 @@ export class ImageSequencePlayer {
       console.warn(
         `[seq player] FAILED frame ${idx + 1} src=${this.frameUrls[idx]} reason=image element onerror`,
       );
+      // Ensure texture.image is never left null — use a transparent fallback
+      // so no visible pixel is painted. Operators can opt into the magenta
+      // debug canvas by setting window.__r3DebugBrokenTextures = true.
+      if (this.texture.image == null) {
+        this.texture.image = makeSequenceFallbackImage();
+        this.texture.needsUpdate = true;
+      }
     };
     img.src = this.frameUrls[idx];
   }
@@ -2820,6 +2865,15 @@ export class ImageSequencePlayer {
 
   setBoundObject3D(obj: import("three").Object3D | null): void {
     this.boundObject3D = obj;
+  }
+
+  /** @internal test-only — simulates a frame load error and applies the fallback image. */
+  _simulateFrameError(idx: number): void {
+    this.error = `frame ${idx + 1} failed (test)`;
+    if (this.texture.image == null) {
+      this.texture.image = makeSequenceFallbackImage();
+      this.texture.needsUpdate = true;
+    }
   }
 
   tick(deltaSec: number): void {
