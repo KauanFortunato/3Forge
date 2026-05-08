@@ -48,6 +48,37 @@ export function parseSequenceJson(text: string): SequenceJsonV2 {
   return normaliseToV2(raw);
 }
 
+export class SequenceValidationError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(`${code}: ${message}`);
+    this.code = code;
+    this.name = "SequenceValidationError";
+  }
+}
+
+export function validateSequenceJson(j: SequenceJsonV2): void {
+  if (!Number.isFinite(j.fps) || j.fps <= 0) {
+    throw new SequenceValidationError(
+      "SEQUENCE_FPS_INVALID",
+      `fps must be > 0, got ${j.fps}`,
+    );
+  }
+  const expectedExt = j.format === "webp" ? ".webp" : ".png";
+  if (!j.framePattern.toLowerCase().endsWith(expectedExt)) {
+    throw new SequenceValidationError(
+      "SEQUENCE_FORMAT_MISMATCH",
+      `framePattern ${j.framePattern} does not match format ${j.format}`,
+    );
+  }
+  if (!Number.isInteger(j.frameCount) || j.frameCount < 1) {
+    throw new SequenceValidationError(
+      "SEQUENCE_FRAMECOUNT_INVALID",
+      `frameCount must be a positive integer, got ${j.frameCount}`,
+    );
+  }
+}
+
 export function normaliseToV2(raw: SequenceJson): SequenceJsonV2 {
   if (raw.version === 2) return raw;
   return {

@@ -3,6 +3,8 @@ import {
   SEQUENCE_SCHEMA_VERSION,
   parseSequenceJson,
   serialiseSequenceJson,
+  validateSequenceJson,
+  SequenceValidationError,
   type SequenceJsonV2,
 } from "./sequenceSchema";
 
@@ -48,5 +50,39 @@ describe("sequenceSchema v2", () => {
     const parsed = parseSequenceJson(text);
     expect(parsed).toEqual(json);
     expect(parsed.version).toBe(SEQUENCE_SCHEMA_VERSION);
+  });
+});
+
+describe("sequenceSchema validation", () => {
+  const base: SequenceJsonV2 = {
+    version: 2,
+    type: "image-sequence",
+    format: "webp",
+    source: "x.mov",
+    framePattern: "frame_%06d.webp",
+    frameCount: 5,
+    fps: 25,
+    width: 0,
+    height: 0,
+    durationSec: 0,
+    loop: true,
+    alpha: true,
+    pixelFormat: "rgba",
+  };
+
+  it("accepts a valid v2 webp", () => {
+    expect(() => validateSequenceJson(base)).not.toThrow();
+  });
+
+  it("rejects fps <= 0", () => {
+    expect(() => validateSequenceJson({ ...base, fps: 0 }))
+      .toThrow(SequenceValidationError);
+    expect(() => validateSequenceJson({ ...base, fps: -1 }))
+      .toThrow(SequenceValidationError);
+  });
+
+  it("rejects framePattern that does not match format extension", () => {
+    expect(() => validateSequenceJson({ ...base, framePattern: "frame_%06d.png" }))
+      .toThrow(/SEQUENCE_FORMAT_MISMATCH/);
   });
 });
