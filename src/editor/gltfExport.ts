@@ -263,6 +263,8 @@ class BlueprintObjectBuilder {
   private async createObject(node: EditorNode): Promise<Group> {
     const object = node.type === "group"
       ? this.buildGroupObject(node)
+      : node.type === "model"
+        ? new Group()
       : await this.buildWrappedNodeObject(node);
     object.name = node.name;
     object.visible = node.visible;
@@ -284,7 +286,7 @@ class BlueprintObjectBuilder {
     return wrapper;
   }
 
-  private async buildWrappedNodeObject(node: Exclude<EditorNode, { type: "group" }>): Promise<Group> {
+  private async buildWrappedNodeObject(node: Exclude<EditorNode, { type: "group" | "model" }>): Promise<Group> {
     const wrapper = new Group();
     const mesh = await this.buildMeshObject(node);
     this.applyNodeOrigin(mesh, node.origin);
@@ -292,7 +294,7 @@ class BlueprintObjectBuilder {
     return wrapper;
   }
 
-  private async buildMeshObject(node: Exclude<EditorNode, { type: "group" }>): Promise<Mesh> {
+  private async buildMeshObject(node: Exclude<EditorNode, { type: "group" | "model" }>): Promise<Mesh> {
     let mesh: Mesh;
     switch (node.type) {
       case "box":
@@ -359,11 +361,11 @@ class BlueprintObjectBuilder {
     );
   }
 
-  private async createNodeMaterial(node: Exclude<EditorNode, { type: "group" }>): Promise<Material> {
+  private async createNodeMaterial(node: Exclude<EditorNode, { type: "group" | "model" }>): Promise<Material> {
     return buildMaterialFromSpec(await this.createBaseMaterialOptions(node), node.material);
   }
 
-  private async createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" }>): Promise<MaterialBaseOptions> {
+  private async createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" | "model" }>): Promise<MaterialBaseOptions> {
     const materialTexture = await this.getMaterialTexture(node.material);
     return {
       color: node.material.color,

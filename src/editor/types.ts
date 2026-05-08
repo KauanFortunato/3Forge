@@ -1,4 +1,4 @@
-export type EditorNodeType = "group" | "box" | "circle" | "sphere" | "cylinder" | "plane" | "text" | "image";
+export type EditorNodeType = "group" | "box" | "circle" | "sphere" | "cylinder" | "plane" | "text" | "image" | "model";
 export type EditableFieldType = "number" | "color" | "boolean" | "string";
 export type PropertyGroup = "Object" | "Transform" | "Geometry" | "Material" | "Text";
 export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text" | "select";
@@ -132,11 +132,13 @@ export interface ImageAsset {
 }
 
 export interface ModelAsset {
-  id?: string;
+  id: string;
   name: string;
   mimeType: "model/gltf-binary" | "model/gltf+json" | string;
   src: string;
   format: "glb" | "gltf";
+  originalFileName?: string;
+  source?: "imported" | "external";
 }
 
 export interface EditableBinding {
@@ -271,7 +273,14 @@ export interface ImageNode extends BaseEditorNode {
   materialId?: string;
 }
 
-export type EditorNode = GroupNode | BoxNode | CircleNode | SphereNode | CylinderNode | PlaneNode | TextNode | ImageNode;
+export interface ModelNode extends BaseEditorNode {
+  type: "model";
+  modelId: string;
+  material: MaterialSpec;
+  materialId?: string;
+}
+
+export type EditorNode = GroupNode | BoxNode | CircleNode | SphereNode | CylinderNode | PlaneNode | TextNode | ImageNode | ModelNode;
 
 export interface ComponentBlueprint {
   version: 1;

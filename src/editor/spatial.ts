@@ -104,6 +104,9 @@ export function computeNodeLocalBounds(node: EditorNode, lookup: SpatialLookup):
     }
     return translateBounds(contentBounds, node.pivotOffset);
   }
+  if (node.type === "model") {
+    return null;
+  }
 
   const geometryBounds = getRenderableGeometryBounds(node, lookup);
   if (!geometryBounds) {
@@ -178,7 +181,7 @@ export function computeNodeWorldMatrix(nodeId: string, lookup: SpatialLookup): M
   return parentMatrix.multiply(attachmentMatrix).multiply(localMatrix);
 }
 
-function getRenderableGeometryBounds(node: Exclude<EditorNode, { type: "group" }>, lookup: SpatialLookup): Bounds3Like | null {
+function getRenderableGeometryBounds(node: Exclude<EditorNode, { type: "group" | "model" }>, lookup: SpatialLookup): Bounds3Like | null {
   switch (node.type) {
     case "box":
       return geometryBoundsFromFactory(() => new BoxGeometry(node.geometry.width, node.geometry.height, node.geometry.depth));

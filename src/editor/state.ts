@@ -56,6 +56,8 @@ import type {
   MaterialAsset,
   MaterialSpec,
   MaterialType,
+  ModelAsset,
+  ModelNode,
   NodeOriginDepth,
   NodeOriginHorizontal,
   NodeOriginSpec,
@@ -93,7 +95,7 @@ const BASE_PROPERTY_DEFINITIONS: NodePropertyDefinition[] = [
   { group: "Transform", path: "transform.scale.z", label: "Scale Z", type: "number", input: "number", step: 0.1, min: 0.01 },
 ];
 
-const GEOMETRY_DEFINITIONS: Record<Exclude<EditorNodeType, "group">, NodePropertyDefinition[]> = {
+const GEOMETRY_DEFINITIONS: Record<Exclude<EditorNodeType, "group" | "model">, NodePropertyDefinition[]> = {
   box: [
     { group: "Geometry", path: "geometry.width", label: "Width", type: "number", input: "number", step: 0.1, min: 0.01 },
     { group: "Geometry", path: "geometry.height", label: "Height", type: "number", input: "number", step: 0.1, min: 0.01 },
@@ -141,6 +143,7 @@ const DEFAULT_NODE_NAMES: Record<EditorNodeType, string> = {
   plane: "Plane",
   image: "Image",
   text: "Text",
+  model: "Model",
 };
 
 const GROUP_PIVOT_PRESET_ORIGINS: Record<GroupPivotPreset, NodeOriginSpec> = {
@@ -186,6 +189,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
     fonts: [],
     materials: [],
     images: [],
+    models: [],
     nodes: [panel, accent, title],
     animation: createDefaultAnimation(),
   };
@@ -294,6 +298,13 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
         image: createTransparentImageAsset(),
         material: createDoubleSidedMaterial("#ffffff", "basic"),
       } as EditorNodeOfType<T>;
+    case "model":
+      return {
+        ...base,
+        type: "model",
+        modelId: "",
+        material: createMaterial("#ffffff"),
+      } as EditorNodeOfType<T>;
     case "text":
       return {
         ...base,
@@ -314,7 +325,7 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
 }
 
 export function getPropertyDefinitions(node: EditorNode): NodePropertyDefinition[] {
-  if (node.type === "group") {
+  if (node.type === "group" || node.type === "model") {
     return [...OBJECT_PROPERTY_DEFINITIONS, ...BASE_PROPERTY_DEFINITIONS];
   }
 
@@ -529,7 +540,7 @@ function normalizeNodeOrigin(value: unknown, fallback: NodeOriginSpec): NodeOrig
 }
 
 function computeOriginPositionDelta(
-  node: Exclude<EditorNode, { type: "group" }>,
+  node: Exclude<EditorNode, { type: "group" | "model" }>,
   previousOrigin: NodeOriginSpec,
   nextOrigin: NodeOriginSpec,
   store: Pick<EditorStore, "getFont">,
@@ -550,7 +561,7 @@ function computeOriginPositionDelta(
 }
 
 function getNodeOriginOffset(
-  node: Exclude<EditorNode, { type: "group" }>,
+  node: Exclude<EditorNode, { type: "group" | "model" }>,
   origin: NodeOriginSpec,
   store: Pick<EditorStore, "getFont">,
 ): Vec3Like {
@@ -594,7 +605,7 @@ function getNodeOriginOffset(
 }
 
 function getTransformedNodeOriginOffset(
-  node: Exclude<EditorNode, { type: "group" }>,
+  node: Exclude<EditorNode, { type: "group" | "model" }>,
   origin: NodeOriginSpec,
   store: Pick<EditorStore, "getFont">,
 ): Vec3Like {
@@ -704,6 +715,64 @@ function normalizeEditableBindings(node: EditorNode, rawBindings: unknown): Reco
   return result;
 }
 
+function normalizeModelLibrary(rawModels: unknown): ModelAsset[] {
+  if (!Array.isArray(rawModels)) {
+    return [];
+  }
+
+  const result: ModelAsset[] = [];
+  const usedIds = new Set<string>();
+
+  for (const rawModel of rawModels) {
+    const model = normalizeModelAsset(rawModel, usedIds);
+    if (model) {
+      result.push(model);
+    }
+  }
+
+  return result;
+}
+
+function normalizeModelAsset(rawModel: unknown, usedIds: Set<string>): ModelAsset | null {
+  if (!rawModel || typeof rawModel !== "object") {
+    return null;
+  }
+
+  const source = rawModel as Record<string, unknown>;
+  const src = typeof source.src === "string" ? source.src.trim() : "";
+  if (!src) {
+    return null;
+  }
+
+  const rawFormat = typeof source.format === "string" ? source.format.toLowerCase() : "";
+  const format = rawFormat === "gltf" ? "gltf" : "glb";
+  const fallbackName = format === "gltf" ? "Model.gltf" : "Model.glb";
+  const name = (typeof source.name === "string" ? source.name.trim() : "") || fallbackName;
+  const proposedId = (typeof source.id === "string" ? source.id.trim() : "") || toCamelCase(stripExtension(name));
+  let id = proposedId || generateId("model-asset");
+  while (usedIds.has(id)) {
+    id = generateId("model-asset");
+  }
+  usedIds.add(id);
+
+  const mimeType = (typeof source.mimeType === "string" ? source.mimeType.trim() : "")
+    || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary");
+  const originalFileName = typeof source.originalFileName === "string" && source.originalFileName.trim()
+    ? source.originalFileName.trim()
+    : undefined;
+  const modelSource = source.source === "external" ? "external" : source.source === "imported" ? "imported" : undefined;
+
+  return {
+    id,
+    name,
+    mimeType,
+    src,
+    format,
+    ...(originalFileName ? { originalFileName } : {}),
+    ...(modelSource ? { source: modelSource } : {}),
+  };
+}
+
 function normalizeImportedNode(rawNode: unknown): EditorNode | null {
   if (!rawNode || typeof rawNode !== "object") {
     return null;
@@ -711,7 +780,7 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
 
   const source = rawNode as Record<string, unknown>;
   const type = source.type;
-  if (type !== "group" && type !== "box" && type !== "circle" && type !== "sphere" && type !== "cylinder" && type !== "plane" && type !== "text" && type !== "image") {
+  if (type !== "group" && type !== "box" && type !== "circle" && type !== "sphere" && type !== "cylinder" && type !== "plane" && type !== "text" && type !== "image" && type !== "model") {
     return null;
   }
 
@@ -769,6 +838,8 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
           node.imageId = source.imageId.trim();
         }
         break;
+      case "model":
+        break;
       case "text":
         node.geometry.text = typeof geometry.text === "string" ? geometry.text : node.geometry.text;
         node.geometry.size = clampNumber(normalizeNumber(geometry.size, node.geometry.size), 0.01);
@@ -782,6 +853,10 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
       case "group":
         break;
     }
+  }
+
+  if (node.type === "model" && typeof source.modelId === "string" && source.modelId.trim()) {
+    node.modelId = source.modelId.trim();
   }
 
   node.editable = normalizeEditableBindings(node, source.editable);
@@ -803,6 +878,8 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
   const availableMaterialIds = new Set(importedMaterials.map((material) => material.id));
   const importedImages = normalizeImageLibrary(source.images);
   const availableImages = new Map(importedImages.map((image) => [image.id, image] as const));
+  const importedModels = normalizeModelLibrary(source.models);
+  const availableModelIds = new Set(importedModels.map((model) => model.id));
   const importedNodes = Array.isArray(source.nodes)
     ? source.nodes.map(normalizeImportedNode).filter((node): node is EditorNode => Boolean(node))
     : [];
@@ -844,7 +921,11 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
       }
     }
 
-      if (node.type !== "group") {
+    if (node.type === "model" && !availableModelIds.has(node.modelId)) {
+      node.modelId = "";
+    }
+
+      if ("material" in node) {
         const candidate = (node as { materialId?: string }).materialId;
         if (candidate && availableMaterialIds.has(candidate)) {
           const asset = importedMaterials.find((entry) => entry.id === candidate);
@@ -875,6 +956,7 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     fonts: importedFonts,
     materials: importedMaterials,
     images: importedImages,
+    models: importedModels,
     nodes: importedNodes,
     animation,
   };
@@ -2278,7 +2360,7 @@ export class EditorStore extends EventTarget {
 
   updateNodeOrigin(nodeId: string, origin: Partial<NodeOriginSpec>, source: EditorStoreChange["source"] = "ui"): void {
     const node = this.getNode(nodeId);
-    if (!node || node.type === "group") {
+    if (!node || node.type === "group" || node.type === "model") {
       return;
     }
 
@@ -2958,7 +3040,7 @@ export class EditorStore extends EventTarget {
     source: EditorStoreChange["source"] = "ui",
   ): string | null {
     const node = this.getNode(nodeId);
-    if (!node || node.type === "group") {
+    if (!node || node.type === "group" || node.type === "model") {
       return null;
     }
     const proposed = (options.name ?? "").trim() || `${node.name} Material`;
@@ -3019,7 +3101,7 @@ export class EditorStore extends EventTarget {
     this.recordHistorySnapshot();
     specRecord[subPath] = parsedValue;
     for (const node of this.getNodesUsingMaterial(materialId)) {
-      if (node.type === "group") {
+      if (node.type === "group" || node.type === "model") {
         continue;
       }
       (node.material as unknown as Record<string, unknown>)[subPath] = parsedValue;
@@ -3037,10 +3119,10 @@ export class EditorStore extends EventTarget {
     if (!asset) {
       return 0;
     }
-    const targets: Exclude<EditorNode, { type: "group" }>[] = [];
+    const targets: Exclude<EditorNode, { type: "group" | "model" }>[] = [];
     for (const nodeId of [...new Set(nodeIds)]) {
       const node = this.getNode(nodeId);
-      if (!node || node.type === "group") {
+      if (!node || node.type === "group" || node.type === "model") {
         continue;
       }
       targets.push(node);
@@ -3065,7 +3147,7 @@ export class EditorStore extends EventTarget {
     const targets: EditorNode[] = [];
     for (const nodeId of [...new Set(nodeIds)]) {
       const node = this.getNode(nodeId);
-      if (!node || node.type === "group") {
+      if (!node || node.type === "group" || node.type === "model") {
         continue;
       }
       if ((node as { materialId?: string }).materialId === undefined) {

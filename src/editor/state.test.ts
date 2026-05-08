@@ -312,6 +312,82 @@ describe("EditorStore", () => {
     expect(node.image.name).toBe("Poster Wide.png");
   });
 
+  it("normalizes GLB/GLTF model asset metadata and model nodes through save/load", () => {
+    const rawBlueprint = {
+      ...createDefaultBlueprint(),
+      models: [
+        {
+          id: "ship-model",
+          name: "Hero Ship.glb",
+          mimeType: "model/gltf-binary",
+          src: "data:model/gltf-binary;base64,c2hpcA==",
+          format: "glb",
+          originalFileName: "Hero Ship.glb",
+          source: "imported",
+        },
+        {
+          id: "empty-model",
+          name: "Empty.glb",
+          mimeType: "model/gltf-binary",
+          src: "",
+          format: "glb",
+        },
+      ],
+      nodes: [
+        {
+          ...createNode("model", null, "ship-node"),
+          name: "Hero Ship",
+          modelId: "ship-model",
+          transform: {
+            position: { x: 1, y: 2, z: 3 },
+            rotation: { x: 0.1, y: 0.2, z: 0.3 },
+            scale: { x: 2, y: 2, z: 2 },
+          },
+        },
+        {
+          ...createNode("model", null, "missing-model-node"),
+          name: "Missing Model",
+          modelId: "missing-model",
+        },
+      ],
+    };
+
+    const store = new EditorStore(rawBlueprint);
+    const shipNode = store.getNode("ship-node");
+    const missingNode = store.getNode("missing-model-node");
+
+    expect(store.blueprint.models).toEqual([
+      {
+        id: "ship-model",
+        name: "Hero Ship.glb",
+        mimeType: "model/gltf-binary",
+        src: "data:model/gltf-binary;base64,c2hpcA==",
+        format: "glb",
+        originalFileName: "Hero Ship.glb",
+        source: "imported",
+      },
+    ]);
+    expect(shipNode).toMatchObject({
+      type: "model",
+      modelId: "ship-model",
+      parentId: null,
+      transform: {
+        position: { x: 1, y: 2, z: 3 },
+        rotation: { x: 0.1, y: 0.2, z: 0.3 },
+        scale: { x: 2, y: 2, z: 2 },
+      },
+    });
+    expect(missingNode?.type).toBe("model");
+    if (missingNode?.type !== "model") {
+      throw new Error("Expected model node.");
+    }
+    expect(missingNode.modelId).toBe("");
+
+    const json = exportBlueprintToJson(store.getSnapshot());
+    const reloaded = new EditorStore(JSON.parse(json));
+    expect(reloaded.getSnapshot()).toEqual(store.getSnapshot());
+  });
+
   it("inserts image nodes linked to existing project image assets", () => {
     const store = new EditorStore(createDefaultBlueprint());
     const assetId = store.addImageAsset({

@@ -897,6 +897,8 @@ export class SceneEditor {
   private createObject(node: EditorNode): Object3D {
     const object = node.type === "group"
       ? this.buildGroupObject(node)
+      : node.type === "model"
+        ? new Group()
       : this.buildWrappedNodeObject(node);
     object.name = node.name;
     object.visible = node.visible;
@@ -917,7 +919,7 @@ export class SceneEditor {
     return wrapper;
   }
 
-  private buildWrappedNodeObject(node: Exclude<EditorNode, { type: "group" }>): Object3D {
+  private buildWrappedNodeObject(node: Exclude<EditorNode, { type: "group" | "model" }>): Object3D {
     const wrapper = new Group();
     const mesh = this.buildMeshObject(node);
     this.applyNodeOrigin(mesh, node.origin);
@@ -925,7 +927,7 @@ export class SceneEditor {
     return wrapper;
   }
 
-  private buildMeshObject(node: Exclude<EditorNode, { type: "group" }>): Mesh {
+  private buildMeshObject(node: Exclude<EditorNode, { type: "group" | "model" }>): Mesh {
     let mesh: Mesh;
     switch (node.type) {
       case "box":
@@ -987,11 +989,11 @@ export class SceneEditor {
     );
   }
 
-  private createNodeMaterial(node: Exclude<EditorNode, { type: "group" }>): Material {
+  private createNodeMaterial(node: Exclude<EditorNode, { type: "group" | "model" }>): Material {
     return buildMaterialFromSpec(this.createBaseMaterialOptions(node), node.material);
   }
 
-  private createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" }>): MaterialBaseOptions {
+  private createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" | "model" }>): MaterialBaseOptions {
     const materialTexture = this.getMaterialTexture(node.material);
     return {
       color: node.material.color,

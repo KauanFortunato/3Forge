@@ -25,7 +25,7 @@ export interface CompatibilityContext {
   targetMaterialType?: MaterialType;
 }
 
-const NON_GROUP_TYPES: ReadonlyArray<Exclude<EditorNodeType, "group">> = [
+const MATERIAL_GEOMETRY_TYPES: ReadonlyArray<Exclude<EditorNodeType, "group" | "model">> = [
   "box",
   "sphere",
   "circle",
@@ -113,7 +113,7 @@ const MATERIAL_TYPE_ADVANCED_PATHS: ReadonlyArray<string> = [
 /**
  * Per-type geometry path table (groups have none).
  */
-const GEOMETRY_PATHS: Record<Exclude<EditorNodeType, "group">, ReadonlyArray<string>> = {
+const GEOMETRY_PATHS: Record<Exclude<EditorNodeType, "group" | "model">, ReadonlyArray<string>> = {
   box: ["geometry.width", "geometry.height", "geometry.depth"],
   circle: [
     "geometry.radius",
@@ -169,12 +169,12 @@ const GEOMETRY_ALIASES: Record<string, Record<string, string>> = {
   },
 };
 
-function isNonGroup(type: EditorNodeType): type is Exclude<EditorNodeType, "group"> {
-  return type !== "group";
+function isMaterialGeometryType(type: EditorNodeType): type is Exclude<EditorNodeType, "group" | "model"> {
+  return type !== "group" && type !== "model";
 }
 
 function geometryPathsFor(type: EditorNodeType): ReadonlyArray<string> {
-  if (!isNonGroup(type)) {
+  if (!isMaterialGeometryType(type)) {
     return [];
   }
   return GEOMETRY_PATHS[type];
@@ -276,16 +276,16 @@ export function isPathCompatible(
   }
 
   if (isMaterialPath(sourcePath)) {
-    if (sourceType === "group") {
+    if (sourceType === "group" || sourceType === "model") {
       return {
         status: "unsupported",
-        reason: "group nodes do not have a material",
+        reason: `${sourceType} nodes do not have a material`,
       };
     }
-    if (targetType === "group") {
+    if (targetType === "group" || targetType === "model") {
       return {
         status: "unsupported",
-        reason: "group nodes do not have a material",
+        reason: `${targetType} nodes do not have a material`,
       };
     }
 
@@ -315,10 +315,10 @@ export function isPathCompatible(
   }
 
   if (isGeometryPath(sourcePath)) {
-    if (sourceType === "group" || targetType === "group") {
+    if (!isMaterialGeometryType(sourceType) || !isMaterialGeometryType(targetType)) {
       return {
         status: "unsupported",
-        reason: "group nodes do not have geometry",
+        reason: "this node type does not have editable geometry",
       };
     }
 
@@ -381,7 +381,7 @@ function collectSourcePaths(
   paths.push(...TRANSFORM_PATHS);
   paths.push(...NODE_TOP_LEVEL_PATHS);
 
-  if (isNonGroup(sourceType)) {
+  if (isMaterialGeometryType(sourceType)) {
     paths.push(...MATERIAL_COMMON_PATHS);
     paths.push(...MATERIAL_SHADOW_PATHS);
 
@@ -399,9 +399,9 @@ function collectSourcePaths(
     paths.push(...GEOMETRY_PATHS[sourceType]);
   }
 
-  // `NON_GROUP_TYPES` is referenced for exhaustiveness of the geometry table
+  // `MATERIAL_GEOMETRY_TYPES` is referenced for exhaustiveness of the geometry table
   // (guards against a new node type silently missing its entry).
-  if (NON_GROUP_TYPES.some((t) => t === sourceType && GEOMETRY_PATHS[t] === undefined)) {
+  if (MATERIAL_GEOMETRY_TYPES.some((t) => t === sourceType && GEOMETRY_PATHS[t] === undefined)) {
     throw new Error(`missing geometry table for node type "${sourceType}"`);
   }
 
