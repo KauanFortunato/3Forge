@@ -12,10 +12,12 @@ interface TopMenu {
 interface MenuBarProps {
   menus: TopMenu[];
   appVersion?: string;
+  hasNewReleaseNotes?: boolean;
+  onOpenReleaseNotes?: () => void;
   onOpenSettings?: () => void;
 }
 
-export function MenuBar({ menus, appVersion, onOpenSettings }: MenuBarProps) {
+export function MenuBar({ menus, appVersion, hasNewReleaseNotes = false, onOpenReleaseNotes, onOpenSettings }: MenuBarProps) {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -89,7 +91,20 @@ export function MenuBar({ menus, appVersion, onOpenSettings }: MenuBarProps) {
             <span className="menubar__dot" aria-hidden="true" />
             auto-save
           </span>
-          <span className="menubar__chip">{appVersion}</span>
+          {onOpenReleaseNotes ? (
+            <button
+              type="button"
+              className={`menubar__chip menubar__chip--button${hasNewReleaseNotes ? " is-new" : ""}`}
+              onClick={onOpenReleaseNotes}
+              aria-label={hasNewReleaseNotes ? `Open release notes for ${appVersion}. New updates available.` : `Open release notes for ${appVersion}`}
+              title={hasNewReleaseNotes ? "New release notes" : "Release notes"}
+            >
+              <span>{appVersion}</span>
+              {hasNewReleaseNotes ? <span className="menubar__badge">New</span> : null}
+            </button>
+          ) : (
+            <span className="menubar__chip">{appVersion}</span>
+          )}
           {onOpenSettings ? (
             <button
               type="button"

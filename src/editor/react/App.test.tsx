@@ -211,6 +211,55 @@ describe("App", () => {
     expect(screen.queryByTestId("viewport-host")).toBeNull();
   });
 
+  it("highlights the app version button until release notes are opened", async () => {
+    persistLocalWorkspace("Release Notes");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+    const { unmount } = render(<App />);
+
+    expect(screen.queryByRole("heading", { name: "3Forge Release Notes" })).toBeNull();
+    const versionButton = screen.getByRole("button", { name: /Open release notes for v0\.3\.3\. New updates available\./i });
+    expect(versionButton.classList.contains("is-new")).toBe(true);
+    expect(within(versionButton).getByText("New")).toBeTruthy();
+
+    fireEvent.click(versionButton);
+
+    expect(await screen.findByRole("heading", { name: "3Forge Release Notes" })).toBeTruthy();
+    expect(screen.getByText("What changed in this update:")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Got it" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { name: "3Forge Release Notes" })).toBeNull();
+    });
+    expect(window.localStorage.getItem("3forge-release-notes-seen-version")).toBe("v0.3.3");
+    expect(screen.getByRole("button", { name: /Open release notes for v0\.3\.3$/i }).classList.contains("is-new")).toBe(false);
+
+    unmount();
+    persistLocalWorkspace("Release Notes Seen");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+    render(<App />);
+
+    expect(screen.queryByRole("heading", { name: "3Forge Release Notes" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Open release notes for v0\.3\.3$/i }).classList.contains("is-new")).toBe(false);
+  });
+
+  it("marks the app version button as new when the stored seen version is older", async () => {
+    window.localStorage.setItem("3forge-release-notes-seen-version", "v3.0.0");
+    persistLocalWorkspace("Older Notes");
+    markWorkspaceSessionActive();
+    mockNavigationType("reload");
+
+    render(<App />);
+
+    const versionButton = screen.getByRole("button", { name: /Open release notes for v0\.3\.3\. New updates available\./i });
+    expect(versionButton.classList.contains("is-new")).toBe(true);
+    fireEvent.click(versionButton);
+
+    expect(await screen.findByRole("heading", { name: "3Forge Release Notes" })).toBeTruthy();
+    expect(document.querySelector(".release-notes__version")?.textContent).toBe("v0.3.3");
+  });
+
   it("adapts the launcher copy for phone layouts", () => {
     persistLocalWorkspace("Pocket Resume");
     setViewportWidth(390);

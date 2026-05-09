@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, DragEvent as ReactDragEvent, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, DragEvent as ReactDragEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { Object3D } from "three";
 import { createBlueprintFromAiAnimationPatch, createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, isAiAnimationPatch, isAiSceneSpec, parseAiBlueprintJson } from "../aiBlueprint";
 import type { AiChatContext, AiProvider } from "../aiBlueprint";
@@ -106,8 +106,12 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { runTask } from "./hooks/useAsyncTask";
 import { useTheme } from "./hooks/useTheme";
 import { ViewportHost } from "./components/ViewportHost";
+import releaseNotesMarkdown from "../release-notes.md?raw";
 
-const APP_VERSION = "v3.1.0";
+declare const __APP_VERSION__: string;
+
+const APP_VERSION = __APP_VERSION__;
+const RELEASE_NOTES_SEEN_VERSION_KEY = "3forge-release-notes-seen-version";
 
 interface NodeClipboard {
   sourceNodeIds: string[];
@@ -297,6 +301,71 @@ function readStoredBooleanPreference(key: string, fallback: boolean): boolean {
   }
 
   return raw === "true";
+}
+
+function shouldShowReleaseNotes(): boolean {
+  if (!canUseLocalStorage()) {
+    return false;
+  }
+
+  return window.localStorage.getItem(RELEASE_NOTES_SEEN_VERSION_KEY) !== APP_VERSION;
+}
+
+function markReleaseNotesSeen(): void {
+  if (!canUseLocalStorage()) {
+    return;
+  }
+
+  window.localStorage.setItem(RELEASE_NOTES_SEEN_VERSION_KEY, APP_VERSION);
+}
+
+function renderReleaseNotesMarkdown(markdown: string) {
+  const lines = markdown.trim().split(/\r?\n/);
+  const blocks: ReactNode[] = [];
+  let listItems: string[] = [];
+
+  const flushList = () => {
+    if (listItems.length === 0) {
+      return;
+    }
+
+    const items = listItems;
+    listItems = [];
+    blocks.push(
+      <ul key={`release-notes-list-${blocks.length}`}>
+        {items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
+      </ul>,
+    );
+  };
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) {
+      flushList();
+      continue;
+    }
+
+    const bulletMatch = trimmedLine.match(/^[-*]\s+(.+)$/);
+    if (bulletMatch) {
+      listItems.push(bulletMatch[1]);
+      continue;
+    }
+
+    flushList();
+
+    const headingMatch = trimmedLine.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const HeadingTag = (`h${level + 2}`) as "h3" | "h4" | "h5";
+      blocks.push(<HeadingTag key={`release-notes-heading-${blocks.length}`}>{headingMatch[2]}</HeadingTag>);
+      continue;
+    }
+
+    blocks.push(<p key={`release-notes-paragraph-${blocks.length}`}>{trimmedLine}</p>);
+  }
+
+  flushList();
+  return blocks;
 }
 
 function downloadTextFile(content: string, fileName: string, mimeType: string): void {
@@ -656,6 +725,8 @@ export function App() {
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false);
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+  const [isReleaseNotesDialogOpen, setIsReleaseNotesDialogOpen] = useState(false);
+  const [hasNewReleaseNotes, setHasNewReleaseNotes] = useState(shouldShowReleaseNotes);
   const { theme, setTheme } = useTheme();
   const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
   const [pendingJsonDropImport, setPendingJsonDropImport] = useState<PendingJsonDropImport | null>(null);
@@ -804,6 +875,16 @@ export function App() {
       setToast(null);
       toastTimerRef.current = null;
     }, 2500);
+  }, []);
+
+  const closeReleaseNotesDialog = useCallback(() => {
+    markReleaseNotesSeen();
+    setHasNewReleaseNotes(false);
+    setIsReleaseNotesDialogOpen(false);
+  }, []);
+
+  const openReleaseNotesDialog = useCallback(() => {
+    setIsReleaseNotesDialogOpen(true);
   }, []);
 
   useEffect(() => {
@@ -3065,6 +3146,25 @@ export function App() {
     </Modal>
   );
 
+  const releaseNotesModal = (
+    <Modal title="3Forge Release Notes" isOpen={isReleaseNotesDialogOpen} onClose={closeReleaseNotesDialog}>
+      <div className="release-notes">
+        <div className="release-notes__head">
+          <span className="release-notes__version">{APP_VERSION}</span>
+          <p className="release-notes__intro">What changed in this update:</p>
+        </div>
+        <div className="release-notes__markdown">
+          {renderReleaseNotesMarkdown(releaseNotesMarkdown)}
+        </div>
+        <div className="modal__actions">
+          <button type="button" className="tbtn is-primary" onClick={closeReleaseNotesDialog}>
+            Got it
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+
   if (!isStarted) {
     return (
       <>
@@ -3087,6 +3187,7 @@ export function App() {
         />
         {jsonDropOverlay}
         {jsonDropImportModal}
+        {releaseNotesModal}
         <input
           ref={jsonInputRef}
           className="app__hidden-input"
@@ -3113,6 +3214,8 @@ export function App() {
         <MenuBar
           menus={menus}
           appVersion={APP_VERSION}
+          hasNewReleaseNotes={hasNewReleaseNotes}
+          onOpenReleaseNotes={openReleaseNotesDialog}
           onOpenSettings={() => setIsSettingsDialogOpen(true)}
         />
       ) : null}
@@ -3789,6 +3892,8 @@ export function App() {
         <p>3Forge is a standalone 3D component editor focused on building reusable Three.js pieces with runtime-editable fields.</p>
         <p>The viewport, history, export pipeline, fonts, images, and scene state stay in the editor core. React now handles the software-like shell, menus, panels, and scene graph workflow.</p>
       </Modal>
+
+      {releaseNotesModal}
 
       <SettingsDialog
         isOpen={isSettingsDialogOpen}
