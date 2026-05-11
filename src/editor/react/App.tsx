@@ -3909,6 +3909,8 @@ export function App() {
         onClose={() => setIsSettingsDialogOpen(false)}
         theme={theme}
         onChangeTheme={setTheme}
+        sceneSettings={storeView.sceneSettings}
+        onChangeSceneSettings={(patch) => store.updateSceneSettings(patch)}
       />
 
       <Modal

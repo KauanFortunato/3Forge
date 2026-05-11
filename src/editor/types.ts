@@ -194,6 +194,32 @@ export interface ComponentAnimation {
   clips: AnimationClip[];
 }
 
+export type SceneToneMapping = "none" | "linear" | "acesFilmic";
+export type SceneShadowType = "basic" | "pcf" | "pcfSoft";
+
+export interface SceneSettings {
+  backgroundColor: string;
+  environment: {
+    type: "none";
+    hdrAssetId: string | null;
+    intensity: number;
+  };
+  lighting: {
+    ambientColor: string;
+    ambientIntensity: number;
+    directionalColor: string;
+    directionalIntensity: number;
+  };
+  toneMapping: {
+    type: SceneToneMapping;
+    exposure: number;
+  };
+  shadows: {
+    enabled: boolean;
+    type: SceneShadowType;
+  };
+}
+
 export interface BaseEditorNode {
   id: string;
   name: string;
@@ -409,6 +435,7 @@ export interface ComponentBlueprint {
   materials: MaterialAsset[];
   images: ImageAsset[];
   models?: ModelAsset[];
+  sceneSettings?: SceneSettings;
   nodes: EditorNode[];
   animation: ComponentAnimation;
 }
@@ -442,6 +469,7 @@ export type EditorStoreChangeReason =
   | "material"
   | "image"
   | "model"
+  | "sceneSettings"
   | "view"
   | "animation"
   | "propertyClipboard";

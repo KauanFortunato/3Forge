@@ -65,6 +65,9 @@ import type {
   NodePropertyDefinition,
   NodePropertyPath,
   PlaneNode,
+  SceneSettings,
+  SceneShadowType,
+  SceneToneMapping,
   SphereNode,
   TextNode,
   TransformSpec,
@@ -262,8 +265,34 @@ export function createDefaultBlueprint(): ComponentBlueprint {
     materials: [],
     images: [],
     models: [],
+    sceneSettings: createDefaultSceneSettings(),
     nodes: [panel, accent, title],
     animation: createDefaultAnimation(),
+  };
+}
+
+export function createDefaultSceneSettings(): SceneSettings {
+  return {
+    backgroundColor: "#25272c",
+    environment: {
+      type: "none",
+      hdrAssetId: null,
+      intensity: 1,
+    },
+    lighting: {
+      ambientColor: "#ffffff",
+      ambientIntensity: 0.3,
+      directionalColor: "#ffffff",
+      directionalIntensity: 1.4,
+    },
+    toneMapping: {
+      type: "acesFilmic",
+      exposure: 1,
+    },
+    shadows: {
+      enabled: true,
+      type: "pcfSoft",
+    },
   };
 }
 
@@ -651,6 +680,63 @@ function normalizeColor(value: string, fallback: string): string {
     return `#${r}${r}${g}${g}${b}${b}`;
   }
   return fallback;
+}
+
+function normalizeOptionalColor(value: unknown, fallback: string): string {
+  return typeof value === "string" ? normalizeColor(value, fallback) : fallback;
+}
+
+function normalizeSceneToneMapping(value: unknown, fallback: SceneToneMapping): SceneToneMapping {
+  return value === "none" || value === "linear" || value === "acesFilmic" ? value : fallback;
+}
+
+function normalizeSceneShadowType(value: unknown, fallback: SceneShadowType): SceneShadowType {
+  return value === "basic" || value === "pcf" || value === "pcfSoft" ? value : fallback;
+}
+
+function normalizeSceneSettings(rawSettings: unknown, fallback = createDefaultSceneSettings()): SceneSettings {
+  if (!rawSettings || typeof rawSettings !== "object") {
+    return structuredClone(fallback);
+  }
+
+  const source = rawSettings as Record<string, unknown>;
+  const environment = source.environment && typeof source.environment === "object"
+    ? source.environment as Record<string, unknown>
+    : {};
+  const lighting = source.lighting && typeof source.lighting === "object"
+    ? source.lighting as Record<string, unknown>
+    : {};
+  const toneMapping = source.toneMapping && typeof source.toneMapping === "object"
+    ? source.toneMapping as Record<string, unknown>
+    : {};
+  const shadows = source.shadows && typeof source.shadows === "object"
+    ? source.shadows as Record<string, unknown>
+    : {};
+
+  return {
+    backgroundColor: normalizeOptionalColor(source.backgroundColor, fallback.backgroundColor),
+    environment: {
+      type: "none",
+      hdrAssetId: typeof environment.hdrAssetId === "string" && environment.hdrAssetId.trim()
+        ? environment.hdrAssetId.trim()
+        : null,
+      intensity: clampNumber(normalizeNumber(environment.intensity, fallback.environment.intensity), 0, 10),
+    },
+    lighting: {
+      ambientColor: normalizeOptionalColor(lighting.ambientColor, fallback.lighting.ambientColor),
+      ambientIntensity: clampNumber(normalizeNumber(lighting.ambientIntensity, fallback.lighting.ambientIntensity), 0, 10),
+      directionalColor: normalizeOptionalColor(lighting.directionalColor, fallback.lighting.directionalColor),
+      directionalIntensity: clampNumber(normalizeNumber(lighting.directionalIntensity, fallback.lighting.directionalIntensity), 0, 20),
+    },
+    toneMapping: {
+      type: normalizeSceneToneMapping(toneMapping.type, fallback.toneMapping.type),
+      exposure: clampNumber(normalizeNumber(toneMapping.exposure, fallback.toneMapping.exposure), 0, 10),
+    },
+    shadows: {
+      enabled: typeof shadows.enabled === "boolean" ? shadows.enabled : fallback.shadows.enabled,
+      type: normalizeSceneShadowType(shadows.type, fallback.shadows.type),
+    },
+  };
 }
 
 function normalizeVec3(value: unknown, fallback: Vec3Like): Vec3Like {
@@ -1167,6 +1253,7 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
   const availableImages = new Map(importedImages.map((image) => [image.id, image] as const));
   const importedModels = normalizeModelLibrary(source.models);
   const availableModelIds = new Set(importedModels.map((model) => model.id));
+  const sceneSettings = normalizeSceneSettings(source.sceneSettings, fallback.sceneSettings ?? createDefaultSceneSettings());
   const importedNodes = Array.isArray(source.nodes)
     ? source.nodes.map(normalizeImportedNode).filter((node): node is EditorNode => Boolean(node))
     : [];
@@ -1244,6 +1331,7 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     materials: importedMaterials,
     images: importedImages,
     models: importedModels,
+    sceneSettings,
     nodes: importedNodes,
     animation,
   };
@@ -1312,6 +1400,10 @@ export class EditorStore extends EventTarget {
     return this._blueprint.models ?? [];
   }
 
+  get sceneSettings(): SceneSettings {
+    return this._blueprint.sceneSettings ?? createDefaultSceneSettings();
+  }
+
   get canUndo(): boolean {
     return this._undoStack.length > 0;
   }
@@ -1347,6 +1439,44 @@ export class EditorStore extends EventTarget {
 
     this._viewMode = mode;
     this.notify({ reason: "view", source });
+  }
+
+  updateSceneSettings(patch: {
+    backgroundColor?: string;
+    environment?: Partial<SceneSettings["environment"]>;
+    lighting?: Partial<SceneSettings["lighting"]>;
+    toneMapping?: Partial<SceneSettings["toneMapping"]>;
+    shadows?: Partial<SceneSettings["shadows"]>;
+  }, source: EditorStoreChange["source"] = "ui"): void {
+    const currentSettings = this.sceneSettings;
+    const nextSettings = normalizeSceneSettings({
+      ...currentSettings,
+      ...patch,
+      environment: {
+        ...currentSettings.environment,
+        ...patch.environment,
+      },
+      lighting: {
+        ...currentSettings.lighting,
+        ...patch.lighting,
+      },
+      toneMapping: {
+        ...currentSettings.toneMapping,
+        ...patch.toneMapping,
+      },
+      shadows: {
+        ...currentSettings.shadows,
+        ...patch.shadows,
+      },
+    }, currentSettings);
+
+    if (JSON.stringify(nextSettings) === JSON.stringify(currentSettings)) {
+      return;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.sceneSettings = nextSettings;
+    this.notify({ reason: "sceneSettings", source });
   }
 
   subscribe(listener: (change: EditorStoreChange) => void): () => void {

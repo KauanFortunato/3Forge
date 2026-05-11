@@ -9,6 +9,7 @@ import type {
   ImageAsset,
   MaterialAsset,
   NodePropertyDefinition,
+  SceneSettings,
   ViewMode,
 } from "../types";
 
@@ -26,6 +27,7 @@ export interface EditorStoreView {
   fonts: FontAsset[];
   materials: MaterialAsset[];
   images: ImageAsset[];
+  sceneSettings: SceneSettings;
   editableFields: EditableFieldEntry[];
   animation: ComponentAnimation;
   selectedNodeAnimationTracks: AnimationTrack[];

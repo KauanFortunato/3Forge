@@ -5,6 +5,7 @@ import { exportBlueprintToJson, generateTypeScriptComponent } from "./exports";
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "./animation";
 import {
   createDefaultBlueprint,
+  createDefaultSceneSettings,
   createNode,
   EditorStore,
   getPropertyDefinitions,
@@ -915,5 +916,22 @@ describe("export after property clipboard", () => {
     expect(output).toContain("new IcosahedronGeometry(");
     expect(output).toContain("new OctahedronGeometry(");
     expect(output).toContain("new TetrahedronGeometry(");
+  });
+
+  it("exports scene settings metadata for runtime consumers", () => {
+    const blueprint = createDefaultBlueprint();
+    blueprint.sceneSettings = {
+      ...createDefaultSceneSettings(),
+      backgroundColor: "#101820",
+      toneMapping: { type: "linear", exposure: 1.4 },
+      shadows: { enabled: false, type: "pcf" },
+    };
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toContain("export const sceneSettings = ");
+    expect(output).toContain('"backgroundColor": "#101820"');
+    expect(output).toContain('"type": "linear"');
+    expect(output).toContain('"enabled": false');
   });
 });

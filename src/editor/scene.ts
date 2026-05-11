@@ -1,7 +1,9 @@
 import {
   AmbientLight,
+  ACESFilmicToneMapping,
   AxesHelper,
   BackSide,
+  BasicShadowMap,
   BasicDepthPacking,
   Box3,
   BoxGeometry,
@@ -17,6 +19,7 @@ import {
   Group,
   HemisphereLight,
   IcosahedronGeometry,
+  LinearToneMapping,
   Mesh,
   Material,
   MeshBasicMaterial,
@@ -32,8 +35,10 @@ import {
   ShadowMaterial,
   Object3D,
   OctahedronGeometry,
+  NoToneMapping,
   PerspectiveCamera,
   PlaneGeometry,
+  PCFShadowMap,
   Raycaster,
   RingGeometry,
   Scene,
@@ -259,6 +264,8 @@ export class SceneEditor {
   private pointerDownX = 0;
   private pointerDownY = 0;
   private mainLight: DirectionalLight | null = null;
+  private hemisphereLight: HemisphereLight | null = null;
+  private ambientLight: AmbientLight | null = null;
   private selectionHelper: Box3Helper | null = null;
   private selectionVisualsSuppressed = false;
   private currentMode: ToolMode = "select";
@@ -276,13 +283,12 @@ export class SceneEditor {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
-    this.renderer.setClearColor("#23252a", 1);
     this.renderer.domElement.style.touchAction = "none";
     this.renderer.domElement.style.display = "block";
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new Scene();
-    this.scene.background = new Color("#25272c");
+    this.scene.background = new Color(this.store.sceneSettings.backgroundColor);
 
     this.camera = new PerspectiveCamera(45, 1, 0.01, 2000);
     this.camera.position.set(6, 5, 8);
@@ -592,6 +598,11 @@ export class SceneEditor {
       return;
     }
 
+    if (change.reason === "sceneSettings") {
+      this.applySceneSettings();
+      return;
+    }
+
     if (change.reason === "editable" || change.reason === "meta") {
       return;
     }
@@ -615,7 +626,7 @@ export class SceneEditor {
     const isWireframe = viewMode === "wireframe";
 
     if (this.mainLight) {
-      this.mainLight.castShadow = isRendered;
+      this.mainLight.castShadow = isRendered && this.store.sceneSettings.shadows.enabled;
     }
 
     this.viewportRoot.traverse((object) => {
@@ -623,8 +634,8 @@ export class SceneEditor {
         const nodeId = this.findNodeId(object);
         const node = nodeId ? this.store.getNode(nodeId) : undefined;
         const material = node && node.type !== "group" ? node.material : undefined;
-        object.castShadow = isRendered && (material?.castShadow ?? true);
-        object.receiveShadow = isRendered && (material?.receiveShadow ?? true);
+        object.castShadow = isRendered && this.store.sceneSettings.shadows.enabled && (material?.castShadow ?? true);
+        object.receiveShadow = isRendered && this.store.sceneSettings.shadows.enabled && (material?.receiveShadow ?? true);
         const meshMaterial = object.material;
         if (meshMaterial && !Array.isArray(meshMaterial) && "wireframe" in meshMaterial) {
           (meshMaterial as { wireframe: boolean }).wireframe = isWireframe || Boolean(material?.wireframe);
@@ -634,11 +645,11 @@ export class SceneEditor {
   }
 
   private addHelpers(): void {
-    const hemi = new HemisphereLight(0xe4e0ea, 0x1f2024, 1.1);
-    this.scene.add(hemi);
+    this.hemisphereLight = new HemisphereLight(0xe4e0ea, 0x1f2024, 1.1);
+    this.scene.add(this.hemisphereLight);
 
-    const ambient = new AmbientLight(0xffffff, 0.3);
-    this.scene.add(ambient);
+    this.ambientLight = new AmbientLight(0xffffff, 0.3);
+    this.scene.add(this.ambientLight);
 
     this.mainLight = new DirectionalLight(0xffffff, 1.4);
     this.mainLight.position.set(5, 9, 6);
@@ -667,6 +678,36 @@ export class SceneEditor {
     shadowPlane.renderOrder = -1;
     shadowPlane.userData.isShadowReceiver = true;
     this.scene.add(shadowPlane);
+    this.applySceneSettings();
+  }
+
+  private applySceneSettings(): void {
+    const settings = this.store.sceneSettings;
+    const background = new Color(settings.backgroundColor);
+    this.scene.background = background;
+    this.renderer.setClearColor(background, 1);
+    this.renderer.toneMapping = settings.toneMapping.type === "acesFilmic"
+      ? ACESFilmicToneMapping
+      : settings.toneMapping.type === "linear"
+        ? LinearToneMapping
+        : NoToneMapping;
+    this.renderer.toneMappingExposure = settings.toneMapping.exposure;
+    this.renderer.shadowMap.enabled = settings.shadows.enabled;
+    this.renderer.shadowMap.type = settings.shadows.type === "basic"
+      ? BasicShadowMap
+      : settings.shadows.type === "pcf"
+        ? PCFShadowMap
+        : PCFSoftShadowMap;
+
+    if (this.ambientLight) {
+      this.ambientLight.color.set(settings.lighting.ambientColor);
+      this.ambientLight.intensity = settings.lighting.ambientIntensity;
+    }
+    if (this.mainLight) {
+      this.mainLight.color.set(settings.lighting.directionalColor);
+      this.mainLight.intensity = settings.lighting.directionalIntensity;
+    }
+    this.updateViewMode();
   }
 
   private createInfiniteGrid(): Mesh<PlaneGeometry, ShaderMaterial> {

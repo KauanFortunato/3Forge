@@ -236,6 +236,48 @@ describe("EditorStore", () => {
     }
   });
 
+  it("normalizes and updates scene settings", () => {
+    const store = new EditorStore({
+      ...createDefaultBlueprint(),
+      sceneSettings: {
+        backgroundColor: "invalid",
+        lighting: {
+          ambientColor: "#abc",
+          ambientIntensity: -1,
+          directionalColor: "#123456",
+          directionalIntensity: 99,
+        },
+        toneMapping: {
+          type: "linear",
+          exposure: 2.5,
+        },
+        shadows: {
+          enabled: false,
+          type: "pcf",
+        },
+      },
+    });
+
+    expect(store.sceneSettings.backgroundColor).toBe("#25272c");
+    expect(store.sceneSettings.lighting.ambientColor).toBe("#aabbcc");
+    expect(store.sceneSettings.lighting.ambientIntensity).toBe(0);
+    expect(store.sceneSettings.lighting.directionalIntensity).toBe(20);
+    expect(store.sceneSettings.toneMapping.type).toBe("linear");
+    expect(store.sceneSettings.shadows.enabled).toBe(false);
+
+    store.updateSceneSettings({
+      backgroundColor: "#111111",
+      lighting: { ambientIntensity: 0.8 },
+      toneMapping: { type: "acesFilmic" },
+      shadows: { enabled: true, type: "pcfSoft" },
+    });
+
+    expect(store.sceneSettings.backgroundColor).toBe("#111111");
+    expect(store.sceneSettings.lighting.ambientIntensity).toBe(0.8);
+    expect(store.sceneSettings.toneMapping.type).toBe("acesFilmic");
+    expect(store.sceneSettings.shadows).toEqual({ enabled: true, type: "pcfSoft" });
+  });
+
   it("round-trips a valid blueprint through JSON export and import", () => {
     const blueprint = new EditorStore(createBlueprintFixture()).getSnapshot();
     const json = exportBlueprintToJson(blueprint);

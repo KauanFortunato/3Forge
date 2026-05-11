@@ -1,7 +1,7 @@
 import { frameToSeconds, getTrackSegments, isTrackMuted, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
 import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageAsset, ImageNode, ModelAsset, TransformSpec } from "./types";
-import { ROOT_NODE_ID, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
+import { ROOT_NODE_ID, createDefaultSceneSettings, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
 
 interface CollectedBinding {
   node: ExportNode;
@@ -252,6 +252,9 @@ export function generateTypeScriptComponent(
     }
   }
   lines.push("};");
+  lines.push("");
+  lines.push("export const sceneSettings = ");
+  lines.push(`${JSON.stringify(blueprint.sceneSettings ?? createDefaultSceneSettings(), null, 2)} as const;`);
   lines.push("");
   if (hasAnimations) {
     emitAnimationDefinitions(lines, animationClips);

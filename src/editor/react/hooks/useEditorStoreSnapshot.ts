@@ -19,6 +19,7 @@ export function useEditorStoreSnapshot(store: EditorStore): EditorStoreView {
       fonts: store.fonts,
       materials: store.materials,
       images: store.images,
+      sceneSettings: store.sceneSettings,
       editableFields: store.listEditableFields(),
       animation: store.animation,
       selectedNodeAnimationTracks: store.getAnimationTracksForNode(store.selectedNodeId),
