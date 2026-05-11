@@ -108,6 +108,61 @@ export function clampFrame(frame: number, durationFrames: number): number {
   return Math.max(0, Math.min(Math.round(frame), Math.max(durationFrames, 0)));
 }
 
+/**
+ * Maximum `clip.previewFrame` across an animation clip array. Returns -1
+ * when no clip declares a non-negative preview frame (W3D-side semantics
+ * for `<Timeline PreviewMarker>` use -1 to mean "no preview chosen"; the
+ * parser drops negatives, so the absence is represented here by -1
+ * rather than `undefined` so callers can compare numerically without
+ * type-narrowing acrobatics).
+ *
+ * Used by:
+ *   - `applyWorkspaceBlueprint` to pick the initial editor frame.
+ *   - The defensive resync `useEffect` to re-sync on workspace restore /
+ *     undo / viewport remount.
+ *   - `__r3Dump().timelineRuntime.previewFrame` for forensic dumps.
+ */
+export function maxPreviewFrameFromClips(clips: readonly AnimationClip[]): number {
+  let max = -1;
+  for (const clip of clips) {
+    if (typeof clip.previewFrame === "number" && clip.previewFrame > max) {
+      max = clip.previewFrame;
+    }
+  }
+  return max;
+}
+
+/**
+ * Single source of truth for "should the editor disable / snap-back live
+ * playback and scrub for the active blueprint?".
+ *
+ * Active when BOTH:
+ *   1. the blueprint metadata carries a W3D origin marker, AND
+ *   2. the animation declares a non-negative PreviewMarker frame.
+ *
+ * Rationale: 3Forge can faithfully reproduce W3D's PreviewMarker snapshot
+ * (via the flatten pre-pass + FlowChildren + TextureText fit). Live
+ * playback / scrubbing currently bypasses those systems — FlowChildren
+ * offsets, mask clipping planes and TextureText fit-to-box are only
+ * applied at flatten time, so animating Position/Scale/Alpha/Enabled
+ * during runtime produces a visibly-broken composition. Until those
+ * runtime refresh paths land, the safe surface is "show the static
+ * preview and refuse to leave it". The guard is intentionally narrow:
+ * blueprints without a W3D origin (legacy 3Forge scenes, hand-authored
+ * timelines) keep full playback + scrub.
+ */
+export function isW3DPlaybackGuarded(opts: {
+  blueprintMetadata: unknown;
+  clips: readonly AnimationClip[];
+}): boolean {
+  const md = opts.blueprintMetadata as { w3d?: unknown } | null | undefined;
+  if (!md || !md.w3d) return false;
+  return maxPreviewFrameFromClips(opts.clips) >= 0;
+}
+
+export const W3D_PLAYBACK_GUARD_WARNING =
+  "Live W3D playback is not fully supported yet. This import is shown as a PreviewMarker snapshot.";
+
 export function createAnimationTrack(nodeId: string, property: AnimationPropertyPath): AnimationTrack {
   return {
     id: generateAnimationId("track"),

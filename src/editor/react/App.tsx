@@ -15,6 +15,7 @@ import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset, imageSequenceToAsset, isVideoFileName, isVideoMimeType, videoFileToAsset } from "../images";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
+import { isW3DPlaybackGuarded, maxPreviewFrameFromClips, W3D_PLAYBACK_GUARD_WARNING } from "../animation";
 import {
   createDefaultBlueprint,
   EditorStore,
@@ -741,6 +742,30 @@ export function App() {
     }
   }, [activeClip, currentFrame]);
 
+  // Defensive preview-frame resync. `applyWorkspaceBlueprint` already seeks
+  // to the W3D PreviewMarker on the import path, but several alternate
+  // paths (workspace restore, undo/redo across a blueprint replacement,
+  // viewport remount on a fresh canvas) can land the editor at frame 0
+  // even when the loaded blueprint declares a non-zero preview frame.
+  // Whenever `storeView.animation` identity changes (i.e. the blueprint
+  // animation object was reassigned — only happens on full reload, not
+  // per-keyframe edits) and the maximum `clip.previewFrame` is positive,
+  // pin the React-side `currentFrame` and the scene to it and pause
+  // playback. The identity-tracked ref prevents this firing on ordinary
+  // edits / playback updates that mutate clips in place.
+  const lastSyncedAnimationRef = useRef<unknown>(null);
+  useEffect(() => {
+    const animation = storeView.animation;
+    if (lastSyncedAnimationRef.current === animation) return;
+    lastSyncedAnimationRef.current = animation;
+    const maxPreview = maxPreviewFrameFromClips(animation.clips);
+    if (maxPreview > 0) {
+      setCurrentFrame(maxPreview);
+      sceneRef.current?.seekAnimation(maxPreview);
+      setIsAnimationPlaying(false);
+    }
+  }, [storeView.animation]);
+
   useEffect(() => {
     if (selectedTrackId && !activeClipTracks.some((track) => track.id === selectedTrackId)) {
       setSelectedTrackId(null);
@@ -877,12 +902,42 @@ export function App() {
     setCurrentFrame((previousFrame) => previousFrame === nextFrame ? previousFrame : nextFrame);
   }, [store]);
 
+  // W3D imports are accurate ONLY at their PreviewMarker frame (see
+  // isW3DPlaybackGuarded). The handlers below intercept every navigation
+  // input (Play, Stop, Scrub, Skip{Back,Forward}, Rewind, FastForward) so
+  // pressing Play / dragging the timeline doesn't put the scene into a
+  // visibly-broken animated state until the runtime refresh pipeline
+  // lands. Each interception:
+  //   - keeps `currentFrame` pinned to the preview frame
+  //   - re-seeks the scene if it drifted
+  //   - shows a transient warning via `setTransientStatus`
+  // The guard is computed via the shared helper so the dump (scene.ts)
+  // and the interception logic (App.tsx) can never disagree.
+  const w3dPlaybackGuarded = useMemo(
+    () => isW3DPlaybackGuarded({
+      blueprintMetadata: store.blueprint.metadata,
+      clips: storeView.animation.clips,
+    }),
+    [storeView.animation, store],
+  );
+  const w3dPreviewFrame = useMemo(
+    () => Math.max(0, maxPreviewFrameFromClips(storeView.animation.clips)),
+    [storeView.animation.clips],
+  );
+  const guardSnapBack = useCallback(() => {
+    setCurrentFrame(w3dPreviewFrame);
+    setIsAnimationPlaying(false);
+    sceneRef.current?.seekAnimation(w3dPreviewFrame);
+    setTransientStatus(W3D_PLAYBACK_GUARD_WARNING);
+  }, [w3dPreviewFrame, setTransientStatus]);
+
   const handleTimelineFrameChange = useCallback((frame: number) => {
+    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     const nextFrame = Math.max(0, Math.min(Math.round(frame), store.getActiveAnimationClip()?.durationFrames ?? 0));
     setCurrentFrame(nextFrame);
     setIsAnimationPlaying(false);
     sceneRef.current?.seekAnimation(nextFrame);
-  }, [store]);
+  }, [store, w3dPlaybackGuarded, guardSnapBack]);
 
   const handleAnimationPlayToggle = useCallback(() => {
     if (isAnimationPlaying) {
@@ -891,46 +946,52 @@ export function App() {
       setTransientStatus("Animation paused.");
       return;
     }
+    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
 
     sceneRef.current?.playAnimation();
     setIsAnimationPlaying(true);
     setTransientStatus("Animation playing.");
-  }, [isAnimationPlaying, setTransientStatus]);
+  }, [isAnimationPlaying, setTransientStatus, w3dPlaybackGuarded, guardSnapBack]);
 
   const handleAnimationStop = useCallback(() => {
+    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     sceneRef.current?.stopAnimation();
     setCurrentFrame(0);
     setIsAnimationPlaying(false);
     setTransientStatus("Animation stopped.");
-  }, [setTransientStatus]);
+  }, [setTransientStatus, w3dPlaybackGuarded, guardSnapBack]);
 
   const handleAnimationSkipBack = useCallback(() => {
+    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     sceneRef.current?.seekAnimation(0);
     setCurrentFrame(0);
-  }, []);
+  }, [w3dPlaybackGuarded, guardSnapBack]);
 
   const handleAnimationSkipForward = useCallback(() => {
+    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     const endFrame = store.getActiveAnimationClip()?.durationFrames ?? 0;
     sceneRef.current?.seekAnimation(endFrame);
     setCurrentFrame(endFrame);
-  }, [store]);
+  }, [store, w3dPlaybackGuarded, guardSnapBack]);
 
   const handleAnimationRewind = useCallback(() => {
+    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     setCurrentFrame((previous) => {
       const next = Math.max(0, previous - 10);
       sceneRef.current?.seekAnimation(next);
       return next;
     });
-  }, []);
+  }, [w3dPlaybackGuarded, guardSnapBack]);
 
   const handleAnimationFastForward = useCallback(() => {
+    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     const endFrame = store.getActiveAnimationClip()?.durationFrames ?? 0;
     setCurrentFrame((previous) => {
       const next = Math.min(endFrame, previous + 10);
       sceneRef.current?.seekAnimation(next);
       return next;
     });
-  }, [store]);
+  }, [store, w3dPlaybackGuarded, guardSnapBack]);
 
   const handleAddAnimationTrack = useCallback((property: AnimationPropertyPath) => {
     if (!selectedNode) {
@@ -1337,12 +1398,7 @@ export function App() {
     // the maximum preview frame across clips so a multi-clip scene lands on
     // the most "settled" pose; fall through to frame 0 when no clip has one.
     const clips = store.getActiveAnimationClip() ? store.blueprint.animation.clips : [];
-    let initialFrame = 0;
-    for (const clip of clips) {
-      if (typeof clip.previewFrame === "number" && clip.previewFrame > initialFrame) {
-        initialFrame = clip.previewFrame;
-      }
-    }
+    const initialFrame = Math.max(0, maxPreviewFrameFromClips(clips));
     setCurrentFrame(initialFrame);
     sceneRef.current?.seekAnimation(initialFrame);
     setIsAnimationPlaying(false);

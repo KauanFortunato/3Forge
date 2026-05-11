@@ -60,6 +60,9 @@ import {
   getAnimationValue,
   isDiscreteAnimationProperty,
   isTrackMuted,
+  isW3DPlaybackGuarded,
+  maxPreviewFrameFromClips,
+  W3D_PLAYBACK_GUARD_WARNING,
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { EditorStore } from "./state";
@@ -992,6 +995,13 @@ export class SceneEditor {
       durationFrames: number;
       runtimeReady: boolean;
       compiledTrackCount: number;
+      previewFrame: number;
+      snapshotMode: boolean;
+      playbackSupported: boolean;
+      playbackGuarded: boolean;
+      scrubGuarded: boolean;
+      lastGuardWarning: string | null;
+      warning: string | null;
     };
     w3dTextDebug: Array<{
       nodeId: string;
@@ -1489,15 +1499,48 @@ export class SceneEditor {
       // autoplaying / drifting off the preview frame?" without opening a
       // debugger. After a clean W3D import, `isPlaying` should be false and
       // `currentFrame` should be the PreviewMarker.
-      timelineRuntime: {
-        isPlaying: this.isAnimationPlaying,
-        activeTimelineName: this.store.getActiveAnimationClip()?.name ?? null,
-        activeTimelineId: this.store.getActiveAnimationClip()?.id ?? null,
-        currentFrame: this.currentAnimationFrame,
-        durationFrames: this.store.getActiveAnimationClip()?.durationFrames ?? 0,
-        runtimeReady: this.animationRuntimeReady,
-        compiledTrackCount: this.animationTracks.length,
-      },
+      timelineRuntime: (() => {
+        // Max W3D PreviewMarker across all clips; -1 when none of them
+        // declared one (legacy blueprints, ad-hoc imports). Lets the
+        // operator see at a glance whether the scene is in "frozen
+        // snapshot" mode or showing animated state.
+        const previewFrame = maxPreviewFrameFromClips(bp.animation.clips);
+        const rounded = Math.round(this.currentAnimationFrame);
+        const snapshotMode = previewFrame >= 0 && rounded === previewFrame;
+        // W3D imports rely on a flatten pre-pass (see applyW3DPreviewFlatten
+        // in src/editor/import/w3d.ts) that bakes ExportProperty + In-timeline
+        // PreviewMarker values into the parsed blueprint. Once the user scrubs
+        // or plays, the animation tracks override Position/Scale/Alpha/Enabled
+        // values — but other W3D-specific systems (FlowChildren layout, mask
+        // clipping planes, TextureText fit-to-box) only refreshed at flatten
+        // time. Playing/scrubbing therefore yields an *approximate* preview
+        // until that refresh pipeline is wired (Phase D.3.1 / D.4). Flag it
+        // here so the surface that decides whether to allow Play can read a
+        // single source of truth.
+        // Use the shared helper so App.tsx (which intercepts the actual
+        // Play/scrub events) and this dump can never disagree about
+        // whether guards are active.
+        const guarded = isW3DPlaybackGuarded({
+          blueprintMetadata: bp.metadata,
+          clips: bp.animation.clips,
+        });
+        return {
+          isPlaying: this.isAnimationPlaying,
+          activeTimelineName: this.store.getActiveAnimationClip()?.name ?? null,
+          activeTimelineId: this.store.getActiveAnimationClip()?.id ?? null,
+          currentFrame: this.currentAnimationFrame,
+          durationFrames: this.store.getActiveAnimationClip()?.durationFrames ?? 0,
+          runtimeReady: this.animationRuntimeReady,
+          compiledTrackCount: this.animationTracks.length,
+          previewFrame,
+          snapshotMode,
+          playbackSupported: !guarded,
+          playbackGuarded: guarded,
+          scrubGuarded: guarded,
+          lastGuardWarning: guarded ? W3D_PLAYBACK_GUARD_WARNING : null,
+          warning: guarded ? W3D_PLAYBACK_GUARD_WARNING : null,
+        };
+      })(),
       shadow: {
         missingTextureNodeCount: w3d.missingTextureNodeIds?.length ?? 0,
         meshPlaceholderNodeCount: w3d.meshPlaceholderNodeIds?.length ?? 0,

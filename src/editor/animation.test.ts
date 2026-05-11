@@ -4,6 +4,7 @@ import {
   animationValueToBoolean,
   assertKeyframesSorted,
   clampFrame,
+  createAnimationClip,
   createAnimationKeyframe,
   createAnimationTrack,
   createDefaultAnimation,
@@ -12,11 +13,14 @@ import {
   isAnimationEasePreset,
   isAnimationPropertyPath,
   isTrackMuted,
+  isW3DPlaybackGuarded,
+  maxPreviewFrameFromClips,
   normalizeAnimation,
   normalizeAnimationValueForProperty,
   secondsToFrame,
   frameToSeconds,
   sortTrackKeyframes,
+  W3D_PLAYBACK_GUARD_WARNING,
 } from "./animation";
 import { createNode } from "./state";
 
@@ -205,5 +209,108 @@ describe("animation helpers", () => {
       createAnimationKeyframe(0, 0),
     ];
     expect(() => assertKeyframesSorted(outOfOrderTrack)).toThrow(/not sorted/);
+  });
+});
+
+describe("maxPreviewFrameFromClips", () => {
+  // Used by:
+  //   - applyWorkspaceBlueprint (pick initial editor frame)
+  //   - the defensive resync useEffect (restore correct frame after a
+  //     blueprint reload / undo / viewport remount)
+  //   - __r3Dump().timelineRuntime.previewFrame (forensic dump)
+  // The tests below pin the contract those three call sites rely on.
+
+  it("returns -1 when no clip declares a preview frame", () => {
+    const a = createAnimationClip("a", { fps: 25, durationFrames: 100 });
+    const b = createAnimationClip("b", { fps: 25, durationFrames: 50 });
+    expect(maxPreviewFrameFromClips([a, b])).toBe(-1);
+  });
+
+  it("returns the only clip's previewFrame when present", () => {
+    const a = createAnimationClip("a", { fps: 25, durationFrames: 100 });
+    a.previewFrame = 80;
+    expect(maxPreviewFrameFromClips([a])).toBe(80);
+  });
+
+  it("returns the maximum previewFrame across multiple clips (LINEUP_LEFT scenario)", () => {
+    // "In" timeline at frame 799, "Out" timeline with no preview marker.
+    const inClip = createAnimationClip("In", { fps: 25, durationFrames: 800 });
+    inClip.previewFrame = 799;
+    const outClip = createAnimationClip("Out", { fps: 25, durationFrames: 200 });
+    expect(maxPreviewFrameFromClips([inClip, outClip])).toBe(799);
+  });
+
+  it("returns the larger previewFrame when multiple clips declare one", () => {
+    const a = createAnimationClip("a", { fps: 25, durationFrames: 100 });
+    a.previewFrame = 30;
+    const b = createAnimationClip("b", { fps: 25, durationFrames: 100 });
+    b.previewFrame = 80;
+    expect(maxPreviewFrameFromClips([a, b])).toBe(80);
+    expect(maxPreviewFrameFromClips([b, a])).toBe(80); // order-independent
+  });
+
+  it("treats previewFrame=0 as a valid preview (legitimate \"rest at frame 0\")", () => {
+    const a = createAnimationClip("a", { fps: 25, durationFrames: 100 });
+    a.previewFrame = 0;
+    // Beats the -1 sentinel for "no preview", so 0 wins.
+    expect(maxPreviewFrameFromClips([a])).toBe(0);
+  });
+
+  it("handles an empty clip array gracefully", () => {
+    expect(maxPreviewFrameFromClips([])).toBe(-1);
+  });
+});
+
+describe("isW3DPlaybackGuarded", () => {
+  // The guard activates when both signals agree: W3D origin marker on
+  // the blueprint metadata + at least one clip declares a non-negative
+  // PreviewMarker. Anything else (legacy 3Forge blueprints, hand-authored
+  // timelines, W3D imports that never declared a preview marker) keeps
+  // playback enabled.
+
+  const makeClipWithPreview = (frame: number) => {
+    const clip = createAnimationClip("In", { fps: 25, durationFrames: 800 });
+    clip.previewFrame = frame;
+    return clip;
+  };
+  const makePlainClip = () => createAnimationClip("plain", { fps: 25, durationFrames: 100 });
+
+  it("returns false for a non-W3D blueprint (no metadata.w3d marker)", () => {
+    expect(isW3DPlaybackGuarded({
+      blueprintMetadata: { foo: "bar" },
+      clips: [makeClipWithPreview(799)],
+    })).toBe(false);
+  });
+
+  it("returns false when metadata is null / undefined", () => {
+    expect(isW3DPlaybackGuarded({ blueprintMetadata: null, clips: [makeClipWithPreview(799)] })).toBe(false);
+    expect(isW3DPlaybackGuarded({ blueprintMetadata: undefined, clips: [makeClipWithPreview(799)] })).toBe(false);
+  });
+
+  it("returns false for a W3D blueprint with no preview marker on any clip", () => {
+    expect(isW3DPlaybackGuarded({
+      blueprintMetadata: { w3d: { originalXml: "<x/>" } },
+      clips: [makePlainClip(), makePlainClip()],
+    })).toBe(false);
+  });
+
+  it("returns true for a W3D blueprint with a positive preview marker (LINEUP_LEFT)", () => {
+    expect(isW3DPlaybackGuarded({
+      blueprintMetadata: { w3d: { originalXml: "<x/>" } },
+      clips: [makeClipWithPreview(799)],
+    })).toBe(true);
+  });
+
+  it("returns true even with previewFrame=0 (legitimate 'rest at frame 0' counts as a snapshot)", () => {
+    expect(isW3DPlaybackGuarded({
+      blueprintMetadata: { w3d: { originalXml: "<x/>" } },
+      clips: [makeClipWithPreview(0)],
+    })).toBe(true);
+  });
+
+  it("exports a stable warning string that the UI can show to the operator", () => {
+    expect(typeof W3D_PLAYBACK_GUARD_WARNING).toBe("string");
+    expect(W3D_PLAYBACK_GUARD_WARNING).toMatch(/PreviewMarker/);
+    expect(W3D_PLAYBACK_GUARD_WARNING.length).toBeGreaterThan(20);
   });
 });
