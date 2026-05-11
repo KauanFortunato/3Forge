@@ -1213,6 +1213,64 @@ describe("W3D import", () => {
       }
     });
 
+    it("flattens Transform.Skew.YProp keyframes into NodeTransform/Skew (W3D diagonal-card scenario)", () => {
+      // Real LINEUP_LEFT case: SHADOW_SMALL2 / diagonal card masks animate
+      // Transform.Skew.YProp during the intro. Before this support the
+      // controller landed in `unsupportedProperties` and cards rendered
+      // as upright rectangles instead of diagonals.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<Quad Id="diag" Name="DiagonalCard">
+  <NodeTransform/>
+  <GeometryOptions><Size X="2" Y="1"/></GeometryOptions>
+</Quad>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1" MaxFrames="200" PreviewMarker="150">
+    <KeyFrameAnimationController AnimatedProperty="Transform.Skew.YProp" ControllableId="diag">
+      <KeyFrame FrameNumber="0" Value="0" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="100" Value="20" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const card = result.blueprint.nodes.find((n) => n.name === "DiagonalCard");
+      // Frame 100 is the last keyframe ≤ PreviewMarker=150 → skew.y = 20.
+      expect(card?.transform.skew?.y).toBe(20);
+      // Diagnostics: not in unsupportedProperties any more.
+      const md = result.blueprint.metadata as { w3d?: { previewFlatten?: { unsupportedProperties: string[] } } };
+      expect(md.w3d?.previewFlatten?.unsupportedProperties ?? []).not.toContain("Transform.Skew.YProp");
+    });
+
+    it("flattens Transform.Skew.XProp and Transform.Skew (uniform 'x,y,z') variants", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<Quad Id="qx" Name="XSkew"><NodeTransform/></Quad>
+<Quad Id="qu" Name="UniSkew"><NodeTransform/></Quad>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1" MaxFrames="100" PreviewMarker="100">
+    <KeyFrameAnimationController AnimatedProperty="Transform.Skew.XProp" ControllableId="qx">
+      <KeyFrame FrameNumber="50" Value="15" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+    <KeyFrameAnimationController AnimatedProperty="Transform.Skew" ControllableId="qu">
+      <KeyFrame FrameNumber="50" Value="5,10,0" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const xskew = result.blueprint.nodes.find((n) => n.name === "XSkew");
+      const uskew = result.blueprint.nodes.find((n) => n.name === "UniSkew");
+      expect(xskew?.transform.skew?.x).toBe(15);
+      expect(uskew?.transform.skew?.x).toBe(5);
+      expect(uskew?.transform.skew?.y).toBe(10);
+      expect(uskew?.transform.skew?.z).toBe(0);
+    });
+
     it("freezeAtPreviewMarker=false opts out of the flatten pre-pass (alias of flattenPreviewState=false)", () => {
       const xml = `<?xml version="1.0" encoding="utf-8"?>
 <Scene Is2DScene="True"><SceneLayer><SceneNode><Children>

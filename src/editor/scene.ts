@@ -1026,6 +1026,20 @@ export class SceneEditor {
       visible: boolean;
       finalVisible: boolean;
     }>;
+    w3dMasks: Array<{
+      nodeId: string;
+      nodeName: string;
+      size: { x: number; y: number };
+      worldBounds: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } } | null;
+      skew: { x: number; y: number; z: number } | null;
+      hasSkewLayer: boolean;
+      inverted: boolean;
+      colored: boolean;
+      disableBinaryAlpha: boolean;
+      maskedNodes: Array<{ id: string; name: string }>;
+      clippingApplied: boolean;
+      approximationWarnings: string[];
+    }>;
     shadow: {
       missingTextureNodeCount: number;
       meshPlaceholderNodeCount: number;
@@ -1477,6 +1491,134 @@ export class SceneEditor {
       });
     }
 
+    // W3D mask forensic table. One entry per `IsMask="True"` quad in the
+    // blueprint, with the post-flatten (PreviewMarker) world bounds + skew
+    // + which downstream nodes reference it via MaskId. Lets the operator
+    // diagnose "X is bleeding past its card / clipping shows the wrong
+    // shape" by inspecting whether the right mask geometry got computed.
+    // Note on approximation: 3Forge clips with axis-aligned planes derived
+    // from the mask's worldMatrix-applied bbox. For a SKEWED mask the
+    // mathematical shape is a parallelogram but the clipping envelope is
+    // the rectangle that bounds it — content can still show inside the
+    // envelope but outside the parallelogram's diagonal edges. Recorded
+    // in `approximationWarnings` per-mask so future fidelity work can
+    // target exactly the masks where this matters visually.
+    type W3DMaskEntry = {
+      nodeId: string;
+      nodeName: string;
+      size: { x: number; y: number };
+      worldBounds: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } } | null;
+      skew: { x: number; y: number; z: number } | null;
+      hasSkewLayer: boolean;
+      inverted: boolean;
+      colored: boolean;
+      disableBinaryAlpha: boolean;
+      maskedNodes: Array<{ id: string; name: string }>;
+      clippingApplied: boolean;
+      approximationWarnings: string[];
+    };
+    const maskProps = (bp.metadata?.w3d as { maskProperties?: Record<string, Record<string, string>> } | undefined)?.maskProperties ?? {};
+    const w3dMasks: W3DMaskEntry[] = [];
+    for (const mn of bp.nodes) {
+      if (!mn.isMask) continue;
+      const wrapper = this.objectMap.get(mn.id);
+      let maskMesh: Mesh | null = null;
+      let maskSkewLayer: Group | null = null;
+      if (wrapper) {
+        for (const c of wrapper.children) {
+          if (c instanceof Group && c.matrixAutoUpdate === false) maskSkewLayer = c;
+        }
+        wrapper.traverse((c) => {
+          if (!maskMesh && c instanceof Mesh) maskMesh = c;
+        });
+      }
+      // Capture into a plain Mesh|null and then narrow with an explicit
+      // typed local — same workaround as `meshObjVisible` higher up in
+      // this file; TypeScript's "never" narrowing inside the traversal
+      // closure scope otherwise rejects mesh.geometry/.matrixWorld below.
+      const mesh: Mesh | null = maskMesh;
+      let worldBounds: W3DMaskEntry["worldBounds"] = null;
+      if (mesh !== null) {
+        const m: Mesh = mesh;
+        if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+        const b = m.geometry.boundingBox;
+        if (b) {
+          const wb = b.clone().applyMatrix4(m.matrixWorld);
+          worldBounds = {
+            min: { x: +wb.min.x.toFixed(4), y: +wb.min.y.toFixed(4), z: +wb.min.z.toFixed(4) },
+            max: { x: +wb.max.x.toFixed(4), y: +wb.max.y.toFixed(4), z: +wb.max.z.toFixed(4) },
+          };
+        }
+      }
+      const maskedNodes: Array<{ id: string; name: string }> = [];
+      for (const consumer of bp.nodes) {
+        const refs = consumer.maskIds ?? (consumer.maskId ? [consumer.maskId] : []);
+        if (refs.includes(mn.id)) {
+          maskedNodes.push({ id: consumer.id.slice(0, 8), name: consumer.name });
+        }
+      }
+      // Per-mask shadow props (only present for masks that authored a
+      // <MaskProperties> element during parse — covers IsInvertedMask,
+      // IsColoredMask, DisableBinaryAlpha).
+      const props = maskProps[mn.id] ?? {};
+      const inverted = props.IsInvertedMask === "True";
+      const colored = props.IsColoredMask === "True";
+      const disableBinaryAlpha = props.DisableBinaryAlpha === "True";
+      const warnings: string[] = [];
+      if (mn.transform.skew && (mn.transform.skew.x !== 0 || mn.transform.skew.y !== 0 || mn.transform.skew.z !== 0)) {
+        warnings.push(
+          "Skewed mask: clipping uses the axis-aligned envelope of the parallelogram, " +
+          "so content inside the envelope but outside the diagonal edges still shows.",
+        );
+      }
+      if (colored) {
+        warnings.push("IsColoredMask='True' parsed but not used by the renderer (clipping is binary).");
+      }
+      // Read clippingPlanes count from the first target wrapper as a
+      // proxy for "is clipping live?". 0 → mask referenced but no planes
+      // applied; > 0 → working.
+      let clippingApplied = false;
+      for (const consumer of maskedNodes) {
+        const w = bp.nodes.find((n) => n.id.startsWith(consumer.id));
+        if (!w) continue;
+        const wrap = this.objectMap.get(w.id);
+        if (!wrap) continue;
+        let consumerMesh: Mesh | null = null;
+        wrap.traverse((c) => { if (!consumerMesh && c instanceof Mesh) consumerMesh = c; });
+        const cm: Mesh | null = consumerMesh;
+        if (cm !== null) {
+          const cmTyped: Mesh = cm;
+          const mat = Array.isArray(cmTyped.material) ? cmTyped.material[0] : cmTyped.material;
+          if (mat && mat.clippingPlanes && mat.clippingPlanes.length > 0) {
+            clippingApplied = true;
+            break;
+          }
+        }
+      }
+      // The mask's own geometry width/height pulled from the node spec —
+      // works for both planes (the parser's mask-fallback path) and real
+      // Quads imported via createQuadNode (kept on geometry.width/height
+      // for image nodes; not present for groups, hence the typeof guard).
+      const gw = (mn as unknown as { geometry?: { width?: number; height?: number } }).geometry;
+      w3dMasks.push({
+        nodeId: mn.id.slice(0, 8),
+        nodeName: mn.name,
+        size: {
+          x: typeof gw?.width === "number" ? +gw.width.toFixed(4) : 0,
+          y: typeof gw?.height === "number" ? +gw.height.toFixed(4) : 0,
+        },
+        worldBounds,
+        skew: mn.transform.skew ?? null,
+        hasSkewLayer: !!maskSkewLayer,
+        inverted,
+        colored,
+        disableBinaryAlpha,
+        maskedNodes,
+        clippingApplied,
+        approximationWarnings: warnings,
+      });
+    }
+
     return {
       sceneMode: bp.sceneMode,
       cameraKind: this.camera instanceof OrthographicCamera ? "orthographic" : "perspective",
@@ -1495,6 +1637,10 @@ export class SceneEditor {
       // Per-TextureText forensic table — see `w3dTextDebug` construction
       // above. Empty array for scenes without text nodes.
       w3dTextDebug,
+      // Per-mask forensic table — see `w3dMasks` construction above.
+      // Includes the post-flatten world bounds (which already incorporate
+      // the skew written by D.4.1 because skewLayer feeds into matrixWorld).
+      w3dMasks,
       // Animation runtime snapshot — answers "is the import secretly
       // autoplaying / drifting off the preview frame?" without opening a
       // debugger. After a clean W3D import, `isPlaying` should be false and

@@ -2643,8 +2643,11 @@ function addToTransformVectorAttr(el: Element, kind: "Position" | "Scale", axis:
  *
  * Property → attribute map:
  *   Transform.Position[.X|Y|ZProp] → NodeTransform/Position/@X|Y|Z
+ *   Transform.Position (uniform)   → NodeTransform/Position/@X,Y,Z split
  *   Transform.Scale[.X|Y|ZProp]    → NodeTransform/Scale/@X|Y|Z
- *   Transform.Scale (uniform)      → NodeTransform/Scale/@X,Y,Z all set
+ *   Transform.Scale (uniform)      → NodeTransform/Scale/@X,Y,Z split
+ *   Transform.Skew[.X|Y|ZProp]     → NodeTransform/Skew/@X|Y|Z (degrees)
+ *   Transform.Skew (uniform)       → NodeTransform/Skew/@X,Y,Z split
  *   Size.X|YProp                   → GeometryOptions/Size/@X|Y
  *   Alpha                          → @Alpha on the target element
  *   Enabled                        → @Enable ("True"/"False")
@@ -2684,6 +2687,26 @@ function writeFlattenedAttribute(el: Element, property: string, value: string): 
     }
     case "Size.XProp": return setGeometryOptionsSize(el, "X", value);
     case "Size.YProp": return setGeometryOptionsSize(el, "Y", value);
+    // W3D's `<NodeTransform><Skew>` is shear in degrees per axis. The
+    // existing parser reads `<Skew X="…" Y="…" Z="…">` directly into
+    // `node.transform.skew`; here we ensure the post-flatten value at
+    // PreviewMarker is written into the same element so a downstream walk
+    // sees the rest-state skew. Diagonal cards in LINEUP_LEFT depend on
+    // Transform.Skew.YProp keyframes; without flatten they fell into
+    // unsupportedProperties and the cards rendered as plain rectangles.
+    case "Transform.Skew.XProp": return setTransformVectorAttr(el, "Skew", "X", value);
+    case "Transform.Skew.YProp": return setTransformVectorAttr(el, "Skew", "Y", value);
+    case "Transform.Skew.ZProp": return setTransformVectorAttr(el, "Skew", "Z", value);
+    case "Transform.Skew": {
+      // Uniform Skew values carry "x,y,z" exactly like uniform Scale /
+      // Position. Split before writing per-axis to avoid `parseNumberAttr`
+      // tripping over the comma.
+      const [sx, sy, sz] = parseUniformVector(value);
+      const ok1 = setTransformVectorAttr(el, "Skew", "X", sx);
+      const ok2 = setTransformVectorAttr(el, "Skew", "Y", sy);
+      const ok3 = setTransformVectorAttr(el, "Skew", "Z", sz);
+      return ok1 || ok2 || ok3;
+    }
     case "Alpha":
       el.setAttribute("Alpha", value);
       return true;
@@ -2708,7 +2731,7 @@ function writeFlattenedAttribute(el: Element, property: string, value: string): 
   }
 }
 
-function setTransformVectorAttr(el: Element, kind: "Position" | "Scale", axis: "X" | "Y" | "Z", value: string): boolean {
+function setTransformVectorAttr(el: Element, kind: "Position" | "Scale" | "Skew", axis: "X" | "Y" | "Z", value: string): boolean {
   let nt = childElementByTag(el, "NodeTransform");
   if (!nt) {
     nt = el.ownerDocument!.createElement("NodeTransform");
