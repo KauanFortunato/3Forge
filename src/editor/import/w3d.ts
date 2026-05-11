@@ -163,6 +163,22 @@ export interface W3DShadowData {
   }>;
   /** 3Forge nodeId → flow layout info for that node (parent + index + offset + axis). */
   flowByNodeId?: Record<string, { parentName: string; index: number; offset: number; axis: "X" | "Y" }>;
+  /**
+   * W3D `<TextureTextFontStyle>` resources, keyed by lower-cased GUID.
+   * TextureText nodes carry `<GeometryOptions FontStyle="<id>">`; this
+   * map lets diagnostics resolve the id back to the human-readable
+   * FontName/Type without re-parsing the XML. Renderer does NOT yet use
+   * this to switch real fonts — that's deferred to a later phase.
+   */
+  textFontStyles?: Record<string, {
+    name: string | null;
+    fontName: string | null;
+    type: string | null;
+    kerning: string | null;
+    wordWrap: string | null;
+    horizontalDirection: string | null;
+    verticalDirection: string | null;
+  }>;
 }
 
 interface ParseContext {
@@ -410,6 +426,10 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     ctx.textureLayerToFilename = tables.layerToFilename;
     ctx.textureLayerOriginalRef = tables.layerOriginalRef;
     ctx.textureResources = tables.textureById;
+    const fontStyles = collectTextureTextFontStyles(resourcesEl);
+    if (fontStyles.size > 0) {
+      ctx.shadow.textFontStyles = Object.fromEntries(fontStyles);
+    }
   }
 
   const sceneNodes = childElementsByTag(sceneLayer, "SceneNode");
@@ -531,7 +551,7 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
       ctx.shadow.flowLayouts = flattenStats.flowLayouts;
       // Cross-reference XML-id keyed flow info onto the 3Forge node ids
       // already mapped via ctx.shadow.nodeIds (3ForgeId → xmlId).
-      const byNode: Record<string, { parentName: string; index: number; offset: number }> = {};
+      const byNode: Record<string, { parentName: string; index: number; offset: number; axis: "X" | "Y" }> = {};
       for (const [forgeId, xmlId] of Object.entries(ctx.shadow.nodeIds)) {
         const info = flattenStats.flowByXmlId[xmlId];
         if (info) {
@@ -539,6 +559,7 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
             parentName: info.parentName,
             index: info.index,
             offset: info.offset,
+            axis: info.axis,
           };
         }
       }
@@ -756,6 +777,47 @@ function resolveTextureReference(reference: string, textureById: Map<string, str
     return basename || null;
   }
   return basename;
+}
+
+/**
+ * Build a lookup of `<TextureTextFontStyle Id="…">` resource ids to their
+ * human-readable metadata. The renderer still uses the editor default
+ * font today, but `__r3Dump().w3dTextDebug` resolves the FontStyle id on
+ * each TextureText back to its FontName/Type so the operator can see
+ * which broadcast font the W3D author chose without re-parsing the XML.
+ */
+function collectTextureTextFontStyles(resourcesEl: Element): Map<string, {
+  name: string | null;
+  fontName: string | null;
+  type: string | null;
+  kerning: string | null;
+  wordWrap: string | null;
+  horizontalDirection: string | null;
+  verticalDirection: string | null;
+}> {
+  const out = new Map<string, {
+    name: string | null;
+    fontName: string | null;
+    type: string | null;
+    kerning: string | null;
+    wordWrap: string | null;
+    horizontalDirection: string | null;
+    verticalDirection: string | null;
+  }>();
+  for (const fs of Array.from(resourcesEl.getElementsByTagName("TextureTextFontStyle"))) {
+    const id = fs.getAttribute("Id");
+    if (!id) continue;
+    out.set(id.toLowerCase(), {
+      name: fs.getAttribute("Name"),
+      fontName: fs.getAttribute("FontName"),
+      type: fs.getAttribute("Type"),
+      kerning: fs.getAttribute("Kerning"),
+      wordWrap: fs.getAttribute("WordWrap"),
+      horizontalDirection: fs.getAttribute("HorizontalDirection"),
+      verticalDirection: fs.getAttribute("VerticalDirection"),
+    });
+  }
+  return out;
 }
 
 function collectBaseMaterials(resourcesEl: Element, ctx: ParseContext): void {
@@ -1477,6 +1539,25 @@ function createTextNode(el: Element, parentId: string, ctx: ParseContext): Edito
     node.geometry.hasTextBox = true;
     if (Number.isFinite(textBoxX) && textBoxX > 0) node.geometry.maxWidth = textBoxX;
     if (Number.isFinite(textBoxY) && textBoxY > 0) node.geometry.maxHeight = textBoxY;
+  }
+  // W3D alignment + diagnostic fields. AlignmentX/Y default to "Center"
+  // in R3 Designer when omitted; only record when explicit so the
+  // renderer can fall through to its "no alignment" path for legacy
+  // imports.
+  const alignXRaw = geom?.getAttribute("AlignmentX");
+  if (alignXRaw === "Left" || alignXRaw === "Center" || alignXRaw === "Right") {
+    node.geometry.alignmentX = alignXRaw;
+  }
+  const alignYRaw = geom?.getAttribute("AlignmentY");
+  if (alignYRaw === "Top" || alignYRaw === "Center" || alignYRaw === "Bottom") {
+    node.geometry.alignmentY = alignYRaw;
+  }
+  if (constrainMethod) {
+    node.geometry.constrainMethod = constrainMethod;
+  }
+  const fontStyleId = geom?.getAttribute("FontStyle");
+  if (fontStyleId) {
+    node.geometry.fontStyleId = fontStyleId.toLowerCase();
   }
   // R3's <TextureText> is a flat textured glyph plane; <GeometryText> is the
   // 3D-extruded variant authored with `Extrusion="..."`. We respect the

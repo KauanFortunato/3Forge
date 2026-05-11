@@ -336,6 +336,29 @@ export interface TextNode extends BaseEditorNode {
      * uniform: missing dims => no fit; this flag is for diagnostics.
      */
     hasTextBox?: boolean;
+    /**
+     * W3D `<GeometryOptions AlignmentX>` — where the text sits inside the
+     * virtual TextBoxSize-defined rectangle centred at the node's local
+     * origin. Default is "Center" when omitted. Renderer translates the
+     * generated TextGeometry after fit-to-box to honour this.
+     */
+    alignmentX?: "Left" | "Center" | "Right";
+    /** W3D `<GeometryOptions AlignmentY>`, see `alignmentX`. */
+    alignmentY?: "Top" | "Center" | "Bottom";
+    /**
+     * W3D `<GeometryOptions ConstrainMethod>` ("Width" / "Height" /
+     * "WidthOnly" / "HeightOnly" …). Kept as a string for diagnostics —
+     * the renderer's current fit-to-box behaviour is uniform downscale
+     * regardless of method, but recording the value lets future work
+     * specialise without re-touching the parser.
+     */
+    constrainMethod?: string;
+    /**
+     * W3D `<GeometryOptions FontStyle>` — lower-cased GUID pointing into
+     * `metadata.w3d.textFontStyles`. Today used purely for diagnostics;
+     * the renderer still uses the editor's default font.
+     */
+    fontStyleId?: string;
   };
   material: MaterialSpec;
   materialId?: string;

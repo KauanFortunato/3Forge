@@ -993,6 +993,29 @@ export class SceneEditor {
       runtimeReady: boolean;
       compiledTrackCount: number;
     };
+    w3dTextDebug: Array<{
+      nodeId: string;
+      nodeName: string;
+      text: string;
+      hasTextBox: boolean;
+      textBoxSize: { x: number | null; y: number | null };
+      alignmentX: string | null;
+      alignmentY: string | null;
+      constrainMethod: string | null;
+      fontStyleId: string | null;
+      fontStyleName: string | null;
+      fontName: string | null;
+      fontType: string | null;
+      parentChain: string[];
+      localScale: { x: number; y: number; z: number };
+      preFitGlyphSize: number;
+      postFitLocalSize: { w: number; h: number } | null;
+      worldBoxSize: { x: number; y: number; z: number } | null;
+      projectedNdcSize: { w: number; h: number } | null;
+      maskId: string | null;
+      visible: boolean;
+      finalVisible: boolean;
+    }>;
     shadow: {
       missingTextureNodeCount: number;
       meshPlaceholderNodeCount: number;
@@ -1037,6 +1060,15 @@ export class SceneEditor {
         approximationWarnings: string[];
       }>;
       flowByNodeId?: Record<string, { parentName: string; index: number; offset: number; axis: "X" | "Y" }>;
+      textFontStyles?: Record<string, {
+        name: string | null;
+        fontName: string | null;
+        type: string | null;
+        kerning: string | null;
+        wordWrap: string | null;
+        horizontalDirection: string | null;
+        verticalDirection: string | null;
+      }>;
     };
 
     const out: Array<Record<string, unknown>> = [];
@@ -1319,6 +1351,122 @@ export class SceneEditor {
       missingTextureRefs: diag.missingTextureRefs,
     } : null;
 
+    // W3D text-node forensic table — for "why is this label huge / off-axis"
+    // reports. One entry per imported `<TextureText>` with everything the
+    // parser/renderer knows about the node's box, alignment, font style,
+    // and final on-screen extent. Built lazily by re-walking `bp.nodes`;
+    // skipped entirely for non-text scenes.
+    type W3DTextDebugEntry = {
+      nodeId: string;
+      nodeName: string;
+      text: string;
+      hasTextBox: boolean;
+      textBoxSize: { x: number | null; y: number | null };
+      alignmentX: string | null;
+      alignmentY: string | null;
+      constrainMethod: string | null;
+      fontStyleId: string | null;
+      fontStyleName: string | null;
+      fontName: string | null;
+      fontType: string | null;
+      parentChain: string[];
+      localScale: { x: number; y: number; z: number };
+      preFitGlyphSize: number;
+      postFitLocalSize: { w: number; h: number } | null;
+      worldBoxSize: { x: number; y: number; z: number } | null;
+      projectedNdcSize: { w: number; h: number } | null;
+      maskId: string | null;
+      visible: boolean;
+      finalVisible: boolean;
+    };
+    const w3dTextDebug: W3DTextDebugEntry[] = [];
+    const fontStylesById = w3d.textFontStyles ?? {};
+    for (const tn of bp.nodes) {
+      if (tn.type !== "text") continue;
+      const wrapper = this.objectMap.get(tn.id);
+      let textMesh: Mesh | null = null;
+      if (wrapper) {
+        wrapper.traverse((c) => {
+          if (!textMesh && c instanceof Mesh) textMesh = c;
+        });
+      }
+      // Pre-capture into a plain Mesh|null binding so the subsequent
+      // accesses don't trip TypeScript's "never" narrowing inside the
+      // traversal-callback closure scope (same trick as `meshObjVisible`
+      // in the main loop above).
+      const textMeshObj: Mesh | null = textMesh;
+      let postFitLocalSize: { w: number; h: number } | null = null;
+      let worldBoxSize: { x: number; y: number; z: number } | null = null;
+      let projectedNdcSize: { w: number; h: number } | null = null;
+      if (textMeshObj !== null) {
+        const m: Mesh = textMeshObj;
+        if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+        const b = m.geometry.boundingBox;
+        if (b) {
+          postFitLocalSize = {
+            w: +(b.max.x - b.min.x).toFixed(4),
+            h: +(b.max.y - b.min.y).toFixed(4),
+          };
+          const wb = b.clone().applyMatrix4(m.matrixWorld);
+          const sz = new Vector3();
+          wb.getSize(sz);
+          worldBoxSize = { x: +sz.x.toFixed(4), y: +sz.y.toFixed(4), z: +sz.z.toFixed(4) };
+          const minNdc = wb.min.clone().project(this.camera);
+          const maxNdc = wb.max.clone().project(this.camera);
+          projectedNdcSize = {
+            w: +Math.abs(maxNdc.x - minNdc.x).toFixed(4),
+            h: +Math.abs(maxNdc.y - minNdc.y).toFixed(4),
+          };
+        }
+      }
+      // Parent chain — same walk as the per-node section, kept local to
+      // avoid coupling the two loops.
+      const chain: string[] = [];
+      {
+        let cursor: EditorNode | null = tn;
+        const seen = new Set<string>();
+        while (cursor) {
+          if (seen.has(cursor.id)) break;
+          seen.add(cursor.id);
+          chain.unshift(cursor.name);
+          const parentId: string | null = cursor.parentId;
+          cursor = parentId ? this.store.blueprint.nodes.find((n) => n.id === parentId) ?? null : null;
+        }
+      }
+      const fsId = tn.geometry.fontStyleId ?? null;
+      const fs = fsId ? fontStylesById[fsId] ?? null : null;
+      w3dTextDebug.push({
+        nodeId: tn.id.slice(0, 8),
+        nodeName: tn.name,
+        text: tn.geometry.text,
+        hasTextBox: !!tn.geometry.hasTextBox,
+        textBoxSize: {
+          x: tn.geometry.maxWidth ?? null,
+          y: tn.geometry.maxHeight ?? null,
+        },
+        alignmentX: tn.geometry.alignmentX ?? null,
+        alignmentY: tn.geometry.alignmentY ?? null,
+        constrainMethod: tn.geometry.constrainMethod ?? null,
+        fontStyleId: fsId,
+        fontStyleName: fs?.name ?? null,
+        fontName: fs?.fontName ?? null,
+        fontType: fs?.type ?? null,
+        parentChain: chain,
+        localScale: {
+          x: +tn.transform.scale.x.toFixed(4),
+          y: +tn.transform.scale.y.toFixed(4),
+          z: +tn.transform.scale.z.toFixed(4),
+        },
+        preFitGlyphSize: +tn.geometry.size.toFixed(4),
+        postFitLocalSize,
+        worldBoxSize,
+        projectedNdcSize,
+        maskId: tn.maskIds?.[0] ?? tn.maskId ?? null,
+        visible: tn.visible,
+        finalVisible: wrapper?.visible ?? tn.visible,
+      });
+    }
+
     return {
       sceneMode: bp.sceneMode,
       cameraKind: this.camera instanceof OrthographicCamera ? "orthographic" : "perspective",
@@ -1334,6 +1482,9 @@ export class SceneEditor {
       // debugging. One entry per `<GeometryOptions FlowChildren="True">`
       // parent group, with child order + widths + computed offsets.
       w3dFlowLayouts: w3d.flowLayouts ?? [],
+      // Per-TextureText forensic table — see `w3dTextDebug` construction
+      // above. Empty array for scenes without text nodes.
+      w3dTextDebug,
       // Animation runtime snapshot — answers "is the import secretly
       // autoplaying / drifting off the preview frame?" without opening a
       // debugger. After a clean W3D import, `isPlaying` should be false and
@@ -1649,7 +1800,7 @@ export class SceneEditor {
     // Strategy: uniform-scale the generated geometry down so its bbox fits;
     // never up-scale (a wide box around a short string is the author's
     // intent — extra padding, not larger text).
-    const { maxWidth, maxHeight } = node.geometry;
+    const { maxWidth, maxHeight, alignmentX, alignmentY } = node.geometry;
     if ((maxWidth && maxWidth > 0) || (maxHeight && maxHeight > 0)) {
       const bbox = geometry.boundingBox;
       if (bbox) {
@@ -1660,6 +1811,36 @@ export class SceneEditor {
         if (maxHeight && maxHeight > 0 && h > maxHeight) s = Math.min(s, maxHeight / h);
         if (s < 1 && Number.isFinite(s) && s > 0) {
           geometry.scale(s, s, 1);
+          geometry.computeBoundingBox();
+        }
+      }
+    }
+    // W3D AlignmentX/AlignmentY: place the (already fitted) text inside a
+    // virtual TextBoxSize-defined rectangle centred at the node's local
+    // origin. Three.js TextGeometry starts at baseline-left, which lands
+    // every label on the wrong side of the node's anchor; the translation
+    // below recentres / left-aligns / right-aligns / top/bottom-aligns
+    // according to the W3D author's intent. Only fires when at least one
+    // alignment axis is explicit — legacy 3Forge imports (no W3D
+    // alignment) keep their baseline-left origin so old behaviour is
+    // preserved. Skipped when no bbox or the geometry has zero extent
+    // (empty/whitespace text — translation would be ill-defined).
+    if (alignmentX || alignmentY) {
+      const bbox = geometry.boundingBox;
+      if (bbox) {
+        const w = bbox.max.x - bbox.min.x;
+        const h = bbox.max.y - bbox.min.y;
+        const boxW = maxWidth && maxWidth > 0 ? maxWidth : w;
+        const boxH = maxHeight && maxHeight > 0 ? maxHeight : h;
+        const { dx, dy } = computeTextAlignOffset(
+          { minX: bbox.min.x, maxX: bbox.max.x, minY: bbox.min.y, maxY: bbox.max.y },
+          boxW,
+          boxH,
+          alignmentX,
+          alignmentY,
+        );
+        if (dx !== 0 || dy !== 0) {
+          geometry.translate(dx, dy, 0);
           geometry.computeBoundingBox();
         }
       }
@@ -2825,6 +3006,54 @@ export interface OrbitPolicy {
   enableRotate: boolean;
   enablePan: boolean;
   enableZoom: boolean;
+}
+
+/**
+ * W3D TextureText alignment: compute the (dx, dy) translation that moves a
+ * baseline-left TextGeometry so its content sits inside a virtual
+ * `(boxW × boxH)` rectangle centred at the node's local origin, honouring
+ * AlignmentX/Y. Pure math — no Three.js dependency — so unit tests don't
+ * need a renderer + font.
+ *
+ * Conventions:
+ *   - The bbox is the post-fit geometry bounding box in node-local space.
+ *   - Output dx/dy is a translation applied to that geometry.
+ *   - When an alignment axis is undefined, the corresponding offset stays 0
+ *     (preserves the existing baseline-left X / baseline Y behaviour).
+ *
+ * Reference points after the translation has been applied:
+ *   alignmentX = "Left"   → bbox.minX  =  -boxW / 2
+ *   alignmentX = "Center" → centre of bbox along X  =  0
+ *   alignmentX = "Right"  → bbox.maxX  =  +boxW / 2
+ *   alignmentY = "Top"    → bbox.maxY  =  +boxH / 2
+ *   alignmentY = "Center" → centre of bbox along Y  =  0
+ *   alignmentY = "Bottom" → bbox.minY  =  -boxH / 2
+ */
+export interface TextAlignBbox {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+export function computeTextAlignOffset(
+  bbox: TextAlignBbox,
+  boxW: number,
+  boxH: number,
+  alignX: "Left" | "Center" | "Right" | undefined,
+  alignY: "Top" | "Center" | "Bottom" | undefined,
+): { dx: number; dy: number } {
+  const w = bbox.maxX - bbox.minX;
+  const h = bbox.maxY - bbox.minY;
+  let dx = 0;
+  if (alignX === "Left") dx = -boxW / 2 - bbox.minX;
+  else if (alignX === "Center") dx = -(bbox.minX + w / 2);
+  else if (alignX === "Right") dx = boxW / 2 - bbox.maxX;
+  let dy = 0;
+  if (alignY === "Top") dy = boxH / 2 - bbox.maxY;
+  else if (alignY === "Center") dy = -(bbox.minY + h / 2);
+  else if (alignY === "Bottom") dy = -boxH / 2 - bbox.minY;
+  return { dx, dy };
 }
 export function orbitPolicyForSceneMode(sceneMode: string | undefined): OrbitPolicy {
   if (sceneMode === "2d") {

@@ -1084,6 +1084,100 @@ describe("W3D import", () => {
       expect(byNode[b!.id]?.offset).toBeCloseTo(1.5, 3);
     });
 
+    it("populates TextNode.geometry.alignmentX/Y and constrainMethod from W3D GeometryOptions", () => {
+      // Real LINEUP_LEFT examples: PLAYER_LAST_NAME_01 / PLAYER_NUMBER_01 /
+      // BENCH_NAME_01 / COACH_FUNCTION all set explicit AlignmentX/Y plus
+      // ConstrainMethod="Width". The renderer uses these to translate the
+      // generated TextGeometry inside the TextBoxSize-defined rectangle.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<TextureText Id="t-left" Name="LeftCentered">
+  <GeometryOptions AlignmentX="Left" AlignmentY="Center" ConstrainMethod="Width"
+                   HasTextBox="True" Text="STEPHENS">
+    <TextBoxSize X="0.38" Y="0.33"/>
+  </GeometryOptions>
+</TextureText>
+<TextureText Id="t-center" Name="CenterCenter">
+  <GeometryOptions AlignmentX="Center" AlignmentY="Center" ConstrainMethod="Width"
+                   HasTextBox="True" Text="5">
+    <TextBoxSize X="0.08" Y="0.19"/>
+  </GeometryOptions>
+</TextureText>
+<TextureText Id="t-right" Name="RightTop">
+  <GeometryOptions AlignmentX="Right" AlignmentY="Top"
+                   HasTextBox="True" Text="EX">
+    <TextBoxSize X="1" Y="1"/>
+  </GeometryOptions>
+</TextureText>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const left = result.blueprint.nodes.find((n) => n.name === "LeftCentered");
+      const center = result.blueprint.nodes.find((n) => n.name === "CenterCenter");
+      const right = result.blueprint.nodes.find((n) => n.name === "RightTop");
+      if (left?.type === "text") {
+        expect(left.geometry.alignmentX).toBe("Left");
+        expect(left.geometry.alignmentY).toBe("Center");
+        expect(left.geometry.constrainMethod).toBe("Width");
+      } else throw new Error("expected text node");
+      if (center?.type === "text") {
+        expect(center.geometry.alignmentX).toBe("Center");
+        expect(center.geometry.alignmentY).toBe("Center");
+      }
+      if (right?.type === "text") {
+        expect(right.geometry.alignmentX).toBe("Right");
+        expect(right.geometry.alignmentY).toBe("Top");
+      }
+    });
+
+    it("ignores AlignmentX/Y values outside the known enum (defensive)", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<TextureText Id="t1" Name="Bogus">
+  <GeometryOptions AlignmentX="BottomRight" AlignmentY="Random" HasTextBox="True" Text="X">
+    <TextBoxSize X="1" Y="1"/>
+  </GeometryOptions>
+</TextureText>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const node = result.blueprint.nodes.find((n) => n.name === "Bogus");
+      if (node?.type === "text") {
+        expect(node.geometry.alignmentX).toBeUndefined();
+        expect(node.geometry.alignmentY).toBeUndefined();
+      }
+    });
+
+    it("records FontStyle id on the text node and the resource map on metadata.w3d", () => {
+      // R3 broadcast scenes carry <TextureTextFontStyle Id="…" Name="FS_xx"
+      // FontName="Obviously Cond" Type="Bold" …> in Resources. The
+      // TextureText references the style by GUID; the renderer doesn't
+      // (yet) swap fonts, but the diagnostic surface resolves the id back
+      // to the FontName/Type so the operator can see the author intent.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+  <TextureTextFontStyle Id="fs-abc" Name="FS_03" FontName="Obviously Cond"
+    Type="Bold" Kerning="0" WordWrap="False"
+    HorizontalDirection="LeftToRight" VerticalDirection="TopToBottom"/>
+</Resources><SceneLayer><SceneNode><Children>
+<TextureText Id="t1" Name="HeroLabel">
+  <GeometryOptions HasTextBox="True" Text="X" FontStyle="FS-ABC">
+    <TextBoxSize X="1" Y="1"/>
+  </GeometryOptions>
+</TextureText>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const node = result.blueprint.nodes.find((n) => n.name === "HeroLabel");
+      if (node?.type === "text") {
+        expect(node.geometry.fontStyleId).toBe("fs-abc");
+      } else throw new Error("expected text node");
+      const md = result.blueprint.metadata as { w3d?: { textFontStyles?: Record<string, {
+        name: string | null; fontName: string | null; type: string | null;
+      }> } };
+      const fs = md.w3d?.textFontStyles?.["fs-abc"];
+      expect(fs?.name).toBe("FS_03");
+      expect(fs?.fontName).toBe("Obviously Cond");
+      expect(fs?.type).toBe("Bold");
+    });
+
     it("populates TextNode.geometry.maxWidth/maxHeight when HasTextBox=True", () => {
       // Real LINEUP_LEFT case: PLAYER_LAST_NAME_NN has a TextBoxSize that
       // the W3D engine fits the player surname into. The renderer reads

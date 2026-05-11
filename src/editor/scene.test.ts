@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DataTexture, Texture } from "three";
 import {
   buildSequencePlaceholderTexture,
+  computeTextAlignOffset,
   decideImageMeshKind,
   formatVideoLoadFailureMessage,
   ImageSequencePlayer,
@@ -766,5 +767,80 @@ describe("Agent A5 — Task 20: PITCH_Out / PITCH_IN regression", () => {
     // PITCH_IN is visible — its tickCount must have incremented (currentFrame
     // can wrap to 0 with 10 frames, so we check the monotonic tick counter).
     expect(pitchIn.state().tickCount).toBeGreaterThan(0);
+  });
+});
+
+describe("computeTextAlignOffset — W3D TextureText alignment math", () => {
+  // The renderer feeds the geometry's post-fit bounding box plus the
+  // TextBoxSize-derived box (boxW × boxH) into this helper, then translates
+  // the geometry by (dx, dy). These tests pin the math by checking the
+  // post-translation reference points the alignment is *supposed* to land on.
+  //
+  // bbox starts at the Three.js TextGeometry's natural baseline-left origin
+  // — minX≈0 (or slightly negative for left-bearing glyphs), minY≈-descent.
+  // We use minX=0, minY=0 for clarity; the helper is linear in bbox.min,
+  // so the actual offset moves the *geometry* to the chosen alignment slot
+  // regardless of where the initial bbox sits.
+  const bbox = { minX: 0, maxX: 1.5, minY: 0, maxY: 0.4 };
+  const boxW = 2;
+  const boxH = 1;
+
+  it("AlignmentX='Left' aligns text's left edge to -boxW/2", () => {
+    const { dx } = computeTextAlignOffset(bbox, boxW, boxH, "Left", undefined);
+    // After translation, bbox.minX + dx must equal -boxW/2 = -1.
+    expect(bbox.minX + dx).toBeCloseTo(-1, 6);
+  });
+
+  it("AlignmentX='Center' centres the text horizontally on x=0", () => {
+    const { dx } = computeTextAlignOffset(bbox, boxW, boxH, "Center", undefined);
+    // Text centre after translation = (bbox.minX + width/2) + dx = 0.
+    const centerX = bbox.minX + (bbox.maxX - bbox.minX) / 2 + dx;
+    expect(centerX).toBeCloseTo(0, 6);
+  });
+
+  it("AlignmentX='Right' aligns text's right edge to +boxW/2", () => {
+    const { dx } = computeTextAlignOffset(bbox, boxW, boxH, "Right", undefined);
+    expect(bbox.maxX + dx).toBeCloseTo(1, 6);
+  });
+
+  it("AlignmentX='Right' shifts the geometry compared to 'Left' (sanity: distinct outputs)", () => {
+    const left = computeTextAlignOffset(bbox, boxW, boxH, "Left", undefined);
+    const right = computeTextAlignOffset(bbox, boxW, boxH, "Right", undefined);
+    // For a 1.5-wide bbox in a 2-wide box, Left → -1, Right → -0.5 → difference 0.5.
+    expect(right.dx - left.dx).toBeCloseTo(boxW - (bbox.maxX - bbox.minX), 6);
+    expect(right.dx).not.toBeCloseTo(left.dx, 3);
+  });
+
+  it("AlignmentY='Top' aligns text's top edge to +boxH/2", () => {
+    const { dy } = computeTextAlignOffset(bbox, boxW, boxH, undefined, "Top");
+    expect(bbox.maxY + dy).toBeCloseTo(0.5, 6);
+  });
+
+  it("AlignmentY='Center' vertically centres the text on y=0", () => {
+    const { dy } = computeTextAlignOffset(bbox, boxW, boxH, undefined, "Center");
+    const centerY = bbox.minY + (bbox.maxY - bbox.minY) / 2 + dy;
+    expect(centerY).toBeCloseTo(0, 6);
+  });
+
+  it("AlignmentY='Bottom' aligns text's bottom edge to -boxH/2", () => {
+    const { dy } = computeTextAlignOffset(bbox, boxW, boxH, undefined, "Bottom");
+    expect(bbox.minY + dy).toBeCloseTo(-0.5, 6);
+  });
+
+  it("undefined on either axis leaves that axis offset at 0", () => {
+    const { dx, dy } = computeTextAlignOffset(bbox, boxW, boxH, undefined, undefined);
+    expect(dx).toBe(0);
+    expect(dy).toBe(0);
+  });
+
+  it("works on bboxes that don't start at origin (real TextGeometry has glyph descender below baseline)", () => {
+    // Simulate a TextGeometry with a small descender: minY = -0.05.
+    const realish = { minX: 0.01, maxX: 0.39, minY: -0.05, maxY: 0.28 };
+    const { dx, dy } = computeTextAlignOffset(realish, 0.4, 0.33, "Left", "Center");
+    // Left: bbox.minX + dx === -boxW/2 → realish.minX + dx === -0.2 → dx = -0.21
+    expect(realish.minX + dx).toBeCloseTo(-0.2, 6);
+    // Center: vertical centre of bbox lands on y=0.
+    const centerY = realish.minY + (realish.maxY - realish.minY) / 2 + dy;
+    expect(centerY).toBeCloseTo(0, 6);
   });
 });
