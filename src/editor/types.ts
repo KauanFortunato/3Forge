@@ -1,4 +1,22 @@
-export type EditorNodeType = "group" | "box" | "circle" | "sphere" | "cylinder" | "plane" | "text" | "image" | "model";
+export type EditorNodeType =
+  | "group"
+  | "box"
+  | "circle"
+  | "sphere"
+  | "cylinder"
+  | "cone"
+  | "capsule"
+  | "ring"
+  | "torus"
+  | "torusKnot"
+  | "dodecahedron"
+  | "icosahedron"
+  | "octahedron"
+  | "tetrahedron"
+  | "plane"
+  | "text"
+  | "image"
+  | "model";
 export type EditableFieldType = "number" | "color" | "boolean" | "string";
 export type PropertyGroup = "Object" | "Transform" | "Geometry" | "Material" | "Text";
 export type PropertyInputKind = "number" | "degrees" | "color" | "checkbox" | "text" | "select";
@@ -219,6 +237,12 @@ export interface SphereNode extends BaseEditorNode {
   type: "sphere";
   geometry: {
     radius: number;
+    widthSegments: number;
+    heightSegments: number;
+    phiStart: number;
+    phiLength: number;
+    thetaStart: number;
+    thetaLength: number;
   };
   material: MaterialSpec;
   materialId?: string;
@@ -230,6 +254,87 @@ export interface CylinderNode extends BaseEditorNode {
     radiusTop: number;
     radiusBottom: number;
     height: number;
+    radialSegments: number;
+    heightSegments: number;
+    thetaStart: number;
+    thetaLength: number;
+  };
+  material: MaterialSpec;
+  materialId?: string;
+}
+
+export interface ConeNode extends BaseEditorNode {
+  type: "cone";
+  geometry: {
+    radius: number;
+    height: number;
+    radialSegments: number;
+    heightSegments: number;
+    thetaStart: number;
+    thetaLength: number;
+  };
+  material: MaterialSpec;
+  materialId?: string;
+}
+
+export interface CapsuleNode extends BaseEditorNode {
+  type: "capsule";
+  geometry: {
+    radius: number;
+    length: number;
+    capSegments: number;
+    radialSegments: number;
+  };
+  material: MaterialSpec;
+  materialId?: string;
+}
+
+export interface RingNode extends BaseEditorNode {
+  type: "ring";
+  geometry: {
+    innerRadius: number;
+    outerRadius: number;
+    thetaSegments: number;
+    phiSegments: number;
+    thetaStart: number;
+    thetaLength: number;
+  };
+  material: MaterialSpec;
+  materialId?: string;
+}
+
+export interface TorusNode extends BaseEditorNode {
+  type: "torus";
+  geometry: {
+    radius: number;
+    tube: number;
+    radialSegments: number;
+    tubularSegments: number;
+    arc: number;
+  };
+  material: MaterialSpec;
+  materialId?: string;
+}
+
+export interface TorusKnotNode extends BaseEditorNode {
+  type: "torusKnot";
+  geometry: {
+    radius: number;
+    tube: number;
+    tubularSegments: number;
+    radialSegments: number;
+    p: number;
+    q: number;
+  };
+  material: MaterialSpec;
+  materialId?: string;
+}
+
+export interface PolyhedronNode extends BaseEditorNode {
+  type: "dodecahedron" | "icosahedron" | "octahedron" | "tetrahedron";
+  geometry: {
+    radius: number;
+    detail: number;
   };
   material: MaterialSpec;
   materialId?: string;
@@ -280,7 +385,22 @@ export interface ModelNode extends BaseEditorNode {
   materialId?: string;
 }
 
-export type EditorNode = GroupNode | BoxNode | CircleNode | SphereNode | CylinderNode | PlaneNode | TextNode | ImageNode | ModelNode;
+export type EditorNode =
+  | GroupNode
+  | BoxNode
+  | CircleNode
+  | SphereNode
+  | CylinderNode
+  | ConeNode
+  | CapsuleNode
+  | RingNode
+  | TorusNode
+  | TorusKnotNode
+  | PolyhedronNode
+  | PlaneNode
+  | TextNode
+  | ImageNode
+  | ModelNode;
 
 export interface ComponentBlueprint {
   version: 1;

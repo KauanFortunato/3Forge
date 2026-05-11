@@ -1,0 +1,183 @@
+<svg width="479" height="498" viewBox="-100 -100 680 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>3Forge App Splash Intro - Absolute Flawless Mask Overlay</title>
+  
+  <style>
+    /* Configuracoes globais */
+    svg { shape-rendering: geometricPrecision; text-rendering: geometricPrecision; }
+
+    /* --- GIZMO: EXPLOSAO INICIAL --- */
+    .cube { transform-box: fill-box; transform-origin: center; opacity: 0; animation-fill-mode: forwards; }
+    .cube.center { animation: popCenter .4s cubic-bezier(0.34, 1.56, 0.64, 1) 0s forwards; }
+    .cube.top    { animation: explodeTop .3s cubic-bezier(0.34, 1.56, 0.64, 1) .05s forwards; }
+    .cube.left   { animation: explodeLeft .3s cubic-bezier(0.34, 1.56, 0.64, 1) .10s forwards; }
+    .cube.right  { animation: explodeRight .3s cubic-bezier(0.34, 1.56, 0.64, 1) .15s forwards; }
+
+    .rod { transform-box: fill-box; animation-fill-mode: forwards; }
+    .rod.v { transform-origin: 50% 100%; transform: scaleY(0); animation: growVertical .2s cubic-bezier(0.34, 1.56, 0.64, 1) .05s forwards; }
+    .rod.l { transform-origin: 100% 0%; transform: scaleX(0); animation: growLeft .2s cubic-bezier(0.34, 1.56, 0.64, 1) .10s forwards; }
+    .rod.r { transform-origin: 0% 0%; transform: scaleX(0); animation: growRight .2s cubic-bezier(0.34, 1.56, 0.64, 1) .15s forwards; }
+
+    /* --- RIBBONS: REVELACAO SIMULTANEA --- */
+    /* Assentamento global de todo o logotipo */
+    #logoAll { transform-box: fill-box; transform-origin: center; animation: logoSettle 0.8s ease-out 1.0s forwards; }
+    
+    /* Sem transformacoes CSS nas faixas para preservar as cordenadas originais impecaveis */
+
+    /* --- SHADING: BRILHO COORDENADO --- */
+    .shine { opacity: 0; mix-blend-mode: screen; animation-fill-mode: forwards; }
+    .s1, .s2, .s3, .s4, .s5, .s6, .s1o { 
+      animation: shineIn .2s ease-out 0.6s forwards, shineOut .2s ease-in 0.8s forwards; 
+    }
+
+    /* --- KEYFRAMES --- */
+    @keyframes logoSettle { 0%{transform:translateY(0px);} 30%{transform:translateY(-2px);} 100%{transform:translateY(0px);} }
+
+    @keyframes popCenter { 
+        0% { opacity: 0; transform: scale(0) rotate(-45deg); } 
+        100% { opacity: 1; transform: scale(1) rotate(0deg); } 
+    }
+    @keyframes explodeTop { 
+        0% { opacity: 0; transform: translateY(30px) scale(0.5); } 
+        100% { opacity: 1; transform: translateY(0) scale(1); } 
+    }
+    @keyframes explodeLeft { 
+        0% { opacity: 0; transform: translate(20px, -15px) scale(0.5); } 
+        100% { opacity: 1; transform: translate(0, 0) scale(1); } 
+    }
+    @keyframes explodeRight { 
+        0% { opacity: 0; transform: translate(-20px, -15px) scale(0.5); } 
+        100% { opacity: 1; transform: translate(0, 0) scale(1); } 
+    }
+    @keyframes growVertical { 0%{transform:scaleY(0);} 100%{transform:scaleY(1);} }
+    @keyframes growLeft { 0%{transform:scaleX(0);} 100%{transform:scaleX(1);} }
+    @keyframes growRight { 0%{transform:scaleX(0);} 100%{transform:scaleX(1);} }
+    @keyframes shineIn { from{opacity:0;} to{opacity:0.4;} }
+    @keyframes shineOut { from{opacity:0.4;} to{opacity:0;} }
+  </style>
+
+  <g id="logoAll">
+    <g clip-path="url(#clip0_43_200)">
+      
+      <mask id="mask0_43_200" style="mask-type:luminance" maskUnits="userSpaceOnUse" x="-71" y="-68" width="705" height="705">
+        <path d="M633.971 -67.9854H-70.4412V636.426H633.971V-67.9854Z" fill="white"/>
+      </mask>
+      
+      <g mask="url(#mask0_43_200)">
+        <g mask="url(#maskP1)">
+          <path d="M167.446 189.812L142.435 175.372L110.103 156.705C102.284 153.887 95.2395 157.057 95.2395 165.287V326.82C95.2395 331.751 99.1138 335.978 102.284 338.091L182.939 388.104L192 394C184.153 387.853 177.436 379.093 177.207 371.198V206.718C175.73 198.28 173.754 194.46 167.446 189.812Z" fill="url(#paint0_linear_43_200)"/>
+          <path class="shine s1" d="M167.446 189.812L142.435 175.372L110.103 156.705C102.284 153.887 95.2395 157.057 95.2395 165.287V326.82C95.2395 331.751 99.1138 335.978 102.284 338.091L182.939 388.104L192 394C184.153 387.853 177.436 379.093 177.207 371.198V206.718C175.73 198.28 173.754 194.46 167.446 189.812Z" fill="url(#shineGrad)"/>
+        </g>
+        <g mask="url(#maskP2)">
+          <path d="M230.783 338.688L177.208 307.114V371.316C177.922 385.7 198.281 402.891 215.425 401.137C222.249 398.776 225.447 396.957 230.783 393.418L254.713 371.316C264.429 361.197 260.721 356.425 246.856 348.512L230.783 338.688Z" fill="url(#paint1_linear_43_200)"/>
+          <path class="shine s2" d="M230.783 338.688L177.208 307.114V371.316C177.922 385.7 198.281 402.891 215.425 401.137C222.249 398.776 225.447 396.957 230.783 393.418L254.713 371.316C264.429 361.197 260.721 356.425 246.856 348.512L230.783 338.688Z" fill="url(#shineGrad)"/>
+        </g>
+        <g mask="url(#maskP3)">
+          <path d="M369.96 232.429L314.664 266.815L244.222 310.619C231.191 320.129 232.804 326.468 232.803 353.236L232.6 407.123C232.6 413.815 236.474 417.337 244.222 415.224L373.482 334.217C378.953 330.609 380.619 327.375 382.287 320.481L382.161 212.5V211.297C381.613 221.922 378.37 226.227 369.96 232.429Z" fill="url(#paint2_linear_43_200)"/>
+          <path class="shine s3" d="M369.96 232.429L314.664 266.815L244.222 310.619C231.191 320.129 232.804 326.468 232.803 353.236L232.6 407.123C232.6 413.815 236.474 417.337 244.222 415.224L373.482 334.217C378.953 330.609 380.619 327.375 382.287 320.481L382.161 212.5V211.297C381.613 221.922 378.37 226.227 369.96 232.429Z" fill="url(#shineGrad)"/>
+        </g>
+        <g mask="url(#maskP4)">
+          <path d="M314.664 266.815L369.96 232.429C378.37 226.227 381.613 221.922 382.161 211.297C381.348 204.235 379.548 201.049 373.824 196.856L362.564 189.812L340.727 178.189C322.764 171.85 314.664 178.894 314.664 194.743V218.693V266.815Z" fill="url(#paint3_linear_43_200)"/>
+          <path class="shine s4" d="M314.664 266.815L369.96 232.429C378.37 226.227 381.613 221.922 382.161 211.297C381.348 204.235 379.548 201.049 373.824 196.856L362.564 189.812L340.727 178.189C322.764 171.85 314.664 178.894 314.664 194.743V218.693V266.815Z" fill="url(#shineGrad)"/>
+        </g>
+        <g mask="url(#maskP5)">
+          <path d="M310.791 220.454L348.829 197.561L374.891 181.007C380.174 176.781 380.526 167.271 374.891 162.34L240.7 83.7984C233.583 80.5119 229.888 80.5555 223.795 83.7984L135.039 136.277C132.573 137.334 124.423 143.024 121.655 145.787C133.984 134.165 149.48 137.982 155.115 141.476L204.064 169.737L288.249 218.341C296.924 224.426 306.771 222.286 310.791 220.454Z" fill="url(#paint4_linear_43_200)"/>
+          <path class="shine s5" d="M310.791 220.454L348.829 197.561L374.891 181.007C380.174 176.781 380.526 167.271 374.891 162.34L240.7 83.7984C233.583 80.5119 229.888 80.5555 223.795 83.7984L135.039 136.277C132.573 137.334 124.423 143.024 121.655 145.787C133.984 134.165 149.48 137.982 155.115 141.476L204.064 169.737L288.249 218.341C296.924 224.426 306.771 222.286 310.791 220.454Z" fill="url(#shineGrad)"/>
+        </g>
+        <g mask="url(#maskP6)">
+          <path d="M155.115 141.476C149.48 137.982 133.984 134.165 121.655 145.787C115.668 151.432 117.077 159.523 117.077 159.523L118.485 193.687C120.246 204.253 134.913 208.601 147.598 202.844L170.259 190.228L204.064 169.737L155.115 141.476Z" fill="url(#paint5_linear_43_200)"/>
+          <path class="shine s6" d="M155.115 141.476C149.48 137.982 133.984 134.165 121.655 145.787C115.668 151.432 117.077 159.523 117.077 159.523L118.485 193.687C120.246 204.253 134.913 208.601 147.598 202.844L170.259 190.228L204.064 169.737L155.115 141.476Z" fill="url(#shineGrad)"/>
+        </g>
+      </g>
+
+      <mask id="mask1_43_200" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="110" y="75" width="280" height="160">
+        <path d="M310.791 220.454L348.829 197.561L374.891 181.007C380.174 176.781 380.526 167.271 374.891 162.34L240.7 83.7984C233.583 80.5119 229.888 80.5555 223.795 83.7984L135.039 136.277C132.573 137.334 124.423 143.024 121.655 145.787C133.984 134.165 149.48 137.982 155.115 141.476L204.064 169.737L288.249 218.341C296.924 224.426 306.771 222.286 310.791 220.454Z" fill="white" stroke="white" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M155.115 141.476C149.48 137.982 133.984 134.165 121.655 145.787C115.668 151.432 117.077 159.523 117.077 159.523L118.485 193.687C120.246 204.253 134.913 208.601 147.598 202.844L170.259 190.228L204.064 169.737L155.115 141.476Z" fill="white" stroke="white" stroke-width="2" stroke-linejoin="round"/>
+      </mask>
+      
+      <g mask="url(#mask1_43_200)">
+        <g mask="url(#maskP1)">
+          <path d="M167.446 189.812L142.435 175.372L110.103 156.705C102.284 153.887 95.2395 157.057 95.2395 165.287V326.821C95.2395 331.751 99.1138 335.978 102.284 338.091L182.939 388.104L191.153 393.776C183.306 387.628 177.436 379.094 177.207 371.199V206.718C175.73 198.28 173.754 194.46 167.446 189.812Z" fill="url(#paint6_linear_43_200)"/>
+          <path class="shine s1o" d="M167.446 189.812L142.435 175.372L110.103 156.705C102.284 153.887 95.2395 157.057 95.2395 165.287V326.821C95.2395 331.751 99.1138 335.978 102.284 338.091L182.939 388.104L191.153 393.776C183.306 387.628 177.436 379.094 177.207 371.199V206.718C175.73 198.28 173.754 194.46 167.446 189.812Z" fill="url(#shineGrad)"/>
+        </g>
+      </g>
+    </g>
+
+    <g id="gizmo">
+      <g class="rod v">
+        <path d="M231.895 223.624V253.21L233.656 254.266V222.568L231.895 223.624Z" fill="#9C9AC4"/>
+        <path d="M231.895 253.21V223.624L230.134 222.568V254.266L231.895 253.21Z" fill="#6E6C96"/>
+      </g>
+      <g class="rod r">
+        <path d="M260.424 276.807L241.052 265.889V267.122L259.719 277.512L260.424 276.807Z" fill="#9C9AC4"/>
+        <path d="M241.052 268.354L259.719 278.92V277.512L241.052 267.122V268.354Z" fill="#6E6C96"/>
+      </g>
+      <g class="rod l">
+        <path d="M223.09 265.889L204.071 277.16V277.864V278.585L223.09 267.122V265.889Z" fill="#9C9AC4"/>
+        <path d="M204.071 279.977L223.09 268.354V267.122L204.071 278.585V279.977Z" fill="#6E6C96"/>
+      </g>
+      <g class="cube center">
+        <path d="M231.895 264.128L241.24 258.566V265.537V268.577L231.895 274.138V264.128Z" fill="#9C9AC4"/>
+        <path d="M222.925 258.566L231.895 253.006L241.24 258.566L231.895 264.128L222.925 258.566Z" fill="#9C9AC4"/>
+        <path d="M231.895 264.128L222.925 258.566V268.577L231.895 274.138V264.128Z" fill="#6E6C96"/>
+      </g>
+      <g class="cube left">
+        <path d="M197.594 281.46L204.423 277.197V284.871L197.594 289.134V281.46Z" fill="#9C9AC4"/>
+        <path d="M191.039 277.197L197.595 272.933L204.423 277.197L197.595 281.46L191.039 277.197Z" fill="#9C9AC4"/>
+        <path d="M197.595 281.46L191.039 277.197V284.871L197.595 289.134V281.46Z" fill="#6E6C96"/>
+      </g>
+      <g class="cube right">
+        <path d="M265.922 281.46L272.751 277.197V284.871L265.922 289.134V281.46Z" fill="#8D8CB4"/>
+        <path d="M259.367 277.197L265.922 272.933L272.751 277.197L265.922 281.46L259.367 277.197Z" fill="#9C9AC4"/>
+        <path d="M265.922 281.46L259.367 277.197V284.871L265.922 289.134V281.46Z" fill="#6E6C96"/>
+      </g>
+      <g class="cube top">
+        <path d="M231.895 214.467L240.7 209.184V218.693L231.895 223.976V214.467Z" fill="#8D8CB4"/>
+        <path d="M223.442 209.184L231.895 203.901L240.7 209.184L231.895 214.467L223.442 209.184Z" fill="#9C9AC4"/>
+        <path d="M231.895 214.467L223.442 209.184V218.693L231.895 223.976V214.467Z" fill="#6E6C96"/>
+      </g>
+    </g>
+  </g>
+
+  <defs>
+    <linearGradient id="paint0_linear_43_200" x1="177.696" y1="155.698" x2="177.696" y2="402.421" gradientUnits="userSpaceOnUse"><stop stop-color="#9847FE"/><stop offset="1" stop-color="#8D39F5"/></linearGradient>
+    <linearGradient id="paint1_linear_43_200" x1="177.696" y1="155.698" x2="177.696" y2="402.421" gradientUnits="userSpaceOnUse"><stop stop-color="#7418E4"/><stop offset="1" stop-color="#400D7E"/></linearGradient>
+    <linearGradient id="paint2_linear_43_200" x1="307.619" y1="175.873" x2="307.619" y2="415.836" gradientUnits="userSpaceOnUse"><stop stop-color="#AF64FF"/><stop offset="1" stop-color="#B66DFF"/></linearGradient>
+    <linearGradient id="paint3_linear_43_200" x1="307.619" y1="175.873" x2="307.619" y2="415.835" gradientUnits="userSpaceOnUse"><stop stop-color="#7418E4"/><stop offset="1" stop-color="#400D7E"/></linearGradient>
+    <linearGradient id="paint4_linear_43_200" x1="247.959" y1="81.3498" x2="247.959" y2="222.366" gradientUnits="userSpaceOnUse"><stop stop-color="#913DFA"/><stop offset="1" stop-color="#AF63FE"/></linearGradient>
+    <linearGradient id="paint5_linear_43_200" x1="247.959" y1="81.3498" x2="247.959" y2="222.366" gradientUnits="userSpaceOnUse"><stop stop-color="#400D7E"/><stop offset="1" stop-color="#7418E4"/></linearGradient>
+    <linearGradient id="paint6_linear_43_200" x1="177.696" y1="155.699" x2="177.696" y2="402.421" gradientUnits="userSpaceOnUse"><stop stop-color="#9847FE"/><stop offset="1" stop-color="#8D39F5"/></linearGradient>
+    
+    <linearGradient id="shineGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0.2" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="white" stop-opacity="0.8"/>
+      <stop offset="0.8" stop-color="white" stop-opacity="0"/>
+    </linearGradient>
+
+    <clipPath id="clip0_43_200"><rect width="1000" height="1000" x="-200" y="-200" fill="white"/></clipPath>
+
+    <mask id="maskP6" maskUnits="userSpaceOnUse" x="110" y="130" width="100" height="90">
+      <rect x="110" y="130" width="0" height="90" fill="white"><animate attributeName="width" begin="0.40s" dur="0.25s" values="0;100" calcMode="linear" fill="freeze"/></rect>
+    </mask>
+    <mask id="maskP5" maskUnits="userSpaceOnUse" x="110" y="70" width="280" height="160">
+      <rect x="110" y="70" width="0" height="160" fill="white"><animate attributeName="width" begin="0.40s" dur="0.40s" values="0;280" calcMode="linear" fill="freeze"/></rect>
+    </mask>
+    <mask id="maskP4" maskUnits="userSpaceOnUse" x="300" y="160" width="90" height="120">
+      <rect x="300" y="160" width="90" height="0" fill="white"><animate attributeName="height" begin="0.40s" dur="0.25s" values="0;120" calcMode="linear" fill="freeze"/></rect>
+    </mask>
+    <mask id="maskP3" maskUnits="userSpaceOnUse" x="220" y="200" width="170" height="230">
+      <rect x="220" y="200" width="170" height="0" fill="white"><animate attributeName="height" begin="0.40s" dur="0.40s" values="0;230" calcMode="linear" fill="freeze"/></rect>
+    </mask>
+    <mask id="maskP2" maskUnits="userSpaceOnUse" x="160" y="290" width="120" height="120">
+      <rect x="280" y="290" width="0" height="120" fill="white">
+        <animate attributeName="x" begin="0.40s" dur="0.25s" values="280;160" calcMode="linear" fill="freeze"/>
+        <animate attributeName="width" begin="0.40s" dur="0.25s" values="0;120" calcMode="linear" fill="freeze"/>
+      </rect>
+    </mask>
+    <mask id="maskP1" maskUnits="userSpaceOnUse" x="80" y="140" width="130" height="270">
+      <rect x="80" y="410" width="130" height="0" fill="white">
+        <animate attributeName="y" begin="0.40s" dur="0.40s" values="410;140" calcMode="linear" fill="freeze"/>
+        <animate attributeName="height" begin="0.40s" dur="0.40s" values="0;270" calcMode="linear" fill="freeze"/>
+      </rect>
+    </mask>
+  </defs>
+</svg>

@@ -167,6 +167,75 @@ describe("EditorStore", () => {
     });
   });
 
+  it("normalizes sphere and cylinder segment geometry with backward-compatible defaults", () => {
+    const legacySphere = createNode("sphere", null, "legacy-sphere");
+    legacySphere.geometry = { radius: 1 } as typeof legacySphere.geometry;
+
+    const detailedCylinder = createNode("cylinder", null, "detailed-cylinder");
+    detailedCylinder.geometry = {
+      radiusTop: 0.3,
+      radiusBottom: 0.6,
+      height: 2,
+      radialSegments: 1,
+      heightSegments: 999,
+      thetaStart: 0.25,
+      thetaLength: -1,
+    };
+
+    const store = new EditorStore({
+      ...createDefaultBlueprint(),
+      nodes: [legacySphere, detailedCylinder],
+    });
+
+    const sphere = store.getNode("legacy-sphere");
+    const cylinder = store.getNode("detailed-cylinder");
+
+    if (!sphere || sphere.type !== "sphere") throw new Error("expected sphere");
+    if (!cylinder || cylinder.type !== "cylinder") throw new Error("expected cylinder");
+
+    expect(sphere.geometry).toEqual({
+      radius: 1,
+      widthSegments: 32,
+      heightSegments: 24,
+      phiStart: 0,
+      phiLength: Math.PI * 2,
+      thetaStart: 0,
+      thetaLength: Math.PI,
+    });
+    expect(cylinder.geometry).toEqual({
+      radiusTop: 0.3,
+      radiusBottom: 0.6,
+      height: 2,
+      radialSegments: 3,
+      heightSegments: 128,
+      thetaStart: 0.25,
+      thetaLength: 0.01,
+    });
+  });
+
+  it("creates core Three.js geometry nodes with editable geometry definitions", () => {
+    const geometryTypes = [
+      "cone",
+      "capsule",
+      "ring",
+      "torus",
+      "torusKnot",
+      "dodecahedron",
+      "icosahedron",
+      "octahedron",
+      "tetrahedron",
+    ] as const;
+
+    for (const type of geometryTypes) {
+      const node = createNode(type, null, `node-${type}`);
+      const definitions = getPropertyDefinitions(node);
+
+      expect(node.type).toBe(type);
+      expect("material" in node).toBe(true);
+      expect(definitions.some((definition) => definition.path.startsWith("geometry."))).toBe(true);
+    }
+  });
+
   it("round-trips a valid blueprint through JSON export and import", () => {
     const blueprint = new EditorStore(createBlueprintFixture()).getSnapshot();
     const json = exportBlueprintToJson(blueprint);

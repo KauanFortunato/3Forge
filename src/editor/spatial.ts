@@ -1,12 +1,21 @@
 import {
   BoxGeometry,
+  CapsuleGeometry,
   CircleGeometry,
+  ConeGeometry,
   CylinderGeometry,
+  DodecahedronGeometry,
   Euler,
+  IcosahedronGeometry,
   Matrix4,
+  OctahedronGeometry,
   PlaneGeometry,
   Quaternion,
+  RingGeometry,
   SphereGeometry,
+  TetrahedronGeometry,
+  TorusGeometry,
+  TorusKnotGeometry,
   Vector3,
 } from "three";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
@@ -193,14 +202,77 @@ function getRenderableGeometryBounds(node: Exclude<EditorNode, { type: "group" |
         node.geometry.thetaStarts,
       ));
     case "sphere":
-      return geometryBoundsFromFactory(() => new SphereGeometry(node.geometry.radius, 32, 24));
+      return geometryBoundsFromFactory(() => new SphereGeometry(
+        node.geometry.radius,
+        Math.max(3, Math.round(node.geometry.widthSegments)),
+        Math.max(2, Math.round(node.geometry.heightSegments)),
+        node.geometry.phiStart,
+        node.geometry.phiLength,
+        node.geometry.thetaStart,
+        node.geometry.thetaLength,
+      ));
     case "cylinder":
       return geometryBoundsFromFactory(() => new CylinderGeometry(
         node.geometry.radiusTop,
         node.geometry.radiusBottom,
         node.geometry.height,
-        32,
+        Math.max(3, Math.round(node.geometry.radialSegments)),
+        Math.max(1, Math.round(node.geometry.heightSegments)),
+        false,
+        node.geometry.thetaStart,
+        node.geometry.thetaLength,
       ));
+    case "cone":
+      return geometryBoundsFromFactory(() => new ConeGeometry(
+        node.geometry.radius,
+        node.geometry.height,
+        Math.max(3, Math.round(node.geometry.radialSegments)),
+        Math.max(1, Math.round(node.geometry.heightSegments)),
+        false,
+        node.geometry.thetaStart,
+        node.geometry.thetaLength,
+      ));
+    case "capsule":
+      return geometryBoundsFromFactory(() => new CapsuleGeometry(
+        node.geometry.radius,
+        node.geometry.length,
+        Math.max(1, Math.round(node.geometry.capSegments)),
+        Math.max(3, Math.round(node.geometry.radialSegments)),
+      ));
+    case "ring":
+      return geometryBoundsFromFactory(() => new RingGeometry(
+        node.geometry.innerRadius,
+        node.geometry.outerRadius,
+        Math.max(3, Math.round(node.geometry.thetaSegments)),
+        Math.max(1, Math.round(node.geometry.phiSegments)),
+        node.geometry.thetaStart,
+        node.geometry.thetaLength,
+      ));
+    case "torus":
+      return geometryBoundsFromFactory(() => new TorusGeometry(
+        node.geometry.radius,
+        node.geometry.tube,
+        Math.max(3, Math.round(node.geometry.radialSegments)),
+        Math.max(3, Math.round(node.geometry.tubularSegments)),
+        node.geometry.arc,
+      ));
+    case "torusKnot":
+      return geometryBoundsFromFactory(() => new TorusKnotGeometry(
+        node.geometry.radius,
+        node.geometry.tube,
+        Math.max(3, Math.round(node.geometry.tubularSegments)),
+        Math.max(3, Math.round(node.geometry.radialSegments)),
+        Math.max(1, Math.round(node.geometry.p)),
+        Math.max(1, Math.round(node.geometry.q)),
+      ));
+    case "dodecahedron":
+      return geometryBoundsFromFactory(() => new DodecahedronGeometry(node.geometry.radius, Math.max(0, Math.round(node.geometry.detail))));
+    case "icosahedron":
+      return geometryBoundsFromFactory(() => new IcosahedronGeometry(node.geometry.radius, Math.max(0, Math.round(node.geometry.detail))));
+    case "octahedron":
+      return geometryBoundsFromFactory(() => new OctahedronGeometry(node.geometry.radius, Math.max(0, Math.round(node.geometry.detail))));
+    case "tetrahedron":
+      return geometryBoundsFromFactory(() => new TetrahedronGeometry(node.geometry.radius, Math.max(0, Math.round(node.geometry.detail))));
     case "plane":
     case "image":
       return geometryBoundsFromFactory(() => new PlaneGeometry(node.geometry.width, node.geometry.height));

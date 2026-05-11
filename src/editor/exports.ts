@@ -588,6 +588,15 @@ function collectImports(nodes: ExportNode[], bindings: CollectedBinding[]): Set<
   if (types.has("circle")) imports.add("CircleGeometry");
   if (types.has("sphere")) imports.add("SphereGeometry");
   if (types.has("cylinder")) imports.add("CylinderGeometry");
+  if (types.has("cone")) imports.add("ConeGeometry");
+  if (types.has("capsule")) imports.add("CapsuleGeometry");
+  if (types.has("ring")) imports.add("RingGeometry");
+  if (types.has("torus")) imports.add("TorusGeometry");
+  if (types.has("torusKnot")) imports.add("TorusKnotGeometry");
+  if (types.has("dodecahedron")) imports.add("DodecahedronGeometry");
+  if (types.has("icosahedron")) imports.add("IcosahedronGeometry");
+  if (types.has("octahedron")) imports.add("OctahedronGeometry");
+  if (types.has("tetrahedron")) imports.add("TetrahedronGeometry");
   if (types.has("plane") || types.has("image")) imports.add("PlaneGeometry");
   for (const used of usedMaterialTypes) {
     const cls = materialClassFor[used];
@@ -737,13 +746,50 @@ function emitCreationLines(
         break;
       case "sphere":
         lines.push(
-          `const ${geometryVariable} = new SphereGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, 32, 24);`,
+          `const ${geometryVariable} = new SphereGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, Math.max(3, Math.round(${propertyExpression(node, "geometry.widthSegments", bindingAccessor)})), Math.max(2, Math.round(${propertyExpression(node, "geometry.heightSegments", bindingAccessor)})), ${propertyExpression(node, "geometry.phiStart", bindingAccessor)}, ${propertyExpression(node, "geometry.phiLength", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaStart", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaLength", bindingAccessor)});`,
         );
         break;
       case "cylinder":
         lines.push(
-          `const ${geometryVariable} = new CylinderGeometry(${propertyExpression(node, "geometry.radiusTop", bindingAccessor)}, ${propertyExpression(node, "geometry.radiusBottom", bindingAccessor)}, ${propertyExpression(node, "geometry.height", bindingAccessor)}, 32);`,
+          `const ${geometryVariable} = new CylinderGeometry(${propertyExpression(node, "geometry.radiusTop", bindingAccessor)}, ${propertyExpression(node, "geometry.radiusBottom", bindingAccessor)}, ${propertyExpression(node, "geometry.height", bindingAccessor)}, Math.max(3, Math.round(${propertyExpression(node, "geometry.radialSegments", bindingAccessor)})), Math.max(1, Math.round(${propertyExpression(node, "geometry.heightSegments", bindingAccessor)})), false, ${propertyExpression(node, "geometry.thetaStart", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaLength", bindingAccessor)});`,
         );
+        break;
+      case "cone":
+        lines.push(
+          `const ${geometryVariable} = new ConeGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, ${propertyExpression(node, "geometry.height", bindingAccessor)}, Math.max(3, Math.round(${propertyExpression(node, "geometry.radialSegments", bindingAccessor)})), Math.max(1, Math.round(${propertyExpression(node, "geometry.heightSegments", bindingAccessor)})), false, ${propertyExpression(node, "geometry.thetaStart", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaLength", bindingAccessor)});`,
+        );
+        break;
+      case "capsule":
+        lines.push(
+          `const ${geometryVariable} = new CapsuleGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, ${propertyExpression(node, "geometry.length", bindingAccessor)}, Math.max(1, Math.round(${propertyExpression(node, "geometry.capSegments", bindingAccessor)})), Math.max(3, Math.round(${propertyExpression(node, "geometry.radialSegments", bindingAccessor)})));`,
+        );
+        break;
+      case "ring":
+        lines.push(
+          `const ${geometryVariable} = new RingGeometry(${propertyExpression(node, "geometry.innerRadius", bindingAccessor)}, ${propertyExpression(node, "geometry.outerRadius", bindingAccessor)}, Math.max(3, Math.round(${propertyExpression(node, "geometry.thetaSegments", bindingAccessor)})), Math.max(1, Math.round(${propertyExpression(node, "geometry.phiSegments", bindingAccessor)})), ${propertyExpression(node, "geometry.thetaStart", bindingAccessor)}, ${propertyExpression(node, "geometry.thetaLength", bindingAccessor)});`,
+        );
+        break;
+      case "torus":
+        lines.push(
+          `const ${geometryVariable} = new TorusGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, ${propertyExpression(node, "geometry.tube", bindingAccessor)}, Math.max(3, Math.round(${propertyExpression(node, "geometry.radialSegments", bindingAccessor)})), Math.max(3, Math.round(${propertyExpression(node, "geometry.tubularSegments", bindingAccessor)})), ${propertyExpression(node, "geometry.arc", bindingAccessor)});`,
+        );
+        break;
+      case "torusKnot":
+        lines.push(
+          `const ${geometryVariable} = new TorusKnotGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, ${propertyExpression(node, "geometry.tube", bindingAccessor)}, Math.max(3, Math.round(${propertyExpression(node, "geometry.tubularSegments", bindingAccessor)})), Math.max(3, Math.round(${propertyExpression(node, "geometry.radialSegments", bindingAccessor)})), Math.max(1, Math.round(${propertyExpression(node, "geometry.p", bindingAccessor)})), Math.max(1, Math.round(${propertyExpression(node, "geometry.q", bindingAccessor)})));`,
+        );
+        break;
+      case "dodecahedron":
+        lines.push(`const ${geometryVariable} = new DodecahedronGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, Math.max(0, Math.round(${propertyExpression(node, "geometry.detail", bindingAccessor)})));`);
+        break;
+      case "icosahedron":
+        lines.push(`const ${geometryVariable} = new IcosahedronGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, Math.max(0, Math.round(${propertyExpression(node, "geometry.detail", bindingAccessor)})));`);
+        break;
+      case "octahedron":
+        lines.push(`const ${geometryVariable} = new OctahedronGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, Math.max(0, Math.round(${propertyExpression(node, "geometry.detail", bindingAccessor)})));`);
+        break;
+      case "tetrahedron":
+        lines.push(`const ${geometryVariable} = new TetrahedronGeometry(${propertyExpression(node, "geometry.radius", bindingAccessor)}, Math.max(0, Math.round(${propertyExpression(node, "geometry.detail", bindingAccessor)})));`);
         break;
       case "plane":
         lines.push(

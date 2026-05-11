@@ -839,4 +839,81 @@ describe("export after property clipboard", () => {
     );
     expect(output).toMatch(geomLineRegex);
   });
+
+  it("exports advanced sphere and cylinder segment geometry", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    const sphereId = store.insertNode("sphere", ROOT_NODE_ID);
+    store.updateNodeName(sphereId, "Segmented Sphere");
+    updateProperty(store, sphereId, "geometry.widthSegments", 12);
+    updateProperty(store, sphereId, "geometry.heightSegments", 6);
+    updateProperty(store, sphereId, "geometry.phiStart", 0.5);
+    updateProperty(store, sphereId, "geometry.phiLength", 2.5);
+    updateProperty(store, sphereId, "geometry.thetaStart", 0.25);
+    updateProperty(store, sphereId, "geometry.thetaLength", 1.5);
+
+    const cylinderId = store.insertNode("cylinder", ROOT_NODE_ID);
+    store.updateNodeName(cylinderId, "Segmented Cylinder");
+    updateProperty(store, cylinderId, "geometry.radialSegments", 9);
+    updateProperty(store, cylinderId, "geometry.heightSegments", 4);
+    updateProperty(store, cylinderId, "geometry.thetaStart", 0.75);
+    updateProperty(store, cylinderId, "geometry.thetaLength", 3.25);
+
+    const output = generateTypeScriptComponent(store.blueprint);
+
+    expect(output).toContain("new SphereGeometry(0.7, Math.max(3, Math.round(12)), Math.max(2, Math.round(6)), 0.5, 2.5, 0.25, 1.5);");
+    expect(output).toContain("new CylinderGeometry(0.5, 0.5, 1.4, Math.max(3, Math.round(9)), Math.max(1, Math.round(4)), false, 0.75, 3.25);");
+
+    const reimported = new EditorStore(JSON.parse(exportBlueprintToJson(store.blueprint)));
+    const sphere = reimported.getNode(sphereId);
+    const cylinder = reimported.getNode(cylinderId);
+
+    if (!sphere || sphere.type !== "sphere") throw new Error("expected reimported sphere");
+    if (!cylinder || cylinder.type !== "cylinder") throw new Error("expected reimported cylinder");
+
+    expect(sphere.geometry.widthSegments).toBe(12);
+    expect(sphere.geometry.thetaLength).toBe(1.5);
+    expect(cylinder.geometry.radialSegments).toBe(9);
+    expect(cylinder.geometry.thetaLength).toBe(3.25);
+  });
+
+  it("exports core Three.js geometry node types", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const types = [
+      "cone",
+      "capsule",
+      "ring",
+      "torus",
+      "torusKnot",
+      "dodecahedron",
+      "icosahedron",
+      "octahedron",
+      "tetrahedron",
+    ] as const;
+
+    for (const type of types) {
+      store.insertNode(type, ROOT_NODE_ID);
+    }
+
+    const output = generateTypeScriptComponent(store.blueprint);
+
+    expect(output).toContain("ConeGeometry");
+    expect(output).toContain("CapsuleGeometry");
+    expect(output).toContain("RingGeometry");
+    expect(output).toContain("TorusGeometry");
+    expect(output).toContain("TorusKnotGeometry");
+    expect(output).toContain("DodecahedronGeometry");
+    expect(output).toContain("IcosahedronGeometry");
+    expect(output).toContain("OctahedronGeometry");
+    expect(output).toContain("TetrahedronGeometry");
+    expect(output).toContain("new ConeGeometry(");
+    expect(output).toContain("new CapsuleGeometry(");
+    expect(output).toContain("new RingGeometry(");
+    expect(output).toContain("new TorusGeometry(");
+    expect(output).toContain("new TorusKnotGeometry(");
+    expect(output).toContain("new DodecahedronGeometry(");
+    expect(output).toContain("new IcosahedronGeometry(");
+    expect(output).toContain("new OctahedronGeometry(");
+    expect(output).toContain("new TetrahedronGeometry(");
+  });
 });

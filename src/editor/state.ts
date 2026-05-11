@@ -109,11 +109,74 @@ const GEOMETRY_DEFINITIONS: Record<Exclude<EditorNodeType, "group" | "model">, N
   ],
   sphere: [
     { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.widthSegments", label: "Width Segments", type: "number", input: "number", step: 1, min: 3, max: 128 },
+    { group: "Geometry", path: "geometry.heightSegments", label: "Height Segments", type: "number", input: "number", step: 1, min: 2, max: 128 },
+    { group: "Geometry", path: "geometry.phiStart", label: "Phi Start", type: "number", input: "number", step: 0.1 },
+    { group: "Geometry", path: "geometry.phiLength", label: "Phi Length", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.thetaStart", label: "Theta Start", type: "number", input: "number", step: 0.1 },
+    { group: "Geometry", path: "geometry.thetaLength", label: "Theta Length", type: "number", input: "number", step: 0.1, min: 0.01 },
   ],
   cylinder: [
     { group: "Geometry", path: "geometry.radiusTop", label: "Top Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
     { group: "Geometry", path: "geometry.radiusBottom", label: "Bottom Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
     { group: "Geometry", path: "geometry.height", label: "Height", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.radialSegments", label: "Radial Segments", type: "number", input: "number", step: 1, min: 3, max: 128 },
+    { group: "Geometry", path: "geometry.heightSegments", label: "Height Segments", type: "number", input: "number", step: 1, min: 1, max: 128 },
+    { group: "Geometry", path: "geometry.thetaStart", label: "Theta Start", type: "number", input: "number", step: 0.1 },
+    { group: "Geometry", path: "geometry.thetaLength", label: "Theta Length", type: "number", input: "number", step: 0.1, min: 0.01 },
+  ],
+  cone: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.height", label: "Height", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.radialSegments", label: "Radial Segments", type: "number", input: "number", step: 1, min: 3, max: 128 },
+    { group: "Geometry", path: "geometry.heightSegments", label: "Height Segments", type: "number", input: "number", step: 1, min: 1, max: 128 },
+    { group: "Geometry", path: "geometry.thetaStart", label: "Theta Start", type: "number", input: "number", step: 0.1 },
+    { group: "Geometry", path: "geometry.thetaLength", label: "Theta Length", type: "number", input: "number", step: 0.1, min: 0.01 },
+  ],
+  capsule: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.length", label: "Length", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.capSegments", label: "Cap Segments", type: "number", input: "number", step: 1, min: 1, max: 64 },
+    { group: "Geometry", path: "geometry.radialSegments", label: "Radial Segments", type: "number", input: "number", step: 1, min: 3, max: 128 },
+  ],
+  ring: [
+    { group: "Geometry", path: "geometry.innerRadius", label: "Inner Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.outerRadius", label: "Outer Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.thetaSegments", label: "Theta Segments", type: "number", input: "number", step: 1, min: 3, max: 128 },
+    { group: "Geometry", path: "geometry.phiSegments", label: "Phi Segments", type: "number", input: "number", step: 1, min: 1, max: 128 },
+    { group: "Geometry", path: "geometry.thetaStart", label: "Theta Start", type: "number", input: "number", step: 0.1 },
+    { group: "Geometry", path: "geometry.thetaLength", label: "Theta Length", type: "number", input: "number", step: 0.1, min: 0.01 },
+  ],
+  torus: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.tube", label: "Tube", type: "number", input: "number", step: 0.05, min: 0.01 },
+    { group: "Geometry", path: "geometry.radialSegments", label: "Radial Segments", type: "number", input: "number", step: 1, min: 3, max: 128 },
+    { group: "Geometry", path: "geometry.tubularSegments", label: "Tubular Segments", type: "number", input: "number", step: 1, min: 3, max: 256 },
+    { group: "Geometry", path: "geometry.arc", label: "Arc", type: "number", input: "number", step: 0.1, min: 0.01 },
+  ],
+  torusKnot: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.tube", label: "Tube", type: "number", input: "number", step: 0.05, min: 0.01 },
+    { group: "Geometry", path: "geometry.tubularSegments", label: "Tubular Segments", type: "number", input: "number", step: 1, min: 3, max: 256 },
+    { group: "Geometry", path: "geometry.radialSegments", label: "Radial Segments", type: "number", input: "number", step: 1, min: 3, max: 128 },
+    { group: "Geometry", path: "geometry.p", label: "P", type: "number", input: "number", step: 1, min: 1, max: 32 },
+    { group: "Geometry", path: "geometry.q", label: "Q", type: "number", input: "number", step: 1, min: 1, max: 32 },
+  ],
+  dodecahedron: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.detail", label: "Detail", type: "number", input: "number", step: 1, min: 0, max: 5 },
+  ],
+  icosahedron: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.detail", label: "Detail", type: "number", input: "number", step: 1, min: 0, max: 5 },
+  ],
+  octahedron: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.detail", label: "Detail", type: "number", input: "number", step: 1, min: 0, max: 5 },
+  ],
+  tetrahedron: [
+    { group: "Geometry", path: "geometry.radius", label: "Radius", type: "number", input: "number", step: 0.1, min: 0.01 },
+    { group: "Geometry", path: "geometry.detail", label: "Detail", type: "number", input: "number", step: 1, min: 0, max: 5 },
   ],
   plane: [
     { group: "Geometry", path: "geometry.width", label: "Width", type: "number", input: "number", step: 0.1, min: 0.01 },
@@ -140,6 +203,15 @@ const DEFAULT_NODE_NAMES: Record<EditorNodeType, string> = {
   circle: "Circle",
   sphere: "Sphere",
   cylinder: "Cylinder",
+  cone: "Cone",
+  capsule: "Capsule",
+  ring: "Ring",
+  torus: "Torus",
+  torusKnot: "Torus Knot",
+  dodecahedron: "Dodecahedron",
+  icosahedron: "Icosahedron",
+  octahedron: "Octahedron",
+  tetrahedron: "Tetrahedron",
   plane: "Plane",
   image: "Image",
   text: "Text",
@@ -273,15 +345,108 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
       return {
         ...base,
         type: "sphere",
-        geometry: { radius: 0.7 },
+        geometry: {
+          radius: 0.7,
+          widthSegments: 32,
+          heightSegments: 24,
+          phiStart: 0,
+          phiLength: Math.PI * 2,
+          thetaStart: 0,
+          thetaLength: Math.PI,
+        },
         material: createMaterial("#8df0ff"),
       } as EditorNodeOfType<T>;
     case "cylinder":
       return {
         ...base,
         type: "cylinder",
-        geometry: { radiusTop: 0.5, radiusBottom: 0.5, height: 1.4 },
+        geometry: {
+          radiusTop: 0.5,
+          radiusBottom: 0.5,
+          height: 1.4,
+          radialSegments: 32,
+          heightSegments: 1,
+          thetaStart: 0,
+          thetaLength: Math.PI * 2,
+        },
         material: createMaterial("#9cf579"),
+      } as EditorNodeOfType<T>;
+    case "cone":
+      return {
+        ...base,
+        type: "cone",
+        geometry: {
+          radius: 0.6,
+          height: 1.4,
+          radialSegments: 32,
+          heightSegments: 1,
+          thetaStart: 0,
+          thetaLength: Math.PI * 2,
+        },
+        material: createMaterial("#ffb86b"),
+      } as EditorNodeOfType<T>;
+    case "capsule":
+      return {
+        ...base,
+        type: "capsule",
+        geometry: { radius: 0.35, length: 1, capSegments: 8, radialSegments: 16 },
+        material: createMaterial("#7dd3fc"),
+      } as EditorNodeOfType<T>;
+    case "ring":
+      return {
+        ...base,
+        type: "ring",
+        geometry: {
+          innerRadius: 0.35,
+          outerRadius: 0.75,
+          thetaSegments: 32,
+          phiSegments: 1,
+          thetaStart: 0,
+          thetaLength: Math.PI * 2,
+        },
+        material: createDoubleSidedMaterial("#f472b6"),
+      } as EditorNodeOfType<T>;
+    case "torus":
+      return {
+        ...base,
+        type: "torus",
+        geometry: { radius: 0.6, tube: 0.18, radialSegments: 16, tubularSegments: 48, arc: Math.PI * 2 },
+        material: createMaterial("#c084fc"),
+      } as EditorNodeOfType<T>;
+    case "torusKnot":
+      return {
+        ...base,
+        type: "torusKnot",
+        geometry: { radius: 0.58, tube: 0.14, tubularSegments: 64, radialSegments: 12, p: 2, q: 3 },
+        material: createMaterial("#fb7185"),
+      } as EditorNodeOfType<T>;
+    case "dodecahedron":
+      return {
+        ...base,
+        type: "dodecahedron",
+        geometry: { radius: 0.75, detail: 0 },
+        material: createMaterial("#fde047"),
+      } as EditorNodeOfType<T>;
+    case "icosahedron":
+      return {
+        ...base,
+        type: "icosahedron",
+        geometry: { radius: 0.75, detail: 0 },
+        material: createMaterial("#34d399"),
+      } as EditorNodeOfType<T>;
+    case "octahedron":
+      return {
+        ...base,
+        type: "octahedron",
+        geometry: { radius: 0.75, detail: 0 },
+        material: createMaterial("#60a5fa"),
+      } as EditorNodeOfType<T>;
+    case "tetrahedron":
+      return {
+        ...base,
+        type: "tetrahedron",
+        geometry: { radius: 0.75, detail: 0 },
+        material: createMaterial("#f97316"),
       } as EditorNodeOfType<T>;
     case "plane":
       return {
@@ -592,6 +757,51 @@ function getNodeOriginOffset(
         z: resolveOriginOffset(-radius, radius, origin.z),
       };
     }
+    case "cone":
+      return {
+        x: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.x),
+        y: resolveOriginOffset(-node.geometry.height * 0.5, node.geometry.height * 0.5, origin.y),
+        z: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.z),
+      };
+    case "capsule": {
+      const halfHeight = node.geometry.length * 0.5 + node.geometry.radius;
+      return {
+        x: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.x),
+        y: resolveOriginOffset(-halfHeight, halfHeight, origin.y),
+        z: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.z),
+      };
+    }
+    case "ring":
+      return {
+        x: resolveOriginOffset(-node.geometry.outerRadius, node.geometry.outerRadius, origin.x),
+        y: resolveOriginOffset(-node.geometry.outerRadius, node.geometry.outerRadius, origin.y),
+        z: resolveOriginOffset(0, 0, origin.z),
+      };
+    case "torus": {
+      const radius = node.geometry.radius + node.geometry.tube;
+      return {
+        x: resolveOriginOffset(-radius, radius, origin.x),
+        y: resolveOriginOffset(-radius, radius, origin.y),
+        z: resolveOriginOffset(-node.geometry.tube, node.geometry.tube, origin.z),
+      };
+    }
+    case "torusKnot": {
+      const radius = node.geometry.radius + node.geometry.tube;
+      return {
+        x: resolveOriginOffset(-radius, radius, origin.x),
+        y: resolveOriginOffset(-radius, radius, origin.y),
+        z: resolveOriginOffset(-radius, radius, origin.z),
+      };
+    }
+    case "dodecahedron":
+    case "icosahedron":
+    case "octahedron":
+    case "tetrahedron":
+      return {
+        x: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.x),
+        y: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.y),
+        z: resolveOriginOffset(-node.geometry.radius, node.geometry.radius, origin.z),
+      };
     case "plane":
     case "image":
       return {
@@ -780,7 +990,26 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
 
   const source = rawNode as Record<string, unknown>;
   const type = source.type;
-  if (type !== "group" && type !== "box" && type !== "circle" && type !== "sphere" && type !== "cylinder" && type !== "plane" && type !== "text" && type !== "image" && type !== "model") {
+  if (
+    type !== "group" &&
+    type !== "box" &&
+    type !== "circle" &&
+    type !== "sphere" &&
+    type !== "cylinder" &&
+    type !== "cone" &&
+    type !== "capsule" &&
+    type !== "ring" &&
+    type !== "torus" &&
+    type !== "torusKnot" &&
+    type !== "dodecahedron" &&
+    type !== "icosahedron" &&
+    type !== "octahedron" &&
+    type !== "tetrahedron" &&
+    type !== "plane" &&
+    type !== "text" &&
+    type !== "image" &&
+    type !== "model"
+  ) {
     return null;
   }
 
@@ -818,13 +1047,71 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
         node.geometry.segments = clampNumber(normalizeNumber(geometry.segments, node.geometry.segments), 1);
         node.geometry.thetaStarts = clampNumber(normalizeNumber(geometry.thetaStarts, node.geometry.thetaStarts), 0.01);
         node.geometry.thetaLenght = clampNumber(normalizeNumber(geometry.thetaLenght, node.geometry.thetaLenght), 0.01);
+        break;
       case "sphere":
         node.geometry.radius = clampNumber(normalizeNumber(geometry.radius, node.geometry.radius), 0.01);
+        node.geometry.widthSegments = clampNumber(normalizeNumber(geometry.widthSegments, node.geometry.widthSegments), 3, 128);
+        node.geometry.heightSegments = clampNumber(normalizeNumber(geometry.heightSegments, node.geometry.heightSegments), 2, 128);
+        node.geometry.phiStart = normalizeNumber(geometry.phiStart, node.geometry.phiStart);
+        node.geometry.phiLength = clampNumber(normalizeNumber(geometry.phiLength, node.geometry.phiLength), 0.01);
+        node.geometry.thetaStart = normalizeNumber(geometry.thetaStart, node.geometry.thetaStart);
+        node.geometry.thetaLength = clampNumber(normalizeNumber(geometry.thetaLength, node.geometry.thetaLength), 0.01);
         break;
       case "cylinder":
         node.geometry.radiusTop = clampNumber(normalizeNumber(geometry.radiusTop, node.geometry.radiusTop), 0.01);
         node.geometry.radiusBottom = clampNumber(normalizeNumber(geometry.radiusBottom, node.geometry.radiusBottom), 0.01);
         node.geometry.height = clampNumber(normalizeNumber(geometry.height, node.geometry.height), 0.01);
+        node.geometry.radialSegments = clampNumber(normalizeNumber(geometry.radialSegments, node.geometry.radialSegments), 3, 128);
+        node.geometry.heightSegments = clampNumber(normalizeNumber(geometry.heightSegments, node.geometry.heightSegments), 1, 128);
+        node.geometry.thetaStart = normalizeNumber(geometry.thetaStart, node.geometry.thetaStart);
+        node.geometry.thetaLength = clampNumber(normalizeNumber(geometry.thetaLength, node.geometry.thetaLength), 0.01);
+        break;
+      case "cone":
+        node.geometry.radius = clampNumber(normalizeNumber(geometry.radius, node.geometry.radius), 0.01);
+        node.geometry.height = clampNumber(normalizeNumber(geometry.height, node.geometry.height), 0.01);
+        node.geometry.radialSegments = clampNumber(normalizeNumber(geometry.radialSegments, node.geometry.radialSegments), 3, 128);
+        node.geometry.heightSegments = clampNumber(normalizeNumber(geometry.heightSegments, node.geometry.heightSegments), 1, 128);
+        node.geometry.thetaStart = normalizeNumber(geometry.thetaStart, node.geometry.thetaStart);
+        node.geometry.thetaLength = clampNumber(normalizeNumber(geometry.thetaLength, node.geometry.thetaLength), 0.01);
+        break;
+      case "capsule":
+        node.geometry.radius = clampNumber(normalizeNumber(geometry.radius, node.geometry.radius), 0.01);
+        node.geometry.length = clampNumber(normalizeNumber(geometry.length, node.geometry.length), 0.01);
+        node.geometry.capSegments = clampNumber(normalizeNumber(geometry.capSegments, node.geometry.capSegments), 1, 64);
+        node.geometry.radialSegments = clampNumber(normalizeNumber(geometry.radialSegments, node.geometry.radialSegments), 3, 128);
+        break;
+      case "ring":
+        node.geometry.innerRadius = clampNumber(normalizeNumber(geometry.innerRadius, node.geometry.innerRadius), 0.01);
+        node.geometry.outerRadius = clampNumber(normalizeNumber(geometry.outerRadius, node.geometry.outerRadius), 0.01);
+        node.geometry.thetaSegments = clampNumber(normalizeNumber(geometry.thetaSegments, node.geometry.thetaSegments), 3, 128);
+        node.geometry.phiSegments = clampNumber(normalizeNumber(geometry.phiSegments, node.geometry.phiSegments), 1, 128);
+        node.geometry.thetaStart = normalizeNumber(geometry.thetaStart, node.geometry.thetaStart);
+        node.geometry.thetaLength = clampNumber(normalizeNumber(geometry.thetaLength, node.geometry.thetaLength), 0.01);
+        if (node.geometry.outerRadius < node.geometry.innerRadius) {
+          node.geometry.outerRadius = node.geometry.innerRadius;
+        }
+        break;
+      case "torus":
+        node.geometry.radius = clampNumber(normalizeNumber(geometry.radius, node.geometry.radius), 0.01);
+        node.geometry.tube = clampNumber(normalizeNumber(geometry.tube, node.geometry.tube), 0.01);
+        node.geometry.radialSegments = clampNumber(normalizeNumber(geometry.radialSegments, node.geometry.radialSegments), 3, 128);
+        node.geometry.tubularSegments = clampNumber(normalizeNumber(geometry.tubularSegments, node.geometry.tubularSegments), 3, 256);
+        node.geometry.arc = clampNumber(normalizeNumber(geometry.arc, node.geometry.arc), 0.01);
+        break;
+      case "torusKnot":
+        node.geometry.radius = clampNumber(normalizeNumber(geometry.radius, node.geometry.radius), 0.01);
+        node.geometry.tube = clampNumber(normalizeNumber(geometry.tube, node.geometry.tube), 0.01);
+        node.geometry.tubularSegments = clampNumber(normalizeNumber(geometry.tubularSegments, node.geometry.tubularSegments), 3, 256);
+        node.geometry.radialSegments = clampNumber(normalizeNumber(geometry.radialSegments, node.geometry.radialSegments), 3, 128);
+        node.geometry.p = clampNumber(normalizeNumber(geometry.p, node.geometry.p), 1, 32);
+        node.geometry.q = clampNumber(normalizeNumber(geometry.q, node.geometry.q), 1, 32);
+        break;
+      case "dodecahedron":
+      case "icosahedron":
+      case "octahedron":
+      case "tetrahedron":
+        node.geometry.radius = clampNumber(normalizeNumber(geometry.radius, node.geometry.radius), 0.01);
+        node.geometry.detail = clampNumber(normalizeNumber(geometry.detail, node.geometry.detail), 0, 5);
         break;
       case "plane":
         node.geometry.width = clampNumber(normalizeNumber(geometry.width, node.geometry.width), 0.01);

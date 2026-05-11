@@ -3,12 +3,16 @@ import {
   BackSide,
   BasicDepthPacking,
   BoxGeometry,
+  CapsuleGeometry,
   CircleGeometry,
+  ConeGeometry,
   CylinderGeometry,
   DoubleSide,
+  DodecahedronGeometry,
   Euler,
   FrontSide,
   Group,
+  IcosahedronGeometry,
   Material,
   Mesh,
   MeshBasicMaterial,
@@ -19,6 +23,7 @@ import {
   MeshPhysicalMaterial,
   MeshStandardMaterial,
   MeshToonMaterial,
+  OctahedronGeometry,
   PlaneGeometry,
   RGBADepthPacking,
   Quaternion,
@@ -26,8 +31,12 @@ import {
   Scene,
   SphereGeometry,
   SRGBColorSpace,
+  RingGeometry,
+  TetrahedronGeometry,
   Texture,
   TextureLoader,
+  TorusGeometry,
+  TorusKnotGeometry,
   VectorKeyframeTrack,
 } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
@@ -304,10 +313,87 @@ class BlueprintObjectBuilder {
         mesh = new Mesh(new CircleGeometry(node.geometry.radius, node.geometry.segments, node.geometry.thetaStarts, node.geometry.thetaLenght), await this.createNodeMaterial(node));
         break;
       case "sphere":
-        mesh = new Mesh(new SphereGeometry(node.geometry.radius, 32, 24), await this.createNodeMaterial(node));
+        mesh = new Mesh(new SphereGeometry(
+          node.geometry.radius,
+          Math.max(3, Math.round(node.geometry.widthSegments)),
+          Math.max(2, Math.round(node.geometry.heightSegments)),
+          node.geometry.phiStart,
+          node.geometry.phiLength,
+          node.geometry.thetaStart,
+          node.geometry.thetaLength,
+        ), await this.createNodeMaterial(node));
         break;
       case "cylinder":
-        mesh = new Mesh(new CylinderGeometry(node.geometry.radiusTop, node.geometry.radiusBottom, node.geometry.height, 32), await this.createNodeMaterial(node));
+        mesh = new Mesh(new CylinderGeometry(
+          node.geometry.radiusTop,
+          node.geometry.radiusBottom,
+          node.geometry.height,
+          Math.max(3, Math.round(node.geometry.radialSegments)),
+          Math.max(1, Math.round(node.geometry.heightSegments)),
+          false,
+          node.geometry.thetaStart,
+          node.geometry.thetaLength,
+        ), await this.createNodeMaterial(node));
+        break;
+      case "cone":
+        mesh = new Mesh(new ConeGeometry(
+          node.geometry.radius,
+          node.geometry.height,
+          Math.max(3, Math.round(node.geometry.radialSegments)),
+          Math.max(1, Math.round(node.geometry.heightSegments)),
+          false,
+          node.geometry.thetaStart,
+          node.geometry.thetaLength,
+        ), await this.createNodeMaterial(node));
+        break;
+      case "capsule":
+        mesh = new Mesh(new CapsuleGeometry(
+          node.geometry.radius,
+          node.geometry.length,
+          Math.max(1, Math.round(node.geometry.capSegments)),
+          Math.max(3, Math.round(node.geometry.radialSegments)),
+        ), await this.createNodeMaterial(node));
+        break;
+      case "ring":
+        mesh = new Mesh(new RingGeometry(
+          node.geometry.innerRadius,
+          node.geometry.outerRadius,
+          Math.max(3, Math.round(node.geometry.thetaSegments)),
+          Math.max(1, Math.round(node.geometry.phiSegments)),
+          node.geometry.thetaStart,
+          node.geometry.thetaLength,
+        ), await this.createNodeMaterial(node));
+        break;
+      case "torus":
+        mesh = new Mesh(new TorusGeometry(
+          node.geometry.radius,
+          node.geometry.tube,
+          Math.max(3, Math.round(node.geometry.radialSegments)),
+          Math.max(3, Math.round(node.geometry.tubularSegments)),
+          node.geometry.arc,
+        ), await this.createNodeMaterial(node));
+        break;
+      case "torusKnot":
+        mesh = new Mesh(new TorusKnotGeometry(
+          node.geometry.radius,
+          node.geometry.tube,
+          Math.max(3, Math.round(node.geometry.tubularSegments)),
+          Math.max(3, Math.round(node.geometry.radialSegments)),
+          Math.max(1, Math.round(node.geometry.p)),
+          Math.max(1, Math.round(node.geometry.q)),
+        ), await this.createNodeMaterial(node));
+        break;
+      case "dodecahedron":
+        mesh = new Mesh(new DodecahedronGeometry(node.geometry.radius, Math.max(0, Math.round(node.geometry.detail))), await this.createNodeMaterial(node));
+        break;
+      case "icosahedron":
+        mesh = new Mesh(new IcosahedronGeometry(node.geometry.radius, Math.max(0, Math.round(node.geometry.detail))), await this.createNodeMaterial(node));
+        break;
+      case "octahedron":
+        mesh = new Mesh(new OctahedronGeometry(node.geometry.radius, Math.max(0, Math.round(node.geometry.detail))), await this.createNodeMaterial(node));
+        break;
+      case "tetrahedron":
+        mesh = new Mesh(new TetrahedronGeometry(node.geometry.radius, Math.max(0, Math.round(node.geometry.detail))), await this.createNodeMaterial(node));
         break;
       case "plane":
         mesh = new Mesh(new PlaneGeometry(node.geometry.width, node.geometry.height), await this.createNodeMaterial(node));

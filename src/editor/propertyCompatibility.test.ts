@@ -196,6 +196,14 @@ describe("isPathCompatible — geometry exact matches", () => {
       status: "applicable",
       targetPath: "geometry.radiusTop",
     });
+    expect(isPathCompatible("sphere", "sphere", "geometry.widthSegments")).toEqual({
+      status: "applicable",
+      targetPath: "geometry.widthSegments",
+    });
+    expect(isPathCompatible("cylinder", "cylinder", "geometry.thetaLength")).toEqual({
+      status: "applicable",
+      targetPath: "geometry.thetaLength",
+    });
   });
 
   it("reports geometry paths absent on the source as unsupported", () => {
