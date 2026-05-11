@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { convertMovsViaBackend, ConvertViaBackendError, installFfmpegViaBackend } from "./movConvertViaBackend";
+import { convertMovFileToImageSequenceAsset, convertMovsViaBackend, ConvertViaBackendError, installFfmpegViaBackend } from "./movConvertViaBackend";
 
 function mockMovFile(name: string): File {
   return new File([new Uint8Array([0x6d, 0x6f, 0x76])], name, { type: "video/quicktime" });
@@ -246,5 +246,86 @@ describe("convertMovsViaBackend format propagation", () => {
     expect(seq.format).toBe("webp");
     expect(seq.fallbackReason).toBeUndefined();
     expect(seq.framePattern).toBe("frame_%06d.webp");
+  });
+});
+
+describe("convertMovFileToImageSequenceAsset", () => {
+  it("returns an ImageAsset with mimeType=image-sequence and full sequence metadata", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const filename = String((init?.headers as Record<string, string>)?.["X-Filename"] ?? "");
+      return new Response(JSON.stringify({
+        jobId: "job-asset",
+        source: filename,
+        format: "webp",
+        sequenceJson: {
+          version: 2, type: "image-sequence", format: "webp",
+          source: filename, framePattern: "frame_%06d.webp", frameCount: 3,
+          fps: 30, width: 1920, height: 1080, durationSec: 0.1,
+          loop: true, alpha: true, pixelFormat: "rgba",
+        },
+        frameCount: 3, fps: 30, alpha: true,
+        frames: [
+          { index: 1, filename: "frame_000001.webp", url: "/api/w3d/convert-mov/jobs/job-asset/frames/frame_000001.webp", sizeBytes: 100 },
+          { index: 2, filename: "frame_000002.webp", url: "/api/w3d/convert-mov/jobs/job-asset/frames/frame_000002.webp", sizeBytes: 100 },
+          { index: 3, filename: "frame_000003.webp", url: "/api/w3d/convert-mov/jobs/job-asset/frames/frame_000003.webp", sizeBytes: 100 },
+        ],
+        ffmpegSource: "static",
+      }), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const asset = await convertMovFileToImageSequenceAsset({
+      file: mockMovFile("intro.mov"),
+      signal: new AbortController().signal,
+      readDimensions: async () => ({ width: 1920, height: 1080 }),
+    });
+    expect(asset.mimeType).toBe("application/x-image-sequence");
+    expect(asset.name).toBe("intro.mov");
+    expect(asset.sequence).toBeDefined();
+    expect(asset.sequence?.frameCount).toBe(3);
+    expect(asset.sequence?.frameUrls.length).toBe(3);
+    expect(asset.sequence?.format).toBe("webp");
+    expect(asset.sequence?.fps).toBe(30);
+    expect(asset.sequence?.alpha).toBe(true);
+    expect(asset.src).toMatch(/frame_000001\.webp$/);
+  });
+
+  it("hydrates width/height from the first frame when the manifest lacks dimensions", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const filename = String((init?.headers as Record<string, string>)?.["X-Filename"] ?? "");
+      return new Response(JSON.stringify({
+        jobId: "job-h", source: filename, format: "webp",
+        sequenceJson: {
+          version: 2, type: "image-sequence", format: "webp",
+          source: filename, framePattern: "frame_%06d.webp", frameCount: 1,
+          fps: 25, width: 0, height: 0, durationSec: 0,
+          loop: true, alpha: true, pixelFormat: "rgba",
+        },
+        frameCount: 1, fps: 25, alpha: true,
+        frames: [{ index: 1, filename: "frame_000001.webp", url: "/api/w3d/convert-mov/jobs/job-h/frames/frame_000001.webp", sizeBytes: 100 }],
+        ffmpegSource: "static",
+      }), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    const asset = await convertMovFileToImageSequenceAsset({
+      file: mockMovFile("nodim.mov"),
+      signal: new AbortController().signal,
+      readDimensions: async () => ({ width: 640, height: 360 }),
+    });
+    expect(asset.sequence?.width).toBe(640);
+    expect(asset.sequence?.height).toBe(360);
+  });
+
+  it("throws MOV_DECODE_FAILED when the backend returns no sequence for the file", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ code: "MOV_DECODE_FAILED", message: "bad codec" }), { status: 500 }),
+    );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    await expect(
+      convertMovFileToImageSequenceAsset({
+        file: mockMovFile("bad.mov"),
+        signal: new AbortController().signal,
+        readDimensions: async () => ({ width: 0, height: 0 }),
+      }),
+    ).rejects.toMatchObject({ name: "ConvertViaBackendError", code: "MOV_DECODE_FAILED" });
   });
 });

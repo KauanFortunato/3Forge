@@ -27,11 +27,17 @@ const FRAME_PATTERN_PNG = FRAME_PATTERN;
 const FRAME_PATTERN_WEBP = "frame_%06d.webp";
 
 /**
- * Round-trip frame 1: encode the source's first frame to PNG via ffmpeg
- * (`-vframes 1` ground truth), decode both the produced WebP and the
- * ground-truth PNG to raw RGBA via two more ffmpeg invocations, and
- * `Buffer.compare()` the two raw buffers. With `-c:v libwebp -lossless 1`,
- * the bytes MUST match -- any difference means the encoder is buggy.
+ * Round-trip frame 1: decode both the produced WebP and the source's first
+ * frame to raw RGBA via two ffmpeg invocations, then compare alpha-aware.
+ *
+ * Why not a flat Buffer.compare? `libwebp -lossless 1` canonicalises RGB
+ * to 0 in fully-transparent pixels (alpha=0) for better compression — this
+ * is documented behaviour, not an encoder bug, and is visually identical
+ * since the pixel is invisible. A flat byte compare rejects every .mov
+ * with a transparent region (e.g. broadcast logos with alpha) and forces
+ * a needless PNG fallback. We require exact byte equality everywhere the
+ * pixel is visible (alpha > 0) and on the alpha channel itself, and only
+ * tolerate RGB drift in fully-transparent pixels.
  */
 export async function smokeTestWebpFrame({
   ffmpegPath, sourcePath, webpFrame, _decode,
@@ -47,10 +53,27 @@ export async function smokeTestWebpFrame({
   if (!webpRgba || !pngRgba || webpRgba.length === 0 || pngRgba.length === 0) {
     return { ok: false, reason: "decode_error" };
   }
-  if (Buffer.compare(webpRgba, pngRgba) !== 0) {
+  if (!rgbaMatchesAlphaAware(webpRgba, pngRgba)) {
     return { ok: false, reason: "rgba_mismatch" };
   }
   return { ok: true };
+}
+
+function rgbaMatchesAlphaAware(webp, source) {
+  if (webp.length !== source.length) return false;
+  if (webp.length % 4 !== 0) return false;
+  for (let i = 0; i < webp.length; i += 4) {
+    if (webp[i + 3] !== source[i + 3]) return false;
+    if (webp[i + 3] === 0) continue;
+    if (
+      webp[i] !== source[i] ||
+      webp[i + 1] !== source[i + 1] ||
+      webp[i + 2] !== source[i + 2]
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function defaultDecodeRgba({ ffmpegPath, target, kind }) {
@@ -271,10 +294,11 @@ export async function probeWebpEncoder(opts = {}) {
   let stdoutText = "";
   try {
     const proc = spawnFn(ff.path, ["-hide_banner", "-encoders"], { shell: false });
+    // readStdout already resolves on the child's 'close' event. Registering
+    // a second close listener after that promise resolved would never fire
+    // (Node ChildProcess emits 'close' exactly once) and hang the whole
+    // conversion pipeline.
     stdoutText = await readStdout(proc);
-    await new Promise((resolve) => {
-      proc.on("close", () => resolve());
-    });
   } catch {
     _encoderProbeCache = { available: false };
     return _encoderProbeCache;
@@ -288,9 +312,10 @@ export function _resetEncoderProbeCache() {
 }
 
 function defaultReadStdout(proc) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let buf = "";
     proc.stdout?.on("data", (c) => { buf += c.toString(); });
+    proc.on("error", reject);
     proc.on("close", () => resolve(buf));
   });
 }

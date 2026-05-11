@@ -313,6 +313,63 @@ describe("EditorStore", () => {
     expect(node.image.name).toBe("Poster Wide.png");
   });
 
+  it("preserves image-sequence metadata across partial updateImageAsset calls", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const nodeId = store.insertNode("image", ROOT_NODE_ID);
+    const sequenceAssetId = store.addImageAsset({
+      name: "Intro.mov",
+      mimeType: "application/x-image-sequence",
+      src: "blob:fixture-frame-1",
+      width: 1920,
+      height: 1080,
+      sequence: {
+        version: 2,
+        type: "image-sequence",
+        format: "webp",
+        source: "Intro.mov",
+        framePattern: "frame_%06d.webp",
+        frameCount: 30,
+        fps: 30,
+        width: 1920,
+        height: 1080,
+        durationSec: 1,
+        loop: true,
+        alpha: true,
+        pixelFormat: "rgba",
+        frameUrls: [
+          "blob:fixture-frame-1",
+          "blob:fixture-frame-2",
+          "blob:fixture-frame-3",
+        ],
+      },
+    });
+    expect(store.assignImageAssetToNodes([nodeId], sequenceAssetId)).toBe(1);
+
+    // Partial rename (only `name` changed) MUST NOT erase the sequence
+    // metadata on the asset or on the bound node.
+    expect(store.updateImageAsset(sequenceAssetId, {
+      name: "Intro Renamed.mov",
+      mimeType: "application/x-image-sequence",
+      src: "blob:fixture-frame-1",
+      width: 1920,
+      height: 1080,
+    })).toBe(true);
+
+    const asset = store.getImageAsset(sequenceAssetId);
+    expect(asset?.mimeType).toBe("application/x-image-sequence");
+    expect(asset?.sequence?.frameCount).toBe(30);
+    expect(asset?.sequence?.frameUrls.length).toBe(3);
+    expect(asset?.sequence?.format).toBe("webp");
+    expect(asset?.name).toBe("Intro Renamed.mov");
+
+    const node = store.getNode(nodeId);
+    expect(node?.type).toBe("image");
+    if (node?.type !== "image") throw new Error("Expected image node.");
+    expect(node.image.mimeType).toBe("application/x-image-sequence");
+    expect(node.image.sequence?.frameCount).toBe(30);
+    expect(node.image.sequence?.frameUrls.length).toBe(3);
+  });
+
   it("inserts image nodes linked to existing project image assets", () => {
     const store = new EditorStore(createDefaultBlueprint());
     const assetId = store.addImageAsset({

@@ -957,6 +957,38 @@ export class SceneEditor {
     cameraKind: "perspective" | "orthographic";
     nodeCount: number;
     nodes: Array<Record<string, unknown>>;
+    mediaLibrary: Array<Record<string, unknown>>;
+    w3dTextures: {
+      resources: Record<string, string>;
+      layers: Array<{ id: string; originalRef: string | null; resolvedFilename: string | null; missing: boolean }>;
+      missingTextureRefs: string[];
+    } | null;
+    previewFlatten: {
+      clipName: string | null;
+      frame: number;
+      appliedControllers: number;
+      appliedExportProperties: number;
+      unsupportedProperties: string[];
+      changedNodeCount: number;
+    } | null;
+    w3dFlowLayouts: Array<{
+      parentXmlId: string;
+      parentName: string;
+      leadingSpace: number;
+      childOrder: string[];
+      childWidths: number[];
+      computedOffsets: number[];
+      approximationWarnings: string[];
+    }>;
+    timelineRuntime: {
+      isPlaying: boolean;
+      activeTimelineName: string | null;
+      activeTimelineId: string | null;
+      currentFrame: number;
+      durationFrames: number;
+      runtimeReady: boolean;
+      compiledTrackCount: number;
+    };
     shadow: {
       missingTextureNodeCount: number;
       meshPlaceholderNodeCount: number;
@@ -973,6 +1005,30 @@ export class SceneEditor {
       helperNodeIds?: string[];
       initialDisabledNodeIds?: string[];
       unresolvedMaterialIds?: string[];
+      textureDiagnostics?: {
+        textureResources: Record<string, string>;
+        textureLayers: Array<{ id: string; originalRef: string | null; resolvedFilename: string | null }>;
+        missingTextureRefs: string[];
+      };
+      textureLayerByNodeId?: Record<string, string>;
+      previewFlatten?: {
+        clipName: string | null;
+        frame: number;
+        appliedControllers: number;
+        appliedExportProperties: number;
+        unsupportedProperties: string[];
+        changedNodeCount: number;
+      };
+      flowLayouts?: Array<{
+        parentXmlId: string;
+        parentName: string;
+        leadingSpace: number;
+        childOrder: string[];
+        childWidths: number[];
+        computedOffsets: number[];
+        approximationWarnings: string[];
+      }>;
+      flowByNodeId?: Record<string, { parentName: string; index: number; offset: number }>;
     };
 
     const out: Array<Record<string, unknown>> = [];
@@ -992,6 +1048,13 @@ export class SceneEditor {
         if (!mesh && c instanceof Mesh) mesh = c;
       });
       const meshObj: Mesh | null = mesh;
+      // Capture meshObj.visible into a plain `boolean | null` BEFORE any
+      // closure reads it. Inside the per-IIFE scopes below, TypeScript
+      // narrows the local `mesh` to `never` after the `if (!mesh && …)`
+      // traversal-callback re-write, which makes `meshObj?.visible` resolve
+      // to `never.visible` and fail typecheck. The explicit copy here side-
+      // steps the narrowing without touching the runtime behaviour.
+      const meshObjVisible: boolean | null = meshObj ? meshObj.visible : null;
       const worldPos = wrapper.getWorldPosition(this.tmpVec3).clone();
       let worldBoxSize: { x: number; y: number; z: number } | null = null;
       let textureState: string | null = null;
@@ -1044,12 +1107,49 @@ export class SceneEditor {
           }
         }
       }
+      // Parent chain (root → node) — forensic field for "why is this node
+      // positioned wrong?" reports. The user can paste back the chain and
+      // we see which ancestor group has the surprising transform without
+      // grepping the W3D XML.
+      const parentChain: string[] = [];
+      {
+        let cursor: EditorNode | null = node;
+        const seen = new Set<string>();
+        while (cursor) {
+          if (seen.has(cursor.id)) break;
+          seen.add(cursor.id);
+          parentChain.unshift(cursor.name);
+          const parentId: string | null = cursor.parentId;
+          cursor = parentId ? this.store.blueprint.nodes.find((n) => n.id === parentId) ?? null : null;
+        }
+      }
+      // Projected screen position — feeds the active camera with the node's
+      // world position and reads NDC X/Y back ([-1, +1] each axis). Critical
+      // for the LINEUP_LEFT class of "side-by-side cards stacked behind each
+      // other" reports: if PLAYER_01..05 all share the same NDC X but the
+      // thumbnail says distinct, the W3D→3Forge transform basis is wrong.
+      const ndc = worldPos.clone().project(this.camera);
+      const screenPos = {
+        ndcX: +ndc.x.toFixed(4),
+        ndcY: +ndc.y.toFixed(4),
+        ndcZ: +ndc.z.toFixed(4),
+      };
+      const flowInfo = w3d.flowByNodeId?.[node.id] ?? null;
       out.push({
         id: node.id.slice(0, 8),
         name: node.name,
         type: node.type,
+        parentChain,
+        screenPos,
+        // W3D FlowChildren info — present when the node is a direct child of
+        // a `<GeometryOptions FlowChildren="True">` parent. Lets the operator
+        // see exactly which flow slot the node was placed into and the
+        // additive offset applied during flatten.
+        flowParent: flowInfo?.parentName ?? null,
+        flowIndex: flowInfo?.index ?? null,
+        flowOffset: flowInfo?.offset ?? null,
         visible: node.visible,
-        meshVisible: meshObj?.visible ?? null,
+        meshVisible: meshObjVisible,
         hasSkewLayer: !!skewLayer,
         skewLayerMatrix: skewLayer ? Array.from(skewLayer.matrix.elements).map((v) => +v.toFixed(4)) : null,
         blueprintSkew: node.transform.skew ?? null,
@@ -1104,7 +1204,7 @@ export class SceneEditor {
             lastTickDelta: s.lastTickDelta,
             playerRegistered: true,
             materialMapIsPlayerTexture: materialMap === player.texture,
-            meshVisible: meshObj?.visible ?? null,
+            meshVisible: meshObjVisible,
           };
         })(),
         isMask: !!node.isMask,
@@ -1113,14 +1213,131 @@ export class SceneEditor {
         isHelper: w3d.helperNodeIds?.includes(node.id) ?? false,
         isMissingTexture: w3d.missingTextureNodeIds?.includes(node.id) ?? false,
         wasInitialDisabled: w3d.initialDisabledNodeIds?.includes(node.id) ?? false,
+        // W3D TextureLayer GUID that drove this node's binding, when known.
+        // Lets the operator cross-reference "this quad" against the
+        // textureLayers table below without grepping the XML.
+        textureLayerId: w3d.textureLayerByNodeId?.[node.id] ?? null,
+        // Animated visibility ("Enabled" controller in W3D, "visible"
+        // animation property in 3Forge). Three layers shown so the operator
+        // can pinpoint where a "node still rendering when keyframe says
+        // off" report breaks down:
+        //   - hasTrack: did the parser create a `visible` animation track?
+        //   - blueprintVisible: post-flatten static state (i.e. what the
+        //     `<Enable>` attribute resolved to after PreviewMarker keyframes
+        //     were baked in)
+        //   - trackValueAtCurrentFrame: what the track evaluates to RIGHT
+        //     NOW (after seekAnimation)
+        //   - objectVisible: what Three.js actually has on the wrapper
+        //   - finalVisible: same as objectVisible — the rendered truth
+        //   - source: which mechanism determined the rendered value
+        animatedVisibility: (() => {
+          const compiled = this.animationTracks.find(
+            (t) => t.propertyPath === "visible" && t.target?.userData?.nodeId === node.id,
+          );
+          const trackValue = compiled
+            ? evaluateCompiledTrack(compiled, this.currentAnimationFrame)
+            : null;
+          const trackFinalVisible = trackValue !== null ? trackValue >= 0.5 : null;
+          return {
+            hasTrack: !!compiled,
+            keyframes: compiled?.keyframes.length ?? 0,
+            firstFrame: compiled?.keyframes[0]?.frame ?? null,
+            lastFrame: compiled?.keyframes[compiled.keyframes.length - 1]?.frame ?? null,
+            blueprintVisible: node.visible,
+            trackValueAtCurrentFrame: trackValue,
+            trackFinalVisible,
+            objectVisible: meshObjVisible,
+            finalVisible: meshObjVisible ?? node.visible,
+            source: compiled ? "animation-track" : "blueprint",
+          };
+        })(),
       });
     }
+
+    // Media library snapshot — shows every asset (especially SEQUENCE
+    // assets) with the node(s) that bind to it. Orphan flag = no node
+    // references the asset, which is the case for .movs converted from a
+    // folder where the W3D XML doesn't statically point to them. Lets the
+    // operator paste back "sequence is in Media but nothing renders it" as
+    // hard evidence instead of a screenshot.
+    const mediaLibrary: Array<Record<string, unknown>> = [];
+    for (const image of bp.images) {
+      const refNodes: Array<{ id: string; name: string }> = [];
+      for (const node of bp.nodes) {
+        if (node.type !== "image") continue;
+        if (image.id && node.imageId === image.id) {
+          refNodes.push({ id: node.id.slice(0, 8), name: node.name });
+        }
+      }
+      const seq = image.sequence;
+      const isSequence = image.mimeType === "application/x-image-sequence";
+      mediaLibrary.push({
+        id: image.id ?? null,
+        name: image.name,
+        mimeType: image.mimeType,
+        kind: isSequence ? "SEQUENCE" : image.mimeType.startsWith("video/") ? "VIDEO" : "IMAGE",
+        sequence: seq ? {
+          source: seq.source,
+          frameCount: seq.frameCount,
+          fps: seq.fps,
+          format: seq.format,
+          fallbackReason: seq.fallbackReason ?? null,
+          alpha: seq.alpha,
+          width: seq.width,
+          height: seq.height,
+          frameUrlsLength: seq.frameUrls.length,
+          firstFrame: seq.frameUrls[0]?.slice(0, 80) ?? null,
+        } : null,
+        referencedByNodes: refNodes,
+        orphan: refNodes.length === 0,
+      });
+    }
+
+    // W3D texture-resolution diagnostics. Pasting these alongside
+    // mediaLibrary makes it possible to answer "this asset is in Media but
+    // doesn't render — why?" by checking three things in order:
+    //   1. Is there a Layer with originalRef pointing at this file?
+    //   2. Did it resolve to a basename (or land in missingTextureRefs)?
+    //   3. Which node's textureLayerId matches that Layer.id?
+    // Null when the project wasn't imported from a W3D scene.
+    const diag = w3d.textureDiagnostics;
+    const w3dTextures = diag ? {
+      resources: diag.textureResources,
+      layers: diag.textureLayers.map((l) => ({
+        ...l,
+        missing: !l.resolvedFilename || diag.missingTextureRefs.includes(l.originalRef ?? ""),
+      })),
+      missingTextureRefs: diag.missingTextureRefs,
+    } : null;
 
     return {
       sceneMode: bp.sceneMode,
       cameraKind: this.camera instanceof OrthographicCamera ? "orthographic" : "perspective",
       nodeCount: bp.nodes.length,
       nodes: out,
+      mediaLibrary,
+      w3dTextures,
+      // Preview-state flatten summary — see W3DShadowData.previewFlatten in
+      // src/editor/import/w3d.ts. Lets the operator confirm at a glance
+      // which timeline frame was baked into the blueprint.
+      previewFlatten: w3d.previewFlatten ?? null,
+      // W3D FlowChildren layouts surfaced for "why are these cards stacked"
+      // debugging. One entry per `<GeometryOptions FlowChildren="True">`
+      // parent group, with child order + widths + computed offsets.
+      w3dFlowLayouts: w3d.flowLayouts ?? [],
+      // Animation runtime snapshot — answers "is the import secretly
+      // autoplaying / drifting off the preview frame?" without opening a
+      // debugger. After a clean W3D import, `isPlaying` should be false and
+      // `currentFrame` should be the PreviewMarker.
+      timelineRuntime: {
+        isPlaying: this.isAnimationPlaying,
+        activeTimelineName: this.store.getActiveAnimationClip()?.name ?? null,
+        activeTimelineId: this.store.getActiveAnimationClip()?.id ?? null,
+        currentFrame: this.currentAnimationFrame,
+        durationFrames: this.store.getActiveAnimationClip()?.durationFrames ?? 0,
+        runtimeReady: this.animationRuntimeReady,
+        compiledTrackCount: this.animationTracks.length,
+      },
       shadow: {
         missingTextureNodeCount: w3d.missingTextureNodeIds?.length ?? 0,
         meshPlaceholderNodeCount: w3d.meshPlaceholderNodeIds?.length ?? 0,
@@ -1326,7 +1543,14 @@ export class SceneEditor {
     object.userData.nodeId = node.id;
     object.userData.nodeType = node.type;
     object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
-    object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
+    // Blueprint stores rotation in degrees (round-trips via export/w3d.ts and
+    // is named `rotationDeg` in the dump tests). Three.js Euler expects
+    // radians, so convert at the apply boundary.
+    object.rotation.set(
+      (node.transform.rotation.x * Math.PI) / 180,
+      (node.transform.rotation.y * Math.PI) / 180,
+      (node.transform.rotation.z * Math.PI) / 180,
+    );
     object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
     return object;
   }
@@ -1407,6 +1631,30 @@ export class SceneEditor {
     });
 
     geometry.computeBoundingBox();
+    // W3D TextureText: when `<TextBoxSize>` is authored, the text MUST fit
+    // inside that box — broadcast templates author short labels like
+    // "COACH"/"BENCH" with portrait boxes that reserve vertical space but
+    // expect the glyph height to be constrained by the box. Without this
+    // step the TextGeometry renders at its natural cap-height (set by
+    // `node.geometry.size`) and short strings spill outside their card.
+    // Strategy: uniform-scale the generated geometry down so its bbox fits;
+    // never up-scale (a wide box around a short string is the author's
+    // intent — extra padding, not larger text).
+    const { maxWidth, maxHeight } = node.geometry;
+    if ((maxWidth && maxWidth > 0) || (maxHeight && maxHeight > 0)) {
+      const bbox = geometry.boundingBox;
+      if (bbox) {
+        const w = bbox.max.x - bbox.min.x;
+        const h = bbox.max.y - bbox.min.y;
+        let s = 1;
+        if (maxWidth && maxWidth > 0 && w > maxWidth) s = Math.min(s, maxWidth / w);
+        if (maxHeight && maxHeight > 0 && h > maxHeight) s = Math.min(s, maxHeight / h);
+        if (s < 1 && Number.isFinite(s) && s > 0) {
+          geometry.scale(s, s, 1);
+          geometry.computeBoundingBox();
+        }
+      }
+    }
     return new Mesh(geometry, material);
   }
 
@@ -2019,9 +2267,25 @@ export class SceneEditor {
     }
     if (cam?.target) {
       this.orbitControls.target.set(cam.target.x, cam.target.y, cam.target.z);
+    } else if (cam?.rotation && cam?.position) {
+      // Authored camera has explicit rotation but no explicit target. Set the
+      // rotation (degrees → radians) so we can derive a forward axis, then
+      // place the orbit target along that forward direction. OrbitControls'
+      // subsequent .update() will re-derive the camera basis from
+      // position + target — matching the authored pose without snapping the
+      // camera to look at world origin.
+      this.camera.rotation.set(
+        (cam.rotation.x * Math.PI) / 180,
+        (cam.rotation.y * Math.PI) / 180,
+        (cam.rotation.z * Math.PI) / 180,
+      );
+      const forward = new Vector3(0, 0, -1).applyEuler(this.camera.rotation);
+      // Distance is arbitrary; OrbitControls only uses target as a pivot
+      // direction. 5 units works for typical broadcast scene scales.
+      this.orbitControls.target.copy(this.camera.position).addScaledVector(forward, 5);
     } else if (cam?.position) {
-      // No explicit target — point at the world origin, which is where R3
-      // tracked broadcast cameras conventionally aim.
+      // No explicit target or rotation — point at the world origin, which is
+      // where R3 tracked broadcast cameras conventionally aim.
       this.orbitControls.target.set(0, 0, 0);
     }
     if (cam?.fovY !== undefined && this.camera instanceof PerspectiveCamera) {
@@ -2207,7 +2471,12 @@ export class SceneEditor {
       const renderable = node.visible && !node.isMask && !this.isMissingTextureNode(node.id);
       object.visible = renderable;
       object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
-      object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
+      // Blueprint rotation is in degrees — Three.js Euler is radians. See create path.
+      object.rotation.set(
+        (node.transform.rotation.x * Math.PI) / 180,
+        (node.transform.rotation.y * Math.PI) / 180,
+        (node.transform.rotation.z * Math.PI) / 180,
+      );
       object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
 
       const mesh = this.getAnimatedVisibilityMeshTarget(object);

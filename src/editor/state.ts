@@ -2821,6 +2821,15 @@ export class EditorStore extends EventTarget {
     asset.src = normalized.src;
     asset.width = normalized.width;
     asset.height = normalized.height;
+    // Preserve existing sequence when a partial update doesn't carry one.
+    // E.g. rename or src-swap on an image-sequence asset must not erase the
+    // sequence metadata (frameUrls, frameCount, fps, format, alpha, etc.).
+    // Only clear the sequence if the asset is no longer typed as a sequence.
+    if (normalized.sequence) {
+      asset.sequence = normalized.sequence;
+    } else if (asset.mimeType !== "application/x-image-sequence") {
+      delete asset.sequence;
+    }
     for (const node of this.getNodesUsingImageAsset(imageId)) {
       applyImageAssetToNode(node, asset, Math.max(node.geometry.width, node.geometry.height));
     }
@@ -3495,11 +3504,19 @@ function applyImageAssetToNode(
   image: ImageAsset,
   maxSize = 2,
 ): void {
+  // If the incoming partial image lacks `sequence` but the existing node
+  // already had one, keep it — node mustn't lose sequence metadata on a
+  // shallow update (e.g. when applyImageAssetToNode is invoked after a
+  // rename whose normalized payload didn't include sequence).
+  const preservedSequence = image.sequence ?? node.image?.sequence;
   node.image = {
     ...image,
     width: Math.max(image.width, 1),
     height: Math.max(image.height, 1),
   };
+  if (preservedSequence) {
+    node.image.sequence = preservedSequence;
+  }
 
   const fitted = fitImageToMaxSize(node.image.width, node.image.height, maxSize);
   node.geometry.width = fitted.width;

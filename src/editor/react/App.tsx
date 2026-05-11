@@ -12,7 +12,7 @@ import {
   supportsFileSystemAccess,
 } from "../fileAccess";
 import { fontFileToAsset } from "../fonts";
-import { imageFileToAsset } from "../images";
+import { imageFileToAsset, imageSequenceToAsset, isVideoFileName, isVideoMimeType, videoFileToAsset } from "../images";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
 import {
@@ -94,6 +94,7 @@ import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { classifyMovAssets, collectFilesFromDirectory, parseW3DFromFolder } from "../import/w3dFolder";
 import {
+  convertMovFileToImageSequenceAsset,
   convertMovsViaBackend,
   ConvertViaBackendError,
   installFfmpegViaBackend,
@@ -227,6 +228,20 @@ function countImageUsage(nodes: EditorNode[]): Record<string, number> {
     usage[node.imageId] = (usage[node.imageId] ?? 0) + 1;
   }
   return usage;
+}
+
+function getMediaKindLabel(image: ImageAsset): string {
+  if (image.mimeType === "application/x-image-sequence") {
+    return "sequence";
+  }
+  if (isVideoMimeType(image.mimeType)) {
+    return "video";
+  }
+  return "image";
+}
+
+function isMovFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".mov");
 }
 
 function resolveSelectionMaterialId(nodes: EditorNode[]): string | null {
@@ -1313,7 +1328,23 @@ export function App() {
     }
     store.loadBlueprint(rawBlueprint, "ui");
     setProjectContext(context);
-    setCurrentFrame(0);
+    // Seek the viewport to the W3D author's chosen "preview" frame when one
+    // exists. R3 broadcast scenes write `<Timeline PreviewMarker="N">` for
+    // the rest state shown in the project thumbnail — typically the last
+    // frame of the "In" intro after everything settled. Without this the
+    // editor would show frame 0, which for animated intros is usually an
+    // offscreen / zero-mask state that looks nothing like thumb.png. Pick
+    // the maximum preview frame across clips so a multi-clip scene lands on
+    // the most "settled" pose; fall through to frame 0 when no clip has one.
+    const clips = store.getActiveAnimationClip() ? store.blueprint.animation.clips : [];
+    let initialFrame = 0;
+    for (const clip of clips) {
+      if (typeof clip.previewFrame === "number" && clip.previewFrame > initialFrame) {
+        initialFrame = clip.previewFrame;
+      }
+    }
+    setCurrentFrame(initialFrame);
+    sceneRef.current?.seekAnimation(initialFrame);
     setIsAnimationPlaying(false);
     setSelectedTrackId(null);
     setSelectedKeyframeId(null);
@@ -1482,6 +1513,20 @@ export function App() {
       }
       // Run the import with merged sequences, then show the done phase.
       await importW3DFromFolder(files, { additionalSequences: result.sequences });
+      // Surface every converted .mov in the Media panel even when the W3D
+      // scene XML doesn't reference it. parseW3D only adds an asset to the
+      // library when a Quad's TextureLayer binds the .mov filename, so
+      // orphan conversions (no binding) would otherwise vanish after the
+      // "Conversion complete" modal. Dedupe against any entry the parser
+      // already added by matching on sequence.source / asset name.
+      for (const [movName, seq] of result.sequences) {
+        const alreadyInLibrary = store.images.some((img) =>
+          img.sequence?.source === seq.source || img.name === movName,
+        );
+        if (!alreadyInLibrary) {
+          store.addImageAsset(imageSequenceToAsset(movName, seq));
+        }
+      }
       setMovModalState((s) => s ? {
         ...s,
         phase: { kind: "done" },
@@ -1514,7 +1559,7 @@ export function App() {
         abortController: undefined,
       } : s);
     }
-  }, [importW3DFromFolder]);
+  }, [importW3DFromFolder, store]);
 
   const importW3DFromFolderWithModalCheck = useCallback(async (
     files: File[],
@@ -3244,7 +3289,7 @@ export function App() {
         ref={imageInputRef}
         className="app__hidden-input"
         type="file"
-        accept=".png,.jpg,.jpeg,.webp,.svg"
+        accept=".png,.jpg,.jpeg,.webp,.svg,.mov"
         onChange={async (event) => {
           const file = event.target.files?.[0];
           event.currentTarget.value = "";
@@ -3253,12 +3298,49 @@ export function App() {
             return;
           }
 
+          // Branch on extension. .mov goes through the dev backend converter
+          // (browser→backend buffer flow) and lands in the store as a fully
+          // populated image-sequence asset. Other formats use the existing
+          // image-only path. The image is then routed via applyImageImport,
+          // so the Media panel renders the SEQUENCE badge / autoplay
+          // preview without any panel-side change.
+          const isMov = /\.mov$/i.test(file.name);
           try {
-            const image = await runTask(`Importing ${file.name}…`, () => imageFileToAsset(file));
-            applyImageImport(image);
-          } catch {
+            if (isMov) {
+              const ctrl = new AbortController();
+              const image = await runTask(`Converting ${file.name}…`, (setLabel) =>
+                convertMovFileToImageSequenceAsset({
+                  file,
+                  signal: ctrl.signal,
+                  onProgress: (p) => {
+                    if (p.phase === "uploading") setLabel(`Converting ${file.name}…`);
+                    else if (p.phase === "converted") setLabel(`Finalizing ${file.name}…`);
+                  },
+                }),
+              );
+              applyImageImport(image);
+            } else {
+              const image = await runTask(`Importing ${file.name}…`, () => imageFileToAsset(file));
+              applyImageImport(image);
+            }
+          } catch (err) {
             pendingImageImportRef.current = null;
-            setTransientStatus("Unable to import image.");
+            const e = err as { name?: string; code?: string };
+            if (e.code === "FFMPEG_NOT_INSTALLED") {
+              setTransientStatus(
+                "Conversor não disponível. Importa pela opção 'Import W3D Folder' para instalar automaticamente.",
+              );
+            } else if (e.code === "NO_BACKEND") {
+              setTransientStatus(
+                "Conversão de .mov só está disponível no dev server. Importa pela opção 'Import W3D Folder'.",
+              );
+            } else if (e.name === "AbortError") {
+              setTransientStatus("Conversão cancelada.");
+            } else {
+              setTransientStatus(
+                isMov ? `Não foi possível converter ${file.name}.` : "Unable to import image.",
+              );
+            }
           }
         }}
       />

@@ -49,6 +49,113 @@ describe("detectSceneMode", () => {
     const sceneEl = parseDoc('<Scene><SceneLayer><Quad Id="q"/><TextureText Id="t"/></SceneLayer></Scene>');
     expect(detectSceneMode(sceneEl).mode).toBe("2d");
   });
+
+  it("treats Camera Projection='Ortographic' (W3D engine typo, sic) as 2D even when Is2DScene='False'", () => {
+    // Real-world: 26PT_WTV_BASKETBALL corpus has 8/10 projects with this
+    // exact combo. Without this override the importer picked perspective
+    // and screen-space broadcast graphics rendered with depth.
+    const sceneEl = parseDoc(
+      '<Scene Is2DScene="False"><SceneLayer><CameraManager>' +
+      '<Camera Projection="Ortographic"><Position Z="-99.4"/></Camera>' +
+      '</CameraManager></SceneLayer></Scene>',
+    );
+    const decision = detectSceneMode(sceneEl);
+    expect(decision.mode).toBe("2d");
+    expect(decision.source).toBe("camera-projection");
+    expect(decision.reason).toContain("Ortographic");
+  });
+
+  it("also accepts the correctly-spelled Camera Projection='Orthographic'", () => {
+    const sceneEl = parseDoc(
+      '<Scene Is2DScene="False"><SceneLayer><CameraManager>' +
+      '<Camera Projection="Orthographic"/>' +
+      '</CameraManager></SceneLayer></Scene>',
+    );
+    expect(detectSceneMode(sceneEl).mode).toBe("2d");
+  });
+
+  it("treats Camera Projection='Perspective' as 3D regardless of Is2DScene flag", () => {
+    const sceneEl = parseDoc(
+      '<Scene Is2DScene="False"><SceneLayer><CameraManager>' +
+      '<Camera Projection="Perspective"/>' +
+      '</CameraManager></SceneLayer></Scene>',
+    );
+    const decision = detectSceneMode(sceneEl);
+    expect(decision.mode).toBe("3d");
+    expect(decision.source).toBe("camera-projection");
+  });
+
+  it("explicit Is2DScene='True' still wins over an inconsistent perspective camera", () => {
+    // Old-engine scenes occasionally had Is2DScene=True with a stray
+    // perspective camera. Author intent (explicit 2D flag) beats stale
+    // camera data.
+    const sceneEl = parseDoc(
+      '<Scene Is2DScene="True"><SceneLayer><CameraManager>' +
+      '<Camera Projection="Perspective"/>' +
+      '</CameraManager></SceneLayer></Scene>',
+    );
+    const decision = detectSceneMode(sceneEl);
+    expect(decision.mode).toBe("2d");
+    expect(decision.source).toBe("Is2DScene-attr");
+  });
+});
+
+describe("Timeline PreviewMarker import", () => {
+  // Broadcast graphics author the rest state as the LAST frame of the "In"
+  // timeline. Importers that drop the operator at frame 0 see the pre-reveal
+  // state (zero-size masks, offscreen elements, alpha=0) which looks nothing
+  // like the thumbnail. The parser surfaces PreviewMarker on the clip so the
+  // editor can seek there on import.
+  // Embed a real <Quad> with a real Alpha track so parseTimeline doesn't
+  // throw away the clip for having zero tracks (timelines without any
+  // KeyFrameAnimationController are dropped by design — they'd be empty).
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="False"><SceneLayer>
+  <SceneNode><Children><Quad Id="n1" Name="N"/></Children></SceneNode>
+  <Timelines Format="HD1080i50">
+    <Timeline Name="In" Id="t1" IsLoop="False" MaxFrames="800" DefaultMarker="0" PreviewMarker="799">
+      <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="n1">
+        <KeyFrame FrameNumber="0" Value="0" LeftType="Linear" RightType="Linear"/>
+        <KeyFrame FrameNumber="799" Value="1" LeftType="Linear" RightType="Linear"/>
+      </KeyFrameAnimationController>
+    </Timeline>
+    <Timeline Name="Out" Id="t2" IsLoop="False" MaxFrames="200" DefaultMarker="-1" PreviewMarker="-1">
+      <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="n1">
+        <KeyFrame FrameNumber="0" Value="1" LeftType="Linear" RightType="Linear"/>
+        <KeyFrame FrameNumber="199" Value="0" LeftType="Linear" RightType="Linear"/>
+      </KeyFrameAnimationController>
+    </Timeline>
+  </Timelines>
+</SceneLayer></Scene>`;
+
+  it("parses PreviewMarker into clip.previewFrame", () => {
+    const result = parseW3D(xml);
+    const inClip = result.blueprint.animation.clips.find((c) => c.name === "In");
+    expect(inClip?.previewFrame).toBe(799);
+  });
+
+  it("ignores negative PreviewMarker values (W3D 'no preview chosen' sentinel)", () => {
+    const result = parseW3D(xml);
+    const outClip = result.blueprint.animation.clips.find((c) => c.name === "Out");
+    expect(outClip?.previewFrame).toBeUndefined();
+  });
+
+  it("clamps PreviewMarker to MaxFrames when XML has an out-of-range value", () => {
+    const overshoot = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="False"><SceneLayer>
+  <SceneNode><Children><Quad Id="n1" Name="N"/></Children></SceneNode>
+  <Timelines Format="HD1080i50">
+    <Timeline Name="In" Id="t1" IsLoop="False" MaxFrames="100" PreviewMarker="999">
+      <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="n1">
+        <KeyFrame FrameNumber="0" Value="0" LeftType="Linear" RightType="Linear"/>
+      </KeyFrameAnimationController>
+    </Timeline>
+  </Timelines>
+</SceneLayer></Scene>`;
+    const result = parseW3D(overshoot);
+    const inClip = result.blueprint.animation.clips.find((c) => c.name === "In");
+    expect(inClip?.previewFrame).toBe(100);
+  });
 });
 
 describe("parseW3D engine + sceneMode wiring", () => {

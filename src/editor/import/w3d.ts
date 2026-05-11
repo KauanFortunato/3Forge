@@ -114,6 +114,51 @@ export interface W3DShadowData {
    * "project materials library" feature can consume the list.
    */
   unresolvedMaterialIds?: string[];
+  /**
+   * Texture-resolution diagnostics surfaced by __r3Dump for debugging
+   * "image is in Media but doesn't render" reports. Mirrors the maps the
+   * parser uses internally so a user can paste back the dump and we can
+   * see the exact resolution chain without re-parsing the XML.
+   */
+  textureDiagnostics?: {
+    /** Resource Id (lower-cased GUID) → Filename from `<Texture>` / `<ImageSequence>`. */
+    textureResources: Record<string, string>;
+    /** TextureLayer Id (lower) → { originalRef as written in XML, resolved file basename }. */
+    textureLayers: Array<{ id: string; originalRef: string | null; resolvedFilename: string | null }>;
+    /** Original XML references whose file did not resolve to an asset. */
+    missingTextureRefs: string[];
+  };
+  /** 3Forge nodeId → TextureLayer Id (lower) the node draws with, when known. */
+  textureLayerByNodeId?: Record<string, string>;
+  /**
+   * Preview-state flatten summary surfaced via __r3Dump. Tells the operator
+   * which "In" PreviewMarker was applied and how many controllers/exports
+   * actually fired during the pre-pass.
+   */
+  previewFlatten?: {
+    clipName: string | null;
+    frame: number;
+    appliedControllers: number;
+    appliedExportProperties: number;
+    unsupportedProperties: string[];
+    changedNodeCount: number;
+  };
+  /**
+   * W3D FlowChildren layouts surfaced via __r3Dump. Each entry summarises
+   * one `<GeometryOptions FlowChildren="True">` parent group with the
+   * spacing rule and per-child offsets applied during flatten.
+   */
+  flowLayouts?: Array<{
+    parentXmlId: string;
+    parentName: string;
+    leadingSpace: number;
+    childOrder: string[];
+    childWidths: number[];
+    computedOffsets: number[];
+    approximationWarnings: string[];
+  }>;
+  /** 3Forge nodeId → flow layout info for that node (parent + index + offset). */
+  flowByNodeId?: Record<string, { parentName: string; index: number; offset: number }>;
 }
 
 interface ParseContext {
@@ -126,6 +171,17 @@ interface ParseContext {
   shadow: W3DShadowData;
   /** TextureLayerId (lowercase) → texture filename, or null when unmapped. */
   textureLayerToFilename: Map<string, string>;
+  /**
+   * TextureLayerId (lower) → the original `TextureMappingOption.Texture`
+   * value as it appears in the XML (a resource GUID, a bare filename, or
+   * a `ProjectResource\…` path). Kept for diagnostics so missing-resource
+   * warnings can show the user the path the XML used.
+   */
+  textureLayerOriginalRef: Map<string, string>;
+  /** Resource Id (lower) → filename, from `<Texture>` and `<ImageSequence>`. */
+  textureResources: Map<string, string>;
+  /** Original XML reference (path or GUID) → resolved basename, for entries we couldn't find on disk. */
+  missingTextureRefs: Map<string, string>;
   /**
    * TextureLayerId (lowercase) → ordered list of 3Forge node ids that draw
    * with that layer. R3 routes animated `TextureMappingOption.*` properties
@@ -190,6 +246,18 @@ export interface W3DParseOptions {
    * caller has overridden the user's preferred orientation.
    */
   sceneModeOverride?: SceneMode;
+  /**
+   * Pre-flatten the W3D preview state into the DOM before walking nodes.
+   * Default: enabled. Tests that assert raw-XML behaviour can pass `false`
+   * to skip the mutation step. See `applyW3DPreviewFlatten` for details.
+   *
+   * Alias: `freezeAtPreviewMarker`. They are the same boolean — naming
+   * mirrors the user-facing "freeze imported scene at the W3D preview frame"
+   * intent. If both are passed and disagree, `flattenPreviewState` wins.
+   */
+  flattenPreviewState?: boolean;
+  /** Alias for `flattenPreviewState`, see above. */
+  freezeAtPreviewMarker?: boolean;
 }
 
 /**
@@ -248,6 +316,27 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     throw new Error("W3D file is missing the root <Scene> element.");
   }
 
+  // Pre-flatten W3D preview state into the DOM so the walkers below see the
+  // visual rest state instead of the raw "animation-start" attribute values.
+  // Two layers:
+  //   1. <ExportProperty UpdateMode="Instantly" Enable="True"> — the
+  //      authored runtime overrides (player names, logo textures, etc).
+  //   2. Last keyframe at-or-before <Timeline PreviewMarker="N"> of the
+  //      "In" timeline — the rest state after the intro plays out.
+  // Layer (2) wins when both touch the same property (animation supersedes
+  // a static override). The mutation only fires when the scene actually
+  // carries an "In" timeline with a non-negative PreviewMarker; otherwise
+  // it's a near no-op (just ExportProperty), so scenes without an authored
+  // preview marker keep their raw-XML behaviour unchanged.
+  // `freezeAtPreviewMarker` is the user-facing name for the same boolean:
+  // "import the scene as it looks at the W3D preview frame, with no
+  // autoplay afterwards." Treat either flag set to false as opt-out.
+  const flattenDisabled =
+    options.flattenPreviewState === false || options.freezeAtPreviewMarker === false;
+  const flattenStats = flattenDisabled
+    ? null
+    : applyW3DPreviewFlatten(doc, sceneEl);
+
   const componentName = options.sceneName ?? sceneEl.getAttribute("Name") ?? "Imported Scene";
 
   const root = createNode("group", null, ROOT_NODE_ID);
@@ -276,6 +365,9 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
       flippedYZ: flipYZ,
     },
     textureLayerToFilename: new Map(),
+    textureLayerOriginalRef: new Map(),
+    textureResources: new Map(),
+    missingTextureRefs: new Map(),
     textureLayerToNodeIds: new Map(),
     textures: normalizeFilenameMap(options.textures),
     videos: normalizeFilenameSet(options.videos),
@@ -310,7 +402,10 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
   const resourcesEl = sceneEl.getElementsByTagName("Resources")[0];
   if (resourcesEl) {
     collectBaseMaterials(resourcesEl, ctx);
-    ctx.textureLayerToFilename = collectTextureLayerMap(resourcesEl);
+    const tables = collectTextureLayerMap(resourcesEl);
+    ctx.textureLayerToFilename = tables.layerToFilename;
+    ctx.textureLayerOriginalRef = tables.layerOriginalRef;
+    ctx.textureResources = tables.textureById;
   }
 
   const sceneNodes = childElementsByTag(sceneLayer, "SceneNode");
@@ -376,6 +471,84 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     );
   }
 
+  // Persist the texture-resolution tables onto the W3D shadow so __r3Dump
+  // can surface them for "image is in Media but doesn't render" diagnostics
+  // without having to re-parse the XML. Keep this in sync with the
+  // W3DShadowData.textureDiagnostics type.
+  if (ctx.textureResources.size > 0 || ctx.textureLayerToFilename.size > 0) {
+    const textureLayers: Array<{ id: string; originalRef: string | null; resolvedFilename: string | null }> = [];
+    const seenLayers = new Set<string>();
+    for (const [id, filename] of ctx.textureLayerToFilename) {
+      seenLayers.add(id);
+      textureLayers.push({
+        id,
+        originalRef: ctx.textureLayerOriginalRef.get(id) ?? null,
+        resolvedFilename: filename,
+      });
+    }
+    // Also include layers we collected an originalRef for but never resolved
+    // — these are the smoking gun when the XML points at a GUID that has no
+    // matching <Texture Id="…"> declaration.
+    for (const [id, ref] of ctx.textureLayerOriginalRef) {
+      if (seenLayers.has(id)) continue;
+      textureLayers.push({ id, originalRef: ref, resolvedFilename: null });
+    }
+    ctx.shadow.textureDiagnostics = {
+      textureResources: Object.fromEntries(ctx.textureResources),
+      textureLayers,
+      missingTextureRefs: Array.from(new Set(ctx.missingTextureRefs.values())),
+    };
+  }
+  // Per-node TextureLayer Id so __r3Dump can answer "which layer drove this
+  // mesh's binding". The map already lives in ctx.textureLayerToNodeIds —
+  // reverse it to nodeId → layerId.
+  if (ctx.textureLayerToNodeIds.size > 0) {
+    const byNode: Record<string, string> = {};
+    for (const [layerId, nodeIds] of ctx.textureLayerToNodeIds) {
+      for (const nid of nodeIds) byNode[nid] = layerId;
+    }
+    ctx.shadow.textureLayerByNodeId = byNode;
+  }
+
+  // Preview-state flatten summary — surfaced via __r3Dump so the operator
+  // can see exactly which timeline frame was applied + how many overrides
+  // fired. Also flag unsupported AnimatedProperty values so we know what
+  // the next iteration of this pre-pass needs to learn.
+  if (flattenStats) {
+    ctx.shadow.previewFlatten = {
+      clipName: flattenStats.previewClipName,
+      frame: flattenStats.previewFrame,
+      appliedControllers: flattenStats.appliedControllers,
+      appliedExportProperties: flattenStats.appliedExportProperties,
+      unsupportedProperties: flattenStats.unsupportedProperties,
+      changedNodeCount: flattenStats.changedNodes.length,
+    };
+    if (flattenStats.flowLayouts.length > 0) {
+      ctx.shadow.flowLayouts = flattenStats.flowLayouts;
+      // Cross-reference XML-id keyed flow info onto the 3Forge node ids
+      // already mapped via ctx.shadow.nodeIds (3ForgeId → xmlId).
+      const byNode: Record<string, { parentName: string; index: number; offset: number }> = {};
+      for (const [forgeId, xmlId] of Object.entries(ctx.shadow.nodeIds)) {
+        const info = flattenStats.flowByXmlId[xmlId];
+        if (info) {
+          byNode[forgeId] = {
+            parentName: info.parentName,
+            index: info.index,
+            offset: info.offset,
+          };
+        }
+      }
+      ctx.shadow.flowByNodeId = byNode;
+    }
+    // eslint-disable-next-line no-console
+    console.info(
+      `[w3d flatten] clip=${flattenStats.previewClipName ?? "(none)"} frame=${flattenStats.previewFrame} ` +
+      `controllers=${flattenStats.appliedControllers} exports=${flattenStats.appliedExportProperties} ` +
+      `changedNodes=${flattenStats.changedNodes.length} unsupported=${flattenStats.unsupportedProperties.join(",") || "none"} ` +
+      `flowLayouts=${flattenStats.flowLayouts.length}`,
+    );
+  }
+
   // Resolve mask references now that all nodes are walked (mask quads can be
   // declared after the nodes referencing them). Multi-mask is intersected
   // by the renderer; we just feed it the resolved id list here.
@@ -403,10 +576,32 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
         `Scene references ${ctx.missingTextures.size} texture${ctx.missingTextures.size === 1 ? "" : "s"} — re-import via "Import W3D Scene (folder)" to load them.`,
       );
     } else {
-      const sample = Array.from(ctx.missingTextures).slice(0, 5).join(", ");
-      ctx.warnings.push(
-        `Missing ${ctx.missingTextures.size} texture${ctx.missingTextures.size === 1 ? "" : "s"} in selected folder: ${sample}${ctx.missingTextures.size > 5 ? ", …" : ""}`,
-      );
+      // One warning per unique missing basename. We surface the basename so
+      // tests / users searching for "Foo.png" find a hit, AND the original
+      // ref in parentheses when it adds information (a `ProjectResource\…`
+      // path or a resource GUID that didn't match a file on disk).
+      const seenBasenames = new Set<string>();
+      if (ctx.missingTextureRefs.size > 0) {
+        for (const [basename, originalRef] of ctx.missingTextureRefs) {
+          if (seenBasenames.has(basename)) continue;
+          seenBasenames.add(basename);
+          const cleanRef = originalRef.replace(/\\/g, "/");
+          const refBase = cleanRef.split("/").pop() ?? cleanRef;
+          if (refBase.toLowerCase() === basename) {
+            // originalRef is just the filename (or a path ending in it) —
+            // show it once.
+            ctx.warnings.push(`Missing texture resource: ${originalRef}`);
+          } else {
+            // originalRef is a resource GUID; show both so the operator can
+            // map "this Id" to "this missing file".
+            ctx.warnings.push(`Missing texture resource: ${basename} (referenced by id "${originalRef}")`);
+          }
+        }
+      } else {
+        for (const basename of ctx.missingTextures) {
+          ctx.warnings.push(`Missing texture resource: ${basename}`);
+        }
+      }
     }
   }
 
@@ -440,6 +635,18 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
               (n) => n.type === "image" && (n.image?.name ?? "").toLowerCase() === lower,
             );
             const decision = decideSequenceLogStatus(node, referencedFilenames.has(lower));
+            // Surface "unreferenced" and "missing" to the user — the caller
+            // adds these to the import warnings list so the asset's status
+            // is visible after the modal closes (toast + console).
+            if (decision === "unreferenced") {
+              ctx.warnings.push(
+                `Converted sequence "${mov}" was imported into Media but no W3D visual node referenced it.`,
+              );
+            } else if (decision === "missing") {
+              ctx.warnings.push(
+                `Sequence "${mov}" was referenced by a TextureLayer but no image node bound to it.`,
+              );
+            }
             return `  ${mov} → ${decision}`;
           })
           .join("\n"),
@@ -474,10 +681,16 @@ export function collectTextureMap(xmlText: string): Map<string, string> {
   if (!resourcesEl) {
     return new Map();
   }
-  return collectTextureLayerMap(resourcesEl);
+  return collectTextureLayerMap(resourcesEl).layerToFilename;
 }
 
-function collectTextureLayerMap(resourcesEl: Element): Map<string, string> {
+interface TextureResolutionTables {
+  layerToFilename: Map<string, string>;
+  layerOriginalRef: Map<string, string>;
+  textureById: Map<string, string>;
+}
+
+function collectTextureLayerMap(resourcesEl: Element): TextureResolutionTables {
   // Combined resource id (lower) → filename. Both <Texture> (still images)
   // and <ImageSequence> (video clips, e.g. .mov) live here under the same
   // GUID space — TextureMappingOption.Texture references either kind by Id.
@@ -507,17 +720,20 @@ function collectTextureLayerMap(resourcesEl: Element): Map<string, string> {
   //    let the folder import resolve it if the user happens to have placed
   //    the file in Resources/Textures.
   const layerToFilename = new Map<string, string>();
+  const layerOriginalRef = new Map<string, string>();
   for (const layer of Array.from(resourcesEl.getElementsByTagName("TextureLayer"))) {
     const layerId = layer.getAttribute("Id");
     if (!layerId) continue;
     const mapping = childElementByTag(layer, "TextureMappingOption");
     const textureRef = mapping?.getAttribute("Texture");
     if (!textureRef) continue;
+    const lowerId = layerId.toLowerCase();
+    layerOriginalRef.set(lowerId, textureRef);
     const resolved = resolveTextureReference(textureRef, textureById);
     if (!resolved) continue;
-    layerToFilename.set(layerId.toLowerCase(), resolved);
+    layerToFilename.set(lowerId, resolved);
   }
-  return layerToFilename;
+  return { layerToFilename, layerOriginalRef, textureById };
 }
 
 function resolveTextureReference(reference: string, textureById: Map<string, string>): string | null {
@@ -834,6 +1050,21 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
       return imageNode;
     }
     ctx.missingTextures.add(filename);
+    // Capture the original XML reference (a `ProjectResource\…` path, a
+    // bare filename, or a GUID that didn't match any <Texture>) so the
+    // post-walk warning can quote the path the author wrote rather than
+    // the basename we resolved it to. Dedupe by lowercased basename, but
+    // keep the original-case basename as the key so warnings preserve the
+    // exact casing the operator typed.
+    const originalRef = ctx.textureLayerOriginalRef.get(layerId) ?? filename;
+    const lowerBasename = filename.toLowerCase();
+    let alreadyTracked = false;
+    for (const [existing] of ctx.missingTextureRefs) {
+      if (existing.toLowerCase() === lowerBasename) { alreadyTracked = true; break; }
+    }
+    if (!alreadyTracked) {
+      ctx.missingTextureRefs.set(filename, originalRef);
+    }
   }
 
   const node = createNode("plane", parentId);
@@ -1193,20 +1424,55 @@ function createTextNode(el: Element, parentId: string, ctx: ParseContext): Edito
   if (node.type !== "text") return node;
   const geom = childElementByTag(el, "GeometryOptions");
   node.geometry.text = geom?.getAttribute("Text") ?? "";
-  // R3 sizes glyphs by the textbox height — <TextBoxSize Y="0.19"/> means
-  // ~0.19 world units tall, regardless of the editor's default. NodeTransform
-  // Scale is multiplied on top by Three at render time, so the final height
-  // is `size * scale.y`. When the textbox is absent (HasTextBox="False",
-  // free-flow text), we drop the default down from 0.3 → 0.1 so the typical
-  // Scale of 1.5–3× authored on free-flow text doesn't blow it up to fill
-  // the viewport.
+  // R3 `<TextBoxSize>` is the *box the laid-out text fits inside*, not the
+  // glyph cap-height. With `ConstrainMethod="Width"` the engine scales the
+  // text so its width matches `TextBoxSize.X` — the Y dimension is just a
+  // reserved vertical envelope that can be larger than the glyph height
+  // (e.g. `<TextBoxSize X="0.73" Y="2.73"/>` for the short string "COACH",
+  // where Y=2.73 reserves vertical space for an animation and the actual
+  // glyph height is ~0.7). Three.js TextGeometry's `size` is literally the
+  // glyph cap-height, so blindly copying Y produces text 3-4× too tall.
+  //
+  // Heuristic that fits every sample in the 26PT corpus + GameName_FS:
+  //   - If ConstrainMethod="Width" AND the box is portrait-oriented
+  //     (Y > X), use X as the glyph height proxy. Square-character fonts
+  //     give a slight under-estimate; broadcast titles tolerate it because
+  //     authored NodeTransform.Scale picks up the slack.
+  //   - Otherwise (landscape box, ConstrainMethod="Height", or absent),
+  //     keep the legacy Y-as-height mapping — that's how landscape labels
+  //     like "DETROIT IRONHAWKS" (6.39×0.23) already work correctly.
+  // When the textbox is absent (HasTextBox="False", free-flow text), drop
+  // the default down from 0.3 → 0.1 so the typical Scale of 1.5–3× on
+  // free-flow text doesn't blow it up to fill the viewport.
   const textBox = childElementByTag(geom, "TextBoxSize");
+  const textBoxX = parseNumberAttr(textBox, "X", NaN);
   const textBoxY = parseNumberAttr(textBox, "Y", NaN);
+  const constrainMethod = geom?.getAttribute("ConstrainMethod") ?? "";
   const hasTextBox = (geom?.getAttribute("HasTextBox") ?? "False") === "True";
   if (Number.isFinite(textBoxY) && textBoxY > 0) {
-    node.geometry.size = textBoxY;
+    const widthConstrained = constrainMethod === "Width";
+    if (
+      widthConstrained &&
+      Number.isFinite(textBoxX) &&
+      textBoxX > 0 &&
+      textBoxY > textBoxX
+    ) {
+      node.geometry.size = textBoxX;
+    } else {
+      node.geometry.size = textBoxY;
+    }
   } else {
     node.geometry.size = hasTextBox ? 0.2 : 0.1;
+  }
+  // Pass TextBoxSize through to the renderer so it can fit-to-box at
+  // mesh-build time using the actual font metrics — the parser-side size
+  // estimate is a glyph-cap-height starting point, not a width guarantee.
+  // Short strings like "COACH" still come out tall otherwise; long strings
+  // like "DETROIT IRONHAWKS" overflow horizontally otherwise.
+  if (hasTextBox) {
+    node.geometry.hasTextBox = true;
+    if (Number.isFinite(textBoxX) && textBoxX > 0) node.geometry.maxWidth = textBoxX;
+    if (Number.isFinite(textBoxY) && textBoxY > 0) node.geometry.maxHeight = textBoxY;
   }
   // R3's <TextureText> is a flat textured glyph plane; <GeometryText> is the
   // 3D-extruded variant authored with `Extrusion="..."`. We respect the
@@ -1493,6 +1759,20 @@ function parseTimeline(el: Element, ctx: ParseContext, formatFps: number): Anima
   if (timelineId) {
     ctx.shadow.clipIds[clip.id] = timelineId.toLowerCase();
   }
+  // <Timeline PreviewMarker="…"> is the frame R3 Designer renders as the
+  // thumbnail / static preview. For broadcast graphics this is almost always
+  // the last frame of an "In" intro — the rest state after the intro plays
+  // out. We surface it on the clip so the editor can seek there on import
+  // and match the thumbnail's appearance instead of showing frame 0 (often
+  // an offscreen / pre-reveal state). Negative markers ("-1") signal "no
+  // preview chosen" and are dropped.
+  const previewRaw = el.getAttribute("PreviewMarker");
+  if (previewRaw != null) {
+    const previewFrame = Math.round(Number(previewRaw));
+    if (Number.isFinite(previewFrame) && previewFrame >= 0) {
+      clip.previewFrame = Math.min(previewFrame, maxFrames);
+    }
+  }
 
   const controllers = childElementsByTag(el, "KeyFrameAnimationController");
   for (const controllerEl of controllers) {
@@ -1619,7 +1899,7 @@ const PRIMITIVE_TAGS_3D = new Set(["Mesh", "Box", "Cone", "Sphere", "Cylinder", 
 
 interface SceneModeDecision {
   mode: SceneMode;
-  source: "name-2d" | "name-3d" | "Is2DScene-attr" | "heuristic-3d" | "heuristic-2d" | "default" | "override";
+  source: "name-2d" | "name-3d" | "Is2DScene-attr" | "camera-projection" | "heuristic-3d" | "heuristic-2d" | "default" | "override";
   reason: string;
 }
 
@@ -1660,10 +1940,27 @@ export function detectSceneMode(sceneEl: Element, sceneName?: string): SceneMode
     }
   }
 
+  // Is2DScene="True" is an explicit author signal — trust it absolutely.
+  // The legacy engine wrote this for screen-space layouts; we respect it.
   const attr = sceneEl.getAttribute("Is2DScene");
   if (attr === "True") {
     return { mode: "2d", source: "Is2DScene-attr", reason: 'Is2DScene="True"' };
   }
+
+  // Modern W3D (post-26PT) writes Is2DScene="False" even for pure 2D
+  // broadcast graphics — the boolean is unreliable in the new engine, but
+  // <Camera Projection="..."> is authoritative. R3 exports the misspelled
+  // "Ortographic" verbatim (sic); accept both spellings. This check beats
+  // Is2DScene="False" so the camera projection wins when they disagree.
+  const cameraEl = sceneEl.getElementsByTagName("Camera")[0];
+  const proj = cameraEl?.getAttribute("Projection");
+  if (proj === "Ortographic" || proj === "Orthographic") {
+    return { mode: "2d", source: "camera-projection", reason: `Camera Projection="${proj}"` };
+  }
+  if (proj === "Perspective") {
+    return { mode: "3d", source: "camera-projection", reason: 'Camera Projection="Perspective"' };
+  }
+
   if (attr === "False") {
     return { mode: "3d", source: "Is2DScene-attr", reason: 'Is2DScene="False"' };
   }
@@ -1912,6 +2209,407 @@ function coerceExposedDefault(type: ExposedPropertyType, raw: string): string | 
     default:
       return raw;
   }
+}
+
+// ---------------------------------------------------------------------------
+// W3D preview-state flatten — pre-pass that bakes ExportProperty overrides
+// and the "In" timeline's PreviewMarker keyframe values into the DOM before
+// the main parser walks it. Lets the importer reproduce the visual state
+// the W3D author intended for the static thumbnail, instead of the
+// animation-start values written verbatim in the XML attributes.
+// ---------------------------------------------------------------------------
+
+export interface W3DFlattenStats {
+  /** Name of the timeline the flatten read from (e.g. "In"), or null. */
+  previewClipName: string | null;
+  /** PreviewMarker frame on that timeline, or -1 when none was applied. */
+  previewFrame: number;
+  /** KeyFrameAnimationController instances whose value was applied. */
+  appliedControllers: number;
+  /** ExportProperty entries whose value was applied. */
+  appliedExportProperties: number;
+  /** AnimatedProperty names we don't know how to apply (logged once each). */
+  unsupportedProperties: string[];
+  /** Per-element summary of what was mutated. */
+  changedNodes: Array<{ id: string; properties: string[] }>;
+  /**
+   * W3D FlowChildren layouts detected + applied during the flatten pre-pass.
+   * Each entry summarises one `<GeometryOptions FlowChildren="True">` group,
+   * with the spacing rule used and the per-child offsets written back into
+   * the DOM. Surfaced via __r3Dump for "why are these cards stacked / spread
+   * weirdly" debugging.
+   */
+  flowLayouts: Array<{
+    parentXmlId: string;
+    parentName: string;
+    leadingSpace: number;
+    childOrder: string[];
+    childWidths: number[];
+    computedOffsets: number[];
+    approximationWarnings: string[];
+  }>;
+  /** Per-child-XML-id flow info (cross-referenced to 3Forge nodeIds later). */
+  flowByXmlId: Record<string, { parentXmlId: string; parentName: string; index: number; offset: number }>;
+}
+
+/**
+ * Pre-flatten the W3D preview state into the parsed DOM in-place.
+ *
+ * The walkers downstream consume plain XML attribute values; pre-flattening
+ * means none of them needs to know about ExportProperty or PreviewMarker.
+ * Returns a stats object so __r3Dump (and diagnostic warnings) can show
+ * the operator which controllers/exports actually fired.
+ */
+function applyW3DPreviewFlatten(doc: Document, sceneEl: Element): W3DFlattenStats {
+  const stats: W3DFlattenStats = {
+    previewClipName: null,
+    previewFrame: -1,
+    appliedControllers: 0,
+    appliedExportProperties: 0,
+    unsupportedProperties: [],
+    changedNodes: [],
+    flowLayouts: [],
+    flowByXmlId: {},
+  };
+
+  // Index every element with an Id attribute. ControllableIds in animations
+  // and ExportProperties are lower-case GUIDs; the resource/scene-tree Ids
+  // they target are sometimes mixed-case in the source XML — we lower-case
+  // both sides at the lookup boundary.
+  const elemById = new Map<string, Element>();
+  for (const el of Array.from(doc.getElementsByTagName("*"))) {
+    const id = el.getAttribute("Id");
+    if (id) elemById.set(id.toLowerCase(), el);
+  }
+
+  // controllableId → property → flattened value (last write wins).
+  const flat = new Map<string, Map<string, string>>();
+  const setFlat = (cid: string, property: string, value: string) => {
+    let inner = flat.get(cid);
+    if (!inner) { inner = new Map(); flat.set(cid, inner); }
+    inner.set(property, value);
+  };
+
+  // (1) ExportProperty pass — runtime overrides authored by the operator.
+  // Skip disabled rows ("Enable=False") and non-instant updates: those
+  // imply runtime/scripted behaviour rather than a static published value.
+  for (const ep of Array.from(sceneEl.getElementsByTagName("ExportProperty"))) {
+    if (ep.getAttribute("Enable") === "False") continue;
+    if ((ep.getAttribute("UpdateMode") ?? "Instantly") !== "Instantly") continue;
+    const cid = (ep.getAttribute("ControllableId") ?? "").toLowerCase();
+    const property = ep.getAttribute("PropertyName") ?? "";
+    const value = ep.getAttribute("Value") ?? "";
+    if (!cid || !property) continue;
+    setFlat(cid, property, value);
+  }
+
+  // (2) Timeline "In" PreviewMarker pass — last keyframe at-or-before the
+  // marker wins. Overrides any ExportProperty value for the same property
+  // because an animation is more specific than a static published value.
+  const inTimeline = Array.from(sceneEl.getElementsByTagName("Timeline")).find((t) => {
+    if (t.getAttribute("Name") !== "In") return false;
+    const pm = Number(t.getAttribute("PreviewMarker") ?? "-1");
+    return Number.isFinite(pm) && pm >= 0;
+  }) ?? null;
+  if (inTimeline) {
+    stats.previewClipName = "In";
+    stats.previewFrame = Math.max(0, Math.round(Number(inTimeline.getAttribute("PreviewMarker") ?? "-1")));
+    for (const ctrl of Array.from(inTimeline.getElementsByTagName("KeyFrameAnimationController"))) {
+      const property = ctrl.getAttribute("AnimatedProperty") ?? "";
+      const cid = (ctrl.getAttribute("ControllableId") ?? "").toLowerCase();
+      if (!cid || !property) continue;
+      const keyframes = Array.from(ctrl.getElementsByTagName("KeyFrame"))
+        .map((kf) => ({
+          frame: Number(kf.getAttribute("FrameNumber") ?? "0"),
+          value: kf.getAttribute("Value") ?? "",
+        }))
+        .filter((k) => Number.isFinite(k.frame))
+        .sort((a, b) => a.frame - b.frame);
+      let pick: { frame: number; value: string } | null = null;
+      for (const kf of keyframes) {
+        if (kf.frame <= stats.previewFrame) pick = kf;
+        else break;
+      }
+      if (pick) setFlat(cid, property, pick.value);
+    }
+  }
+
+  // (3) Apply flat state to the DOM. Per-element write tracking lets us
+  // report changedNodes; per-property dispatch keeps the application
+  // logic in one switch.
+  const unsupportedSeen = new Set<string>();
+  for (const [cid, props] of flat) {
+    const el = elemById.get(cid);
+    if (!el) continue;
+    const applied: string[] = [];
+    for (const [property, value] of props) {
+      const ok = writeFlattenedAttribute(el, property, value);
+      if (ok) {
+        applied.push(property);
+        if (inTimeline && Array.from(inTimeline.getElementsByTagName("KeyFrameAnimationController"))
+          .some((c) => (c.getAttribute("ControllableId") ?? "").toLowerCase() === cid
+            && c.getAttribute("AnimatedProperty") === property)) {
+          stats.appliedControllers += 1;
+        } else {
+          stats.appliedExportProperties += 1;
+        }
+      } else if (!unsupportedSeen.has(property)) {
+        unsupportedSeen.add(property);
+        stats.unsupportedProperties.push(property);
+      }
+    }
+    if (applied.length > 0) {
+      stats.changedNodes.push({ id: cid, properties: applied });
+    }
+  }
+
+  // (4) FlowChildren layout — applies AFTER the per-property writes so the
+  // child width detection sees post-flatten Quad sizes (some templates
+  // animate Size.XProp on the cards themselves and the final-frame width
+  // is what we want to flow against).
+  applyW3DFlowLayouts(sceneEl, stats);
+
+  return stats;
+}
+
+/**
+ * W3D layout step: arrange children of any `<Group>` whose
+ * `<GeometryOptions FlowChildren="True">` is set so they sit side-by-side
+ * along X instead of overlapping. Reads `LeadingSpace` for the gap and
+ * approximates each child's width from the max `<Size X="...">` in its
+ * descendant subtree (already flattened by the preceding pre-pass).
+ *
+ * The offset is *additive* — writes `Position.X += offset` so any explicit
+ * Position the author set on the child (e.g. a per-card tweak) is preserved.
+ *
+ * Order: XML document order. SceneNodeIndex-based reordering is not yet
+ * applied — when a corpus shows up that actually uses SceneNodeIndex for
+ * flow order, extend here.
+ */
+function applyW3DFlowLayouts(sceneEl: Element, stats: W3DFlattenStats): void {
+  const allGroups = Array.from(sceneEl.getElementsByTagName("Group"));
+  for (const group of allGroups) {
+    const geom = childElementByTag(group, "GeometryOptions");
+    if (!geom) continue;
+    if (geom.getAttribute("FlowChildren") !== "True") continue;
+    const leadingSpace = parseNumberAttr(geom, "LeadingSpace", 0);
+    const childrenEl = childElementByTag(group, "Children");
+    if (!childrenEl) continue;
+
+    const directChildren: Element[] = [];
+    for (let i = 0; i < childrenEl.childNodes.length; i += 1) {
+      const node = childrenEl.childNodes.item(i);
+      if (node && node.nodeType === 1) directChildren.push(node as Element);
+    }
+    if (directChildren.length < 2) continue;
+
+    const warnings: string[] = [];
+    const widths = directChildren.map((c) => computeFlowChildWidth(c, warnings));
+    const offsets: number[] = [];
+    let cum = 0;
+    for (let i = 0; i < directChildren.length; i += 1) {
+      offsets.push(cum);
+      cum += widths[i] + leadingSpace;
+    }
+    directChildren.forEach((child, i) => {
+      addToTransformVectorAttr(child, "Position", "X", offsets[i]);
+    });
+
+    const parentXmlId = (group.getAttribute("Id") ?? "").toLowerCase();
+    const parentName = group.getAttribute("Name") ?? "";
+    stats.flowLayouts.push({
+      parentXmlId,
+      parentName,
+      leadingSpace,
+      childOrder: directChildren.map((c) => c.getAttribute("Name") ?? "(unnamed)"),
+      childWidths: widths.map((w) => +w.toFixed(4)),
+      computedOffsets: offsets.map((o) => +o.toFixed(4)),
+      approximationWarnings: warnings,
+    });
+    directChildren.forEach((child, i) => {
+      const childXmlId = (child.getAttribute("Id") ?? "").toLowerCase();
+      if (!childXmlId) return;
+      stats.flowByXmlId[childXmlId] = {
+        parentXmlId,
+        parentName,
+        index: i,
+        offset: +offsets[i].toFixed(4),
+      };
+    });
+  }
+}
+
+/**
+ * Approximate a child's width for FlowChildren spacing: max
+ * `<Size X="...">` in the descendant subtree. The dominant card width for
+ * a player lineup is the Photo Quad's Size.X; this picks it up cleanly.
+ * Returns a default of 1 when no positive Size.X exists in the subtree
+ * (records the approximation so the caller can surface a diagnostic).
+ */
+function computeFlowChildWidth(el: Element, warnings: string[]): number {
+  let max = 0;
+  for (const s of Array.from(el.getElementsByTagName("Size"))) {
+    const x = Number(s.getAttribute("X") ?? "0");
+    if (Number.isFinite(x) && x > max) max = x;
+  }
+  if (max > 0) return max;
+  warnings.push(`${el.getAttribute("Name") ?? "(unnamed)"}: no descendant <Size X> > 0; fell back to width=1`);
+  return 1;
+}
+
+function addToTransformVectorAttr(el: Element, kind: "Position" | "Scale", axis: "X" | "Y" | "Z", delta: number): void {
+  if (delta === 0) return;
+  let nt = childElementByTag(el, "NodeTransform");
+  if (!nt) {
+    nt = el.ownerDocument!.createElement("NodeTransform");
+    el.insertBefore(nt, el.firstChild);
+  }
+  let inner = childElementByTag(nt, kind);
+  if (!inner) {
+    inner = el.ownerDocument!.createElement(kind);
+    nt.appendChild(inner);
+  }
+  const current = Number(inner.getAttribute(axis) ?? "0");
+  const next = (Number.isFinite(current) ? current : 0) + delta;
+  inner.setAttribute(axis, String(next));
+}
+
+/**
+ * Apply one flattened property to a single XML element. Returns true when
+ * the property is recognised and the attribute was written. Returns false
+ * for unsupported properties so the caller can aggregate diagnostics.
+ *
+ * Property → attribute map:
+ *   Transform.Position[.X|Y|ZProp] → NodeTransform/Position/@X|Y|Z
+ *   Transform.Scale[.X|Y|ZProp]    → NodeTransform/Scale/@X|Y|Z
+ *   Transform.Scale (uniform)      → NodeTransform/Scale/@X,Y,Z all set
+ *   Size.X|YProp                   → GeometryOptions/Size/@X|Y
+ *   Alpha                          → @Alpha on the target element
+ *   Enabled                        → @Enable ("True"/"False")
+ *   Text                           → GeometryOptions/@Text
+ *   TextureMappingOption.Texture   → TextureMappingOption/@Texture
+ *   Emissive.RGB                   → @Emissive (hex, no #)
+ *   SceneNodeIndex                 → @SceneNodeIndex (numeric stash for ordering)
+ */
+function writeFlattenedAttribute(el: Element, property: string, value: string): boolean {
+  switch (property) {
+    case "Transform.Position.XProp": return setTransformVectorAttr(el, "Position", "X", value);
+    case "Transform.Position.YProp": return setTransformVectorAttr(el, "Position", "Y", value);
+    case "Transform.Position.ZProp": return setTransformVectorAttr(el, "Position", "Z", value);
+    case "Transform.Position": {
+      // Uniform Position controllers carry "x,y,z" exactly like uniform
+      // Scale. Split before writing per-axis.
+      const [px, py, pz] = parseUniformVector(value);
+      const ok1 = setTransformVectorAttr(el, "Position", "X", px);
+      const ok2 = setTransformVectorAttr(el, "Position", "Y", py);
+      const ok3 = setTransformVectorAttr(el, "Position", "Z", pz);
+      return ok1 || ok2 || ok3;
+    }
+    case "Transform.Scale.XProp": return setTransformVectorAttr(el, "Scale", "X", value);
+    case "Transform.Scale.YProp": return setTransformVectorAttr(el, "Scale", "Y", value);
+    case "Transform.Scale.ZProp": return setTransformVectorAttr(el, "Scale", "Z", value);
+    case "Transform.Scale": {
+      // Uniform Scale controllers carry the value as a comma-separated
+      // triple ("1,1,1" / "0.75,0.75,1" / "0,0,1"), NOT a single number.
+      // Real LINEUP_LEFT: NAME_01 Transform.Scale at frame 255 = "0.75,0.75,0.75".
+      // Splitting and writing per-axis matches what `<Scale X="..." Y="..." Z="...">`
+      // expects downstream.
+      const [sx, sy, sz] = parseUniformVector(value);
+      const ok1 = setTransformVectorAttr(el, "Scale", "X", sx);
+      const ok2 = setTransformVectorAttr(el, "Scale", "Y", sy);
+      const ok3 = setTransformVectorAttr(el, "Scale", "Z", sz);
+      return ok1 || ok2 || ok3;
+    }
+    case "Size.XProp": return setGeometryOptionsSize(el, "X", value);
+    case "Size.YProp": return setGeometryOptionsSize(el, "Y", value);
+    case "Alpha":
+      el.setAttribute("Alpha", value);
+      return true;
+    case "Enabled":
+      el.setAttribute("Enable", boolish(value) ? "True" : "False");
+      return true;
+    case "Text":
+      return setGeometryOptionsAttr(el, "Text", value);
+    case "TextureMappingOption.Texture":
+      return setTextureMappingTexture(el, value);
+    case "Emissive.RGB":
+      // R3 hex is stored without the leading #; accept both forms here.
+      el.setAttribute("Emissive", value.startsWith("#") ? value.slice(1) : value);
+      return true;
+    case "SceneNodeIndex":
+      // Stashed for downstream draw-order handling. Not consumed by the
+      // current walker; surfaced via __r3Dump for diagnostics.
+      el.setAttribute("SceneNodeIndex", value);
+      return true;
+    default:
+      return false;
+  }
+}
+
+function setTransformVectorAttr(el: Element, kind: "Position" | "Scale", axis: "X" | "Y" | "Z", value: string): boolean {
+  let nt = childElementByTag(el, "NodeTransform");
+  if (!nt) {
+    nt = el.ownerDocument!.createElement("NodeTransform");
+    el.insertBefore(nt, el.firstChild);
+  }
+  let inner = childElementByTag(nt, kind);
+  if (!inner) {
+    inner = el.ownerDocument!.createElement(kind);
+    nt.appendChild(inner);
+  }
+  inner.setAttribute(axis, value);
+  return true;
+}
+
+function setGeometryOptionsSize(el: Element, axis: "X" | "Y", value: string): boolean {
+  let go = childElementByTag(el, "GeometryOptions");
+  if (!go) {
+    go = el.ownerDocument!.createElement("GeometryOptions");
+    el.insertBefore(go, el.firstChild);
+  }
+  let size = childElementByTag(go, "Size");
+  if (!size) {
+    size = el.ownerDocument!.createElement("Size");
+    go.appendChild(size);
+  }
+  size.setAttribute(axis, value);
+  return true;
+}
+
+function setGeometryOptionsAttr(el: Element, attr: string, value: string): boolean {
+  const go = childElementByTag(el, "GeometryOptions");
+  if (!go) return false;
+  go.setAttribute(attr, value);
+  return true;
+}
+
+function setTextureMappingTexture(el: Element, value: string): boolean {
+  let mapping = childElementByTag(el, "TextureMappingOption");
+  if (!mapping) {
+    mapping = el.ownerDocument!.createElement("TextureMappingOption");
+    el.appendChild(mapping);
+  }
+  mapping.setAttribute("Texture", value);
+  return true;
+}
+
+function boolish(value: string): boolean {
+  if (value === "True") return true;
+  if (value === "False") return false;
+  const n = Number(value);
+  return Number.isFinite(n) ? n >= 0.5 : false;
+}
+
+/**
+ * Parse a "x,y,z" triple (uniform Transform.Position / Transform.Scale
+ * keyframe value) into three string components. Single values get
+ * broadcast to all three axes. Whitespace tolerated.
+ */
+function parseUniformVector(value: string): [string, string, string] {
+  const parts = value.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length >= 3) return [parts[0], parts[1], parts[2]];
+  if (parts.length === 1) return [parts[0], parts[0], parts[0]];
+  return [value, value, value];
 }
 
 // ---------------------------------------------------------------------------

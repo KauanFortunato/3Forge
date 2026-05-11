@@ -208,6 +208,13 @@ export interface AnimationClip {
   fps: number;
   durationFrames: number;
   tracks: AnimationTrack[];
+  /**
+   * Frame the W3D author wanted shown as the static thumbnail/rest state
+   * (`<Timeline PreviewMarker="…">`). For broadcast graphics this is
+   * typically the last frame of the "In" timeline — the moment after the
+   * intro animation settles. -1 / undefined when the author didn't pick one.
+   */
+  previewFrame?: number;
 }
 
 export interface ComponentAnimation {
@@ -314,6 +321,21 @@ export interface TextNode extends BaseEditorNode {
     bevelEnabled: boolean;
     bevelThickness: number;
     bevelSize: number;
+    /**
+     * W3D `<TextBoxSize X>` — when set, the renderer scales the generated
+     * TextGeometry down so its bounding-box width stays ≤ maxWidth. Lets
+     * R3-authored short labels (player names, bench rows, COACH) stay
+     * inside the card they belong to instead of overflowing.
+     */
+    maxWidth?: number;
+    /** W3D `<TextBoxSize Y>` — same role as `maxWidth`, for height. */
+    maxHeight?: number;
+    /**
+     * True when the W3D source had `HasTextBox="True"`. We still write
+     * `maxWidth`/`maxHeight` separately so the renderer's contract is
+     * uniform: missing dims => no fit; this flag is for diagnostics.
+     */
+    hasTextBox?: boolean;
   };
   material: MaterialSpec;
   materialId?: string;

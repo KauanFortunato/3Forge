@@ -169,6 +169,39 @@ describe("W3D import", () => {
     expect(videoAssets.length).toBe(3);
   });
 
+  it("uses TextBoxSize.X (not Y) as glyph height when the box is portrait-oriented and ConstrainMethod=Width", () => {
+    // Real-world: LINEUP_LEFT has <TextureText Text="COACH"> with
+    // <TextBoxSize X="0.73" Y="2.73"/> and ConstrainMethod="Width". W3D
+    // engine fits the 5-char string inside the 0.73-wide box and the Y
+    // dimension is just reserved vertical space. Treating Y as the glyph
+    // cap-height rendered text 3.7× too tall, filling the viewport.
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<TextureText Id="t-coach" Name="COACH_FUNCTION">
+  <GeometryOptions ConstrainMethod="Width" HasTextBox="True" Text="COACH">
+    <TextBoxSize X="0.73" Y="2.73"/>
+  </GeometryOptions>
+</TextureText>
+<TextureText Id="t-team" Name="DETROIT_IRONHAWKS">
+  <GeometryOptions ConstrainMethod="Width" HasTextBox="True" Text="DETROIT IRONHAWKS">
+    <TextBoxSize X="6.39" Y="0.23"/>
+  </GeometryOptions>
+</TextureText>
+</Children></SceneNode></SceneLayer></Scene>`;
+    const result = parseW3D(xml);
+    const coach = result.blueprint.nodes.find((n) => n.name === "COACH_FUNCTION");
+    expect(coach?.type).toBe("text");
+    if (coach?.type === "text") {
+      // Portrait box → fall back to X as glyph height proxy.
+      expect(coach.geometry.size).toBeCloseTo(0.73, 3);
+    }
+    const team = result.blueprint.nodes.find((n) => n.name === "DETROIT_IRONHAWKS");
+    if (team?.type === "text") {
+      // Landscape box → keep the legacy Y-as-height mapping (no regression).
+      expect(team.geometry.size).toBeCloseTo(0.23, 3);
+    }
+  });
+
   it("converts animated TextureMappingOption.Offset/Scale into material.textureOptions tracks", () => {
     // GameName_FS animates TextureMappingOption.Offset.YProp on a TextureLayer
     // shared by HOME_1/HOME_2/HOME_3 (etc). Without TextureLayer-aware
@@ -434,6 +467,579 @@ describe("W3D import", () => {
       // The diagnostic must NOT call this "missing" — it would imply a
       // parse failure where there isn't one.
       expect(decideSequenceLogStatus(undefined, false)).toBe("unreferenced");
+    });
+  });
+
+  describe("texture-resolution diagnostics", () => {
+    // The user's "image is in Media but doesn't render in scene" reports
+    // need three things to debug: (1) which TextureLayers exist, (2) what
+    // each one resolved to, and (3) what's missing on disk with the
+    // original XML reference preserved. These tests lock in that contract.
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<Texture Id="tex-home" Filename="home_player.png"/>
+<TextureLayer Id="LY-HOME"><TextureMappingOption Texture="tex-home"/></TextureLayer>
+<TextureLayer Id="LY-MISS"><TextureMappingOption Texture="ProjectResource\\BASE_GRADIENT.png"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q-home" Name="HomePlayerPic">
+  <Primitive><FaceMappingList>
+    <NamedBaseFaceMapping TextureLayerId="LY-HOME"/>
+  </FaceMappingList></Primitive>
+</Quad>
+<Quad Id="q-miss" Name="MissingTexQuad">
+  <Primitive><FaceMappingList>
+    <NamedBaseFaceMapping TextureLayerId="LY-MISS"/>
+  </FaceMappingList></Primitive>
+</Quad>
+</Children></SceneNode></SceneLayer></Scene>`;
+
+    it("resolves a TextureLayer to its filename via the Texture resource Id", () => {
+      const homeAsset: ImageAsset = {
+        name: "home_player.png", mimeType: "image/png",
+        src: "blob:home", width: 256, height: 256,
+      };
+      const result = parseW3D(xml, {
+        sceneName: "Test",
+        textures: new Map([["home_player.png", homeAsset]]),
+      });
+      const homeNode = result.blueprint.nodes.find((n) => n.name === "HomePlayerPic");
+      expect(homeNode?.type).toBe("image");
+      if (homeNode?.type === "image") {
+        expect(homeNode.image.name).toBe("home_player.png");
+        expect(homeNode.image.mimeType).toBe("image/png");
+      }
+    });
+
+    it("emits a per-ref warning preserving the ProjectResource\\ path for missing textures", () => {
+      const homeAsset: ImageAsset = {
+        name: "home_player.png", mimeType: "image/png",
+        src: "blob:home", width: 256, height: 256,
+      };
+      const result = parseW3D(xml, {
+        sceneName: "Test",
+        textures: new Map([["home_player.png", homeAsset]]),
+      });
+      const missingWarn = result.warnings.filter((w) => w.startsWith("Missing texture resource:"));
+      expect(missingWarn.length).toBe(1);
+      expect(missingWarn[0]).toContain("ProjectResource\\BASE_GRADIENT.png");
+    });
+
+    it("persists textureDiagnostics into metadata.w3d for __r3Dump consumption", () => {
+      const homeAsset: ImageAsset = {
+        name: "home_player.png", mimeType: "image/png",
+        src: "blob:home", width: 256, height: 256,
+      };
+      const result = parseW3D(xml, {
+        sceneName: "Test",
+        textures: new Map([["home_player.png", homeAsset]]),
+      });
+      const md = result.blueprint.metadata as { w3d?: { textureDiagnostics?: {
+        textureResources: Record<string, string>;
+        textureLayers: Array<{ id: string; originalRef: string | null; resolvedFilename: string | null }>;
+        missingTextureRefs: string[];
+      } } } | undefined;
+      const diag = md?.w3d?.textureDiagnostics;
+      expect(diag).toBeDefined();
+      // <Texture Id="tex-home"> shows up in resources.
+      expect(diag?.textureResources["tex-home"]).toBe("home_player.png");
+      // Both layers are catalogued; one resolved, one didn't.
+      const homeLayer = diag?.textureLayers.find((l) => l.id === "ly-home");
+      expect(homeLayer?.resolvedFilename).toBe("home_player.png");
+      expect(homeLayer?.originalRef).toBe("tex-home");
+      const missLayer = diag?.textureLayers.find((l) => l.id === "ly-miss");
+      expect(missLayer?.originalRef).toBe("ProjectResource\\BASE_GRADIENT.png");
+      // missingTextureRefs surfaces the missing path so the dump shows it.
+      expect(diag?.missingTextureRefs).toContain("ProjectResource\\BASE_GRADIENT.png");
+    });
+  });
+
+  describe("W3D preview-state flatten pre-pass", () => {
+    // The W3D engine writes "animation-start" attribute values verbatim into
+    // the XML. R3 Designer compensates by evaluating Timeline "In" at the
+    // <Timeline PreviewMarker> frame before showing the rest state. 3Forge
+    // mirrors that by mutating the parsed DOM with the values at the
+    // preview frame, so the downstream walker sees the visual rest state
+    // directly. Tests below lock in:
+    //   - ExportProperty Text/Texture/Emissive/Enabled overrides
+    //   - Last keyframe ≤ PreviewMarker is the value applied
+    //   - Animation keyframes win over ExportProperty for the same property
+    //   - Disabled ExportProperty rows are ignored
+    //   - flattenPreviewState=false escapes the pre-pass (legacy behaviour)
+
+    it("ExportProperty PropertyName=Text overrides <GeometryOptions Text>", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<TextureText Id="t-team" Name="TeamLabel">
+  <GeometryOptions HasTextBox="True" Text="PLACEHOLDER">
+    <TextBoxSize X="6.39" Y="0.23"/>
+  </GeometryOptions>
+</TextureText>
+</Children></SceneNode>
+<ExportManagerProperties><ExportList Name="vTeam">
+  <ExportProperty Enable="True" PropertyName="Text" Type="String"
+    Value="DETROIT IRONHAWKS" ControllableId="t-team" UpdateMode="Instantly"/>
+</ExportList></ExportManagerProperties>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const node = result.blueprint.nodes.find((n) => n.name === "TeamLabel");
+      expect(node?.type).toBe("text");
+      if (node?.type === "text") {
+        expect(node.geometry.text).toBe("DETROIT IRONHAWKS");
+      }
+    });
+
+    it("ExportProperty PropertyName=TextureMappingOption.Texture rebinds the layer", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+  <Texture Id="tex-default" Filename="placeholder.png"/>
+  <Texture Id="tex-real" Filename="IronHawks.png"/>
+  <TextureLayer Id="lyr-logo">
+    <TextureMappingOption Texture="tex-default"/>
+  </TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q-logo" Name="Logo">
+  <GeometryOptions><Size X="1" Y="1"/></GeometryOptions>
+  <Primitive><FaceMappingList>
+    <NamedBaseFaceMapping TextureLayerId="lyr-logo"/>
+  </FaceMappingList></Primitive>
+</Quad>
+</Children></SceneNode>
+<ExportManagerProperties><ExportList Name="vLogo">
+  <ExportProperty Enable="True" PropertyName="TextureMappingOption.Texture"
+    Type="Texture" Value="tex-real" ControllableId="lyr-logo" UpdateMode="Instantly"/>
+</ExportList></ExportManagerProperties>
+</SceneLayer></Scene>`;
+      const real: ImageAsset = { name: "IronHawks.png", mimeType: "image/png", src: "blob:real", width: 64, height: 64 };
+      const placeholder: ImageAsset = { name: "placeholder.png", mimeType: "image/png", src: "blob:ph", width: 1, height: 1 };
+      const result = parseW3D(xml, {
+        textures: new Map([
+          ["IronHawks.png", real],
+          ["placeholder.png", placeholder],
+        ]),
+      });
+      const node = result.blueprint.nodes.find((n) => n.name === "Logo");
+      expect(node?.type).toBe("image");
+      if (node?.type === "image") {
+        expect(node.image.name).toBe("IronHawks.png");
+      }
+    });
+
+    it("picks the numeric-max FrameNumber ≤ PreviewMarker, regardless of XML document order", () => {
+      // Real LINEUP_LEFT case: NAME_01 Transform.Position.XProp has keyframes
+      // written in XML in this order: 220, 255, 175, 140. Picking the LAST
+      // one in XML order (140 → 0.35) is wrong — we want the numeric max ≤
+      // PreviewMarker, which is 255 → 0.37.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<Group Id="n1" Name="NameSlot"><NodeTransform><Position X="0"/></NodeTransform></Group>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1" MaxFrames="800" PreviewMarker="799">
+    <KeyFrameAnimationController AnimatedProperty="Transform.Position.XProp" ControllableId="n1">
+      <KeyFrame FrameNumber="220" Value="0.69" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="255" Value="0.37" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="175" Value="0.69" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="140" Value="0.35" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const node = result.blueprint.nodes.find((n) => n.name === "NameSlot");
+      // 255 is the numeric max ≤ 799 → value should be 0.37, not 0.35
+      // (which would be the case if we picked XML-last instead of numeric-max).
+      expect(node?.transform.position.x).toBeCloseTo(0.37, 3);
+    });
+
+    it("splits comma-separated 'x,y,z' triples for uniform Transform.Scale / Transform.Position", () => {
+      // Real LINEUP_LEFT case: NAME_01 Transform.Scale at frame 255 carries
+      // Value="0.75,0.75,0.75". Without per-axis splitting the parser ends
+      // up trying to read "0.75,0.75,0.75" as one number → NaN → fallback.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<Group Id="n1" Name="UniformScale"><NodeTransform><Scale X="1" Y="1" Z="1"/></NodeTransform></Group>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1" MaxFrames="800" PreviewMarker="799">
+    <KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="n1">
+      <KeyFrame FrameNumber="140" Value="0,0,1" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="255" Value="0.75,0.75,0.75" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const node = result.blueprint.nodes.find((n) => n.name === "UniformScale");
+      expect(node?.transform.scale.x).toBeCloseTo(0.75, 3);
+      expect(node?.transform.scale.y).toBeCloseTo(0.75, 3);
+      expect(node?.transform.scale.z).toBeCloseTo(0.75, 3);
+    });
+
+    it("picks the last keyframe at-or-before PreviewMarker, not the first", () => {
+      // Quad whose Position.XProp animates 0 → 5 over frames 0–200 (the
+      // value at PreviewMarker=180 should land between the 100 and 200
+      // keyframes — we take "at-or-before" so the 100 keyframe value wins).
+      // Using XProp avoids the 2D-mode Y/Z flip so the assertion stays
+      // a clean 3 rather than -3.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<Quad Id="q1" Name="Slider">
+  <NodeTransform><Position X="0" Y="0" Z="0"/></NodeTransform>
+</Quad>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1" IsLoop="False" MaxFrames="200" PreviewMarker="180">
+    <KeyFrameAnimationController AnimatedProperty="Transform.Position.XProp" ControllableId="q1">
+      <KeyFrame FrameNumber="0" Value="0" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="100" Value="3" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="200" Value="5" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const node = result.blueprint.nodes.find((n) => n.name === "Slider");
+      expect(node?.transform.position.x).toBeCloseTo(3, 3);
+    });
+
+    it("animation keyframe at PreviewMarker overrides ExportProperty for the same target", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<TextureText Id="t1" Name="Label">
+  <GeometryOptions HasTextBox="True" Text="XML">
+    <TextBoxSize X="2" Y="0.3"/>
+  </GeometryOptions>
+</TextureText>
+</Children></SceneNode>
+<ExportManagerProperties>
+  <ExportProperty Enable="True" PropertyName="Alpha" Type="Float"
+    Value="1" ControllableId="t1" UpdateMode="Instantly"/>
+</ExportManagerProperties>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1tl" MaxFrames="100" PreviewMarker="100">
+    <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="t1">
+      <KeyFrame FrameNumber="0" Value="1" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="50" Value="0" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const node = result.blueprint.nodes.find((n) => n.name === "Label");
+      // Keyframe at frame 50 (value 0) is the last ≤ PreviewMarker=100 →
+      // material.opacity should land at 0, not the export-property's 1.
+      expect(node?.type).toBe("text");
+      if (node && node.type !== "group") {
+        expect(node.material.opacity).toBe(0);
+      }
+    });
+
+    it("ignores ExportProperty rows where Enable='False'", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<TextureText Id="t1" Name="Label">
+  <GeometryOptions HasTextBox="True" Text="ORIGINAL"><TextBoxSize X="2" Y="0.3"/></GeometryOptions>
+</TextureText>
+</Children></SceneNode>
+<ExportManagerProperties>
+  <ExportProperty Enable="False" PropertyName="Text" Type="String"
+    Value="OVERRIDE" ControllableId="t1" UpdateMode="Instantly"/>
+</ExportManagerProperties>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const node = result.blueprint.nodes.find((n) => n.name === "Label");
+      if (node?.type === "text") {
+        expect(node.geometry.text).toBe("ORIGINAL");
+      }
+    });
+
+    it("flattenPreviewState=false skips the pre-pass entirely (legacy escape hatch)", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<TextureText Id="t1" Name="Label">
+  <GeometryOptions HasTextBox="True" Text="RAW_XML"><TextBoxSize X="2" Y="0.3"/></GeometryOptions>
+</TextureText>
+</Children></SceneNode>
+<ExportManagerProperties>
+  <ExportProperty Enable="True" PropertyName="Text" Type="String"
+    Value="FLATTENED" ControllableId="t1" UpdateMode="Instantly"/>
+</ExportManagerProperties>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml, { flattenPreviewState: false });
+      const node = result.blueprint.nodes.find((n) => n.name === "Label");
+      if (node?.type === "text") {
+        expect(node.geometry.text).toBe("RAW_XML");
+      }
+    });
+
+    it("Size.XProp keyframe at PreviewMarker overrides the XML <Size X> attribute", () => {
+      // Real LINEUP_LEFT case: BASE_MAIN has Size X=0 at frame 0 (mask is
+      // zero-width before the intro plays) and grows via Size.XProp keyframes.
+      // Without flatten, the parser saw the X=0 starting value and rendered
+      // a degenerate mask that clipped nothing.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<Quad Id="q1" Name="GrowingBar" IsMask="True">
+  <GeometryOptions><Size X="0" Y="1"/></GeometryOptions>
+</Quad>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1tl" MaxFrames="200" PreviewMarker="150">
+    <KeyFrameAnimationController AnimatedProperty="Size.XProp" ControllableId="q1">
+      <KeyFrame FrameNumber="0" Value="0" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="120" Value="7" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const mask = result.blueprint.nodes.find((n) => n.name === "GrowingBar");
+      // After flatten, the rendered Size.X should be 7 (the keyframe at
+      // frame 120 is the last one ≤ PreviewMarker=150). Quad geometry
+      // reads from GeometryOptions/Size, so the flatten must have written
+      // back into that subtree. We check the parsed geometry.width here
+      // (which the createQuadNode wires from Size.X). Mask Quads enter
+      // 3Forge as plane nodes so the width lives on the plane geometry.
+      if (mask && mask.type === "plane") {
+        expect(mask.geometry.width).toBe(7);
+      } else {
+        throw new Error(`expected plane mask, got ${mask?.type ?? "undefined"}`);
+      }
+    });
+
+    it("FlowChildren=True on a Group lays children out side-by-side along X", () => {
+      // Real LINEUP_LEFT case: PLAYERS group has
+      //   <GeometryOptions LeadingSpace="-1.26" FlowChildren="True" />
+      // Children PLAYER_01..05 have same X=0 + different Z values; without
+      // FlowChildren they all stack at the same screen X.
+      // Each player subtree contains a Photo Quad with Size X="2.3" — that's
+      // the dominant card width the flow uses.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Group Id="players" Name="PLAYERS">
+  <GeometryOptions LeadingSpace="-1.26" FlowChildren="True"/>
+  <NodeTransform><Position X="0"/></NodeTransform>
+  <Children>
+    <Group Id="p1" Name="P_01"><NodeTransform><Position X="0" Y="-3.5" Z="0"/></NodeTransform>
+      <Children><Quad Id="pq1" Name="PHOTO_01"><GeometryOptions><Size X="2.3" Y="2.3"/></GeometryOptions></Quad></Children></Group>
+    <Group Id="p2" Name="P_02"><NodeTransform><Position X="0" Y="-3.5" Z="-5"/></NodeTransform>
+      <Children><Quad Id="pq2" Name="PHOTO_02"><GeometryOptions><Size X="2.3" Y="2.3"/></GeometryOptions></Quad></Children></Group>
+    <Group Id="p3" Name="P_03"><NodeTransform><Position X="0" Y="-3.5" Z="-10"/></NodeTransform>
+      <Children><Quad Id="pq3" Name="PHOTO_03"><GeometryOptions><Size X="2.3" Y="2.3"/></GeometryOptions></Quad></Children></Group>
+    <Group Id="p4" Name="P_04"><NodeTransform><Position X="0" Y="-3.5" Z="-15"/></NodeTransform>
+      <Children><Quad Id="pq4" Name="PHOTO_04"><GeometryOptions><Size X="2.3" Y="2.3"/></GeometryOptions></Quad></Children></Group>
+    <Group Id="p5" Name="P_05"><NodeTransform><Position X="0" Y="-3.5" Z="-20"/></NodeTransform>
+      <Children><Quad Id="pq5" Name="PHOTO_05"><GeometryOptions><Size X="2.3" Y="2.3"/></GeometryOptions></Quad></Children></Group>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const xs = ["P_01", "P_02", "P_03", "P_04", "P_05"].map((n) =>
+        result.blueprint.nodes.find((nd) => nd.name === n)?.transform.position.x ?? null,
+      );
+      // child widths = 2.3, leadingSpace = -1.26 → stride = 1.04
+      // offsets: [0, 1.04, 2.08, 3.12, 4.16]
+      expect(xs[0]).toBeCloseTo(0, 3);
+      expect(xs[1]).toBeCloseTo(1.04, 3);
+      expect(xs[2]).toBeCloseTo(2.08, 3);
+      expect(xs[3]).toBeCloseTo(3.12, 3);
+      expect(xs[4]).toBeCloseTo(4.16, 3);
+      // All five distinct (the whole point):
+      expect(new Set(xs).size).toBe(5);
+    });
+
+    it("does not move children of groups WITHOUT FlowChildren='True'", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Group Id="row" Name="Row">
+  <GeometryOptions LeadingSpace="-1.26"/>
+  <Children>
+    <Group Id="a" Name="A"><NodeTransform><Position X="0"/></NodeTransform>
+      <Children><Quad Id="qa" Name="QA"><GeometryOptions><Size X="2"/></GeometryOptions></Quad></Children></Group>
+    <Group Id="b" Name="B"><NodeTransform><Position X="0"/></NodeTransform>
+      <Children><Quad Id="qb" Name="QB"><GeometryOptions><Size X="2"/></GeometryOptions></Quad></Children></Group>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const a = result.blueprint.nodes.find((n) => n.name === "A");
+      const b = result.blueprint.nodes.find((n) => n.name === "B");
+      // Both stay at X=0 — no flow rule fired.
+      expect(a?.transform.position.x).toBe(0);
+      expect(b?.transform.position.x).toBe(0);
+    });
+
+    it("preserves explicit child Position.X by adding the flow offset on top", () => {
+      // PLAYER_02 in LINEUP_LEFT has an explicit X — verify the flow adds
+      // the slot offset rather than overwriting the authored value.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Group Id="row" Name="Row">
+  <GeometryOptions LeadingSpace="-1" FlowChildren="True"/>
+  <Children>
+    <Group Id="a" Name="A"><NodeTransform><Position X="0"/></NodeTransform>
+      <Children><Quad Id="qa" Name="QA"><GeometryOptions><Size X="3"/></GeometryOptions></Quad></Children></Group>
+    <Group Id="b" Name="B"><NodeTransform><Position X="0.5"/></NodeTransform>
+      <Children><Quad Id="qb" Name="QB"><GeometryOptions><Size X="3"/></GeometryOptions></Quad></Children></Group>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const a = result.blueprint.nodes.find((n) => n.name === "A");
+      const b = result.blueprint.nodes.find((n) => n.name === "B");
+      // A: 0 + 0 = 0; B: 0.5 + (3 + -1) = 0.5 + 2 = 2.5
+      expect(a?.transform.position.x).toBeCloseTo(0, 3);
+      expect(b?.transform.position.x).toBeCloseTo(2.5, 3);
+    });
+
+    it("falls back to width=1 when a child subtree has no positive <Size X>", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Group Id="row" Name="Row">
+  <GeometryOptions LeadingSpace="0" FlowChildren="True"/>
+  <Children>
+    <Group Id="a" Name="EmptyA"><NodeTransform><Position X="0"/></NodeTransform></Group>
+    <Group Id="b" Name="EmptyB"><NodeTransform><Position X="0"/></NodeTransform></Group>
+    <Group Id="c" Name="EmptyC"><NodeTransform><Position X="0"/></NodeTransform></Group>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const xs = ["EmptyA", "EmptyB", "EmptyC"].map((n) =>
+        result.blueprint.nodes.find((nd) => nd.name === n)?.transform.position.x ?? null,
+      );
+      // Each empty subtree gets the fallback width of 1, leadingSpace=0.
+      expect(xs).toEqual([0, 1, 2]);
+      // Approximation warning surfaced for each:
+      const md = result.blueprint.metadata as { w3d?: { flowLayouts?: Array<{ approximationWarnings: string[] }> } };
+      const warns = md.w3d?.flowLayouts?.[0].approximationWarnings ?? [];
+      expect(warns.length).toBe(3);
+    });
+
+    it("persists flowLayouts + flowByNodeId on metadata.w3d for __r3Dump consumption", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Group Id="row" Name="Row">
+  <GeometryOptions LeadingSpace="-0.5" FlowChildren="True"/>
+  <Children>
+    <Group Id="a" Name="A"><NodeTransform><Position X="0"/></NodeTransform>
+      <Children><Quad Id="qa" Name="QA"><GeometryOptions><Size X="2"/></GeometryOptions></Quad></Children></Group>
+    <Group Id="b" Name="B"><NodeTransform><Position X="0"/></NodeTransform>
+      <Children><Quad Id="qb" Name="QB"><GeometryOptions><Size X="2"/></GeometryOptions></Quad></Children></Group>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const md = result.blueprint.metadata as { w3d?: {
+        flowLayouts?: Array<{
+          parentName: string; leadingSpace: number;
+          childOrder: string[]; childWidths: number[]; computedOffsets: number[];
+        }>;
+        flowByNodeId?: Record<string, { parentName: string; index: number; offset: number }>;
+      } };
+      const layouts = md.w3d?.flowLayouts ?? [];
+      expect(layouts.length).toBe(1);
+      expect(layouts[0].parentName).toBe("Row");
+      expect(layouts[0].leadingSpace).toBe(-0.5);
+      expect(layouts[0].childOrder).toEqual(["A", "B"]);
+      expect(layouts[0].childWidths).toEqual([2, 2]);
+      expect(layouts[0].computedOffsets).toEqual([0, 1.5]);
+      // flowByNodeId — keyed by 3Forge node ids. Verify B's entry has index=1.
+      const a = result.blueprint.nodes.find((n) => n.name === "A");
+      const b = result.blueprint.nodes.find((n) => n.name === "B");
+      const byNode = md.w3d?.flowByNodeId ?? {};
+      expect(byNode[a!.id]?.index).toBe(0);
+      expect(byNode[b!.id]?.index).toBe(1);
+      expect(byNode[b!.id]?.offset).toBeCloseTo(1.5, 3);
+    });
+
+    it("populates TextNode.geometry.maxWidth/maxHeight when HasTextBox=True", () => {
+      // Real LINEUP_LEFT case: PLAYER_LAST_NAME_NN has a TextBoxSize that
+      // the W3D engine fits the player surname into. The renderer reads
+      // these to scale down the generated TextGeometry instead of letting
+      // the player's name overflow the card.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<TextureText Id="t-name" Name="PLAYER_LAST_NAME_01">
+  <GeometryOptions ConstrainMethod="Width" HasTextBox="True" AlignmentX="Center" Text="STEPHENS">
+    <TextBoxSize X="1.2" Y="0.4"/>
+  </GeometryOptions>
+</TextureText>
+<TextureText Id="t-free" Name="FreeText">
+  <GeometryOptions HasTextBox="False" Text="UNBOUNDED"/>
+</TextureText>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const bounded = result.blueprint.nodes.find((n) => n.name === "PLAYER_LAST_NAME_01");
+      const free = result.blueprint.nodes.find((n) => n.name === "FreeText");
+      if (bounded?.type === "text") {
+        expect(bounded.geometry.hasTextBox).toBe(true);
+        expect(bounded.geometry.maxWidth).toBeCloseTo(1.2, 3);
+        expect(bounded.geometry.maxHeight).toBeCloseTo(0.4, 3);
+      } else {
+        throw new Error("expected text node");
+      }
+      // Free-flow text (HasTextBox=False) must NOT have a max set — the
+      // renderer should leave its size alone.
+      if (free?.type === "text") {
+        expect(free.geometry.hasTextBox).toBeUndefined();
+        expect(free.geometry.maxWidth).toBeUndefined();
+        expect(free.geometry.maxHeight).toBeUndefined();
+      }
+    });
+
+    it("freezeAtPreviewMarker=false opts out of the flatten pre-pass (alias of flattenPreviewState=false)", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<TextureText Id="t1" Name="Label">
+  <GeometryOptions HasTextBox="True" Text="RAW"><TextBoxSize X="2" Y="0.3"/></GeometryOptions>
+</TextureText>
+</Children></SceneNode>
+<ExportManagerProperties>
+  <ExportProperty Enable="True" PropertyName="Text" Type="String"
+    Value="FROZEN" ControllableId="t1" UpdateMode="Instantly"/>
+</ExportManagerProperties>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml, { freezeAtPreviewMarker: false });
+      const node = result.blueprint.nodes.find((n) => n.name === "Label");
+      if (node?.type === "text") expect(node.geometry.text).toBe("RAW");
+    });
+
+    it("persists previewFlatten stats into metadata.w3d for __r3Dump consumption", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children><Quad Id="q1" Name="Q"/></Children></SceneNode>
+<ExportManagerProperties>
+  <ExportProperty Enable="True" PropertyName="Alpha" Type="Float"
+    Value="0.5" ControllableId="q1" UpdateMode="Instantly"/>
+</ExportManagerProperties>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1tl" MaxFrames="50" PreviewMarker="40">
+    <KeyFrameAnimationController AnimatedProperty="Transform.Position.XProp" ControllableId="q1">
+      <KeyFrame FrameNumber="0" Value="0" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="30" Value="2" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const md = result.blueprint.metadata as { w3d?: { previewFlatten?: {
+        clipName: string | null; frame: number;
+        appliedControllers: number; appliedExportProperties: number;
+        unsupportedProperties: string[]; changedNodeCount: number;
+      } } } | undefined;
+      const pf = md?.w3d?.previewFlatten;
+      expect(pf).toBeDefined();
+      expect(pf?.clipName).toBe("In");
+      expect(pf?.frame).toBe(40);
+      expect(pf?.appliedControllers).toBeGreaterThanOrEqual(1);
+      expect(pf?.appliedExportProperties).toBeGreaterThanOrEqual(1);
+      expect(pf?.changedNodeCount).toBeGreaterThanOrEqual(1);
     });
   });
 });

@@ -309,13 +309,22 @@ function normalizeAnimationClips(
     const fps = normalizePositiveInteger(clipSource.fps, fallbackClip.fps);
     const durationFrames = normalizePositiveInteger(clipSource.durationFrames, fallbackClip.durationFrames);
     const tracks = normalizeAnimationTracks(Array.isArray(clipSource.tracks) ? clipSource.tracks : [], validNodeIds, durationFrames);
-    normalized.push({
+    // Preserve the W3D PreviewMarker if it was carried on the clip (set
+    // by the parser). Negative values mean "no preview chosen" and are
+    // dropped; values outside the duration are clamped to the last frame.
+    const rawPreview = typeof clipSource.previewFrame === "number" ? clipSource.previewFrame : null;
+    const previewFrame = rawPreview !== null && Number.isFinite(rawPreview) && rawPreview >= 0
+      ? Math.min(Math.round(rawPreview), durationFrames)
+      : undefined;
+    const clip: AnimationClip = {
       id: clipId,
       name,
       fps,
       durationFrames,
       tracks,
-    });
+    };
+    if (previewFrame !== undefined) clip.previewFrame = previewFrame;
+    normalized.push(clip);
   }
 
   return normalized;

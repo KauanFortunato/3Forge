@@ -361,6 +361,52 @@ describe("smokeTestWebpFrame", () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toBe("decode_error");
   });
+
+  it("tolerates RGB drift in fully-transparent pixels (libwebp canonicalises RGB to 0 there)", async () => {
+    // Webp pixel: alpha=0, RGB zeroed by libwebp. Source pixel: alpha=0,
+    // arbitrary RGB. Visually identical (invisible), so must NOT fall back.
+    let i = 0;
+    const result = await smokeTestWebpFrame({
+      ffmpegPath: "/fake/ffmpeg",
+      sourcePath: "/fake/source.mov",
+      webpFrame: "/fake/frame.webp",
+      _decode: async () =>
+        Buffer.from(i++ === 0
+          ? [0, 0, 0, 0, 200, 100, 50, 255]
+          : [180, 90, 40, 0, 200, 100, 50, 255]),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects RGB drift in visible pixels", async () => {
+    let i = 0;
+    const result = await smokeTestWebpFrame({
+      ffmpegPath: "/fake/ffmpeg",
+      sourcePath: "/fake/source.mov",
+      webpFrame: "/fake/frame.webp",
+      _decode: async () =>
+        Buffer.from(i++ === 0
+          ? [10, 20, 30, 255]
+          : [10, 21, 30, 255]),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("rgba_mismatch");
+  });
+
+  it("rejects alpha mismatches even when RGB matches", async () => {
+    let i = 0;
+    const result = await smokeTestWebpFrame({
+      ffmpegPath: "/fake/ffmpeg",
+      sourcePath: "/fake/source.mov",
+      webpFrame: "/fake/frame.webp",
+      _decode: async () =>
+        Buffer.from(i++ === 0
+          ? [10, 20, 30, 128]
+          : [10, 20, 30, 200]),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("rgba_mismatch");
+  });
 });
 
 describe("probeWebpEncoder", () => {
@@ -393,6 +439,26 @@ describe("probeWebpEncoder", () => {
     });
     expect(r).toEqual({ available: false });
   });
+
+  it("does not hang when the child process emits 'close' only once (regression)", async () => {
+    // Real ChildProcess emits 'close' exactly once. The earlier code added
+    // a second `proc.on('close')` listener AFTER awaiting readStdout, which
+    // never fired in production and hung the entire conversion pipeline.
+    // The 2s vitest timeout below catches any reintroduced second-listener
+    // pattern; the assertion catches a wrong availability decision.
+    const fakeSpawn = () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      process.nextTick(() => {
+        proc.stdout.emit("data", Buffer.from("V..... libwebp              libwebp WebP image\n"));
+        proc.emit("close", 0);
+      });
+      return proc;
+    };
+    const r = await probeWebpEncoder({ _spawn: fakeSpawn });
+    expect(r).toEqual({ available: true });
+  }, 2000);
 
   it("caches the probe result across calls", async () => {
     let calls = 0;

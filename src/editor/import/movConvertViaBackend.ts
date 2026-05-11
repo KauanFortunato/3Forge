@@ -1,4 +1,5 @@
-import type { ImageSequenceMetadata } from "../types";
+import { imageSequenceToAsset, readImageDimensions } from "../images";
+import type { ImageAsset, ImageSequenceMetadata } from "../types";
 
 /**
  * Convert a list of `.mov` Files via the dev backend, returning a
@@ -27,6 +28,13 @@ export interface ConvertViaBackendResult {
   sequences: Map<string, ImageSequenceMetadata>;
   /** Per-mov failures; the import can still proceed for the converted ones. */
   failed: { mov: string; error: string }[];
+}
+
+export interface ConvertMovFileToImageSequenceAssetOptions {
+  file: File;
+  signal: AbortSignal;
+  onProgress?: (p: ConvertProgress) => void;
+  readDimensions?: (src: string) => Promise<{ width: number; height: number }>;
 }
 
 interface BackendManifest {
@@ -147,6 +155,45 @@ export async function convertMovsViaBackend(
   return { sequences, failed };
 }
 
+export async function convertMovFileToImageSequenceAsset(
+  opts: ConvertMovFileToImageSequenceAssetOptions,
+): Promise<ImageAsset> {
+  const { file, signal, onProgress, readDimensions = readImageDimensions } = opts;
+  const result = await convertMovsViaBackend({
+    movFiles: [file],
+    signal,
+    onProgress,
+  });
+  const sequence =
+    result.sequences.get(file.name)
+    ?? findSequenceCaseInsensitive(result.sequences, file.name);
+
+  if (!sequence) {
+    const failed = result.failed.find((entry) => entry.mov.toLowerCase() === file.name.toLowerCase());
+    throw new ConvertViaBackendError(
+      "MOV_DECODE_FAILED",
+      failed?.error ?? `No image sequence was returned for ${file.name}.`,
+    );
+  }
+
+  let hydratedSequence = sequence;
+  const firstFrame = sequence.frameUrls[0];
+  if (firstFrame && (!sequence.width || !sequence.height)) {
+    try {
+      const dimensions = await readDimensions(firstFrame);
+      hydratedSequence = {
+        ...sequence,
+        width: dimensions.width,
+        height: dimensions.height,
+      };
+    } catch {
+      // Keep backend metadata if the browser cannot decode the first frame.
+    }
+  }
+
+  return imageSequenceToAsset(file.name, hydratedSequence);
+}
+
 /**
  * Ask the dev backend to run `npm install` so the bundled `ffmpeg-static`
  * dependency is materialised. Used by the editor's "Install" affordance
@@ -181,4 +228,17 @@ export async function installFfmpegViaBackend(signal: AbortSignal): Promise<void
       body.message ?? "Install failed",
     );
   }
+}
+
+function findSequenceCaseInsensitive(
+  sequences: Map<string, ImageSequenceMetadata>,
+  fileName: string,
+): ImageSequenceMetadata | undefined {
+  const target = fileName.toLowerCase();
+  for (const [key, value] of sequences) {
+    if (key.toLowerCase() === target) {
+      return value;
+    }
+  }
+  return undefined;
 }
