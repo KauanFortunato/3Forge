@@ -812,6 +812,132 @@ describe("W3D import", () => {
       }
     });
 
+    it("FlowChildren Direction='YMinus' offsets children along -Y instead of X", () => {
+      // Real LINEUP_LEFT case: BENCH_LIST is
+      //   <GeometryOptions LeadingSpace="-0.084" FlowChildren="True"
+      //                    FlowChildrenAlignment="Trailing" Direction="YMinus" />
+      // Children are TextureText rows whose dominant Y extent is the
+      // TextBoxSize.Y (0.15). Stride = 0.15 + (-0.084) = 0.066 per row,
+      // applied on -Y. The XML's authored X on each child must survive.
+      // Note: Is2DScene="False" + no <Camera Projection> keeps Y unflipped
+      // for this fixture so the assertions read the raw W3D coords directly.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>
+<Group Id="bench" Name="BENCH_LIST">
+  <GeometryOptions LeadingSpace="-0.084" FlowChildren="True"
+                   FlowChildrenAlignment="Trailing" Direction="YMinus"/>
+  <NodeTransform><Position Y="0.983"/></NodeTransform>
+  <Children>
+    <Group Id="bp1" Name="BENCH_PLAYER_01"><NodeTransform><Position X="2"/></NodeTransform>
+      <Children><TextureText Id="bn1" Name="BENCH_NAME_01">
+        <GeometryOptions HasTextBox="True" Text="A"><TextBoxSize X="0.86" Y="0.15"/></GeometryOptions>
+      </TextureText></Children></Group>
+    <Group Id="bp2" Name="BENCH_PLAYER_02"><NodeTransform><Position X="2"/></NodeTransform>
+      <Children><TextureText Id="bn2" Name="BENCH_NAME_02">
+        <GeometryOptions HasTextBox="True" Text="B"><TextBoxSize X="0.86" Y="0.15"/></GeometryOptions>
+      </TextureText></Children></Group>
+    <Group Id="bp3" Name="BENCH_PLAYER_03"><NodeTransform><Position X="2"/></NodeTransform>
+      <Children><TextureText Id="bn3" Name="BENCH_NAME_03">
+        <GeometryOptions HasTextBox="True" Text="C"><TextBoxSize X="0.86" Y="0.15"/></GeometryOptions>
+      </TextureText></Children></Group>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const get = (name: string) =>
+        result.blueprint.nodes.find((n) => n.name === name)?.transform.position ?? null;
+      // Authored X on each child is preserved (not zeroed).
+      expect(get("BENCH_PLAYER_01")?.x).toBe(2);
+      expect(get("BENCH_PLAYER_02")?.x).toBe(2);
+      expect(get("BENCH_PLAYER_03")?.x).toBe(2);
+      // Y advances on -Y by stride 0.066.
+      expect(get("BENCH_PLAYER_01")?.y).toBeCloseTo(0, 3);
+      expect(get("BENCH_PLAYER_02")?.y).toBeCloseTo(-0.066, 3);
+      expect(get("BENCH_PLAYER_03")?.y).toBeCloseTo(-0.132, 3);
+      // Diagnostics: direction + axis + alignment + childExtents surface.
+      const md = result.blueprint.metadata as { w3d?: { flowLayouts?: Array<{
+        direction: string; appliedAxis: string; alignment: string | null;
+        childExtents: number[]; approximationWarnings: string[];
+      }> } };
+      const layout = md.w3d?.flowLayouts?.[0];
+      expect(layout?.direction).toBe("YMinus");
+      expect(layout?.appliedAxis).toBe("Y");
+      expect(layout?.alignment).toBe("Trailing");
+      expect(layout?.childExtents).toEqual([0.15, 0.15, 0.15]);
+      // Trailing is parsed but approximated — must be reported, not silent.
+      const trailingWarn = (layout?.approximationWarnings ?? []).find((w) =>
+        w.includes("FlowChildrenAlignment") && w.includes("Trailing"),
+      );
+      expect(trailingWarn).toBeDefined();
+    });
+
+    it("FlowChildren Direction='YPlus' offsets children along +Y", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>
+<Group Id="g" Name="StackDown">
+  <GeometryOptions LeadingSpace="0" FlowChildren="True" Direction="YPlus"/>
+  <Children>
+    <Quad Id="q1" Name="A"><GeometryOptions><Size X="1" Y="1"/></GeometryOptions></Quad>
+    <Quad Id="q2" Name="B"><GeometryOptions><Size X="1" Y="1"/></GeometryOptions></Quad>
+    <Quad Id="q3" Name="C"><GeometryOptions><Size X="1" Y="1"/></GeometryOptions></Quad>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const get = (n: string) =>
+        result.blueprint.nodes.find((nd) => nd.name === n)?.transform.position ?? null;
+      expect(get("A")?.y).toBe(0);
+      expect(get("B")?.y).toBe(1);
+      expect(get("C")?.y).toBe(2);
+      // X axis untouched.
+      expect(get("A")?.x).toBe(0);
+      expect(get("B")?.x).toBe(0);
+      expect(get("C")?.x).toBe(0);
+    });
+
+    it("FlowChildren Direction='XMinus' offsets children along -X", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="False"><SceneLayer><SceneNode><Children>
+<Group Id="g" Name="StackLeft">
+  <GeometryOptions LeadingSpace="0" FlowChildren="True" Direction="XMinus"/>
+  <Children>
+    <Quad Id="q1" Name="A"><GeometryOptions><Size X="2" Y="1"/></GeometryOptions></Quad>
+    <Quad Id="q2" Name="B"><GeometryOptions><Size X="2" Y="1"/></GeometryOptions></Quad>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const get = (n: string) =>
+        result.blueprint.nodes.find((nd) => nd.name === n)?.transform.position ?? null;
+      expect(get("A")?.x).toBe(0);
+      expect(get("B")?.x).toBe(-2);
+    });
+
+    it("FlowChildren Direction default (omitted) still flows along +X — PLAYER_01..05 regression guard", () => {
+      // Same fixture as the original FlowChildren test, but with a no-op
+      // change to the XML: omitting Direction must keep the legacy X+
+      // behaviour so PLAYER_NN don't suddenly stack on Y or X-.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Group Id="players" Name="PLAYERS">
+  <GeometryOptions LeadingSpace="-1.26" FlowChildren="True"/>
+  <Children>
+    <Group Id="p1" Name="P_01">
+      <Children><Quad Id="pq1" Name="PHOTO_01"><GeometryOptions><Size X="2.3"/></GeometryOptions></Quad></Children></Group>
+    <Group Id="p2" Name="P_02">
+      <Children><Quad Id="pq2" Name="PHOTO_02"><GeometryOptions><Size X="2.3"/></GeometryOptions></Quad></Children></Group>
+  </Children>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const get = (n: string) =>
+        result.blueprint.nodes.find((nd) => nd.name === n)?.transform.position ?? null;
+      expect(get("P_01")?.x).toBeCloseTo(0, 3);
+      expect(get("P_02")?.x).toBeCloseTo(1.04, 3);
+      expect(get("P_01")?.y).toBe(0);
+      expect(get("P_02")?.y).toBe(0);
+    });
+
     it("FlowChildren=True on a Group lays children out side-by-side along X", () => {
       // Real LINEUP_LEFT case: PLAYERS group has
       //   <GeometryOptions LeadingSpace="-1.26" FlowChildren="True" />

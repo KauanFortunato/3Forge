@@ -152,13 +152,17 @@ export interface W3DShadowData {
     parentXmlId: string;
     parentName: string;
     leadingSpace: number;
+    direction: "XPlus" | "XMinus" | "YPlus" | "YMinus";
+    appliedAxis: "X" | "Y";
+    alignment: string | null;
     childOrder: string[];
     childWidths: number[];
+    childExtents: number[];
     computedOffsets: number[];
     approximationWarnings: string[];
   }>;
-  /** 3Forge nodeId → flow layout info for that node (parent + index + offset). */
-  flowByNodeId?: Record<string, { parentName: string; index: number; offset: number }>;
+  /** 3Forge nodeId → flow layout info for that node (parent + index + offset + axis). */
+  flowByNodeId?: Record<string, { parentName: string; index: number; offset: number; axis: "X" | "Y" }>;
 }
 
 interface ParseContext {
@@ -2238,18 +2242,38 @@ export interface W3DFlattenStats {
    * with the spacing rule used and the per-child offsets written back into
    * the DOM. Surfaced via __r3Dump for "why are these cards stacked / spread
    * weirdly" debugging.
+   *
+   * direction: "XPlus" | "XMinus" | "YPlus" | "YMinus". Default = "XPlus"
+   * (W3D's implicit direction when `Direction` is omitted from the
+   * `<GeometryOptions>` element). YPlus / YMinus stack children vertically;
+   * the bench-list in LINEUP_LEFT uses YMinus.
+   *
+   * appliedAxis: "X" | "Y" — convenience field telling the operator which
+   * NodeTransform/Position axis was mutated. Mirrors `direction[0]`.
+   *
+   * alignment: raw `FlowChildrenAlignment` value as written by the W3D
+   * exporter. Today "Trailing" is parsed but approximated — recorded in
+   * `approximationWarnings` so future iterations can know what's missing.
+   *
+   * childExtents: per-child measurement on the flow axis. Replaces the
+   * previous `childWidths` field (kept for back-compat) so YPlus/YMinus
+   * scenes show height-based stride.
    */
   flowLayouts: Array<{
     parentXmlId: string;
     parentName: string;
     leadingSpace: number;
+    direction: "XPlus" | "XMinus" | "YPlus" | "YMinus";
+    appliedAxis: "X" | "Y";
+    alignment: string | null;
     childOrder: string[];
     childWidths: number[];
+    childExtents: number[];
     computedOffsets: number[];
     approximationWarnings: string[];
   }>;
   /** Per-child-XML-id flow info (cross-referenced to 3Forge nodeIds later). */
-  flowByXmlId: Record<string, { parentXmlId: string; parentName: string; index: number; offset: number }>;
+  flowByXmlId: Record<string, { parentXmlId: string; parentName: string; index: number; offset: number; axis: "X" | "Y" }>;
 }
 
 /**
@@ -2372,15 +2396,40 @@ function applyW3DPreviewFlatten(doc: Document, sceneEl: Element): W3DFlattenStat
   return stats;
 }
 
+type FlowDirection = "XPlus" | "XMinus" | "YPlus" | "YMinus";
+
+function parseFlowDirection(raw: string | null): FlowDirection {
+  // W3D defaults to horizontal flow when Direction is omitted. The string
+  // values we've seen in the wild are "XPlus" / "XMinus" / "YPlus" /
+  // "YMinus"; accept bare axis names ("X" / "Y") defensively so a future
+  // exporter variant doesn't silently fall back to default.
+  switch (raw) {
+    case "XMinus": return "XMinus";
+    case "YPlus": return "YPlus";
+    case "YMinus": return "YMinus";
+    case "XPlus":
+    case "X":
+    case null:
+    case "":
+      return "XPlus";
+    case "Y":
+      return "YPlus";
+    default:
+      return "XPlus";
+  }
+}
+
 /**
  * W3D layout step: arrange children of any `<Group>` whose
  * `<GeometryOptions FlowChildren="True">` is set so they sit side-by-side
- * along X instead of overlapping. Reads `LeadingSpace` for the gap and
- * approximates each child's width from the max `<Size X="...">` in its
+ * along the configured axis instead of overlapping. Reads `LeadingSpace`
+ * for the gap, `Direction` for axis + sign (default `XPlus`), and
+ * `FlowChildrenAlignment` (parsed but approximated; logged when set).
+ * Approximates each child's extent from the max `<Size X|Y="...">` in its
  * descendant subtree (already flattened by the preceding pre-pass).
  *
- * The offset is *additive* — writes `Position.X += offset` so any explicit
- * Position the author set on the child (e.g. a per-card tweak) is preserved.
+ * The offset is *additive* — writes `Position.X|Y += offset` so any
+ * explicit Position the author set on the child is preserved.
  *
  * Order: XML document order. SceneNodeIndex-based reordering is not yet
  * applied — when a corpus shows up that actually uses SceneNodeIndex for
@@ -2393,6 +2442,8 @@ function applyW3DFlowLayouts(sceneEl: Element, stats: W3DFlattenStats): void {
     if (!geom) continue;
     if (geom.getAttribute("FlowChildren") !== "True") continue;
     const leadingSpace = parseNumberAttr(geom, "LeadingSpace", 0);
+    const direction = parseFlowDirection(geom.getAttribute("Direction"));
+    const alignmentRaw = geom.getAttribute("FlowChildrenAlignment");
     const childrenEl = childElementByTag(group, "Children");
     if (!childrenEl) continue;
 
@@ -2404,15 +2455,27 @@ function applyW3DFlowLayouts(sceneEl: Element, stats: W3DFlattenStats): void {
     if (directChildren.length < 2) continue;
 
     const warnings: string[] = [];
-    const widths = directChildren.map((c) => computeFlowChildWidth(c, warnings));
+    if (alignmentRaw && alignmentRaw !== "Leading") {
+      warnings.push(
+        `FlowChildrenAlignment="${alignmentRaw}" parsed but approximated; ` +
+        `children are placed by cumulative offset only (no trailing/centre alignment yet).`,
+      );
+    }
+    const axis: "X" | "Y" = direction.startsWith("X") ? "X" : "Y";
+    const sign = direction.endsWith("Plus") ? 1 : -1;
+    // For X flow use child width (Size.X); for Y flow use child height
+    // (Size.Y). Falls back to 1 with a warning when the subtree has no
+    // positive Size on the relevant axis — common for label-only children
+    // (just a TextureText with TextBoxSize but no Quad Size).
+    const extents = directChildren.map((c) => computeFlowChildExtent(c, axis, warnings));
     const offsets: number[] = [];
     let cum = 0;
     for (let i = 0; i < directChildren.length; i += 1) {
-      offsets.push(cum);
-      cum += widths[i] + leadingSpace;
+      offsets.push(cum * sign);
+      cum += extents[i] + leadingSpace;
     }
     directChildren.forEach((child, i) => {
-      addToTransformVectorAttr(child, "Position", "X", offsets[i]);
+      addToTransformVectorAttr(child, "Position", axis, offsets[i]);
     });
 
     const parentXmlId = (group.getAttribute("Id") ?? "").toLowerCase();
@@ -2421,8 +2484,15 @@ function applyW3DFlowLayouts(sceneEl: Element, stats: W3DFlattenStats): void {
       parentXmlId,
       parentName,
       leadingSpace,
+      direction,
+      appliedAxis: axis,
+      alignment: alignmentRaw,
       childOrder: directChildren.map((c) => c.getAttribute("Name") ?? "(unnamed)"),
-      childWidths: widths.map((w) => +w.toFixed(4)),
+      // childWidths preserved (as the extent value) so existing __r3Dump
+      // consumers / tests don't break; new callers should prefer
+      // `childExtents` which makes the axis-aware reading explicit.
+      childWidths: extents.map((w) => +w.toFixed(4)),
+      childExtents: extents.map((w) => +w.toFixed(4)),
       computedOffsets: offsets.map((o) => +o.toFixed(4)),
       approximationWarnings: warnings,
     });
@@ -2434,26 +2504,37 @@ function applyW3DFlowLayouts(sceneEl: Element, stats: W3DFlattenStats): void {
         parentName,
         index: i,
         offset: +offsets[i].toFixed(4),
+        axis,
       };
     });
   }
 }
 
 /**
- * Approximate a child's width for FlowChildren spacing: max
- * `<Size X="...">` in the descendant subtree. The dominant card width for
- * a player lineup is the Photo Quad's Size.X; this picks it up cleanly.
- * Returns a default of 1 when no positive Size.X exists in the subtree
- * (records the approximation so the caller can surface a diagnostic).
+ * Approximate a child's extent on the flow axis: max `<Size X|Y="...">`
+ * in the descendant subtree. For X flow, returns the dominant card width
+ * (e.g. Photo Quad Size.X). For Y flow, returns the dominant card height
+ * (e.g. label TextBoxSize.Y or stripe Quad Size.Y). Returns a default of
+ * 1 when no positive value exists in the subtree and records a warning.
  */
-function computeFlowChildWidth(el: Element, warnings: string[]): number {
+function computeFlowChildExtent(el: Element, axis: "X" | "Y", warnings: string[]): number {
   let max = 0;
-  for (const s of Array.from(el.getElementsByTagName("Size"))) {
-    const x = Number(s.getAttribute("X") ?? "0");
-    if (Number.isFinite(x) && x > max) max = x;
+  // Include both <Size> and <TextBoxSize> elements: the former is on
+  // Quad/Mesh primitives, the latter is on TextureText nodes. Bench rows
+  // in LINEUP_LEFT are just a TextureText (no Quad), so without
+  // TextBoxSize we'd default to 1 and the vertical stride would collapse.
+  const tags = ["Size", "TextBoxSize"];
+  for (const tag of tags) {
+    for (const s of Array.from(el.getElementsByTagName(tag))) {
+      const v = Number(s.getAttribute(axis) ?? "0");
+      if (Number.isFinite(v) && v > max) max = v;
+    }
   }
   if (max > 0) return max;
-  warnings.push(`${el.getAttribute("Name") ?? "(unnamed)"}: no descendant <Size X> > 0; fell back to width=1`);
+  warnings.push(
+    `${el.getAttribute("Name") ?? "(unnamed)"}: no descendant <Size ${axis}> > 0 ` +
+    `for axis ${axis}; fell back to extent=1`,
+  );
   return 1;
 }
 

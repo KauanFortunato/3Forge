@@ -975,8 +975,12 @@ export class SceneEditor {
       parentXmlId: string;
       parentName: string;
       leadingSpace: number;
+      direction: "XPlus" | "XMinus" | "YPlus" | "YMinus";
+      appliedAxis: "X" | "Y";
+      alignment: string | null;
       childOrder: string[];
       childWidths: number[];
+      childExtents: number[];
       computedOffsets: number[];
       approximationWarnings: string[];
     }>;
@@ -1023,12 +1027,16 @@ export class SceneEditor {
         parentXmlId: string;
         parentName: string;
         leadingSpace: number;
+        direction: "XPlus" | "XMinus" | "YPlus" | "YMinus";
+        appliedAxis: "X" | "Y";
+        alignment: string | null;
         childOrder: string[];
         childWidths: number[];
+        childExtents: number[];
         computedOffsets: number[];
         approximationWarnings: string[];
       }>;
-      flowByNodeId?: Record<string, { parentName: string; index: number; offset: number }>;
+      flowByNodeId?: Record<string, { parentName: string; index: number; offset: number; axis: "X" | "Y" }>;
     };
 
     const out: Array<Record<string, unknown>> = [];
@@ -1148,6 +1156,7 @@ export class SceneEditor {
         flowParent: flowInfo?.parentName ?? null,
         flowIndex: flowInfo?.index ?? null,
         flowOffset: flowInfo?.offset ?? null,
+        flowAxis: flowInfo?.axis ?? null,
         visible: node.visible,
         meshVisible: meshObjVisible,
         hasSkewLayer: !!skewLayer,
