@@ -278,6 +278,35 @@ describe("EditorStore", () => {
     expect(store.sceneSettings.shadows).toEqual({ enabled: true, type: "pcfSoft" });
   });
 
+  it("adds HDR assets and persists HDR scene environment selection", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    const hdrId = store.addHdrAsset({
+      id: "studio",
+      name: "Studio.hdr",
+      mimeType: "image/vnd.radiance",
+      src: "data:image/vnd.radiance;base64,aGRy",
+      source: "imported",
+    });
+
+    expect(hdrId).toBe("studio");
+    expect(store.hdrs).toHaveLength(1);
+    expect(store.sceneSettings.environment).toMatchObject({
+      type: "hdr",
+      hdrAssetId: "studio",
+    });
+
+    const reloaded = new EditorStore(store.getSnapshot());
+    expect(reloaded.getHdrAsset("studio")?.name).toBe("Studio.hdr");
+    expect(reloaded.sceneSettings.environment.type).toBe("hdr");
+
+    reloaded.removeHdrAsset("studio");
+    expect(reloaded.sceneSettings.environment).toMatchObject({
+      type: "none",
+      hdrAssetId: null,
+    });
+  });
+
   it("round-trips a valid blueprint through JSON export and import", () => {
     const blueprint = new EditorStore(createBlueprintFixture()).getSnapshot();
     const json = exportBlueprintToJson(blueprint);

@@ -1,6 +1,6 @@
 import { frameToSeconds, getTrackSegments, isTrackMuted, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
-import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageAsset, ImageNode, ModelAsset, TransformSpec } from "./types";
+import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageAsset, ImageNode, ModelAsset, SceneSettings, TransformSpec } from "./types";
 import { ROOT_NODE_ID, createDefaultSceneSettings, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
 
 interface CollectedBinding {
@@ -88,6 +88,7 @@ export interface GenerateTypeScriptComponentOptions {
   fontAssetPathsById?: Record<string, string>;
   imageAssetPathsByNodeId?: Record<string, string>;
   modelAssetPathsById?: Record<string, string>;
+  hdrAssetPathsById?: Record<string, string>;
 }
 
 export function exportBlueprintToJson(blueprint: ComponentBlueprint): string {
@@ -122,6 +123,7 @@ export function generateTypeScriptComponent(
   const fontAssetPathsById = options.fontAssetPathsById ?? {};
   const imageAssetPathsByNodeId = options.imageAssetPathsByNodeId ?? {};
   const modelAssetPathsById = options.modelAssetPathsById ?? {};
+  const hdrAssetPathsById = options.hdrAssetPathsById ?? {};
   const imagesById = new Map((blueprint.images ?? []).map((image) => [image.id, image] as const));
   const inlineFonts = fonts.filter((font) => !fontAssetPathsById[font.font.id]);
   const externalFonts = fonts.filter((font) => Boolean(fontAssetPathsById[font.font.id]));
@@ -254,7 +256,7 @@ export function generateTypeScriptComponent(
   lines.push("};");
   lines.push("");
   lines.push("export const sceneSettings = ");
-  lines.push(`${JSON.stringify(blueprint.sceneSettings ?? createDefaultSceneSettings(), null, 2)} as const;`);
+  lines.push(`${JSON.stringify(createExportSceneSettings(blueprint.sceneSettings, hdrAssetPathsById), null, 2)} as const;`);
   lines.push("");
   if (hasAnimations) {
     emitAnimationDefinitions(lines, animationClips);
@@ -408,6 +410,26 @@ export function generateTypeScriptComponent(
   lines.push("}");
 
   return lines.join("\n");
+}
+
+function createExportSceneSettings(
+  sceneSettings: SceneSettings | undefined,
+  hdrAssetPathsById: Record<string, string>,
+): SceneSettings | (SceneSettings & { environment: SceneSettings["environment"] & { hdrAssetPath?: string } }) {
+  const settings = structuredClone(sceneSettings ?? createDefaultSceneSettings());
+  const hdrAssetId = settings.environment.hdrAssetId;
+  const hdrAssetPath = hdrAssetId ? hdrAssetPathsById[hdrAssetId] : undefined;
+  if (!hdrAssetPath) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    environment: {
+      ...settings.environment,
+      hdrAssetPath,
+    },
+  };
 }
 
 function collectExportCollections(blueprint: ComponentBlueprint, nodes: ExportNode[]): ExportCollections {

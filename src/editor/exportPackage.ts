@@ -1,8 +1,9 @@
 import JSZip from "jszip";
 import { getAvailableFonts, getFontData } from "./fonts";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "./exports";
+import { HDR_FILE_TOO_LARGE_MESSAGE, MAX_HDR_FILE_SIZE_BYTES } from "./hdr";
 import { MAX_MODEL_FILE_SIZE_BYTES, MODEL_FILE_TOO_LARGE_MESSAGE } from "./models";
-import type { ComponentBlueprint, EditableBinding, FontAsset, ImageAsset, ImageNode, ModelAsset, TransformSpec } from "./types";
+import type { ComponentBlueprint, EditableBinding, FontAsset, HdrAsset, ImageAsset, ImageNode, ModelAsset, TransformSpec } from "./types";
 
 interface ExportModelNode {
   id: string;
@@ -42,14 +43,17 @@ export function createExportPackageData(blueprint: ComponentBlueprint): ExportPa
   const fontAssetPathsById: Record<string, string> = {};
   const imageAssetPathsByNodeId: Record<string, string> = {};
   const modelAssetPathsById: Record<string, string> = {};
+  const hdrAssetPathsById: Record<string, string> = {};
   const availableFonts = new Map(getAvailableFonts(blueprint.fonts).map((font) => [font.id, font]));
   const usedFonts = collectUsedFonts(blueprint, availableFonts);
   const usedImages = collectUsedImages(blueprint);
   const usedModels = collectUsedModels(blueprint);
+  const usedHdrs = collectUsedHdrs(blueprint);
   const imagesById = new Map((blueprint.images ?? []).map((image) => [image.id, image] as const));
   const modelsById = new Map((blueprint.models ?? []).map((model) => [model.id, model] as const));
   const imageAssetPathsBySource = new Map<string, string>();
   const modelAssetPathsBySource = new Map<string, string>();
+  const hdrAssetPathsBySource = new Map<string, string>();
 
   for (const font of usedFonts) {
     const path = createUniquePath(usedPaths, "assets/fonts", font.name, ".typeface.json");
@@ -82,6 +86,15 @@ export function createExportPackageData(blueprint: ComponentBlueprint): ExportPa
     }
   }
 
+  for (const hdr of usedHdrs) {
+    const hdrPath = resolvePackagedHdrPath(hdr, usedPaths, hdrAssetPathsBySource);
+    hdrAssetPathsById[hdr.id] = toRelativeAssetPath(hdrPath.publicPath);
+
+    if (hdrPath.file) {
+      files.push(hdrPath.file);
+    }
+  }
+
   files.unshift(
     {
       path: blueprintFileName,
@@ -93,6 +106,7 @@ export function createExportPackageData(blueprint: ComponentBlueprint): ExportPa
         fontAssetPathsById,
         imageAssetPathsByNodeId,
         modelAssetPathsById,
+        hdrAssetPathsById,
       }),
     },
   );
@@ -161,6 +175,16 @@ function collectUsedImages(blueprint: ComponentBlueprint): ImageNode[] {
 function collectUsedModels(blueprint: ComponentBlueprint): ExportModelNode[] {
   return (blueprint.nodes as Array<ComponentBlueprint["nodes"][number] | ExportModelNode>)
     .filter((node): node is ExportModelNode => node.type === "model");
+}
+
+function collectUsedHdrs(blueprint: ComponentBlueprint): HdrAsset[] {
+  const environment = blueprint.sceneSettings?.environment;
+  if (environment?.type !== "hdr" || !environment.hdrAssetId) {
+    return [];
+  }
+
+  const asset = blueprint.hdrs?.find((hdr) => hdr.id === environment.hdrAssetId);
+  return asset ? [asset] : [];
 }
 
 function resolvePackagedImagePath(
@@ -252,6 +276,38 @@ function resolvePackagedModelPath(
   };
 }
 
+function resolvePackagedHdrPath(
+  hdr: HdrAsset,
+  usedPaths: Set<string>,
+  hdrAssetPathsBySource: Map<string, string>,
+): { publicPath: string; file?: ExportPackageFile } {
+  const existingPath = hdrAssetPathsBySource.get(hdr.src);
+  if (existingPath) {
+    return { publicPath: existingPath };
+  }
+
+  if (!isDataUrl(hdr.src)) {
+    return { publicPath: hdr.src };
+  }
+
+  const path = createUniquePath(usedPaths, "assets/environments", hdr.name, resolveHdrExtension(hdr.name));
+  const content = decodeDataUrl(hdr.src);
+  if (content.byteLength > MAX_HDR_FILE_SIZE_BYTES) {
+    throw new Error(HDR_FILE_TOO_LARGE_MESSAGE);
+  }
+
+  const file = {
+    path,
+    content,
+  };
+
+  hdrAssetPathsBySource.set(hdr.src, path);
+  return {
+    publicPath: path,
+    file,
+  };
+}
+
 
 function toRelativeAssetPath(path: string): string {
   return /^(?:[a-z]+:)?\/\//i.test(path) || /^[a-z]+:/i.test(path) || path.startsWith("/") || path.startsWith(".")
@@ -330,6 +386,10 @@ function resolveModelExtension(name: string, mimeType: string, format: ModelAsse
   }
 
   return ".glb";
+}
+
+function resolveHdrExtension(name: string): string {
+  return /\.hdr$/i.test(name) ? ".hdr" : ".hdr";
 }
 
 function createUniquePath(

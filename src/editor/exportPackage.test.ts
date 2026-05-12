@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultFontAsset } from "./fonts";
 import { generateTypeScriptComponent } from "./exports";
 import { createExportPackageData, createExportPackageZipBlob } from "./exportPackage";
+import { HDR_FILE_TOO_LARGE_MESSAGE, MAX_HDR_FILE_SIZE_BYTES } from "./hdr";
 import { MAX_MODEL_FILE_SIZE_BYTES, MODEL_FILE_TOO_LARGE_MESSAGE } from "./models";
 import { createBlueprintFixture } from "../test/fixtures";
 
@@ -150,6 +151,56 @@ describe("exportPackage", () => {
     expect(typeScriptContent).toContain('import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";');
     expect(typeScriptContent).toContain('"./assets/models/shared-ship.glb"');
     expect(typeScriptContent).toContain("gltfLoader.loadAsync");
+  });
+
+  it("packages selected HDR environment assets and points scene settings at assets/environments", () => {
+    const blueprint = createBlueprintFixture();
+    blueprint.componentName = "HDR Package";
+    blueprint.hdrs = [{
+      id: "studio-hdr",
+      name: "Studio HDR.hdr",
+      mimeType: "image/vnd.radiance",
+      src: "data:image/vnd.radiance;base64,aGRy",
+    }];
+    blueprint.sceneSettings = {
+      ...blueprint.sceneSettings!,
+      environment: {
+        type: "hdr",
+        hdrAssetId: "studio-hdr",
+        intensity: 1.25,
+      },
+    };
+
+    const packageData = createExportPackageData(blueprint);
+    const hdrFiles = packageData.files.filter((file) => file.path.startsWith("assets/environments/"));
+    const typeScriptContent = String(packageData.files.find((file) => file.path === packageData.typeScriptFileName)?.content ?? "");
+
+    expect(hdrFiles).toHaveLength(1);
+    expect(hdrFiles[0]?.path).toBe("assets/environments/studio-hdr.hdr");
+    expect(hdrFiles[0]?.content).toBeInstanceOf(Uint8Array);
+    expect(typeScriptContent).toContain('"hdrAssetPath": "./assets/environments/studio-hdr.hdr"');
+  });
+
+  it("rejects ZIP packages with oversized embedded HDR assets", () => {
+    const blueprint = createBlueprintFixture();
+    const oversizedBase64Length = Math.ceil((MAX_HDR_FILE_SIZE_BYTES + 1) / 3) * 4;
+    const oversizedBase64 = "A".repeat(oversizedBase64Length);
+    blueprint.hdrs = [{
+      id: "oversized-hdr",
+      name: "Oversized.hdr",
+      mimeType: "image/vnd.radiance",
+      src: `data:image/vnd.radiance;base64,${oversizedBase64}`,
+    }];
+    blueprint.sceneSettings = {
+      ...blueprint.sceneSettings!,
+      environment: {
+        type: "hdr",
+        hdrAssetId: "oversized-hdr",
+        intensity: 1,
+      },
+    };
+
+    expect(() => createExportPackageData(blueprint)).toThrow(HDR_FILE_TOO_LARGE_MESSAGE);
   });
 
   it("rejects ZIP packages with oversized embedded model assets", () => {

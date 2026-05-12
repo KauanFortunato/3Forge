@@ -6,6 +6,7 @@ import type {
   EditableFieldEntry,
   EditorNode,
   FontAsset,
+  HdrAsset,
   ImageAsset,
   MaterialAsset,
   NodePropertyDefinition,
@@ -27,6 +28,7 @@ export interface EditorStoreView {
   fonts: FontAsset[];
   materials: MaterialAsset[];
   images: ImageAsset[];
+  hdrs: HdrAsset[];
   sceneSettings: SceneSettings;
   editableFields: EditableFieldEntry[];
   animation: ComponentAnimation;

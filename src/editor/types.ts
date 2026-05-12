@@ -159,6 +159,15 @@ export interface ModelAsset {
   source?: "imported" | "external";
 }
 
+export interface HdrAsset {
+  id: string;
+  name: string;
+  mimeType: "image/vnd.radiance" | string;
+  src: string;
+  originalFileName?: string;
+  source?: "imported" | "external";
+}
+
 export interface EditableBinding {
   path: NodePropertyPath;
   key: string;
@@ -200,7 +209,7 @@ export type SceneShadowType = "basic" | "pcf" | "pcfSoft";
 export interface SceneSettings {
   backgroundColor: string;
   environment: {
-    type: "none";
+    type: "none" | "hdr";
     hdrAssetId: string | null;
     intensity: number;
   };
@@ -435,6 +444,7 @@ export interface ComponentBlueprint {
   materials: MaterialAsset[];
   images: ImageAsset[];
   models?: ModelAsset[];
+  hdrs?: HdrAsset[];
   sceneSettings?: SceneSettings;
   nodes: EditorNode[];
   animation: ComponentAnimation;
@@ -469,6 +479,7 @@ export type EditorStoreChangeReason =
   | "material"
   | "image"
   | "model"
+  | "hdr"
   | "sceneSettings"
   | "view"
   | "animation"
