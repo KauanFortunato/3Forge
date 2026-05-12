@@ -5,9 +5,10 @@ export const MAX_MODEL_FILE_SIZE_LABEL = "25 MB";
 export const MODEL_FILE_TOO_LARGE_MESSAGE = `Model is too large. Maximum supported size is ${MAX_MODEL_FILE_SIZE_LABEL}.`;
 
 export function isModelFile(file: File): boolean {
-  return /\.(glb|gltf)$/i.test(file.name)
+  return /\.(glb|gltf|usdz)$/i.test(file.name)
     || file.type === "model/gltf-binary"
-    || file.type === "model/gltf+json";
+    || file.type === "model/gltf+json"
+    || file.type === "model/vnd.usdz+zip";
 }
 
 export async function modelFileToAsset(file: File): Promise<ModelAsset> {
@@ -20,12 +21,29 @@ export async function modelFileToAsset(file: File): Promise<ModelAsset> {
   }
 
   const src = await readFileAsDataUrl(file);
-  const format = file.name.toLowerCase().endsWith(".gltf") ? "gltf" : "glb";
+  const lowerName = file.name.toLowerCase();
+  const isUsdz = lowerName.endsWith(".usdz") || file.type === "model/vnd.usdz+zip";
+  const format: ModelAsset["format"] = isUsdz
+    ? "usdz"
+    : lowerName.endsWith(".gltf")
+      ? "gltf"
+      : "glb";
+
+  const defaultName = format === "usdz"
+    ? "Model.usdz"
+    : format === "gltf"
+      ? "Model.gltf"
+      : "Model.glb";
+  const defaultMime = format === "usdz"
+    ? "model/vnd.usdz+zip"
+    : format === "gltf"
+      ? "model/gltf+json"
+      : "model/gltf-binary";
 
   return {
     id: "",
-    name: file.name || (format === "gltf" ? "Model.gltf" : "Model.glb"),
-    mimeType: file.type || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary"),
+    name: file.name || defaultName,
+    mimeType: file.type || defaultMime,
     src,
     format,
     originalFileName: file.name || undefined,

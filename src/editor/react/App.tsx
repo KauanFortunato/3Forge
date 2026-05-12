@@ -7,7 +7,7 @@ import { compareComponentBlueprints } from "../blueprintDiff";
 import type { BlueprintDiffChangedObject, BlueprintDiffSummary } from "../blueprintDiff";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { createExportPackageZip } from "../exportPackage";
-import { exportBlueprintToGlbBlob, exportBlueprintToGltfBlob } from "../gltfExport";
+import { exportBlueprintToGlbBlob, exportBlueprintToGltfBlob, exportBlueprintToUsdzBlob } from "../gltfExport";
 import {
   BrowserFileSystemFileHandle,
   getBlueprintFileName,
@@ -450,6 +450,7 @@ function dataTransferHasModelFile(dataTransfer: DataTransfer): boolean {
     item.kind === "file" && (
       item.type === "model/gltf-binary"
       || item.type === "model/gltf+json"
+      || item.type === "model/vnd.usdz+zip"
       || item.type === ""
     )
   ));
@@ -1885,18 +1886,20 @@ export function App() {
     }
   }, [blueprintSnapshot, setTransientStatus]);
 
-  const downloadSceneModel = useCallback(async (format: "glb" | "gltf") => {
+  const downloadSceneModel = useCallback(async (format: "glb" | "gltf" | "usdz") => {
     try {
       const blob = await runTask(`Exporting ${format.toUpperCase()}...`, () => (
         format === "glb"
           ? exportBlueprintToGlbBlob(blueprintSnapshot)
-          : exportBlueprintToGltfBlob(blueprintSnapshot)
+          : format === "usdz"
+            ? exportBlueprintToUsdzBlob(blueprintSnapshot)
+            : exportBlueprintToGltfBlob(blueprintSnapshot)
       ));
       const fileName = `${blueprintSnapshot.componentName || "3forge-component"}.${format}`;
       downloadBlobFile(blob, fileName);
       setTransientStatus(`Downloaded ${fileName}.`);
-    } catch {
-      setTransientStatus(`Unable to export ${format.toUpperCase()} model.`);
+    } catch (err) {
+      setTransientStatus(err instanceof Error && err.message ? err.message : `Unable to export ${format.toUpperCase()} model.`);
     }
   }, [blueprintSnapshot, setTransientStatus]);
 
@@ -2991,10 +2994,17 @@ export function App() {
         { id: "file-save", label: "Save", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+S", onSelect: () => void handleSaveProject() },
         { id: "file-save-as", label: "Save As", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+Shift+S", onSelect: () => void handleSaveAsProject() },
         { id: "file-divider-2", separator: true },
-        { id: "file-import-json", label: "Import JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
-        { id: "file-import-image", label: "Import Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
-        { id: "file-import-model", label: "Import Model", icon: <MeshIcon width={14} height={14} />, onSelect: () => modelInputRef.current?.click() },
-        { id: "file-import-font", label: "Import Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
+        {
+          id: "file-import",
+          label: "Import",
+          icon: <FileIcon width={14} height={14} />,
+          children: [
+            { id: "file-import-json", label: "JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
+            { id: "file-import-image", label: "Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
+            { id: "file-import-model", label: "Model", icon: <MeshIcon width={14} height={14} />, onSelect: () => modelInputRef.current?.click() },
+            { id: "file-import-font", label: "Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
+          ],
+        },
         { id: "file-divider-3", separator: true },
         {
           id: "file-export",
@@ -3005,6 +3015,7 @@ export function App() {
             { id: "file-export-zip", label: "ZIP file", onSelect: () => void downloadExportPackage() },
             { id: "file-export-gltf", label: "GLTF scene", onSelect: () => void downloadSceneModel("gltf") },
             { id: "file-export-glb", label: "GLB scene", onSelect: () => void downloadSceneModel("glb") },
+            { id: "file-export-usdz", label: "USDZ scene", onSelect: () => void downloadSceneModel("usdz") },
           ],
         },
         { id: "file-divider-4", separator: true },
@@ -3831,7 +3842,7 @@ export function App() {
         ref={modelInputRef}
         className="app__hidden-input"
         type="file"
-        accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+        accept=".glb,.gltf,.usdz,model/gltf-binary,model/gltf+json,model/vnd.usdz+zip"
         multiple
         onChange={async (event) => {
           const files = Array.from(event.target.files ?? []);

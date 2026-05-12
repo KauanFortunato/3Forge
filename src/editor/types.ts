@@ -152,9 +152,9 @@ export interface ImageAsset {
 export interface ModelAsset {
   id: string;
   name: string;
-  mimeType: "model/gltf-binary" | "model/gltf+json" | string;
+  mimeType: "model/gltf-binary" | "model/gltf+json" | "model/vnd.usdz+zip" | string;
   src: string;
-  format: "glb" | "gltf";
+  format: "glb" | "gltf" | "usdz";
   originalFileName?: string;
   source?: "imported" | "external";
 }

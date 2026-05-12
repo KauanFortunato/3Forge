@@ -1041,8 +1041,16 @@ function normalizeModelAsset(rawModel: unknown, usedIds: Set<string>): ModelAsse
   }
 
   const rawFormat = typeof source.format === "string" ? source.format.toLowerCase() : "";
-  const format = rawFormat === "gltf" ? "gltf" : "glb";
-  const fallbackName = format === "gltf" ? "Model.gltf" : "Model.glb";
+  const format: ModelAsset["format"] = rawFormat === "usdz"
+    ? "usdz"
+    : rawFormat === "gltf"
+      ? "gltf"
+      : "glb";
+  const fallbackName = format === "usdz"
+    ? "Model.usdz"
+    : format === "gltf"
+      ? "Model.gltf"
+      : "Model.glb";
   const name = (typeof source.name === "string" ? source.name.trim() : "") || fallbackName;
   const proposedId = (typeof source.id === "string" ? source.id.trim() : "") || toCamelCase(stripExtension(name));
   let id = proposedId || generateId("model-asset");
@@ -1052,7 +1060,11 @@ function normalizeModelAsset(rawModel: unknown, usedIds: Set<string>): ModelAsse
   usedIds.add(id);
 
   const mimeType = (typeof source.mimeType === "string" ? source.mimeType.trim() : "")
-    || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary");
+    || (format === "usdz"
+      ? "model/vnd.usdz+zip"
+      : format === "gltf"
+        ? "model/gltf+json"
+        : "model/gltf-binary");
   const originalFileName = typeof source.originalFileName === "string" && source.originalFileName.trim()
     ? source.originalFileName.trim()
     : undefined;
@@ -3474,8 +3486,16 @@ export class EditorStore extends EventTarget {
     const id = this.makeUniqueModelId(options.id ?? model.id);
     const proposedName = (options.name ?? model.name ?? "").trim() || "Model";
     const name = this.makeUniqueModelName(proposedName);
-    const format = model.format === "gltf" ? "gltf" : "glb";
-    const mimeType = model.mimeType || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary");
+    const format: ModelAsset["format"] = model.format === "usdz"
+      ? "usdz"
+      : model.format === "gltf"
+        ? "gltf"
+        : "glb";
+    const mimeType = model.mimeType || (format === "usdz"
+      ? "model/vnd.usdz+zip"
+      : format === "gltf"
+        ? "model/gltf+json"
+        : "model/gltf-binary");
 
     this.recordHistorySnapshot();
     this._blueprint.models = [

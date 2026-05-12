@@ -263,7 +263,7 @@ function isDataUrl(value: string): boolean {
   return value.startsWith("data:");
 }
 
-function decodeDataUrl(dataUrl: string): Uint8Array {
+export function decodeDataUrl(dataUrl: string): Uint8Array {
   const [metadata, payload] = dataUrl.split(",", 2);
   if (!metadata || payload === undefined) {
     throw new Error("Invalid data URL.");
@@ -323,6 +323,10 @@ function resolveModelExtension(name: string, mimeType: string, format: ModelAsse
   const nameMatch = name.match(/(\.[a-z0-9]+)$/i);
   if (nameMatch) {
     return nameMatch[1].toLowerCase();
+  }
+
+  if (mimeType === "model/vnd.usdz+zip" || format === "usdz") {
+    return ".usdz";
   }
 
   if (mimeType === "model/gltf+json" || format === "gltf") {

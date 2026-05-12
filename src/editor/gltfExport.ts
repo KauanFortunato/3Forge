@@ -5,6 +5,7 @@ import {
   BoxGeometry,
   CapsuleGeometry,
   CircleGeometry,
+  Color,
   ConeGeometry,
   CylinderGeometry,
   DoubleSide,
@@ -40,10 +41,14 @@ import {
   VectorKeyframeTrack,
 } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
+import { USDZExporter } from "three/examples/jsm/exporters/USDZExporter.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { evaluateAnimationTrackValue, frameToSeconds, getAnimationValue, isTrackMuted, sortTrackKeyframes } from "./animation";
+import { decodeDataUrl } from "./exportPackage";
 import { DEFAULT_FONT_ID, getAvailableFonts, parseFontAsset } from "./fonts";
-import type { AnimationClip, AnimationPropertyPath, AnimationTrack, ComponentBlueprint, EditorNode, ImageAsset, ImageNode, MaterialSpec, NodeOriginSpec, TextNode } from "./types";
+import type { AnimationClip, AnimationPropertyPath, AnimationTrack, ComponentBlueprint, EditorNode, ImageAsset, ImageNode, MaterialSpec, ModelAsset, NodeOriginSpec, TextNode } from "./types";
 
 type MaterialBaseOptions = Record<string, unknown>;
 
@@ -70,6 +75,71 @@ export async function exportBlueprintToGlbBlob(blueprint: ComponentBlueprint): P
   }
 
   return new Blob([result], { type: "model/gltf-binary" });
+}
+
+export async function exportBlueprintToUsdzBlob(blueprint: ComponentBlueprint): Promise<Blob> {
+  const group = await createBlueprintExportGroup(blueprint);
+  group.updateMatrixWorld(true);
+  convertMaterialsForUsdz(group);
+  const result = await new USDZExporter().parseAsync(group);
+  return new Blob([result as BlobPart], { type: "model/vnd.usdz+zip" });
+}
+
+export function convertMaterialsForUsdz(group: Group): void {
+  group.traverse((object) => {
+    if (!(object instanceof Mesh)) {
+      return;
+    }
+    if (Array.isArray(object.material)) {
+      object.material = object.material.map((material) => convertMaterialForUsdz(material));
+      return;
+    }
+    object.material = convertMaterialForUsdz(object.material);
+  });
+}
+
+function convertMaterialForUsdz(material: Material): Material {
+  if ((material as { isMeshStandardMaterial?: boolean }).isMeshStandardMaterial) {
+    return material;
+  }
+
+  const source = material as Material & {
+    color?: Color;
+    map?: Texture | null;
+    emissive?: Color;
+    emissiveMap?: Texture | null;
+    emissiveIntensity?: number;
+    normalMap?: Texture | null;
+  };
+
+  const replacement = new MeshStandardMaterial({
+    color: source.color instanceof Color ? source.color.clone() : new Color(0xffffff),
+    metalness: 0,
+    roughness: 1,
+    transparent: material.transparent,
+    opacity: material.opacity,
+    alphaTest: material.alphaTest,
+    side: material.side,
+  });
+
+  if (source.map) {
+    replacement.map = source.map;
+  }
+  if (source.emissive instanceof Color) {
+    replacement.emissive = source.emissive.clone();
+  }
+  if (source.emissiveMap) {
+    replacement.emissiveMap = source.emissiveMap;
+  }
+  if (typeof source.emissiveIntensity === "number") {
+    replacement.emissiveIntensity = source.emissiveIntensity;
+  }
+  if (source.normalMap) {
+    replacement.normalMap = source.normalMap;
+  }
+
+  replacement.name = material.name;
+  return replacement;
 }
 
 export async function exportBlueprintToGltfBlob(blueprint: ComponentBlueprint): Promise<Blob> {
@@ -229,17 +299,109 @@ function evaluateAxisValueAtFrame(
 
 const AXES: TransformAxis[] = ["x", "y", "z"];
 
+type TextureLoaderLoadFn = (
+  this: TextureLoader,
+  url: string,
+  onLoad?: (texture: Texture) => void,
+  onProgress?: (event: ProgressEvent) => void,
+  onError?: (error: unknown) => void,
+) => Texture;
+
+/**
+ * Parses a USDZ buffer via {@link USDLoader.parse} while ensuring that every texture
+ * loaded through {@link TextureLoader} during parsing has its underlying image fully
+ * decoded before the returned Group is handed back. This is required because
+ * `TextureLoader.load` returns synchronously with an empty `Texture` (its
+ * `source.data === null`); the actual `<img>` element is owned internally by
+ * `ImageLoader` until its `load` event fires. Without awaiting those callbacks the
+ * downstream GLTFExporter sees textures with no image data and fails with
+ * "No valid image data found. Unable to process texture."
+ *
+ * The function patches `TextureLoader.prototype.load` for the duration of `parse`,
+ * collects per-call Promises that resolve when each texture's `onLoad`/`onError`
+ * fires, and restores the prototype in a `finally` block so the global is never
+ * left in a patched state — even if `parse` throws.
+ */
+export async function parseUsdzWithTextures(
+  usdLoader: USDLoader,
+  buffer: ArrayBuffer,
+): Promise<Group> {
+  const originalLoad = TextureLoader.prototype.load as TextureLoaderLoadFn;
+  const pendingTextureLoads: Array<Promise<void>> = [];
+
+  const patchedLoad: TextureLoaderLoadFn = function patchedLoad(
+    this: TextureLoader,
+    url: string,
+    onLoad?: (texture: Texture) => void,
+    onProgress?: (event: ProgressEvent) => void,
+    onError?: (error: unknown) => void,
+  ): Texture {
+    let resolveWaiter!: () => void;
+    let rejectWaiter!: (reason: unknown) => void;
+    const waiter = new Promise<void>((resolve, reject) => {
+      resolveWaiter = resolve;
+      rejectWaiter = reject;
+    });
+    pendingTextureLoads.push(waiter);
+
+    const handleLoad = (texture: Texture): void => {
+      try {
+        if (onLoad) {
+          onLoad(texture);
+        }
+      } finally {
+        resolveWaiter();
+      }
+    };
+    const handleError = (error: unknown): void => {
+      try {
+        if (onError) {
+          onError(error);
+        }
+      } finally {
+        const label = url || "anonymous";
+        rejectWaiter(error instanceof Error ? error : new Error(`Texture image failed to decode: ${label}`));
+      }
+    };
+
+    // Delegate to the original synchronous loader. The returned Texture is
+    // returned to the caller immediately; resolution of the waiter happens
+    // later when the image element's load/error event fires.
+    return originalLoad.call(this, url, handleLoad, onProgress, handleError);
+  };
+
+  (TextureLoader.prototype as unknown as { load: TextureLoaderLoadFn }).load = patchedLoad;
+
+  try {
+    const group = usdLoader.parse(buffer);
+    const results = await Promise.allSettled(pendingTextureLoads);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        console.warn("USDZ texture load failed; export will proceed without it.", result.reason);
+      }
+    }
+    return group;
+  } finally {
+    (TextureLoader.prototype as unknown as { load: TextureLoaderLoadFn }).load = originalLoad;
+  }
+}
+
 class BlueprintObjectBuilder {
   private readonly textureLoader = new TextureLoader();
   private readonly textureCache = new Map<string, Promise<Texture>>();
   private readonly objectMap = new Map<string, Group>();
   private readonly childContainerMap = new Map<string, Group>();
   private readonly imagesById: Map<string, ImageAsset>;
+  private readonly modelsById: Map<string, ModelAsset>;
+  private readonly modelGroupCache = new Map<string, Promise<Group>>();
+  private readonly gltfLoader = new GLTFLoader();
+  private readonly usdLoader = new USDLoader();
 
   constructor(private readonly blueprint: ComponentBlueprint) {
     this.imagesById = new Map((blueprint.images ?? []).flatMap((image) => (
       image.id ? [[image.id, image] as const] : []
     )));
+    this.modelsById = new Map((blueprint.models ?? []).map((model) => [model.id, model] as const));
   }
 
   async build(): Promise<Group> {
@@ -273,7 +435,7 @@ class BlueprintObjectBuilder {
     const object = node.type === "group"
       ? this.buildGroupObject(node)
       : node.type === "model"
-        ? new Group()
+        ? await this.buildModelObject(node)
       : await this.buildWrappedNodeObject(node);
     object.name = node.name;
     object.visible = node.visible;
@@ -283,6 +445,59 @@ class BlueprintObjectBuilder {
     object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
     object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
     return object;
+  }
+
+  private async buildModelObject(node: Extract<EditorNode, { type: "model" }>): Promise<Group> {
+    const wrapper = new Group();
+    const asset = this.modelsById.get(node.modelId);
+    if (!asset) {
+      return wrapper;
+    }
+
+    const loaded = await this.getCachedModelGroup(asset);
+    loaded.traverse((child) => {
+      child.userData.assetId = asset.id;
+      child.userData.nodeId = node.id;
+      child.userData.nodeType = node.type;
+      if (child instanceof Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    wrapper.add(loaded);
+    return wrapper;
+  }
+
+  private async getCachedModelGroup(asset: ModelAsset): Promise<Group> {
+    let promise = this.modelGroupCache.get(asset.id);
+    if (!promise) {
+      promise = this.loadModelAssetGroup(asset);
+      this.modelGroupCache.set(asset.id, promise);
+    }
+    const group = await promise;
+    return group.clone(true);
+  }
+
+  private async loadModelAssetGroup(asset: ModelAsset): Promise<Group> {
+    const bytes = decodeDataUrl(asset.src);
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+
+    if (asset.format === "glb") {
+      const gltf = await this.gltfLoader.parseAsync(buffer, "");
+      return gltf.scene.clone(true);
+    }
+
+    if (asset.format === "gltf") {
+      const json = new TextDecoder().decode(bytes);
+      const gltf = await this.gltfLoader.parseAsync(json, "");
+      return gltf.scene.clone(true);
+    }
+
+    if (containsUsdcMagic(bytes)) {
+      throw new Error(`USDZ asset "${asset.name}" uses USDC (binary) which is not supported yet. Convert to USDA or GLB first.`);
+    }
+
+    return parseUsdzWithTextures(this.usdLoader, buffer);
   }
 
   private buildGroupObject(node: Extract<EditorNode, { type: "group" }>): Group {
@@ -624,6 +839,25 @@ function resolveOriginOffset(min: number, max: number, origin: NodeOriginSpec["x
     default:
       return -((min + max) * 0.5);
   }
+}
+
+const USDC_MAGIC = new Uint8Array([0x50, 0x58, 0x52, 0x2D, 0x55, 0x53, 0x44, 0x43]);
+
+function containsUsdcMagic(bytes: Uint8Array): boolean {
+  const limit = Math.min(bytes.length - USDC_MAGIC.length, 4096);
+  for (let index = 0; index <= limit; index += 1) {
+    let match = true;
+    for (let offset = 0; offset < USDC_MAGIC.length; offset += 1) {
+      if (bytes[index + offset] !== USDC_MAGIC[offset]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveImageAssetForNode(node: ImageNode, imagesById: Map<string, ImageAsset>): ImageAsset {

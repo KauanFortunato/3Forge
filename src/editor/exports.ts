@@ -118,7 +118,9 @@ export function generateTypeScriptComponent(
   const importNames = collectImports(nodes, bindings);
   const fontVariables = new Map(fonts.map((font) => [font.font.id, font.fontVariableName]));
   const imageVariables = new Map(images.map((image) => [image.key, image.textureVariableName]));
-  const modelVariables = new Map(models.map((model) => [model.key, model.gltfVariableName]));
+  const modelVariables = new Map<string, { variableName: string; format: ModelAsset["format"] }>(
+    models.map((model) => [model.key, { variableName: model.gltfVariableName, format: model.model.format }] as const),
+  );
   const fontAssetPathsById = options.fontAssetPathsById ?? {};
   const imageAssetPathsByNodeId = options.imageAssetPathsByNodeId ?? {};
   const modelAssetPathsById = options.modelAssetPathsById ?? {};
@@ -135,8 +137,13 @@ export function generateTypeScriptComponent(
     lines.push(`import { FontLoader } from "three/examples/jsm/loaders/FontLoader.js";`);
     lines.push(`import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";`);
   }
-  if (models.length > 0) {
+  const hasGltfModels = models.some((model) => model.model.format !== "usdz");
+  const hasUsdzModels = models.some((model) => model.model.format === "usdz");
+  if (hasGltfModels) {
     lines.push(`import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";`);
+  }
+  if (hasUsdzModels) {
+    lines.push(`import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";`);
   }
   lines.push("");
 
@@ -230,7 +237,12 @@ export function generateTypeScriptComponent(
       lines.push(`const ${model.dataVariableName} = ${JSON.stringify(modelSource)} as const;`);
     }
     lines.push("");
-    lines.push("const gltfLoader = new GLTFLoader();");
+    if (hasGltfModels) {
+      lines.push("const gltfLoader = new GLTFLoader();");
+    }
+    if (hasUsdzModels) {
+      lines.push("const usdLoader = new USDLoader();");
+    }
     lines.push("");
   }
 
@@ -331,7 +343,8 @@ export function generateTypeScriptComponent(
     }
     lines.push("    ] = await Promise.all([");
     for (const model of models) {
-      lines.push(`      gltfLoader.loadAsync(${model.dataVariableName}),`);
+      const loaderName = model.model.format === "usdz" ? "usdLoader" : "gltfLoader";
+      lines.push(`      ${loaderName}.loadAsync(${model.dataVariableName}),`);
     }
     lines.push("    ]);");
   }
@@ -680,7 +693,7 @@ function emitNode(
   groupContentVariableNames: Map<string, string>,
   fontVariables: Map<string, string>,
   imageVariables: Map<string, string>,
-  modelVariables: Map<string, string>,
+  modelVariables: Map<string, { variableName: string; format: ModelAsset["format"] }>,
   bindingAccessor: string,
   captureNodeRefs: boolean,
   skipCreation = false,
@@ -715,7 +728,7 @@ function emitCreationLines(
   variableName: string,
   fontVariables: Map<string, string>,
   imageVariables: Map<string, string>,
-  modelVariables: Map<string, string>,
+  modelVariables: Map<string, { variableName: string; format: ModelAsset["format"] }>,
   bindingAccessor: string,
 ): string[] {
   const lines: string[] = [];
@@ -730,7 +743,11 @@ function emitCreationLines(
     if (!modelVariable) {
       throw new Error(`Model asset not found for model node "${node.name}".`);
     }
-    lines.push(`const ${variableName} = ${modelVariable}.scene.clone(true) as Group;`);
+    if (modelVariable.format === "usdz") {
+      lines.push(`const ${variableName} = ${modelVariable.variableName}.clone(true) as Group;`);
+    } else {
+      lines.push(`const ${variableName} = ${modelVariable.variableName}.scene.clone(true) as Group;`);
+    }
   } else {
     const geometryVariable = `${variableName}Geometry`;
     const materialVariable = `${variableName}Material`;

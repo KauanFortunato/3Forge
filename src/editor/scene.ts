@@ -59,6 +59,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import {
   animationValueToBoolean,
@@ -238,6 +239,7 @@ export class SceneEditor {
   private readonly objectMap = new Map<string, Object3D>();
   private readonly childContainerMap = new Map<string, Object3D>();
   private readonly gltfLoader = new GLTFLoader();
+  private readonly usdLoader = new USDLoader();
   private readonly selectionBounds = new Box3();
   private readonly selectionSize = new Vector3();
   private readonly selectionCenter = new Vector3();
@@ -979,24 +981,44 @@ export class SceneEditor {
       return wrapper;
     }
 
-    this.gltfLoader.load(
-      asset.src,
-      (gltf) => {
-        wrapper.clear();
-        const scene = gltf.scene.clone(true);
-        scene.traverse((child) => {
-          child.userData.nodeId = node.id;
-          child.userData.nodeType = node.type;
-          if (child instanceof Mesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
-          }
-        });
-        wrapper.add(scene);
-      },
-      undefined,
-      () => {},
-    );
+    if (asset.format === "usdz") {
+      this.usdLoader.load(
+        asset.src,
+        (group) => {
+          wrapper.clear();
+          group.traverse((child) => {
+            child.userData.nodeId = node.id;
+            child.userData.nodeType = node.type;
+            if (child instanceof Mesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+          wrapper.add(group);
+        },
+        undefined,
+        () => {},
+      );
+    } else {
+      this.gltfLoader.load(
+        asset.src,
+        (gltf) => {
+          wrapper.clear();
+          const scene = gltf.scene.clone(true);
+          scene.traverse((child) => {
+            child.userData.nodeId = node.id;
+            child.userData.nodeType = node.type;
+            if (child instanceof Mesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+          wrapper.add(scene);
+        },
+        undefined,
+        () => {},
+      );
+    }
 
     return wrapper;
   }

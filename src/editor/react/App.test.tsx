@@ -604,7 +604,7 @@ describe("App", () => {
     const { container } = render(<App />);
     fireEvent.click(screen.getByRole("button", { name: /New project/i }));
     const modelInput = container.querySelector(
-      'input[type="file"][accept=".glb,.gltf,model/gltf-binary,model/gltf+json"]',
+      'input[type="file"][accept=".glb,.gltf,.usdz,model/gltf-binary,model/gltf+json,model/vnd.usdz+zip"]',
     ) as HTMLInputElement;
     const file = new File(["glb"], "hero-ship.glb", { type: "model/gltf-binary" });
 
