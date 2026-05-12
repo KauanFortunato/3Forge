@@ -79,18 +79,26 @@ export async function parseW3DFromFolder(
         videoFilenames.add(baseName);
       }
       // Capture the converted-frame-sequence siblings of any .mov:
-      //   Resources/Textures/<stem>_webp_frames/sequence.json (priority 1)
-      //   Resources/Textures/<stem>_png_frames/sequence.json  (priority 2)
-      //   Resources/Textures/<stem>_frames/sequence.json      (priority 3, legacy)
+      //   Resources/Textures/<slug>_sequence_<hash8>/sequence.json (priority 1, Phase 1 layout)
+      //   Resources/Textures/<stem>_webp_frames/sequence.json      (priority 2)
+      //   Resources/Textures/<stem>_png_frames/sequence.json       (priority 3)
+      //   Resources/Textures/<stem>_frames/sequence.json           (priority 4, legacy)
+      //
+      // The Phase 1 layout uses a hashed folder name so multiple converts of
+      // the same .mov don't collide; the actual `.mov` filename is recorded
+      // inside `sequence.json` (the `source` field). For the in-memory map
+      // key we normalise the layer suffix to the sentinel `_sequence_hash`
+      // so the priority loop below can look it up uniformly.
       const sequenceMatch = relPath
         .replace(/\\/g, "/")
-        .match(/Resources\/Textures\/([^/]+?)(_webp_frames|_png_frames|_frames)\/(.+)$/i);
+        .match(/Resources\/Textures\/([^/]+?)(_sequence_[0-9a-f]{8}|_webp_frames|_png_frames|_frames)\/(.+)$/i);
       if (sequenceMatch) {
         const stem = sequenceMatch[1];
-        const layer = sequenceMatch[2].toLowerCase() as
-          | "_webp_frames"
-          | "_png_frames"
-          | "_frames";
+        const rawLayer = sequenceMatch[2].toLowerCase();
+        const layer: "_sequence_hash" | "_webp_frames" | "_png_frames" | "_frames" =
+          /^_sequence_[0-9a-f]{8}$/.test(rawLayer)
+            ? "_sequence_hash"
+            : (rawLayer as "_webp_frames" | "_png_frames" | "_frames");
         const tail = sequenceMatch[3];
         const layerKey = `${stem}::${layer}`;
         if (tail.toLowerCase() === "sequence.json") {
@@ -169,15 +177,25 @@ export async function parseW3DFromFolder(
   const sceneNameFromFolder = topLevelFolder(chosenScene) ?? stripExtension(chosenScene.name);
 
   // Resolve sequences using a priority chain per stem:
-  //   Priority 1: <stem>_webp_frames/  (WebP v2)
-  //   Priority 2: <stem>_png_frames/   (PNG v2)
-  //   Priority 3: <stem>_frames/       (legacy v1 or v2)
+  //   Priority 1: <slug>_sequence_<hash8>/  (Phase 1 hashed layout — current writer)
+  //   Priority 2: <stem>_webp_frames/       (WebP v2 legacy)
+  //   Priority 3: <stem>_png_frames/        (PNG v2 legacy)
+  //   Priority 4: <stem>_frames/            (legacy v1 or v2)
   // Keys in sequenceFiles and sequenceFrames are "${stem}::${layer}".
+  // For the Phase 1 layer the stem is the sanitised slug (which may differ
+  // from the .mov basename due to slug sanitisation); the `.mov` filename
+  // we use for the `sequences` Map key is read from sequence.json's
+  // `source` field — that's the Strategy A binding.
   const sequenceWarnings: string[] = [];
   const sequences = new Map<string, ImageSequenceMetadata>();
+  // Track the winning layer-priority per sourceMov key so a Phase 1 entry
+  // resolved under one stem (e.g. sanitised slug "pitch_in") still beats a
+  // legacy `_frames` entry resolved under a differently-cased stem
+  // (e.g. "PITCH_IN") that maps to the same .mov filename.
+  const sequencePriority = new Map<string, number>();
 
-  const PRIORITY: ReadonlyArray<"_webp_frames" | "_png_frames" | "_frames"> = [
-    "_webp_frames", "_png_frames", "_frames",
+  const PRIORITY: ReadonlyArray<"_sequence_hash" | "_webp_frames" | "_png_frames" | "_frames"> = [
+    "_sequence_hash", "_webp_frames", "_png_frames", "_frames",
   ];
 
   const stems = new Set<string>();
@@ -185,8 +203,10 @@ export async function parseW3DFromFolder(
   for (const k of sequenceFrames.keys()) stems.add(k.split("::")[0]);
 
   for (const stem of stems) {
-    const sourceMov = `${stem}.mov`;
+    const defaultSourceMov = `${stem}.mov`;
+    let resolvedSourceMov = defaultSourceMov;
     let resolved: ImageSequenceMetadata | null = null;
+    let resolvedPriority = PRIORITY.length;
 
     for (const layer of PRIORITY) {
       if (resolved) break;
@@ -196,6 +216,11 @@ export async function parseW3DFromFolder(
       if (!jsonFile && !frames) continue;
 
       const isLegacy = layer === "_frames";
+      const isPhase1 = layer === "_sequence_hash";
+      // For the Phase 1 layout the stem is the sanitised slug, so the
+      // .mov filename has to come from sequence.json's `source` field.
+      // We refine `sourceMov` once we've parsed it below.
+      let sourceMov = defaultSourceMov;
 
       // Path A: sequence.json present — parse, validate, build frameUrls.
       if (jsonFile) {
@@ -235,6 +260,16 @@ export async function parseW3DFromFolder(
           sequenceWarnings.push(`sequence.json for ${stem} (${layer}) missing frame files — skipping this layer.`);
           continue;
         }
+        // Strategy A: for the Phase 1 hashed layout the stem is the
+        // sanitised slug (lossy), so the actual .mov filename used as the
+        // sequences-map key has to come from sequence.json's `source`
+        // field. Older / hand-rolled sequences without a `source` fall
+        // back to the slug-derived name.
+        if (isPhase1 && parsed.source && typeof parsed.source === "string") {
+          sourceMov = parsed.source;
+        }
+        resolvedSourceMov = sourceMov;
+        resolvedPriority = PRIORITY.indexOf(layer);
         resolved = {
           version: 2,
           type: "image-sequence",
@@ -276,6 +311,12 @@ export async function parseW3DFromFolder(
         ordered.sort((a, b) => a.idx - b.idx);
         const ext = ordered[0].ext as "webp" | "png";
         const digits = ordered[0].digits;
+        // Auto-repair has no manifest, so for a Phase 1 hashed folder we
+        // can't know the original .mov name — fall back to the slug.
+        // (In practice a Phase 1 folder will always carry sequence.json,
+        // so this branch is a safety net.)
+        resolvedSourceMov = sourceMov;
+        resolvedPriority = PRIORITY.indexOf(layer);
         resolved = {
           version: 2,
           type: "image-sequence",
@@ -302,7 +343,17 @@ export async function parseW3DFromFolder(
     }
 
     if (resolved) {
-      sequences.set(sourceMov, resolved);
+      // Cross-stem priority: a Phase 1 sanitised-slug entry (e.g.
+      // "pitch_in") may be processed AFTER a legacy "PITCH_IN_frames"
+      // entry that resolved to the same .mov filename. Compare the
+      // winning layer-priority of any prior entry under this sourceMov
+      // and only overwrite if the new entry is strictly better (lower
+      // index in PRIORITY).
+      const existingPriority = sequencePriority.get(resolvedSourceMov);
+      if (existingPriority === undefined || resolvedPriority < existingPriority) {
+        sequences.set(resolvedSourceMov, resolved);
+        sequencePriority.set(resolvedSourceMov, resolvedPriority);
+      }
     }
   }
 

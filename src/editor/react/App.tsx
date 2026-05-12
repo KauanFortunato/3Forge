@@ -14,7 +14,7 @@ import {
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset, imageSequenceToAsset, isVideoFileName, isVideoMimeType, videoFileToAsset } from "../images";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
-import { SceneEditor } from "../scene";
+import { SceneEditor, summariseSequenceResolverWarnings } from "../scene";
 import { isW3DPlaybackGuarded, maxPreviewFrameFromClips, W3D_PLAYBACK_GUARD_WARNING } from "../animation";
 import {
   createDefaultBlueprint,
@@ -1397,6 +1397,22 @@ export function App() {
     }
     store.loadBlueprint(rawBlueprint, "ui");
     setProjectContext(context);
+    // Phase 3B: surface unresolved sequence warnings as visible toasts so
+    // the user knows WHY a sequence isn't animating, instead of having to
+    // open devtools and inspect __r3Dump. Grouped one toast per status —
+    // never one toast per asset.
+    try {
+      const sequenceWarnings = summariseSequenceResolverWarnings(store.blueprint);
+      for (const w of sequenceWarnings) {
+        showToast(w.message, "warning");
+        // eslint-disable-next-line no-console
+        console.warn(`[sequence resolver] ${w.status}: ${w.message} — assets: ${w.assetNames.join(", ")}`);
+      }
+    } catch (err) {
+      // Defensive: never let a diagnostic helper crash the load path.
+      // eslint-disable-next-line no-console
+      console.warn("[sequence resolver] summary failed:", err);
+    }
     // Seek the viewport to the W3D author's chosen "preview" frame when one
     // exists. R3 broadcast scenes write `<Timeline PreviewMarker="N">` for
     // the rest state shown in the project thumbnail — typically the last
@@ -1414,7 +1430,7 @@ export function App() {
     setSelectedKeyframeId(null);
     setIsStarted(true);
     setTransientStatus(message);
-  }, [setTransientStatus, store]);
+  }, [setTransientStatus, store, showToast]);
 
   const downloadExportFile = useCallback((mode: ExportMode) => {
     const content = mode === "json" ? blueprintJson : typeScriptExport;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DataTexture, Texture } from "three";
 import {
   buildSequencePlaceholderTexture,
+  computeSequenceResolverStatus,
   computeTextAlignOffset,
   decideImageMeshKind,
   formatVideoLoadFailureMessage,
@@ -10,6 +11,7 @@ import {
   resolveMaskInversion,
   setTextureUpdateIfReady,
   shouldAttachTransformGizmo,
+  summariseSequenceResolverWarnings,
   summariseVideoTextureState,
 } from "./scene";
 import { createNode } from "./state";
@@ -842,5 +844,171 @@ describe("computeTextAlignOffset — W3D TextureText alignment math", () => {
     // Center: vertical centre of bbox lands on y=0.
     const centerY = realish.minY + (realish.maxY - realish.minY) / 2 + dy;
     expect(centerY).toBeCloseTo(0, 6);
+  });
+});
+
+describe("__r3Dump.imageSequence.resolverStatus (Phase 3 diagnostic)", () => {
+  it("returns 'missing-folder-access' when the sequence has no frameUrls", () => {
+    expect(
+      computeSequenceResolverStatus({ hasFrameUrls: false, playerError: null }),
+    ).toBe("missing-folder-access");
+  });
+
+  it("returns 'player-error' when frameUrls exist but the player reports an error", () => {
+    expect(
+      computeSequenceResolverStatus({ hasFrameUrls: true, playerError: "decode failed" }),
+    ).toBe("player-error");
+  });
+
+  it("returns 'resolved' when frameUrls exist and the player has no error", () => {
+    expect(
+      computeSequenceResolverStatus({ hasFrameUrls: true, playerError: null }),
+    ).toBe("resolved");
+  });
+
+  it("'missing-folder-access' takes precedence over a stale player error", () => {
+    // If frameUrls are gone, we report the root cause, not a downstream
+    // player crash that merely echoes it.
+    expect(
+      computeSequenceResolverStatus({ hasFrameUrls: false, playerError: "boom" }),
+    ).toBe("missing-folder-access");
+  });
+
+  it("returns 'dev-cache-expired' for a dev-cache sequence with no frameUrls", () => {
+    expect(
+      computeSequenceResolverStatus({
+        hasFrameUrls: false,
+        playerError: null,
+        storageType: "dev-cache",
+      }),
+    ).toBe("dev-cache-expired");
+  });
+
+  it("returns 'unsupported-storage' for an unknown storageType with no frameUrls", () => {
+    expect(
+      computeSequenceResolverStatus({
+        hasFrameUrls: false,
+        playerError: null,
+        storageType: "weird-cloud-storage",
+      }),
+    ).toBe("unsupported-storage");
+  });
+
+  it("returns 'missing-folder-access' when storageType is explicitly 'project-folder'", () => {
+    expect(
+      computeSequenceResolverStatus({
+        hasFrameUrls: false,
+        playerError: null,
+        storageType: "project-folder",
+        hasManifestPath: true,
+      }),
+    ).toBe("missing-folder-access");
+  });
+});
+
+describe("summariseSequenceResolverWarnings (Phase 3B)", () => {
+  function makeSeq(opts: {
+    storageType?: "project-folder" | "dev-cache";
+    frameCount?: number;
+    hasFrameUrls?: boolean;
+  }) {
+    const fc = opts.frameCount ?? 1;
+    return {
+      type: "image-sequence" as const,
+      version: 3 as const,
+      format: "webp" as const,
+      source: "x.mov",
+      framePattern: "frame_%06d.webp",
+      frameCount: fc,
+      fps: 25,
+      width: 100,
+      height: 100,
+      durationSec: fc / 25,
+      loop: true,
+      alpha: true,
+      pixelFormat: "rgba" as const,
+      frameUrls: opts.hasFrameUrls ? Array.from({ length: fc }, (_, i) => `blob:f-${i + 1}`) : [],
+      storageType: opts.storageType,
+      manifestPath: opts.storageType === "project-folder"
+        ? "Resources/Textures/x_sequence_aabbccdd/sequence.json"
+        : undefined,
+      sourceHash: "sha256:aabbccddeeff",
+    };
+  }
+
+  function makeBp(images: { id: string; name: string; sequence: ReturnType<typeof makeSeq> }[]): ComponentBlueprint {
+    return {
+      version: 1,
+      componentName: "test",
+      sceneMode: "2d",
+      nodes: [],
+      fonts: [],
+      images: images.map((i) => ({
+        id: i.id,
+        name: i.name,
+        mimeType: "application/x-image-sequence",
+        src: i.sequence.frameUrls[0] ?? "",
+        width: 100,
+        height: 100,
+        sequence: i.sequence,
+      })),
+      materials: [],
+      animation: { clips: [] },
+    } as unknown as ComponentBlueprint;
+  }
+
+  it("returns no warnings when every sequence is resolved", () => {
+    const bp = makeBp([
+      { id: "a", name: "ok.mov", sequence: makeSeq({ storageType: "project-folder", hasFrameUrls: true }) },
+    ]);
+    expect(summariseSequenceResolverWarnings(bp)).toEqual([]);
+  });
+
+  it("reports a single grouped warning for project-folder sequences with no frameUrls", () => {
+    const bp = makeBp([
+      { id: "a", name: "logo.mov", sequence: makeSeq({ storageType: "project-folder" }) },
+      { id: "b", name: "stage.mov", sequence: makeSeq({ storageType: "project-folder" }) },
+      { id: "c", name: "intro.mov", sequence: makeSeq({ storageType: "project-folder" }) },
+    ]);
+    const warnings = summariseSequenceResolverWarnings(bp);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0].status).toBe("missing-folder-access");
+    expect(warnings[0].count).toBe(3);
+    expect(warnings[0].message).toMatch(/3 image sequences/);
+    expect(warnings[0].message).toMatch(/Reconnect|re-import/i);
+    expect(warnings[0].assetNames.sort()).toEqual(["intro.mov", "logo.mov", "stage.mov"]);
+  });
+
+  it("reports a separate group for dev-cache-expired sequences", () => {
+    const bp = makeBp([
+      { id: "a", name: "ok.mov", sequence: makeSeq({ storageType: "project-folder", hasFrameUrls: true }) },
+      { id: "b", name: "tmp.mov", sequence: makeSeq({ storageType: "dev-cache" }) },
+    ]);
+    const warnings = summariseSequenceResolverWarnings(bp);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0].status).toBe("dev-cache-expired");
+    expect(warnings[0].message).toMatch(/Temporary|expired|Re-import/i);
+    expect(warnings[0].assetNames).toEqual(["tmp.mov"]);
+  });
+
+  it("groups separately by status (project-folder + dev-cache mixed)", () => {
+    const bp = makeBp([
+      { id: "a", name: "logo.mov", sequence: makeSeq({ storageType: "project-folder" }) },
+      { id: "b", name: "tmp.mov", sequence: makeSeq({ storageType: "dev-cache" }) },
+    ]);
+    const warnings = summariseSequenceResolverWarnings(bp);
+    expect(warnings.length).toBe(2);
+    const statuses = warnings.map((w) => w.status).sort();
+    expect(statuses).toEqual(["dev-cache-expired", "missing-folder-access"]);
+  });
+
+  it("uses singular wording when only one sequence is affected", () => {
+    const bp = makeBp([
+      { id: "a", name: "lone.mov", sequence: makeSeq({ storageType: "project-folder" }) },
+    ]);
+    const warnings = summariseSequenceResolverWarnings(bp);
+    expect(warnings[0].count).toBe(1);
+    expect(warnings[0].message).not.toMatch(/^\d+ image sequences/);
+    expect(warnings[0].message).toMatch(/it/);
   });
 });

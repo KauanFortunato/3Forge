@@ -826,3 +826,174 @@ describe("parseW3DFromFolder resolver priority", () => {
     expect(result.warnings.some((w) => /webp_frames.*validation/i.test(w) || /validation.*webp_frames/i.test(w))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 3: reopen support for Phase 1's _sequence_<hash8> layout
+// ---------------------------------------------------------------------------
+
+describe("parseW3DFromFolder Phase 1 _sequence_<hash8> layout (Phase 3 reopen)", () => {
+  // Same DOM-API stubs the other suites use, so jsdom can pretend to load
+  // <video>/<img> elements synchronously.
+  let videoSrcSetter: PropertyDescriptor | undefined;
+  let imageSrcSetter: PropertyDescriptor | undefined;
+  beforeAll(() => {
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:fixture");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    videoSrcSetter = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "src");
+    Object.defineProperty(HTMLMediaElement.prototype, "src", {
+      configurable: true,
+      set(this: HTMLMediaElement, value: string) {
+        Object.defineProperty(this, "_src", { configurable: true, value });
+        if (!value) return;
+        Object.defineProperty(this, "videoWidth", { configurable: true, value: 1920 });
+        Object.defineProperty(this, "videoHeight", { configurable: true, value: 1080 });
+        queueMicrotask(() => { this.onloadedmetadata?.(new Event("loadedmetadata")); });
+      },
+      get(this: HTMLMediaElement) { return (this as unknown as { _src?: string })._src ?? ""; },
+    });
+    imageSrcSetter = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+    Object.defineProperty(HTMLImageElement.prototype, "src", {
+      configurable: true,
+      set(this: HTMLImageElement, value: string) {
+        Object.defineProperty(this, "_src", { configurable: true, value });
+        if (!value) return;
+        Object.defineProperty(this, "naturalWidth", { configurable: true, value: 4 });
+        Object.defineProperty(this, "naturalHeight", { configurable: true, value: 4 });
+        queueMicrotask(() => { this.onload?.(new Event("load")); });
+      },
+      get(this: HTMLImageElement) { return (this as unknown as { _src?: string })._src ?? ""; },
+    });
+  });
+  afterAll(() => {
+    vi.restoreAllMocks();
+    if (videoSrcSetter) Object.defineProperty(HTMLMediaElement.prototype, "src", videoSrcSetter);
+    if (imageSrcSetter) Object.defineProperty(HTMLImageElement.prototype, "src", imageSrcSetter);
+  });
+
+  it("resolves sequence.json + frames from Resources/Textures/<slug>_sequence_<hash8>/", async () => {
+    const enc = new TextEncoder();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const validJson = JSON.stringify({
+      version: 3,
+      type: "image-sequence",
+      format: "webp",
+      source: "PITCH_IN.mov",
+      framePattern: "frame_%06d.webp",
+      frameCount: 2,
+      fps: 25,
+      width: 1920,
+      height: 1080,
+      durationSec: 0.08,
+      loop: true,
+      alpha: true,
+      pixelFormat: "rgba",
+      sourceHash: "sha256:a1b2c3d4e5f60718",
+    });
+
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="PITCH_IN.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="PITCH_IN">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(xml)),
+      // .mov absent (the user only kept the converted sequence — common after Phase 1)
+      makeFileWithBytes("Project/Resources/Textures/pitch_in_sequence_a1b2c3d4/sequence.json", enc.encode(validJson)),
+      makeFileWithBytes("Project/Resources/Textures/pitch_in_sequence_a1b2c3d4/frame_000001.webp", png),
+      makeFileWithBytes("Project/Resources/Textures/pitch_in_sequence_a1b2c3d4/frame_000002.webp", png),
+    ];
+
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "PITCH_IN");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      expect(node.image.mimeType).toBe("application/x-image-sequence");
+      expect(node.image.sequence?.frameCount).toBe(2);
+      expect(node.image.sequence?.frameUrls.length).toBe(2);
+      expect(node.image.sequence?.format).toBe("webp");
+    }
+    // No "Missing texture" warning for PITCH_IN.mov — sequence is the asset.
+    const missingWarn = result.warnings.find((w) => /Missing/i.test(w));
+    if (missingWarn) {
+      expect(missingWarn).not.toContain("PITCH_IN.mov");
+    }
+  });
+
+  it("Phase 1 layout takes priority over legacy <stem>_frames/ if both exist", async () => {
+    const enc = new TextEncoder();
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const phase1Json = JSON.stringify({
+      version: 3, type: "image-sequence", format: "webp",
+      source: "PITCH_IN.mov", framePattern: "frame_%06d.webp",
+      frameCount: 1, fps: 25, width: 100, height: 100, durationSec: 0.04,
+      loop: true, alpha: true, pixelFormat: "rgba",
+      sourceHash: "sha256:a1b2c3d4e5f60718",
+    });
+    const legacyJson = JSON.stringify({
+      version: 2, type: "image-sequence", format: "png",
+      source: "PITCH_IN.mov", framePattern: "frame_%06d.png",
+      frameCount: 1, fps: 25, width: 100, height: 100, durationSec: 0.04,
+      loop: true, alpha: true, pixelFormat: "rgba",
+    });
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="PITCH_IN.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="PITCH_IN">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(xml)),
+      makeFileWithBytes("Project/Resources/Textures/pitch_in_sequence_a1b2c3d4/sequence.json", enc.encode(phase1Json)),
+      makeFileWithBytes("Project/Resources/Textures/pitch_in_sequence_a1b2c3d4/frame_000001.webp", png),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/sequence.json", enc.encode(legacyJson)),
+      makeFileWithBytes("Project/Resources/Textures/PITCH_IN_frames/frame_000001.png", png),
+    ];
+    const result = await parseW3DFromFolder(files);
+    const node = result.blueprint.nodes.find((n) => n.name === "PITCH_IN");
+    expect(node?.type).toBe("image");
+    if (node?.type === "image") {
+      // Phase 1 layout wins — format is webp, NOT the legacy png.
+      expect(node.image.sequence?.format).toBe("webp");
+    }
+  });
+
+  it("Phase 1 sequence with missing frame falls through with a warning", async () => {
+    const enc = new TextEncoder();
+    const phase1Json = JSON.stringify({
+      version: 3, type: "image-sequence", format: "webp",
+      source: "PITCH_IN.mov", framePattern: "frame_%06d.webp",
+      frameCount: 3, fps: 25, width: 100, height: 100, durationSec: 0.12,
+      loop: true, alpha: true, pixelFormat: "rgba",
+      sourceHash: "sha256:a1b2c3d4e5f60718",
+    });
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<ImageSequence Id="seq1" Name="PITCH_IN.mov"/>
+<TextureLayer Id="LY1"><TextureMappingOption Texture="seq1"/></TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="PITCH_IN">
+<Primitive><FaceMappingList>
+<NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive>
+</Quad></Children></SceneNode></SceneLayer></Scene>`;
+    const files = [
+      makeFileWithBytes("Project/scene.w3d", enc.encode(xml)),
+      makeFileWithBytes("Project/Resources/Textures/pitch_in_sequence_a1b2c3d4/sequence.json", enc.encode(phase1Json)),
+      // Only 1 of the claimed 3 frames present
+      makeFileWithBytes("Project/Resources/Textures/pitch_in_sequence_a1b2c3d4/frame_000001.webp", new Uint8Array([0x89])),
+    ];
+    const result = await parseW3DFromFolder(files);
+    expect(result.warnings.some((w) => /missing frame/i.test(w))).toBe(true);
+  });
+});

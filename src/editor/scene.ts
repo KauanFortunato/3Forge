@@ -74,6 +74,7 @@ import type {
   EditorNode,
   EditorStoreChange,
   ImageNode,
+  ImageSequenceMetadata,
   MaterialSpec,
   NodeOriginSpec,
   TextNode,
@@ -1245,9 +1246,52 @@ export class SceneEditor {
         video: videoState,
         imageSequence: (() => {
           const player = this.sequencePlayers.get(node.id);
-          if (!player) return null;
+          const seq = node.type === "image" ? (node.image.sequence ?? null) : null;
+          // Common Phase 3 diagnostic fields: surfaced regardless of
+          // whether a live player exists, so the operator can see the
+          // sequence's storage shape even on a reopen-without-folder.
+          const commonFields = seq
+            ? {
+                storageType: seq.storageType ?? null,
+                manifestPath: seq.manifestPath ?? null,
+                sourceHash: seq.sourceHash ?? null,
+                hasRuntimeFrameUrls: (seq.frameUrls?.length ?? 0) > 0,
+                runtimeFrameUrlCount: seq.frameUrls?.length ?? 0,
+              }
+            : null;
+          if (!player) {
+            // Phase 3 reopen: a sequence may exist on the blueprint but
+            // have no live player because frameUrls couldn't be minted
+            // (e.g. workspace autosave restore without folder access).
+            // Surface that as `missing-folder-access` so the diagnostic
+            // dump shows WHY the node isn't animating.
+            if (seq) {
+              const resolverStatus = computeSequenceResolverStatus({
+                hasFrameUrls: (seq.frameUrls?.length ?? 0) > 0,
+                playerError: null,
+                storageType: seq.storageType,
+                hasManifestPath: !!seq.manifestPath,
+              });
+              return {
+                ...commonFields,
+                resolverStatus,
+                resolverWarning: describeSequenceResolverStatus(resolverStatus, seq.manifestPath),
+                playerRegistered: false,
+              };
+            }
+            return null;
+          }
           const s = player.state();
+          const resolverStatus = computeSequenceResolverStatus({
+            hasFrameUrls: (seq?.frameUrls?.length ?? 0) > 0,
+            playerError: s.error ?? null,
+            storageType: seq?.storageType,
+            hasManifestPath: !!seq?.manifestPath,
+          });
           return {
+            ...commonFields,
+            resolverStatus,
+            resolverWarning: describeSequenceResolverStatus(resolverStatus, seq?.manifestPath),
             frameCount: s.totalFrames,
             currentFrame: s.currentFrame,
             loadedFrames: s.loadedFrames,
@@ -3152,6 +3196,173 @@ export type ImageMeshKind = "image-sequence" | "video" | "image" | "sequence-pay
  * `sequence.frameUrls` payload doesn't — we don't want to silently fall to
  * the video branch with a revoked blob URL.
  */
+/**
+ * Phase 3 reopen diagnostic: classifies a sequence node into a resolver
+ * state for `__r3Dump.imageSequence.resolverStatus`. Pure so it can be
+ * unit-tested without instantiating SceneEditor.
+ *
+ *   - `resolved`              — frameUrls present and the player is healthy
+ *   - `missing-folder-access` — sequence has manifestPath + storageType
+ *                               "project-folder" but no frameUrls
+ *                               (e.g. workspace autosave rehydrated the
+ *                                blueprint without an FSA folder handle)
+ *   - `dev-cache-expired`     — storageType "dev-cache" + no frameUrls
+ *                               (transient frames vanished — re-import to
+ *                                save permanently)
+ *   - `unsupported-storage`   — storageType is something the renderer
+ *                               doesn't recognise (forward-compat guard)
+ *   - `player-error`          — frameUrls present but the live player has
+ *                               an error in its state (e.g. a frame fetch
+ *                                failed after init)
+ *   - `unresolved`            — generic catch-all (no metadata to act on)
+ *
+ * Parse-time statuses (`missing-manifest`, `invalid-manifest`,
+ * `missing-frame`) fire as warnings during `parseW3DFromFolder` and
+ * surface via `result.warnings`; the renderer never observes them
+ * because the parser drops the sequence and falls back to video mime.
+ */
+export type SequenceResolverStatus =
+  | "resolved"
+  | "missing-folder-access"
+  | "dev-cache-expired"
+  | "unsupported-storage"
+  | "player-error"
+  | "unresolved";
+
+export interface SequenceResolverStatusInput {
+  hasFrameUrls: boolean;
+  playerError: string | null;
+  /** Sequence storage type from the blueprint, may be undefined for legacy. */
+  storageType?: string;
+  /** True when the sequence has manifestPath set (Phase 1 layout). */
+  hasManifestPath?: boolean;
+}
+
+export function computeSequenceResolverStatus(input: SequenceResolverStatusInput): SequenceResolverStatus {
+  if (input.hasFrameUrls) {
+    if (input.playerError) return "player-error";
+    return "resolved";
+  }
+  // No frameUrls — diagnose WHY based on storage shape.
+  if (input.storageType === "dev-cache") return "dev-cache-expired";
+  if (input.storageType !== undefined && input.storageType !== "project-folder") {
+    return "unsupported-storage";
+  }
+  // project-folder, or the legacy back-compat case where storageType is
+  // unknown — both point at "we expected to find frames in the project
+  // folder but they aren't here".
+  return "missing-folder-access";
+}
+
+export interface SequenceResolverWarning {
+  /** The resolver status that produced this warning. */
+  status: SequenceResolverStatus;
+  /** Number of distinct assets in the blueprint affected by this status. */
+  count: number;
+  /** Operator-facing message ready for a toast. Already pluralised /
+   * grouped — there is at most ONE warning per status, regardless of
+   * how many assets share it. */
+  message: string;
+  /** The names of the affected assets, for log/devtools follow-up. */
+  assetNames: string[];
+}
+
+/**
+ * Walks the blueprint and groups image-sequence assets that failed to
+ * resolve into one warning per resolver-status. Used by App.tsx after
+ * `loadBlueprint` to fire a single toast per failure mode (e.g. "3
+ * sequences could not be loaded — reconnect the project folder")
+ * instead of one toast per asset.
+ *
+ * Asset-library entries (`blueprint.images`) are the canonical source
+ * — image nodes pointing into the library inherit its sequence shape.
+ * Sequences in `resolved` or `player-error` state are NOT reported
+ * here (resolved is success; player-error is a runtime symptom that
+ * surfaces via `__r3Dump.imageSequence.error`, not at load time).
+ */
+export function summariseSequenceResolverWarnings(
+  blueprint: ComponentBlueprint,
+): SequenceResolverWarning[] {
+  // Collect unique sequence assets by id (or by name when id is missing,
+  // which is the legacy case). Asset library is canonical; image nodes
+  // that carry their own `image.sequence` (no library entry) are also
+  // considered so we don't miss inline assets.
+  const seen = new Map<string, { name: string; status: SequenceResolverStatus }>();
+  const consider = (asset: { id?: string; name: string; sequence?: ImageSequenceMetadata } | undefined): void => {
+    if (!asset?.sequence) return;
+    const key = asset.id ?? asset.name;
+    if (seen.has(key)) return;
+    const seq = asset.sequence;
+    const status = computeSequenceResolverStatus({
+      hasFrameUrls: (seq.frameUrls?.length ?? 0) > 0,
+      playerError: null,
+      storageType: seq.storageType,
+      hasManifestPath: !!seq.manifestPath,
+    });
+    seen.set(key, { name: asset.name, status });
+  };
+  for (const asset of blueprint.images ?? []) consider(asset);
+  for (const node of blueprint.nodes) {
+    if (node.type !== "image") continue;
+    consider(node.image);
+  }
+
+  // Group by status — but skip the success and runtime-only ones.
+  const groups = new Map<SequenceResolverStatus, string[]>();
+  for (const { name, status } of seen.values()) {
+    if (status === "resolved") continue;
+    if (status === "player-error") continue;  // surfaces via runtime player state, not load
+    const list = groups.get(status) ?? [];
+    list.push(name);
+    groups.set(status, list);
+  }
+
+  const out: SequenceResolverWarning[] = [];
+  for (const [status, names] of groups) {
+    out.push({
+      status,
+      count: names.length,
+      message: groupedMessageFor(status, names.length),
+      assetNames: names,
+    });
+  }
+  return out;
+}
+
+function groupedMessageFor(status: SequenceResolverStatus, count: number): string {
+  const plural = count === 1 ? "image sequence" : `${count} image sequences`;
+  switch (status) {
+    case "missing-folder-access":
+      return `${count === 1 ? "An" : count} ${plural === "image sequence" ? "image sequence" : plural} could not be loaded. Reconnect or re-import the project folder to load ${count === 1 ? "it" : "them"}.`;
+    case "dev-cache-expired":
+      return `${count === 1 ? "A temporary MOV sequence" : `${count} temporary MOV sequences`} expired. Re-import with project folder access to save ${count === 1 ? "it" : "them"} permanently.`;
+    case "unsupported-storage":
+      return `${count === 1 ? "An image sequence has" : `${count} image sequences have`} an unsupported storage type and could not be loaded.`;
+    case "unresolved":
+    default:
+      return `${count === 1 ? "An image sequence" : `${count} image sequences`} could not be resolved.`;
+  }
+}
+
+/** Operator-facing one-liner explaining the resolver status. */
+export function describeSequenceResolverStatus(status: SequenceResolverStatus, manifestPath?: string | null): string {
+  switch (status) {
+    case "resolved":
+      return "Sequence resolved.";
+    case "missing-folder-access":
+      return `Sequence frames are stored in the project folder${manifestPath ? ` (${manifestPath})` : ""}. Reconnect or re-import the project folder to load them.`;
+    case "dev-cache-expired":
+      return "Temporary MOV sequence expired. Re-import with project folder access to save it permanently.";
+    case "unsupported-storage":
+      return "Sequence storage type is not recognised by this build of the editor.";
+    case "player-error":
+      return "Sequence player reported a frame load error.";
+    case "unresolved":
+    default:
+      return "Sequence is not resolved.";
+  }
+}
+
 export function decideImageMeshKind(image: {
   mimeType: string;
   sequence?: { frameUrls?: string[] };
