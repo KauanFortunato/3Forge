@@ -15,7 +15,7 @@ import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset, imageSequenceToAsset, isVideoFileName, isVideoMimeType, videoFileToAsset } from "../images";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor, summariseSequenceResolverWarnings } from "../scene";
-import { isW3DPlaybackGuarded, maxPreviewFrameFromClips, W3D_PLAYBACK_GUARD_WARNING } from "../animation";
+import { getPlaybackDiagnostics, isW3DPlaybackGuarded, maxPreviewFrameFromClips, W3D_PLAYBACK_GUARD_WARNING } from "../animation";
 import {
   createDefaultBlueprint,
   EditorStore,
@@ -928,6 +928,17 @@ export function App() {
     }),
     [storeView.animation, store],
   );
+  // Phase 4: full playback diagnostics (W3D guard, no-clips, zero-tracks,
+  // missing targets, unsupported properties). Drives the visible banner +
+  // disabled Play state below.
+  const playbackDiagnostics = useMemo(
+    () => getPlaybackDiagnostics({
+      blueprintMetadata: store.blueprint.metadata,
+      clips: storeView.animation.clips,
+      nodeIds: new Set(storeView.blueprintNodes.map((n) => n.id)),
+    }),
+    [store, storeView.animation.clips, storeView.blueprintNodes],
+  );
   const w3dPreviewFrame = useMemo(
     () => Math.max(0, maxPreviewFrameFromClips(storeView.animation.clips)),
     [storeView.animation.clips],
@@ -955,11 +966,21 @@ export function App() {
       return;
     }
     if (w3dPlaybackGuarded) { guardSnapBack(); return; }
+    // Phase 4: non-W3D blocked reasons (no-clips, duration-zero, etc.)
+    // surface a clear status instead of silently ignoring the click.
+    if (playbackDiagnostics.playbackBlockedReason !== null) {
+      setTransientStatus(playbackDiagnostics.playbackBlockedMessage);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[playback] blocked (${playbackDiagnostics.playbackBlockedReason}): ${playbackDiagnostics.playbackBlockedMessage}`,
+      );
+      return;
+    }
 
     sceneRef.current?.playAnimation();
     setIsAnimationPlaying(true);
     setTransientStatus("Animation playing.");
-  }, [isAnimationPlaying, setTransientStatus, w3dPlaybackGuarded, guardSnapBack]);
+  }, [isAnimationPlaying, setTransientStatus, w3dPlaybackGuarded, guardSnapBack, playbackDiagnostics]);
 
   const handleAnimationStop = useCallback(() => {
     if (w3dPlaybackGuarded) { guardSnapBack(); return; }
@@ -2990,6 +3011,13 @@ export function App() {
             onFastForward: handleAnimationFastForward,
             onSkipBack: handleAnimationSkipBack,
             onSkipForward: handleAnimationSkipForward,
+            // Phase 4: persistent banner shown next to Play when blocked.
+            // For W3D-guarded scenes shows the snapshot text; for non-W3D
+            // failures (no clips, missing targets, etc.) shows the
+            // operator-facing reason. Empty string ⇒ no banner.
+            blockedMessage: playbackDiagnostics.playbackBlockedReason === "guarded"
+              ? "W3D snapshot — playback disabled until live W3D animation is supported."
+              : (playbackDiagnostics.playbackBlockedMessage || undefined),
           } : null}
           onComponentNameChange={(value) => store.updateComponentName(value)}
           onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}

@@ -163,6 +163,154 @@ export function isW3DPlaybackGuarded(opts: {
 export const W3D_PLAYBACK_GUARD_WARNING =
   "Live W3D playback is not fully supported yet. This import is shown as a PreviewMarker snapshot.";
 
+/** Reasons playback cannot start. `null` when playback is supported. */
+export type PlaybackBlockedReason =
+  | "guarded"
+  | "no-clips"
+  | "duration-zero"
+  | "zero-tracks"
+  | "missing-targets"
+  | "unsupported-properties"
+  | "render-loop-inactive"
+  | null;
+
+export interface PlaybackDiagnostics {
+  /** Total clips on the active blueprint. */
+  clipCount: number;
+  /** Sum of authored tracks across every clip. */
+  trackCount: number;
+  /** Tracks that compiled successfully (have a resolvable target node and a
+   * supported property path). May be lower than `trackCount` when nodes were
+   * deleted or when the blueprint authored a property the runtime can't drive. */
+  compiledTrackCount: number;
+  /** Tracks dropped during compile because of missing target / unsupported property. */
+  invalidTrackCount: number;
+  /** Distinct node ids referenced by tracks that don't exist in the blueprint. */
+  missingTargetNodeIds: string[];
+  /** Distinct property paths referenced by tracks the runtime can't drive. */
+  unsupportedAnimatedProperties: string[];
+  /** First reason — in order of severity — why Play cannot proceed. `null` ⇒ ok. */
+  playbackBlockedReason: PlaybackBlockedReason;
+  /** Operator-facing message paired with `playbackBlockedReason`. Empty when
+   * playback is supported. */
+  playbackBlockedMessage: string;
+  /** True when playback can run end-to-end. Equivalent to `playbackBlockedReason === null`. */
+  playbackSupported: boolean;
+  /** True when the W3D guard is active (subset of `!playbackSupported`). */
+  playbackGuarded: boolean;
+}
+
+/** Property paths the runtime can drive end-to-end. Mirrors what
+ * `getAnimationValue` / `applyAnimationValueToNode` actually handle today. */
+const SUPPORTED_ANIMATED_PROPERTIES: ReadonlySet<string> = new Set<AnimationPropertyPath>([
+  "visible",
+  "transform.position.x",
+  "transform.position.y",
+  "transform.position.z",
+  "transform.rotation.x",
+  "transform.rotation.y",
+  "transform.rotation.z",
+  "transform.scale.x",
+  "transform.scale.y",
+  "transform.scale.z",
+  "material.opacity",
+  "material.textureOptions.offsetU",
+  "material.textureOptions.offsetV",
+  "material.textureOptions.repeatU",
+  "material.textureOptions.repeatV",
+]);
+
+export interface PlaybackDiagnosticsInput {
+  blueprintMetadata: unknown;
+  clips: readonly AnimationClip[];
+  /** All node ids present in the blueprint. Used to detect missing track targets. */
+  nodeIds: ReadonlySet<string>;
+  /** Optional override of the "what is supported" set. Tests pass this; the
+   * default mirrors the runtime evaluator. */
+  supportedProperties?: ReadonlySet<string>;
+}
+
+/**
+ * Pure helper: classifies playback readiness so the App can disable the Play
+ * button AND surface a visible reason.
+ *
+ * Order of checks (only the first one fires — the rest are still computed for
+ * the diagnostic object):
+ *   1. W3D guard       → `guarded`
+ *   2. No clips        → `no-clips`
+ *   3. Duration zero   → `duration-zero`
+ *   4. Zero tracks     → `zero-tracks`
+ *   5. Missing targets → `missing-targets`
+ *   6. Unsupported     → `unsupported-properties`
+ *
+ * `render-loop-inactive` is a runtime symptom (raf cancelled / scene unmounted);
+ * App.tsx layers that on top of this output when it knows the runtime state.
+ */
+export function getPlaybackDiagnostics(input: PlaybackDiagnosticsInput): PlaybackDiagnostics {
+  const supported = input.supportedProperties ?? SUPPORTED_ANIMATED_PROPERTIES;
+  const guarded = isW3DPlaybackGuarded({
+    blueprintMetadata: input.blueprintMetadata,
+    clips: input.clips,
+  });
+  const clipCount = input.clips.length;
+  let trackCount = 0;
+  let compiledTrackCount = 0;
+  let invalidTrackCount = 0;
+  const missingTargets = new Set<string>();
+  const unsupported = new Set<string>();
+  let totalDuration = 0;
+  for (const clip of input.clips) {
+    totalDuration += clip.durationFrames ?? 0;
+    for (const track of clip.tracks) {
+      trackCount += 1;
+      const targetMissing = !input.nodeIds.has(track.nodeId);
+      const propertyUnsupported = !supported.has(track.property);
+      if (targetMissing) missingTargets.add(track.nodeId);
+      if (propertyUnsupported) unsupported.add(track.property);
+      if (targetMissing || propertyUnsupported) {
+        invalidTrackCount += 1;
+      } else {
+        compiledTrackCount += 1;
+      }
+    }
+  }
+
+  let reason: PlaybackBlockedReason = null;
+  let message = "";
+  if (guarded) {
+    reason = "guarded";
+    message = W3D_PLAYBACK_GUARD_WARNING;
+  } else if (clipCount === 0) {
+    reason = "no-clips";
+    message = "Playback failed: no animation clips.";
+  } else if (totalDuration <= 0) {
+    reason = "duration-zero";
+    message = "Playback failed: duration is 0.";
+  } else if (compiledTrackCount === 0 && trackCount === 0) {
+    reason = "zero-tracks";
+    message = "Playback failed: no valid animation tracks.";
+  } else if (compiledTrackCount === 0 && missingTargets.size > 0) {
+    reason = "missing-targets";
+    message = `Playback failed: missing target nodes (${missingTargets.size}).`;
+  } else if (compiledTrackCount === 0 && unsupported.size > 0) {
+    reason = "unsupported-properties";
+    message = `Playback failed: unsupported animated properties (${unsupported.size}).`;
+  }
+
+  return {
+    clipCount,
+    trackCount,
+    compiledTrackCount,
+    invalidTrackCount,
+    missingTargetNodeIds: Array.from(missingTargets),
+    unsupportedAnimatedProperties: Array.from(unsupported),
+    playbackBlockedReason: reason,
+    playbackBlockedMessage: message,
+    playbackSupported: reason === null,
+    playbackGuarded: guarded,
+  };
+}
+
 export function createAnimationTrack(nodeId: string, property: AnimationPropertyPath): AnimationTrack {
   return {
     id: generateAnimationId("track"),

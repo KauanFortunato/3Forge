@@ -43,6 +43,10 @@ export interface PlaybackToolbarProps {
   onFastForward: () => void;
   onSkipBack: () => void;
   onSkipForward: () => void;
+  /** Phase 4: persistent message rendered inline next to the timeline
+   * controls when playback can't run end-to-end (W3D guard, no clips,
+   * missing targets, etc.). Empty string ⇒ no banner. */
+  blockedMessage?: string;
 }
 
 interface SecondaryToolbarProps {
@@ -284,10 +288,24 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
     onFastForward,
     onSkipBack,
     onSkipForward,
+    blockedMessage,
   } = props;
+  const blocked = !!blockedMessage;
+  const playTitle = blocked ? blockedMessage : (isPlaying ? "Pause" : "Play");
 
   return (
     <div className="playbar" role="group" aria-label="Playback controls">
+      {blocked ? (
+        <span
+          className="playbar__banner"
+          role="status"
+          aria-live="polite"
+          title={blockedMessage}
+          data-testid="playback-blocked-banner"
+        >
+          {blockedMessage}
+        </span>
+      ) : null}
       <button
         type="button"
         className="ibtn"
@@ -308,11 +326,12 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
       </button>
       <button
         type="button"
-        className={`ibtn${isPlaying ? " is-active" : ""}`}
+        className={`ibtn${isPlaying ? " is-active" : ""}${blocked ? " is-disabled" : ""}`}
         onClick={onPlayToggle}
         aria-label={isPlaying ? "Pause" : "Play"}
         aria-pressed={isPlaying}
-        title={isPlaying ? "Pause" : "Play"}
+        aria-disabled={blocked}
+        title={playTitle}
       >
         {isPlaying ? <PauseIcon width={12} height={12} /> : <PlayIcon width={12} height={12} />}
       </button>

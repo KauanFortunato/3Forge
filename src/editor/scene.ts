@@ -61,6 +61,7 @@ import {
   isDiscreteAnimationProperty,
   isTrackMuted,
   isW3DPlaybackGuarded,
+  getPlaybackDiagnostics,
   maxPreviewFrameFromClips,
   W3D_PLAYBACK_GUARD_WARNING,
 } from "./animation";
@@ -194,6 +195,9 @@ export class SceneEditor {
   private animationPlaybackStartedAt = 0;
   private animationPlaybackStartFrame = 0;
   private lastEmittedAnimationFrame: number | null = null;
+  /** Phase 4: timestamp of the last render-loop tick (performance.now()).
+   * Read by __r3Dump to compute renderLoopActive. */
+  private lastPlaybackTickTime: number | null = null;
   private lastAnimationFrameEmitAt = 0;
   private lastSelectionHelperUpdateAt = 0;
   private selectionHelperDirty = true;
@@ -1002,6 +1006,16 @@ export class SceneEditor {
       playbackGuarded: boolean;
       scrubGuarded: boolean;
       lastGuardWarning: string | null;
+      // Phase 4 diagnostics
+      clipCount: number;
+      trackCount: number;
+      invalidTrackCount: number;
+      missingTargetNodeIds: string[];
+      unsupportedAnimatedProperties: string[];
+      playbackBlockedReason: import("./animation").PlaybackBlockedReason;
+      playbackBlockedMessage: string;
+      lastPlaybackTickTime: number | null;
+      renderLoopActive: boolean;
       warning: string | null;
     };
     w3dTextDebug: Array<{
@@ -1710,10 +1724,19 @@ export class SceneEditor {
         // Use the shared helper so App.tsx (which intercepts the actual
         // Play/scrub events) and this dump can never disagree about
         // whether guards are active.
-        const guarded = isW3DPlaybackGuarded({
+        const nodeIds = new Set(bp.nodes.map((n) => n.id));
+        const diag = getPlaybackDiagnostics({
           blueprintMetadata: bp.metadata,
           clips: bp.animation.clips,
+          nodeIds,
         });
+        const guarded = diag.playbackGuarded;
+        // The render loop is "active" when the editor's RAF tick has fired
+        // recently. lastPlaybackTickTime is updated inside startLoop().
+        // A null value means the loop never ticked since this SceneEditor
+        // instance was created (constructor failed, scene unmounted, etc).
+        const lastTick = this.lastPlaybackTickTime ?? null;
+        const renderLoopActive = lastTick !== null && (performance.now() - lastTick) < 1000;
         return {
           isPlaying: this.isAnimationPlaying,
           activeTimelineName: this.store.getActiveAnimationClip()?.name ?? null,
@@ -1724,11 +1747,25 @@ export class SceneEditor {
           compiledTrackCount: this.animationTracks.length,
           previewFrame,
           snapshotMode,
-          playbackSupported: !guarded,
+          playbackSupported: diag.playbackSupported && renderLoopActive,
           playbackGuarded: guarded,
           scrubGuarded: guarded,
           lastGuardWarning: guarded ? W3D_PLAYBACK_GUARD_WARNING : null,
           warning: guarded ? W3D_PLAYBACK_GUARD_WARNING : null,
+          // Phase 4 diagnostics
+          clipCount: diag.clipCount,
+          trackCount: diag.trackCount,
+          invalidTrackCount: diag.invalidTrackCount,
+          missingTargetNodeIds: diag.missingTargetNodeIds,
+          unsupportedAnimatedProperties: diag.unsupportedAnimatedProperties,
+          playbackBlockedReason: !renderLoopActive && diag.playbackBlockedReason === null
+            ? "render-loop-inactive"
+            : diag.playbackBlockedReason,
+          playbackBlockedMessage: !renderLoopActive && diag.playbackBlockedReason === null
+            ? "Playback failed: render loop is not active."
+            : diag.playbackBlockedMessage,
+          lastPlaybackTickTime: lastTick,
+          renderLoopActive,
         };
       })(),
       shadow: {
@@ -2734,6 +2771,7 @@ export class SceneEditor {
   private startLoop(): void {
     const tick = () => {
       this.animationFrame = requestAnimationFrame(tick);
+      this.lastPlaybackTickTime = performance.now();
       const dt = this.playerClock.getDelta();
       for (const player of this.sequencePlayers.values()) player.tick(dt);
       this.updateAnimationPlayback();

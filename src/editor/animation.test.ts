@@ -13,6 +13,7 @@ import {
   isAnimationEasePreset,
   isAnimationPropertyPath,
   isTrackMuted,
+  getPlaybackDiagnostics,
   isW3DPlaybackGuarded,
   maxPreviewFrameFromClips,
   normalizeAnimation,
@@ -312,5 +313,122 @@ describe("isW3DPlaybackGuarded", () => {
     expect(typeof W3D_PLAYBACK_GUARD_WARNING).toBe("string");
     expect(W3D_PLAYBACK_GUARD_WARNING).toMatch(/PreviewMarker/);
     expect(W3D_PLAYBACK_GUARD_WARNING.length).toBeGreaterThan(20);
+  });
+});
+
+describe("getPlaybackDiagnostics (Phase 4)", () => {
+  const makeNode = (id: string) => ({ ...createNode("plane", { name: id, parentId: null }), id });
+  const makeClip = (durationFrames: number, tracks: Array<{ nodeId: string; property: string }> = []) => {
+    const clip = createAnimationClip("c", { fps: 25, durationFrames });
+    clip.tracks = tracks.map((t) => {
+      const tr = createAnimationTrack(t.nodeId, t.property as never);
+      tr.keyframes = [createAnimationKeyframe(0, 0)];
+      return tr;
+    });
+    return clip;
+  };
+
+  it("returns playbackSupported=true when blueprint has clips, tracks, and matching nodes", () => {
+    const n = makeNode("n1");
+    const clip = makeClip(120, [{ nodeId: n.id, property: "transform.position.x" }]);
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: null,
+      clips: [clip],
+      nodeIds: new Set([n.id]),
+    });
+    expect(diag.playbackSupported).toBe(true);
+    expect(diag.playbackBlockedReason).toBeNull();
+    expect(diag.compiledTrackCount).toBe(1);
+    expect(diag.invalidTrackCount).toBe(0);
+  });
+
+  it("returns 'guarded' for a W3D blueprint with PreviewMarker", () => {
+    const clip = createAnimationClip("In", { fps: 25, durationFrames: 800 });
+    clip.previewFrame = 799;
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: { w3d: { originalXml: "<x/>" } },
+      clips: [clip],
+      nodeIds: new Set(),
+    });
+    expect(diag.playbackBlockedReason).toBe("guarded");
+    expect(diag.playbackBlockedMessage).toMatch(/W3D|PreviewMarker/i);
+    expect(diag.playbackGuarded).toBe(true);
+  });
+
+  it("returns 'no-clips' when there are zero clips", () => {
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: null,
+      clips: [],
+      nodeIds: new Set(),
+    });
+    expect(diag.playbackBlockedReason).toBe("no-clips");
+    expect(diag.playbackBlockedMessage).toMatch(/no animation clips/i);
+  });
+
+  it("returns 'duration-zero' when total clip duration is 0", () => {
+    const clip = makeClip(0);
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: null,
+      clips: [clip],
+      nodeIds: new Set(),
+    });
+    expect(diag.playbackBlockedReason).toBe("duration-zero");
+    expect(diag.playbackBlockedMessage).toMatch(/duration is 0/i);
+  });
+
+  it("returns 'zero-tracks' when clips exist with duration but no tracks", () => {
+    const clip = makeClip(120);
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: null,
+      clips: [clip],
+      nodeIds: new Set(),
+    });
+    expect(diag.playbackBlockedReason).toBe("zero-tracks");
+    expect(diag.playbackBlockedMessage).toMatch(/no valid animation tracks/i);
+  });
+
+  it("returns 'missing-targets' when every track points at a missing node", () => {
+    const clip = makeClip(120, [{ nodeId: "ghost", property: "transform.position.x" }]);
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: null,
+      clips: [clip],
+      nodeIds: new Set(["someone-else"]),
+    });
+    expect(diag.playbackBlockedReason).toBe("missing-targets");
+    expect(diag.missingTargetNodeIds).toEqual(["ghost"]);
+    expect(diag.invalidTrackCount).toBe(1);
+    expect(diag.compiledTrackCount).toBe(0);
+  });
+
+  it("returns 'unsupported-properties' when every track targets an unsupported property", () => {
+    const n = makeNode("n1");
+    // material.color isn't in the runtime's supported animated property set.
+    const clip = makeClip(120, [{ nodeId: n.id, property: "material.color" }]);
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: null,
+      clips: [clip],
+      nodeIds: new Set([n.id]),
+    });
+    expect(diag.playbackBlockedReason).toBe("unsupported-properties");
+    expect(diag.unsupportedAnimatedProperties).toEqual(["material.color"]);
+    expect(diag.invalidTrackCount).toBe(1);
+  });
+
+  it("does NOT block when SOME tracks are valid even if others are bad", () => {
+    const n = makeNode("n1");
+    const clip = makeClip(120, [
+      { nodeId: n.id, property: "transform.position.x" }, // valid
+      { nodeId: "ghost", property: "transform.position.y" }, // missing target
+    ]);
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: null,
+      clips: [clip],
+      nodeIds: new Set([n.id]),
+    });
+    expect(diag.playbackSupported).toBe(true);
+    expect(diag.playbackBlockedReason).toBeNull();
+    expect(diag.compiledTrackCount).toBe(1);
+    expect(diag.invalidTrackCount).toBe(1);
+    expect(diag.missingTargetNodeIds).toEqual(["ghost"]);
   });
 });
