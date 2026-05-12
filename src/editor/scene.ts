@@ -68,6 +68,7 @@ import {
   isTrackMuted,
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
+import { containsUsdcMagic, tryDecodeDataUrl } from "./modelBuffer";
 import { EditorStore } from "./state";
 import type {
   AnimationEasePreset,
@@ -982,23 +983,39 @@ export class SceneEditor {
     }
 
     if (asset.format === "usdz") {
-      this.usdLoader.load(
-        asset.src,
-        (group) => {
-          wrapper.clear();
-          group.traverse((child) => {
-            child.userData.nodeId = node.id;
-            child.userData.nodeType = node.type;
-            if (child instanceof Mesh) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-            }
+      const populate = (group: Group): void => {
+        wrapper.clear();
+        group.traverse((child) => {
+          child.userData.nodeId = node.id;
+          child.userData.nodeType = node.type;
+          if (child instanceof Mesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        wrapper.add(group);
+      };
+
+      const bytes = tryDecodeDataUrl(asset.src);
+      if (bytes && containsUsdcMagic(bytes)) {
+        const buffer = bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ) as ArrayBuffer;
+        void import("./usdcParser")
+          .then(({ parseUsdc }) => parseUsdc(buffer))
+          .then(populate)
+          .catch((error) => {
+            console.error("Failed to parse USDC model:", error);
           });
-          wrapper.add(group);
-        },
-        undefined,
-        () => {},
-      );
+      } else {
+        this.usdLoader.load(
+          asset.src,
+          populate,
+          undefined,
+          () => {},
+        );
+      }
     } else {
       this.gltfLoader.load(
         asset.src,

@@ -4,6 +4,19 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./usdcParser", () => ({
+  parseUsdc: async (): Promise<Group> => {
+    const root = new Group();
+    root.name = "USDC Mock Root";
+    const mesh = new Mesh(new BoxGeometry(0.5, 0.5, 0.5), new MeshStandardMaterial({ color: 0x00ff00 }));
+    mesh.name = "USDCMockMesh";
+    mesh.userData.usdcStub = true;
+    root.add(mesh);
+    return root;
+  },
+}));
+
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "./animation";
 import { createDefaultBlueprint, createNode, ROOT_NODE_ID } from "./state";
 import {
@@ -336,7 +349,7 @@ describe("gltfExport", () => {
     }
   });
 
-  it("throws clear error when model is USDC binary", async () => {
+  it("routes USDC-binary USDZ assets through the tinyusdz parser", async () => {
     const dataUrl = await makeUsdcUsdzDataUrl();
     const asset: ModelAsset = {
       id: "asset-usdc",
@@ -351,7 +364,16 @@ describe("gltfExport", () => {
     blueprint.models = [asset];
     blueprint.nodes = [modelNode];
 
-    await expect(createBlueprintExportGroup(blueprint)).rejects.toThrow(/USDC/);
+    const group = await createBlueprintExportGroup(blueprint);
+
+    const markedMeshes: Mesh[] = [];
+    group.traverse((child) => {
+      if (child instanceof Mesh && child.userData.usdcStub === true) {
+        markedMeshes.push(child);
+      }
+    });
+    expect(markedMeshes.length).toBe(1);
+    expect(markedMeshes[0]?.userData.assetId).toBe(asset.id);
   });
 
   describe("parseUsdzWithTextures", () => {

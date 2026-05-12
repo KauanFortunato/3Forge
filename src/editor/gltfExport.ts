@@ -48,6 +48,8 @@ import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { evaluateAnimationTrackValue, frameToSeconds, getAnimationValue, isTrackMuted, sortTrackKeyframes } from "./animation";
 import { decodeDataUrl } from "./exportPackage";
 import { DEFAULT_FONT_ID, getAvailableFonts, parseFontAsset } from "./fonts";
+import { containsUsdcMagic } from "./modelBuffer";
+import { awaitTextureLoadsDuring } from "./textureLoadWait";
 import type { AnimationClip, AnimationPropertyPath, AnimationTrack, ComponentBlueprint, EditorNode, ImageAsset, ImageNode, MaterialSpec, ModelAsset, NodeOriginSpec, TextNode } from "./types";
 
 type MaterialBaseOptions = Record<string, unknown>;
@@ -299,91 +301,18 @@ function evaluateAxisValueAtFrame(
 
 const AXES: TransformAxis[] = ["x", "y", "z"];
 
-type TextureLoaderLoadFn = (
-  this: TextureLoader,
-  url: string,
-  onLoad?: (texture: Texture) => void,
-  onProgress?: (event: ProgressEvent) => void,
-  onError?: (error: unknown) => void,
-) => Texture;
-
 /**
- * Parses a USDZ buffer via {@link USDLoader.parse} while ensuring that every texture
- * loaded through {@link TextureLoader} during parsing has its underlying image fully
- * decoded before the returned Group is handed back. This is required because
- * `TextureLoader.load` returns synchronously with an empty `Texture` (its
- * `source.data === null`); the actual `<img>` element is owned internally by
- * `ImageLoader` until its `load` event fires. Without awaiting those callbacks the
- * downstream GLTFExporter sees textures with no image data and fails with
- * "No valid image data found. Unable to process texture."
- *
- * The function patches `TextureLoader.prototype.load` for the duration of `parse`,
- * collects per-call Promises that resolve when each texture's `onLoad`/`onError`
- * fires, and restores the prototype in a `finally` block so the global is never
- * left in a patched state — even if `parse` throws.
+ * Parses a USDZ buffer via {@link USDLoader.parse} while ensuring that every
+ * texture loaded through {@link TextureLoader} during parsing has its
+ * underlying image fully decoded before the returned Group is handed back.
+ * Delegates to {@link awaitTextureLoadsDuring} for the prototype patching;
+ * see that helper for rationale.
  */
 export async function parseUsdzWithTextures(
   usdLoader: USDLoader,
   buffer: ArrayBuffer,
 ): Promise<Group> {
-  const originalLoad = TextureLoader.prototype.load as TextureLoaderLoadFn;
-  const pendingTextureLoads: Array<Promise<void>> = [];
-
-  const patchedLoad: TextureLoaderLoadFn = function patchedLoad(
-    this: TextureLoader,
-    url: string,
-    onLoad?: (texture: Texture) => void,
-    onProgress?: (event: ProgressEvent) => void,
-    onError?: (error: unknown) => void,
-  ): Texture {
-    let resolveWaiter!: () => void;
-    let rejectWaiter!: (reason: unknown) => void;
-    const waiter = new Promise<void>((resolve, reject) => {
-      resolveWaiter = resolve;
-      rejectWaiter = reject;
-    });
-    pendingTextureLoads.push(waiter);
-
-    const handleLoad = (texture: Texture): void => {
-      try {
-        if (onLoad) {
-          onLoad(texture);
-        }
-      } finally {
-        resolveWaiter();
-      }
-    };
-    const handleError = (error: unknown): void => {
-      try {
-        if (onError) {
-          onError(error);
-        }
-      } finally {
-        const label = url || "anonymous";
-        rejectWaiter(error instanceof Error ? error : new Error(`Texture image failed to decode: ${label}`));
-      }
-    };
-
-    // Delegate to the original synchronous loader. The returned Texture is
-    // returned to the caller immediately; resolution of the waiter happens
-    // later when the image element's load/error event fires.
-    return originalLoad.call(this, url, handleLoad, onProgress, handleError);
-  };
-
-  (TextureLoader.prototype as unknown as { load: TextureLoaderLoadFn }).load = patchedLoad;
-
-  try {
-    const group = usdLoader.parse(buffer);
-    const results = await Promise.allSettled(pendingTextureLoads);
-    for (const result of results) {
-      if (result.status === "rejected") {
-        console.warn("USDZ texture load failed; export will proceed without it.", result.reason);
-      }
-    }
-    return group;
-  } finally {
-    (TextureLoader.prototype as unknown as { load: TextureLoaderLoadFn }).load = originalLoad;
-  }
+  return awaitTextureLoadsDuring(() => usdLoader.parse(buffer));
 }
 
 class BlueprintObjectBuilder {
@@ -494,7 +423,8 @@ class BlueprintObjectBuilder {
     }
 
     if (containsUsdcMagic(bytes)) {
-      throw new Error(`USDZ asset "${asset.name}" uses USDC (binary) which is not supported yet. Convert to USDA or GLB first.`);
+      const { parseUsdc } = await import("./usdcParser");
+      return awaitTextureLoadsDuring(() => parseUsdc(buffer));
     }
 
     return parseUsdzWithTextures(this.usdLoader, buffer);
@@ -839,25 +769,6 @@ function resolveOriginOffset(min: number, max: number, origin: NodeOriginSpec["x
     default:
       return -((min + max) * 0.5);
   }
-}
-
-const USDC_MAGIC = new Uint8Array([0x50, 0x58, 0x52, 0x2D, 0x55, 0x53, 0x44, 0x43]);
-
-function containsUsdcMagic(bytes: Uint8Array): boolean {
-  const limit = Math.min(bytes.length - USDC_MAGIC.length, 4096);
-  for (let index = 0; index <= limit; index += 1) {
-    let match = true;
-    for (let offset = 0; offset < USDC_MAGIC.length; offset += 1) {
-      if (bytes[index + offset] !== USDC_MAGIC[offset]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function resolveImageAssetForNode(node: ImageNode, imagesById: Map<string, ImageAsset>): ImageAsset {
