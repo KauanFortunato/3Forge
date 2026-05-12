@@ -133,11 +133,26 @@ export type {
 } from "./import/sequenceSchema";
 import type { SequenceFormat, SequenceFallbackReason } from "./import/sequenceSchema";
 
+/**
+ * Where the canonical frame files for this sequence live.
+ *
+ * - `project-folder`: written into the project's
+ *   `Resources/Textures/<slug>_sequence_<hash8>/` folder via the File
+ *   System Access API. `manifestPath` is set; `frameUrls` is hydrated
+ *   on demand (browser-session-scoped blob URLs) and never persisted.
+ *   This is the only durable storage type — survives reload + export.
+ * - `dev-cache`: temp dir on the dev server (legacy fallback used
+ *   when the user refuses folder access or FSA is unsupported).
+ *   Non-persistent: do NOT rely on these frames after a reload.
+ */
+export type SequenceStorageType = "project-folder" | "dev-cache";
+
 export interface ImageSequenceMetadata {
   /** Discriminator. Always "image-sequence". */
   type: "image-sequence";
-  /** sequence.json schema version. v1 is read-only legacy; v2 writes the format field. */
-  version: 1 | 2;
+  /** sequence.json schema version. v1/v2 are read-only legacy; v3 writers
+   * also emit `sourceHash` / `createdBy` / `converterVersion`. */
+  version: 1 | 2 | 3;
   /** Image format used for every frame. Implicit "png" on legacy v1. */
   format: SequenceFormat;
   /** Source .mov filename the sequence was generated from. */
@@ -167,6 +182,18 @@ export interface ImageSequenceMetadata {
   autoRepaired?: boolean;
   /** Set in-memory only: resolved via the legacy `<basename>_frames/` layer (priority 3). */
   legacy?: boolean;
+  /** Where the canonical frame files live. Persisted. Defaults to
+   * `"dev-cache"` for legacy blueprints that pre-date the project-folder
+   * pipeline. */
+  storageType?: SequenceStorageType;
+  /** Project-root-relative path to `sequence.json`, e.g.
+   * `Resources/Textures/<slug>_sequence_<hash8>/sequence.json`. Present
+   * when `storageType === "project-folder"`. Persisted. */
+  manifestPath?: string;
+  /** Full sha256 of the source .mov, formatted `sha256:<full-hex>`.
+   * Used to detect "same video already converted" so re-imports skip
+   * ffmpeg. Persisted. The folder name encodes only the first 8 chars. */
+  sourceHash?: string;
 }
 
 export interface ImageAsset {

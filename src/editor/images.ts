@@ -1,4 +1,4 @@
-import type { ImageAsset, ImageSequenceMetadata, SequenceFallbackReason, SequenceFormat } from "./types";
+import type { ImageAsset, ImageSequenceMetadata, SequenceFallbackReason, SequenceFormat, SequenceStorageType } from "./types";
 
 export const EMPTY_IMAGE_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9erVkAAAAASUVORK5CYII=";
@@ -272,7 +272,7 @@ function normalizeImageSequenceMetadata(
 
   const normalized: ImageSequenceMetadata = {
     type: "image-sequence",
-    version: source.version === 1 || source.version === 2 ? source.version : fallback?.version ?? 2,
+    version: normalizeSequenceVersion(source.version, fallback?.version),
     format,
     source: typeof source.source === "string" && source.source.trim()
       ? source.source.trim()
@@ -302,7 +302,34 @@ function normalizeImageSequenceMetadata(
     normalized.legacy = true;
   }
 
+  const storageType = normalizeStorageType(source.storageType, fallback?.storageType);
+  if (storageType) {
+    normalized.storageType = storageType;
+  }
+  const manifestPath = typeof source.manifestPath === "string" && source.manifestPath.trim()
+    ? source.manifestPath.trim()
+    : fallback?.manifestPath;
+  if (manifestPath) {
+    normalized.manifestPath = manifestPath;
+  }
+  const sourceHash = typeof source.sourceHash === "string" && /^sha256:[0-9a-fA-F]{8,}$/.test(source.sourceHash.trim())
+    ? source.sourceHash.trim()
+    : fallback?.sourceHash;
+  if (sourceHash) {
+    normalized.sourceHash = sourceHash;
+  }
+
   return normalized;
+}
+
+function normalizeSequenceVersion(value: unknown, fallback: 1 | 2 | 3 | undefined): 1 | 2 | 3 {
+  if (value === 1 || value === 2 || value === 3) return value;
+  return fallback ?? 3;
+}
+
+function normalizeStorageType(value: unknown, fallback: SequenceStorageType | undefined): SequenceStorageType | undefined {
+  if (value === "project-folder" || value === "dev-cache") return value;
+  return fallback;
 }
 
 function normalizeSequenceFormat(

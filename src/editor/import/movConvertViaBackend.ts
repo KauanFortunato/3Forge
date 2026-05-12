@@ -130,7 +130,7 @@ export async function convertMovsViaBackend(
       manifest.format === "webp" || manifest.sequenceJson.format === "webp" ? "webp" : "png";
     const fps = manifest.fps > 0 ? manifest.fps : 25;
     const seq: ImageSequenceMetadata = {
-      version: 2,
+      version: 3,
       type: "image-sequence",
       format: detectedFormat,
       source: file.name,
@@ -144,6 +144,12 @@ export async function convertMovsViaBackend(
       alpha: manifest.alpha,
       pixelFormat: "rgba",
       frameUrls: manifest.frames.map((f) => f.url),
+      // No manifestPath here — the caller will set
+      // `storageType: "project-folder"` + `manifestPath` after copying the
+      // frames into the project folder. Anything that comes straight off
+      // the backend lives in the dev-cache and must not be considered
+      // persistent.
+      storageType: "dev-cache",
     };
     const reason = manifest.fallbackReason ?? manifest.sequenceJson.fallbackReason;
     if (reason) seq.fallbackReason = reason;

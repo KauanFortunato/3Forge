@@ -101,6 +101,14 @@ import {
   installFfmpegViaBackend,
   type ConvertProgress,
 } from "../import/movConvertViaBackend";
+import {
+  ensureWritableProjectRoot,
+  persistSequencesToProjectFolder,
+} from "../import/movProjectFolderImport";
+import { computeSequenceSourceHash } from "../import/sequenceHash";
+import { tryReadExistingSequence } from "../import/sequenceFolder";
+import type { FSADirectoryHandleLike } from "../import/sequenceFolder";
+import type { ImageSequenceMetadata } from "../types";
 import { MovConversionModal, type MovConvertedFile, type MovConversionResult, type MovConvertError, type MovModalPhase } from "./components/MovConversionModal";
 import { exportToW3D } from "../export/w3d";
 import { runTask } from "./hooks/useAsyncTask";
@@ -1540,14 +1548,130 @@ export function App() {
           } : s);
         }
       };
-      const result = await convertMovsViaBackend({
-        movFiles: movsToConvert,
-        signal: ctrl.signal,
-        onProgress,
-      });
+
+      // Phase 1: project-folder persistence.
+      //
+      // - Compute sha256 for every .mov up front so the dedupe check
+      //   (`tryReadExistingSequence`) and the writer share one hash.
+      // - If we have a writable directory handle, dedupe each .mov
+      //   against `Resources/Textures/<slug>_sequence_<hash8>/`. Reused
+      //   sequences skip the backend entirely.
+      // - Whatever remains goes to the backend; we then copy the temp
+      //   frames into the project folder. The sequence the editor sees
+      //   ends up with `storageType: "project-folder"` and a
+      //   `manifestPath`, so it survives reload / export.
+      // - If no writable handle is available we surface a clear toast
+      //   and fall back to the existing dev-cache flow — explicitly
+      //   marked transient (`storageType: "dev-cache"`) — instead of
+      //   pretending the import is durable.
+      const projectRootAvailability = await ensureWritableProjectRoot(directoryHandle as FSADirectoryHandleLike | null);
+      const projectRoot = projectRootAvailability.kind === "ready" ? projectRootAvailability.root : null;
+
+      const movsWithBytes = await Promise.all(movsToConvert.map(async (f) => ({
+        file: f,
+        bytes: await f.arrayBuffer(),
+      })));
+      const movHashes = new Map<string, string>();
+      for (const { file, bytes } of movsWithBytes) {
+        movHashes.set(file.name, await computeSequenceSourceHash(bytes));
+      }
+
+      const reusedSequences = new Map<string, ImageSequenceMetadata>();
+      const reusedFrameFiles = new Map<string, File[]>();
+      const movsToSendToBackend: File[] = [];
+      if (projectRoot) {
+        for (const { file } of movsWithBytes) {
+          const sourceHash = movHashes.get(file.name)!;
+          const existing = await tryReadExistingSequence({
+            projectRoot,
+            videoName: file.name,
+            sourceHash,
+            onWarning: (m) => console.warn(`[mov-convert] ${m}`),
+          });
+          if (existing) {
+            const frameUrls = existing.frameFiles.map((f) => URL.createObjectURL(f));
+            const seq: ImageSequenceMetadata = {
+              type: "image-sequence",
+              version: 3,
+              format: existing.manifest.format,
+              source: existing.manifest.source || file.name,
+              framePattern: existing.manifest.framePattern,
+              frameCount: existing.manifest.frameCount,
+              fps: existing.manifest.fps,
+              width: existing.manifest.width,
+              height: existing.manifest.height,
+              durationSec: existing.manifest.durationSec,
+              loop: existing.manifest.loop,
+              alpha: existing.manifest.alpha,
+              pixelFormat: "rgba",
+              frameUrls,
+              storageType: "project-folder",
+              manifestPath: existing.manifestPath,
+              sourceHash,
+            };
+            if (existing.manifest.fallbackReason) seq.fallbackReason = existing.manifest.fallbackReason;
+            reusedSequences.set(file.name, seq);
+            reusedFrameFiles.set(file.name, existing.frameFiles);
+            // eslint-disable-next-line no-console
+            console.info(`[mov-convert] reusing on-disk sequence for "${file.name}" at ${existing.manifestPath}`);
+          } else {
+            movsToSendToBackend.push(file);
+          }
+        }
+      } else {
+        // Phase 1 policy: do NOT silently fall back to dev-cache. The
+        // user explicitly chose to import a W3D folder that contains a
+        // .mov; without a writable project folder we cannot make the
+        // conversion durable, and silently producing temporary frames
+        // is the exact behaviour the spec calls out as wrong (the
+        // sequence would vanish on reload/export with no warning).
+        //
+        // Require explicit user opt-in for the dev-cache path. If they
+        // decline we abort the .mov conversion entirely; the rest of
+        // the W3D scene still imports — Quads bound to a missing
+        // sequence land on the existing "missing texture placeholder"
+        // path the importer already handles.
+        if (movsWithBytes.length > 0) {
+          const denialReason = projectRootAvailability.kind === "denied" ? projectRootAvailability.reason : "no-handle";
+          // eslint-disable-next-line no-console
+          console.warn(`[mov-convert] project-folder write access unavailable (${denialReason}); asking for explicit opt-in.`);
+          showToast(
+            "MOV conversion needs project folder write access so the sequence can be saved permanently.",
+            "warning",
+          );
+          const userOptIn = typeof window.confirm === "function"
+            ? window.confirm(
+                "Convert MOV files temporarily?\n\n" +
+                "Frames will be stored in the dev cache only — they will NOT survive reload or export. " +
+                "Click Cancel to import the W3D scene without converting the .mov files; you can re-run " +
+                "the import after granting folder access to save the sequences permanently.",
+              )
+            : false;
+          if (userOptIn) {
+            movsToSendToBackend.push(...movsWithBytes.map((m) => m.file));
+            // eslint-disable-next-line no-console
+            console.warn("[mov-convert] user opted into temporary dev-cache conversion; sequences will not survive reload.");
+          } else {
+            // eslint-disable-next-line no-console
+            console.info("[mov-convert] user declined dev-cache fallback; skipping .mov conversion entirely.");
+            showToast(
+              "MOV files skipped — re-import after granting project folder write access to convert them.",
+              "info",
+            );
+          }
+        }
+      }
+
+      const result = movsToSendToBackend.length === 0
+        ? { sequences: new Map<string, ImageSequenceMetadata>(), failed: [] as { mov: string; error: string }[] }
+        : await convertMovsViaBackend({
+            movFiles: movsToSendToBackend,
+            signal: ctrl.signal,
+            onProgress,
+          });
       // eslint-disable-next-line no-console
       console.info(
-        `[mov-convert] backend conversion complete: ${result.sequences.size} converted, ${result.failed.length} failed`,
+        `[mov-convert] backend conversion complete: ${result.sequences.size} converted, ${result.failed.length} failed, ${reusedSequences.size} reused from project folder`,
       );
       if (result.failed.length > 0) {
         for (const f of result.failed) {
@@ -1555,6 +1679,62 @@ export function App() {
           console.warn(`[mov-convert] ${f.mov} failed: ${f.error}`);
         }
       }
+
+      // Phase 1: copy the newly-converted sequences into the project
+      // folder when we have one. Replace the dev-cache metadata with
+      // project-folder metadata before the importer sees it so the
+      // resulting blueprint is durable from the first save.
+      if (projectRoot && result.sequences.size > 0) {
+        const inputs = [] as Parameters<typeof persistSequencesToProjectFolder>[0]["movs"];
+        for (const { file, bytes } of movsWithBytes) {
+          const backendSeq = result.sequences.get(file.name);
+          if (!backendSeq) continue;
+          inputs.push({
+            movName: file.name,
+            movBytes: bytes,
+            backendManifest: {
+              version: 3,
+              type: "image-sequence",
+              format: backendSeq.format,
+              source: file.name,
+              framePattern: backendSeq.framePattern,
+              frameCount: backendSeq.frameCount,
+              fps: backendSeq.fps,
+              width: backendSeq.width,
+              height: backendSeq.height,
+              durationSec: backendSeq.durationSec,
+              loop: backendSeq.loop,
+              alpha: backendSeq.alpha,
+              pixelFormat: "rgba",
+              ...(backendSeq.fallbackReason ? { fallbackReason: backendSeq.fallbackReason } : {}),
+            },
+            frameFetchUrls: backendSeq.frameUrls,
+          });
+        }
+        const outcomes = await persistSequencesToProjectFolder({
+          projectRoot,
+          movs: inputs,
+          onWarning: (m) => console.warn(`[mov-convert] ${m}`),
+        });
+        for (const outcome of outcomes) {
+          if ((outcome.status === "written" || outcome.status === "reused") && outcome.metadata) {
+            // Revoke the temp dev-cache blob URLs (they were never
+            // appended to the editor's image library; the only
+            // reference is `backendSeq.frameUrls` which we drop below).
+            result.sequences.set(outcome.movName, outcome.metadata);
+          } else if (outcome.status === "failed") {
+            // eslint-disable-next-line no-console
+            console.warn(`[mov-convert] failed to persist "${outcome.movName}" to project folder: ${outcome.error}`);
+            showToast(`Could not save sequence for "${outcome.movName}" into the project folder; using a temporary copy instead.`, "warning");
+          }
+        }
+      }
+      // Merge reused sequences back into the result map so the importer
+      // sees one unified set keyed by .mov filename.
+      for (const [movName, seq] of reusedSequences) {
+        result.sequences.set(movName, seq);
+      }
+
       // Build per-file MovConvertedFile[] from the sequences map.
       const finalConverted: MovConvertedFile[] = [];
       for (const [movName, seq] of result.sequences) {
