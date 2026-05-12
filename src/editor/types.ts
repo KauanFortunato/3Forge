@@ -141,9 +141,14 @@ import type { SequenceFormat, SequenceFallbackReason } from "./import/sequenceSc
  *   System Access API. `manifestPath` is set; `frameUrls` is hydrated
  *   on demand (browser-session-scoped blob URLs) and never persisted.
  *   This is the only durable storage type — survives reload + export.
+ *   Exported zips mirror this same folder layout under
+ *   `Resources/Textures/<...>/` so the storage type stays the same
+ *   whether you ship the project folder or the zip.
  * - `dev-cache`: temp dir on the dev server (legacy fallback used
  *   when the user refuses folder access or FSA is unsupported).
  *   Non-persistent: do NOT rely on these frames after a reload.
+ *   On export, dev-cache sequences are promoted to `project-folder`
+ *   if their frames are still in memory.
  */
 export type SequenceStorageType = "project-folder" | "dev-cache";
 
