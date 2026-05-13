@@ -179,6 +179,75 @@ export interface W3DShadowData {
     horizontalDirection: string | null;
     verticalDirection: string | null;
   }>;
+  /**
+   * Per-node raw W3D attributes that the importer reads but the runtime
+   * doesn't fully consume yet. Keyed by 3Forge nodeId, structurally
+   * identical to existing per-node bags (`maskProperties`, `textureLayerByNodeId`).
+   *
+   * Purpose: avoid silent data loss when widening W3D coverage. Before
+   * this store, every new W3D field had to be added to `normalizeImportedNode`
+   * (or `normalizeMaterialSpec`) explicitly or be dropped on round-trip —
+   * the regression class behind both the Phase 10 mask-fields bug AND
+   * the Phase 11 `textureOptions` bug. Sidecar metadata flows through
+   * `normalizeBlueprint` verbatim (no per-field allowlist) so future
+   * additions don't replay the same regression.
+   *
+   * Renderer + UI may consume these fields lazily as features land; until
+   * then they're available via `__r3Dump` for diagnostics and via
+   * `metadata.w3d.originalXml` for export round-trip.
+   */
+  rawNodeAttributes?: Record<string, W3DRawNodeAttributes>;
+  /**
+   * `<Timelines Format="…">` value verbatim (e.g. "HD1080p50"). Surfaced via
+   * `__r3Dump.sceneCamera.projectFormat` so the operator can confirm the
+   * project's target aspect/fps without re-parsing the XML. Phase B.5
+   * diagnostic only — does not alter camera / viewport behaviour.
+   */
+  timelineFormat?: string;
+}
+
+/**
+ * Per-node raw W3D attributes preserved verbatim from the source XML.
+ * Each field is optional and only populated when the W3D author wrote a
+ * non-default value, so absent fields don't add noise to diagnostics or
+ * persistence.
+ */
+export interface W3DRawNodeAttributes {
+  /** `<Quad/TextureText/Group SpeedScale="N">` — per-node animation playback
+   * multiplier. Default 1.0; runtime currently plays every track at 1.0× so
+   * non-1.0 values are preserved for future use. */
+  speedScale?: number;
+  /** `<Quad/Group DisplayColor="...">` — R3 Designer outline / list colour
+   * (decimal RGB or hex). Editor display hint only; no rendering effect. */
+  displayColor?: string;
+  /** `<TextureText> GeometryOptions/@TextQuality` — rasterization density
+   * hint (e.g. "0.8", "3", "5"). Future-use for glyph LOD. */
+  textQuality?: string;
+  /** `<NodeTransform PivotType="Absolute">` attribute (when present). The
+   * `<Pivot>` ELEMENT is already consumed into `GroupNode.pivotOffset`;
+   * this is the separate attribute on the wrapping `<NodeTransform>`. */
+  pivotType?: string;
+  /** `<NodeTransform><Scale Lock="XtoY"/>` — locked-axes constraint. */
+  scaleLock?: string;
+  /** `<GeometryOptions><Size Lock="XtoYtoZ"/>` — locked-axes constraint on
+   * the static Size element. */
+  sizeLock?: string;
+  /** Authored `Enable="True"|"False"` attribute, preserved verbatim. The
+   * importer forces `node.visible = true` for design-view ergonomics; this
+   * field lets diagnostics (and a future runtime-mode toggle) recover the
+   * authored state without re-parsing the XML. */
+  rawEnabled?: string;
+  /** Authored `Alpha="N"` attribute as a string. The numeric value is
+   * already multiplied into `material.opacity` at import time; preserved
+   * verbatim for round-trip and diagnostic forensics. */
+  rawAlpha?: string;
+  /**
+   * Forward-compatibility catch-all: any other XML attribute the importer
+   * sees on a node but doesn't have a typed home for. Keys are attribute
+   * names; values are the verbatim string from the XML. Empty / absent
+   * when nothing landed here.
+   */
+  unknown?: Record<string, string>;
 }
 
 interface ParseContext {
@@ -200,6 +269,18 @@ interface ParseContext {
   textureLayerOriginalRef: Map<string, string>;
   /** Resource Id (lower) → filename, from `<Texture>` and `<ImageSequence>`. */
   textureResources: Map<string, string>;
+  /** Block 6: TextureTextFontStyle GUID (lower) → resolved style metadata.
+   * Used by createTextNode to populate node.geometry.fontFamily / fontWeight
+   * without re-walking shadow data. */
+  fontStyles: Map<string, {
+    name: string | null;
+    fontName: string | null;
+    type: string | null;
+    kerning: string | null;
+    wordWrap: string | null;
+    horizontalDirection: string | null;
+    verticalDirection: string | null;
+  }>;
   /** Original XML reference (path or GUID) → resolved basename, for entries we couldn't find on disk. */
   missingTextureRefs: Map<string, string>;
   /**
@@ -407,6 +488,7 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     textureLayerToFilename: new Map(),
     textureLayerOriginalRef: new Map(),
     textureResources: new Map(),
+    fontStyles: new Map(),
     missingTextureRefs: new Map(),
     textureLayerToNodeIds: new Map(),
     textures: normalizeFilenameMap(options.textures),
@@ -449,6 +531,7 @@ export function parseW3D(xmlText: string, options: W3DParseOptions = {}): W3DImp
     const fontStyles = collectTextureTextFontStyles(resourcesEl);
     if (fontStyles.size > 0) {
       ctx.shadow.textFontStyles = Object.fromEntries(fontStyles);
+      ctx.fontStyles = fontStyles;
     }
   }
 
@@ -1011,6 +1094,14 @@ function handleNode(el: Element, parentId: string, ctx: ParseContext): void {
     }
   }
 
+  // Block 1: capture per-node raw W3D attributes the runtime doesn't
+  // consume yet, so future widening of W3D coverage doesn't have to
+  // re-parse the XML. Sidecar bag flows through normalizeBlueprint
+  // verbatim (it lives on `metadata.w3d.*`, not on EditorNode), which
+  // sidesteps the per-field allowlist regressions that hit Phase 10
+  // (mask fields) and Phase 11 (textureOptions).
+  collectRawNodeAttributes(el, node, ctx);
+
   if (w3dId) {
     const lowered = w3dId.toLowerCase();
     ctx.idMap.set(lowered, node.id);
@@ -1128,7 +1219,7 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
       // Pull TextureMappingOption sampling settings (wrap, filter, offset,
       // scale) onto the material. The renderer applies them to the loaded
       // Texture so authored offsets/repeats survive the import.
-      const samplingOptions = parseTextureSamplingOptions(el);
+      const samplingOptions = parseTextureSamplingOptions(el, ctx);
       if (samplingOptions) {
         imageNode.material.textureOptions = samplingOptions;
       }
@@ -1181,7 +1272,7 @@ function createQuadNode(el: Element, parentId: string, ctx: ParseContext): Edito
  * Quad is wired to. Returns undefined when there's nothing worth recording
  * (every field falls back to a Three.js default at apply time).
  */
-function parseTextureSamplingOptions(quadEl: Element): TextureSamplingOptions | undefined {
+function parseTextureSamplingOptions(quadEl: Element, ctx: ParseContext): TextureSamplingOptions | undefined {
   const primitive = childElementByTag(quadEl, "Primitive");
   const list = childElementByTag(primitive, "FaceMappingList");
   const mapping = childElementByTag(list, "NamedBaseFaceMapping");
@@ -1233,6 +1324,61 @@ function parseTextureSamplingOptions(quadEl: Element): TextureSamplingOptions | 
     const y = parseNumberAttr(scaleEl, "Y", 1);
     if (x !== 1) out.repeatU = x;
     if (y !== 1) out.repeatV = y;
+  }
+  // <Rotation Z="…"> on the mapping option — UV rotation in degrees. Only
+  // record when non-zero; the renderer treats `undefined` as no rotation.
+  // LINEUP_LEFT's FF_MAIN layer authors Z=-1 to slant PATTERN.png slightly.
+  const rotationEl = childElementByTag(mappingOption, "Rotation");
+  if (rotationEl) {
+    const z = parseNumberAttr(rotationEl, "Z", 0);
+    if (z !== 0) out.textureRotation = z;
+  }
+
+  // W3D AlphaKey: a second texture (`Key="<guid>"` + `KeyType="AlphaKey"`)
+  // composited as the layer's alpha mask. LINEUP_LEFT uses this to feather
+  // every PHOTO_xx with VERTICAL_RAMP.png so player photos fade out vertically.
+  // Block 5 composites the key texture into fragment alpha via
+  // MeshBasicMaterial.onBeforeCompile when `alphaKeyTextureName` resolves
+  // to a loaded image asset; until then we preserve the GUID for round-trip
+  // and the resolved filename for the renderer's image-asset lookup.
+  // Treat `Key=""` / `Key="00000000-0000-0000-0000-000000000000"` as absent.
+  const keyAttr = mappingOption.getAttribute("Key");
+  const keyTypeAttr = mappingOption.getAttribute("KeyType");
+  if (keyAttr && keyAttr !== "" && !/^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(keyAttr)) {
+    const keyLower = keyAttr.toLowerCase();
+    out.alphaKeyTextureId = keyLower;
+    if (keyTypeAttr) out.alphaKeyType = keyTypeAttr;
+    // Resolve the GUID → Texture resource filename so the renderer can
+    // look the asset up on blueprint.images without re-walking the W3D XML.
+    // ctx.textureResources is built in collectTextures (lower-cased GUID →
+    // filename basename like "ramp.png").
+    const resolvedName = ctx.textureResources.get(keyLower);
+    if (resolvedName) out.alphaKeyTextureName = resolvedName;
+  }
+  // ColorShaping / PremultiplyColor / IsEmissive / TextureStretchOption:
+  // preserved as diagnostic strings so a future renderer upgrade can act on
+  // them without re-parsing the W3D XML. None of these change rendering
+  // today; they're stored only when present and non-default.
+  const colorShaping = mappingOption.getAttribute("ColorShaping");
+  if (colorShaping) out.colorShaping = colorShaping;
+  const premultiplyColor = mappingOption.getAttribute("PremultiplyColor");
+  if (premultiplyColor && premultiplyColor !== "0") out.premultiplyColor = premultiplyColor;
+  const isEmissive = mappingOption.getAttribute("IsEmissive");
+  if (isEmissive === "True") out.isEmissive = true;
+  const textureStretchOption = mappingOption.getAttribute("TextureStretchOption");
+  if (textureStretchOption) out.textureStretchOption = textureStretchOption;
+  // Block 5: TextureBlending lives on the parent <TextureLayer>, not on
+  // <TextureMappingOption>. Walk one level up and read it. "Multiply" /
+  // "Add" / "Screen" are the values we've seen in the wild; renderer maps
+  // the first two onto Three.js built-in blending constants.
+  const layerEl = mappingOption.parentElement;
+  if (layerEl && layerEl.tagName === "TextureLayer") {
+    const blend = layerEl.getAttribute("TextureBlending");
+    // "Multiply" is by far the most common; the renderer treats unset as
+    // NormalBlending, so only record when non-default.
+    if (blend && blend !== "Normal" && blend !== "") {
+      out.textureBlending = blend;
+    }
   }
 
   return Object.keys(out).length > 0 ? out : undefined;
@@ -1577,7 +1723,23 @@ function createTextNode(el: Element, parentId: string, ctx: ParseContext): Edito
   }
   const fontStyleId = geom?.getAttribute("FontStyle");
   if (fontStyleId) {
-    node.geometry.fontStyleId = fontStyleId.toLowerCase();
+    const styleLower = fontStyleId.toLowerCase();
+    node.geometry.fontStyleId = styleLower;
+    // Block 6: surface the authored font name / weight from the resolved
+    // <TextureTextFontStyle> resource so diagnostics show "this node wanted
+    // 'Obviously Cond Light'" without the operator having to traverse
+    // metadata.w3d.textFontStyles by hand.
+    const style = ctx.fontStyles.get(styleLower);
+    if (style) {
+      if (style.fontName) node.geometry.fontFamily = style.fontName;
+      if (style.type) node.geometry.fontWeight = style.type;
+    }
+  }
+  // Block 1/6: W3D TextQuality (e.g. "0.8", "3", "5"). Surfaced for
+  // diagnostics today; future work may map to TextGeometry.curveSegments.
+  const textQuality = geom?.getAttribute("TextQuality");
+  if (textQuality) {
+    node.geometry.textQuality = textQuality;
   }
   // R3's <TextureText> is a flat textured glyph plane; <GeometryText> is the
   // 3D-extruded variant authored with `Extrusion="..."`. We respect the
@@ -1690,6 +1852,61 @@ function applyNodeAlpha(el: Element, node: EditorNode): void {
   }
 }
 
+/**
+ * Block 1: populate `metadata.w3d.rawNodeAttributes[nodeId]` with W3D
+ * fields the runtime doesn't consume yet. Sidecar storage (not a field on
+ * EditorNode) keeps it out of `normalizeImportedNode`'s allowlist, so
+ * adding more raw fields later won't replay the Phase 10 / Phase 11
+ * silent-drop regressions.
+ *
+ * Only writes fields when the W3D author wrote a non-default value, so
+ * absent fields don't pollute diagnostics or persistence.
+ */
+function collectRawNodeAttributes(el: Element, node: EditorNode, ctx: ParseContext): void {
+  const raw: W3DRawNodeAttributes = {};
+  // `SpeedScale="1"` is the W3D default. Preserve only meaningful deviations.
+  const speedScaleRaw = el.getAttribute("SpeedScale");
+  if (speedScaleRaw) {
+    const n = Number(speedScaleRaw);
+    if (Number.isFinite(n) && n !== 1) raw.speedScale = n;
+  }
+  const displayColor = el.getAttribute("DisplayColor");
+  if (displayColor) raw.displayColor = displayColor;
+  const enableAttr = el.getAttribute("Enable");
+  if (enableAttr) raw.rawEnabled = enableAttr;
+  const alphaAttr = el.getAttribute("Alpha");
+  if (alphaAttr !== null) raw.rawAlpha = alphaAttr;
+  // PivotType lives on `<NodeTransform>`, not the node element itself.
+  const transformEl = childElementByTag(el, "NodeTransform");
+  if (transformEl) {
+    const pivotType = transformEl.getAttribute("PivotType");
+    if (pivotType) raw.pivotType = pivotType;
+    // Scale Lock — `<NodeTransform><Scale Lock="XtoY"/></NodeTransform>`.
+    const scaleEl = childElementByTag(transformEl, "Scale");
+    if (scaleEl) {
+      const scaleLock = scaleEl.getAttribute("Lock");
+      if (scaleLock) raw.scaleLock = scaleLock;
+    }
+  }
+  // Size Lock — `<GeometryOptions><Size Lock="XtoYtoZ"/></GeometryOptions>`.
+  const geometryOptionsEl = childElementByTag(el, "GeometryOptions");
+  if (geometryOptionsEl) {
+    const sizeEl = childElementByTag(geometryOptionsEl, "Size");
+    if (sizeEl) {
+      const sizeLock = sizeEl.getAttribute("Lock");
+      if (sizeLock) raw.sizeLock = sizeLock;
+    }
+    // TextQuality (TextureText / GeometryText).
+    const textQuality = geometryOptionsEl.getAttribute("TextQuality");
+    if (textQuality) raw.textQuality = textQuality;
+  }
+  // Only stash when at least one field landed — avoids empty objects
+  // bloating dumps and persistence.
+  if (Object.keys(raw).length === 0) return;
+  ctx.shadow.rawNodeAttributes ??= {};
+  ctx.shadow.rawNodeAttributes[node.id] = raw;
+}
+
 function applyTransform(el: Element, node: EditorNode, ctx: ParseContext): void {
   const transformEl = childElementByTag(el, "NodeTransform");
   if (!transformEl) {
@@ -1726,6 +1943,48 @@ function applyTransform(el: Element, node: EditorNode, ctx: ParseContext): void 
     if (skewEl.hasAttribute("Z")) skew.z = parseNumberAttr(skewEl, "Z", 0);
     if (skew.x !== 0 || skew.y !== 0 || skew.z !== 0) {
       node.transform.skew = skew;
+    }
+  }
+
+  // Static <Pivot X="…" Y="…" Z="…"> defines the local origin for this
+  // node's children (W3D's NodeTransform sub-element, used heavily by
+  // broadcast templates with PivotType="Absolute"). 3Forge's GroupNode
+  // already has a `pivotOffset` field that buildGroupObject applies as
+  // the content sub-Group's position — children added to the group then
+  // measure from (wrapper + pivot). The importer previously ignored
+  // <Pivot> entirely; that's the root cause of LINEUP_LEFT's PLAYER_01..05
+  // misalignment (each card carries <Pivot Y="-1.4"> and shifted 1.4
+  // units off vertically after the 2D flip negated Position but left
+  // pivotOffset at zero).
+  //
+  // Only applied to Group nodes today. Non-group nodes with authored
+  // <Pivot> are vanishingly rare in the corpus we've seen — if one
+  // shows up, it'd need its own renderer plumbing (pivot translate on
+  // the mesh geometry). We log to aggregateSkip in that case so it's
+  // surfaced as a known gap rather than silently dropped.
+  const pivotEl = childElementByTag(transformEl, "Pivot");
+  if (pivotEl) {
+    if (node.type === "group") {
+      const pivot = { x: 0, y: 0, z: 0 };
+      if (pivotEl.hasAttribute("X")) pivot.x = parseNumberAttr(pivotEl, "X", 0);
+      if (pivotEl.hasAttribute("Y")) {
+        const raw = parseNumberAttr(pivotEl, "Y", 0);
+        pivot.y = ctx.flipYZ ? -raw : raw;
+      }
+      if (pivotEl.hasAttribute("Z")) {
+        const raw = parseNumberAttr(pivotEl, "Z", 0);
+        pivot.z = ctx.flipYZ ? -raw : raw;
+      }
+      if (pivot.x !== 0 || pivot.y !== 0 || pivot.z !== 0) {
+        node.pivotOffset = pivot;
+      }
+    } else {
+      aggregateSkip(
+        ctx,
+        "NodeTransformPivot",
+        node.name,
+        "Pivot element on a non-group node — renderer support pending",
+      );
     }
   }
 }
@@ -1789,6 +2048,12 @@ function parseTimelines(timelinesEl: Element, blueprint: ComponentBlueprint, ctx
   const fps = fpsForFormat(format);
   if (format && !KNOWN_FORMATS.has(format)) {
     ctx.warnings.push(`Unknown timeline Format "${format}" — assuming ${fps} fps. Verify keyframe timing.`);
+  }
+  // Persist the authored format string on the shadow metadata so the runtime
+  // can surface it in __r3Dump.sceneCamera.projectFormat without re-parsing
+  // the XML. Phase B.5 diagnostic only — no visual behaviour change.
+  if (format) {
+    ctx.shadow.timelineFormat = format;
   }
 
   const clips: AnimationClip[] = [];

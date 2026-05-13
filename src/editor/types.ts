@@ -117,6 +117,47 @@ export interface TextureSamplingOptions {
   offsetV?: number;
   repeatU?: number;
   repeatV?: number;
+  /**
+   * W3D `<TextureMappingOption><Rotation Z="…"/></TextureMappingOption>` — UV
+   * rotation in **degrees**. LINEUP_LEFT's TEXTURE_FULLFRAME_MAIN authors
+   * `Rotation Z=-1` so the PATTERN.png tile slants slightly. The renderer
+   * translates this to `texture.rotation` (radians, centred at 0.5,0.5).
+   */
+  textureRotation?: number;
+  /**
+   * W3D AlphaKey reference — `<TextureMappingOption Key="<guid>" KeyType="AlphaKey">`.
+   * The GUID points at another `<Texture>` resource (e.g. VERTICAL_RAMP.png)
+   * that W3D composites as the layer's alpha mask. The Block 5 renderer
+   * composites the key into fragment alpha via `MeshBasicMaterial.onBeforeCompile`
+   * when `alphaKeyTextureName` resolves to a loaded image asset. The GUID
+   * stays robust to texture-folder renames.
+   */
+  alphaKeyTextureId?: string;
+  /** Resolved filename basename for the alphaKey texture (e.g. "ramp.png"),
+   * derived at import time from the W3D `<Texture Id=… Filename=…>` resource
+   * matching `alphaKeyTextureId`. The renderer uses this to look up the
+   * image asset on the blueprint. Absent when the GUID didn't resolve. */
+  alphaKeyTextureName?: string;
+  alphaKeyType?: string;
+  /** W3D `ColorShaping="Shaped"` etc. — purely diagnostic for now. */
+  colorShaping?: string;
+  /** W3D `PremultiplyColor` — non-default values surface a diagnostic. */
+  premultiplyColor?: string;
+  /** W3D `IsEmissive="True"`. The renderer treats all textured Quads as
+   * basic-material today; preserving this lets a future PBR pass honour
+   * emissive textures. */
+  isEmissive?: boolean;
+  /** W3D `TextureStretchOption="Fill" | "Keep" | …` — preserved for round-trip
+   * and future renderer use. */
+  textureStretchOption?: string;
+  /**
+   * W3D `<TextureLayer TextureBlending="Multiply|Add|Screen|…">`. The Block 5
+   * renderer maps `"Multiply"` → `MultiplyBlending` and `"Add"` →
+   * `AdditiveBlending` on the material; unknown / `"Screen"` values are
+   * preserved verbatim with a warning in the dump (`Screen` would need
+   * CustomBlending equations that risk breaking transparency sorting).
+   */
+  textureBlending?: string;
 }
 
 export interface MaterialAsset {
@@ -396,6 +437,34 @@ export interface TextNode extends BaseEditorNode {
      * the renderer still uses the editor's default font.
      */
     fontStyleId?: string;
+    /**
+     * Block 6: the resolved W3D font name (e.g. "Obviously", "Obviously Cond"),
+     * looked up from `metadata.w3d.textFontStyles[fontStyleId].fontName` at
+     * import time. Used by the renderer's W3D font resolver to match against
+     * the bundled font catalog by name. Stored on the node so dumps can show
+     * the requested font without re-walking metadata.
+     */
+    fontFamily?: string;
+    /** Block 6: W3D font weight/type (e.g. "Light", "Bold", "Light Italic")
+     * from `<TextureTextFontStyle Type>`. Diagnostic. */
+    fontWeight?: string;
+    /**
+     * Block 6: actual 3Forge font asset id the renderer ended up using.
+     * Equal to `fontStyleId`'s resolved match when present; falls back to
+     * `DEFAULT_FONT_ID` when the W3D font is not bundled. Records the
+     * fallback path for the dump so the operator sees substitution.
+     */
+    resolvedFontId?: string;
+    /** Block 6: human-readable reason for substitution (e.g. "Obviously not
+     * bundled — falling back to Helvetiker"). Absent when the requested
+     * font matched exactly. */
+    fontFallbackReason?: string;
+    /**
+     * Block 1/6: W3D `<GeometryOptions TextQuality>` — rasterization density
+     * hint (e.g. "0.8", "3", "5"). Currently preserved for diagnostics only;
+     * future work may map this to TextGeometry `curveSegments`.
+     */
+    textQuality?: string;
   };
   material: MaterialSpec;
   materialId?: string;

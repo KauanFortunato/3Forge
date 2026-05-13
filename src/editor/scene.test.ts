@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DataTexture, Texture } from "three";
+import { Box3, DataTexture, Group, Mesh, MeshBasicMaterial, PlaneGeometry, Texture, Vector3 } from "three";
 import {
+  buildKeepInsidePlanesFromBox,
   buildSequencePlaceholderTexture,
+  computeAuthoredPermanentlyHidden,
   computeSequenceResolverStatus,
   computeTextAlignOffset,
+  computeWorldBoundsFromMeshes,
   decideImageMeshKind,
   formatVideoLoadFailureMessage,
   ImageSequencePlayer,
@@ -1012,3 +1015,327 @@ describe("summariseSequenceResolverWarnings (Phase 3B)", () => {
     expect(warnings[0].message).toMatch(/it/);
   });
 });
+
+describe("computeWorldBoundsFromMeshes (Phase 10 degenerate-bounds regression)", () => {
+  // Backing the LINEUP_LEFT PHOTO_MASK_* / PHOTO_DUMMY_* fix. The dump
+  // showed `worldBounds.min == worldBounds.max == (one finite point)`
+  // for those masks, downstream clipping planes collapsed to a single
+  // point, and inverted masks then hid every consumer. Root cause was
+  // the old "pick first Mesh + applyMatrix4" approach producing a
+  // degenerate world box when the chosen mesh had a degenerate local
+  // bbox (replaced geometry, parent group with zero-scale animation,
+  // etc.). The new helper unions every descendant mesh's world bbox
+  // AND returns `null` when nothing contributed a non-empty box — the
+  // caller (`computeMaskPlanes`) then refuses to emit collapsed planes.
+
+  function makePlaneMesh(width: number, height: number): Mesh {
+    return new Mesh(new PlaneGeometry(width, height), new MeshBasicMaterial());
+  }
+
+  it("returns a non-empty world bbox for a wrapper containing one PlaneGeometry mesh", () => {
+    const wrapper = new Group();
+    const mesh = makePlaneMesh(1, 3); // PHOTO_MASK_01 dimensions
+    wrapper.add(mesh);
+    const box = computeWorldBoundsFromMeshes(wrapper);
+    expect(box).not.toBeNull();
+    if (!box) return;
+    expect(box.isEmpty()).toBe(false);
+    expect(box.max.x - box.min.x).toBeCloseTo(1, 5);
+    expect(box.max.y - box.min.y).toBeCloseTo(3, 5);
+  });
+
+  it("returns null when the wrapper has no Mesh descendants (group-only subtree)", () => {
+    const wrapper = new Group();
+    wrapper.add(new Group());
+    const box = computeWorldBoundsFromMeshes(wrapper);
+    expect(box).toBeNull();
+  });
+
+  it("returns null when the only Mesh has degenerate geometry (PlaneGeometry(0,0))", () => {
+    const wrapper = new Group();
+    wrapper.add(makePlaneMesh(0, 0));
+    const box = computeWorldBoundsFromMeshes(wrapper);
+    expect(box).toBeNull();
+  });
+
+  it("returns null when an ancestor scale collapses every descendant to a single point", () => {
+    // Real-world version of the LINEUP_LEFT bug: PHOTO_MASK_01 sits under a
+    // parent whose Phase 7 normalization (or Transform.Scale animation)
+    // produced scale=0 at the active frame. The MESH itself is healthy
+    // (PlaneGeometry(1, 3)), but matrixWorld collapses to a single point
+    // and `applyMatrix4` produces min == max. The helper detects this and
+    // bails so the caller doesn't emit a degenerate-rectangle clip plane.
+    const wrapper = new Group();
+    wrapper.scale.set(0, 0, 1);
+    wrapper.add(makePlaneMesh(1, 3));
+    const box = computeWorldBoundsFromMeshes(wrapper);
+    expect(box).toBeNull();
+  });
+
+  it("respects matrixAutoUpdate=false skewLayer wrappers (Phase 6 nested-mesh case)", () => {
+    // Mask quad with static W3D <Skew>: wrapper → skewLayer (matrix copied,
+    // matrixAutoUpdate=false) → mesh. The helper must still find the mesh
+    // and produce a non-empty world bbox — the previous "first Mesh"
+    // shortcut worked for this case but a wrong-prototype check (e.g.
+    // gated on matrixAutoUpdate) would skip the skewLayer subtree.
+    const wrapper = new Group();
+    const skewLayer = new Group();
+    skewLayer.userData.isSkewLayer = true;
+    skewLayer.matrixAutoUpdate = false;
+    skewLayer.matrix.identity();
+    skewLayer.add(makePlaneMesh(2, 4));
+    wrapper.add(skewLayer);
+    const box = computeWorldBoundsFromMeshes(wrapper);
+    expect(box).not.toBeNull();
+    if (!box) return;
+    expect(box.isEmpty()).toBe(false);
+    expect(box.max.x - box.min.x).toBeCloseTo(2, 5);
+    expect(box.max.y - box.min.y).toBeCloseTo(4, 5);
+  });
+
+  it("unions multiple mesh descendants into a single AABB (defensive against accidentally-nested helpers)", () => {
+    // If something accidentally added a helper Mesh under the wrapper (e.g.
+    // a debug Box3Helper), the old "first Mesh" approach could pick that
+    // helper instead of the actual mask geometry. The union approach merges
+    // everything so the result is at least as large as the authored mask.
+    const wrapper = new Group();
+    const a = makePlaneMesh(1, 1);
+    a.position.set(-2, 0, 0);
+    const b = makePlaneMesh(1, 1);
+    b.position.set(2, 0, 0);
+    wrapper.add(a);
+    wrapper.add(b);
+    const box = computeWorldBoundsFromMeshes(wrapper);
+    expect(box).not.toBeNull();
+    if (!box) return;
+    // Two 1×1 meshes at x=±2 → unioned x-extent = (-2-0.5)..(2+0.5) = 5.
+    expect(box.max.x - box.min.x).toBeCloseTo(5, 5);
+    expect(box.max.y - box.min.y).toBeCloseTo(1, 5);
+  });
+
+  it("respects the wrapper's own world transform (translation propagates to bbox)", () => {
+    const wrapper = new Group();
+    wrapper.position.set(10, 20, 0);
+    wrapper.add(makePlaneMesh(1, 1));
+    const box = computeWorldBoundsFromMeshes(wrapper);
+    expect(box).not.toBeNull();
+    if (!box) return;
+    // Centered 1×1 mesh translated to (10, 20) → bounds (9.5..10.5, 19.5..20.5).
+    expect(box.min.x).toBeCloseTo(9.5, 5);
+    expect(box.max.x).toBeCloseTo(10.5, 5);
+    expect(box.min.y).toBeCloseTo(19.5, 5);
+    expect(box.max.y).toBeCloseTo(20.5, 5);
+  });
+});
+
+describe("buildKeepInsidePlanesFromBox (Phase 11.5 — inverted mask reveal regression)", () => {
+  // The "PHOTO_01..05 disappeared" symptom traced to the inverted-mask sign
+  // flip in computeMaskPlanes: with sign=-1 the four plane normals face
+  // outward, and Three's `material.clippingPlanes` array is the
+  // INTERSECTION of half-spaces. The intersection of four outward planes
+  // around a non-degenerate box is mathematically empty (no point can
+  // satisfy x≤minX AND x≥maxX simultaneously) → consumer hidden
+  // everywhere. The fix is to always emit inward-facing "keep inside"
+  // planes; the box exterior (the union of four half-spaces) is non-
+  // convex and unrepresentable as a single material.clippingPlanes array.
+  //
+  // These tests pin the math so the inversion bug can't sneak back.
+
+  function pointIsKept(planes: ReturnType<typeof buildKeepInsidePlanesFromBox>, p: Vector3): boolean {
+    if (!planes) return true; // null = no clipping → always kept
+    // Three's clippingPlanes semantic: a fragment at world position p is
+    // KEPT iff `plane.normal.dot(p) + plane.constant >= 0` for every plane.
+    return planes.every((plane) => plane.normal.dot(p) + plane.constant >= 0);
+  }
+
+  it("for a healthy mask box, keeps points INSIDE the box (regardless of `inverted` flag)", () => {
+    // Mask of dimensions 4 × 2 centred at origin → -2..+2 in x, -1..+1 in y.
+    const box = new Box3(new Vector3(-2, -1, 0), new Vector3(2, 1, 0));
+    for (const inverted of [false, true]) {
+      const planes = buildKeepInsidePlanesFromBox(box, inverted);
+      expect(planes).not.toBeNull();
+      if (!planes) continue;
+      expect(planes.length).toBe(4);
+      // Centre is inside → kept.
+      expect(pointIsKept(planes, new Vector3(0, 0, 0))).toBe(true);
+      // Just inside each edge → kept.
+      expect(pointIsKept(planes, new Vector3(1.9, 0, 0))).toBe(true);
+      expect(pointIsKept(planes, new Vector3(-1.9, 0, 0))).toBe(true);
+      expect(pointIsKept(planes, new Vector3(0, 0.9, 0))).toBe(true);
+      expect(pointIsKept(planes, new Vector3(0, -0.9, 0))).toBe(true);
+      // Outside on any axis → clipped (the consumer's pixel discarded).
+      expect(pointIsKept(planes, new Vector3(3, 0, 0))).toBe(false);
+      expect(pointIsKept(planes, new Vector3(-3, 0, 0))).toBe(false);
+      expect(pointIsKept(planes, new Vector3(0, 2, 0))).toBe(false);
+      expect(pointIsKept(planes, new Vector3(0, -2, 0))).toBe(false);
+    }
+  });
+
+  it("LINEUP_LEFT BASE_MAIN-shape mask (7.7 × 2.77 at origin) keeps PHOTO-equivalent consumer pixels inside", () => {
+    // Frame-end shape for BASE_MAIN: post-flatten width 7.7, height 2.77.
+    // AlignmentX="Right" centres it around its right anchor (line 42 W3D)
+    // but for clipping math we only care about the world-space bbox, which
+    // is centred at the wrapper's origin after applyMatrix4.
+    const box = new Box3(new Vector3(-3.85, -1.385, 0), new Vector3(3.85, 1.385, 0));
+    const planes = buildKeepInsidePlanesFromBox(box, /* inverted */ true);
+    expect(planes).not.toBeNull();
+    if (!planes) return;
+    // A typical TEXTURE_FULLFRAME_MAIN consumer pixel near the mask centre
+    // must NOT be clipped (this was hidden pre-Phase-11.5).
+    expect(pointIsKept(planes, new Vector3(0, 0, 0))).toBe(true);
+    // SMALL_TEAM_NAME's authored position is X=3.883 Y=-1.545 — just past
+    // the X edge but within the post-rendering pipeline. Confirm the math:
+    // X=3.883 > 3.85 so this specific point IS clipped (mask ends at 3.85).
+    // The point of the test is the inside-mask point being VISIBLE.
+    expect(pointIsKept(planes, new Vector3(3, 0, 0))).toBe(true);
+    // Far outside the mask → still clipped, as expected.
+    expect(pointIsKept(planes, new Vector3(50, 0, 0))).toBe(false);
+  });
+
+  it("returns null for a degenerate box (Phase 10 guard remains intact)", () => {
+    const point = new Box3(new Vector3(1, 2, 0), new Vector3(1, 2, 0));
+    expect(buildKeepInsidePlanesFromBox(point, false)).toBeNull();
+    expect(buildKeepInsidePlanesFromBox(point, true)).toBeNull();
+    // Zero-width but non-zero-height also degenerate (X collapse).
+    const xCollapse = new Box3(new Vector3(0, 0, 0), new Vector3(0, 1, 0));
+    expect(buildKeepInsidePlanesFromBox(xCollapse, true)).toBeNull();
+  });
+
+  it("REGRESSION: inverted=true does NOT produce an empty-intersection plane set", () => {
+    // The pre-Phase-11.5 bug: `sign = inverted ? -1 : 1` flipped every
+    // normal outward, and the intersection of four outward planes is
+    // empty → every consumer pixel clipped. Pinning the centre-point
+    // visibility under inverted=true would have caught that regression.
+    const box = new Box3(new Vector3(-1, -1, 0), new Vector3(1, 1, 0));
+    const planes = buildKeepInsidePlanesFromBox(box, true);
+    expect(planes).not.toBeNull();
+    if (!planes) return;
+    // A point at the mask centre must be kept. Pre-fix this was false →
+    // PHOTO_01..05 disappeared under their IsInvertedMask="True" masks.
+    expect(pointIsKept(planes, new Vector3(0, 0, 0))).toBe(true);
+  });
+});
+
+// Phase B.1 (LINEUP_LEFT learning fixture) — predicate for "treat this node
+// as permanently hidden because R3 authored Enable=False with no way to ever
+// reveal it". The renderer wires this into the wrapper visibility; these
+// tests pin the rule's exact preconditions so the predicate stays
+// conservative (never hides a production node that animates).
+describe("computeAuthoredPermanentlyHidden (LINEUP_LEFT background section)", () => {
+  function bpWith(
+    nodes: EditorNode[],
+    options?: {
+      initialDisabledNodeIds?: string[];
+      tracks?: Array<{ nodeId: string; property: string; keyframeFrames?: number[] }>;
+    },
+  ): ComponentBlueprint {
+    const clips = (options?.tracks ?? []).reduce((acc, t) => {
+      const keyframes = (t.keyframeFrames ?? [0]).map((frame, idx) => ({
+        id: `kf-${t.nodeId}-${t.property}-${idx}`,
+        frame,
+        value: 1,
+        ease: "linear" as const,
+      }));
+      acc.push({
+        id: `clip-${acc.length}`,
+        name: `clip-${acc.length}`,
+        fps: 50,
+        durationFrames: 100,
+        tracks: [{ id: `track-${acc.length}`, nodeId: t.nodeId, property: t.property as never, keyframes }],
+      });
+      return acc;
+    }, [] as ComponentBlueprint["animation"]["clips"]);
+    return {
+      version: 1,
+      componentName: "test",
+      sceneMode: "2d",
+      nodes,
+      fonts: [],
+      images: [],
+      materials: [],
+      animation: { activeClipId: clips[0]?.id ?? null, clips },
+      metadata: options?.initialDisabledNodeIds
+        ? { w3d: { initialDisabledNodeIds: options.initialDisabledNodeIds } }
+        : {},
+    } as unknown as ComponentBlueprint;
+  }
+
+  it("Test 1 (BACKGROUND-like): Enable=False + no animation tracks + not mask + no mask consumers → authoredPermanentlyHidden", () => {
+    const bg = createNode("plane", null); bg.name = "BACKGROUND";
+    const bp = bpWith([bg], { initialDisabledNodeIds: [bg.id] });
+    expect(computeAuthoredPermanentlyHidden(bp, bg.id)).toBe(true);
+  });
+
+  it("Test 2 (production node): Enable=False BUT has Size animation track → NOT authoredPermanentlyHidden", () => {
+    // Real LINEUP_LEFT shape: BASE_MAIN's Size.XProp grows from 0 → 7.7
+    // between frames 50 → 97. Even with Enable=False, the timeline reveals
+    // it; predicate must keep the wrapper visible-eligible.
+    const animated = createNode("plane", null); animated.name = "ANIMATED_BASE";
+    const bp = bpWith([animated], {
+      initialDisabledNodeIds: [animated.id],
+      tracks: [{ nodeId: animated.id, property: "geometry.width", keyframeFrames: [50, 97] }],
+    });
+    expect(computeAuthoredPermanentlyHidden(bp, animated.id)).toBe(false);
+  });
+
+  it("Test 2b (production node, Position track only): Enable=False + Position.Y track → NOT authoredPermanentlyHidden", () => {
+    // SMALL_TEAM_NAME-like: only a Position track moves it. Must not be
+    // hidden because Enable=False; the In timeline drives the position.
+    const animated = createNode("plane", null); animated.name = "SMALL_TEXT_LIKE";
+    const bp = bpWith([animated], {
+      initialDisabledNodeIds: [animated.id],
+      tracks: [{ nodeId: animated.id, property: "transform.position.y", keyframeFrames: [120, 150] }],
+    });
+    expect(computeAuthoredPermanentlyHidden(bp, animated.id)).toBe(false);
+  });
+
+  it("Test 3 (BASE_MAIN-like mask): IsMask=True + Enable=False still NOT permanently hidden — must remain in mask topology", () => {
+    // The wrapper's `visible` is already false for masks (separate rule),
+    // but the predicate must NOT independently mark it authoredPermanentlyHidden
+    // because mask-consumers still rely on its bounds for clipping planes.
+    const mask = createNode("plane", null); mask.name = "BASE_MAIN_LIKE";
+    mask.isMask = true;
+    const consumer = createNode("plane", null); consumer.name = "FF_MAIN_LIKE";
+    consumer.maskId = mask.id;
+    const bp = bpWith([mask, consumer], { initialDisabledNodeIds: [mask.id] });
+    expect(computeAuthoredPermanentlyHidden(bp, mask.id)).toBe(false);
+  });
+
+  it("Test 3b (mask producer protection): Enable=False non-mask that is referenced by a consumer's maskId stays renderable", () => {
+    const producer = createNode("plane", null); producer.name = "PRODUCER";
+    const consumer = createNode("plane", null); consumer.name = "CONSUMER";
+    consumer.maskId = producer.id;
+    const bp = bpWith([producer, consumer], { initialDisabledNodeIds: [producer.id] });
+    expect(computeAuthoredPermanentlyHidden(bp, producer.id)).toBe(false);
+  });
+
+  it("Test 5 (HORIZONTAL_SLIDE / MAIN parent group): Enable=False parent with animated descendants → NOT authoredPermanentlyHidden", () => {
+    // Real LINEUP_LEFT: HORIZONTAL_SLIDE wraps TEAM_NAME's LINE_01/LINE_02
+    // which contain animated text. If an author marked HORIZONTAL_SLIDE
+    // Enable=False, hiding it would erase the entire animated subtree.
+    const parent = createNode("group", null); parent.name = "HORIZONTAL_SLIDE_LIKE";
+    const child = createNode("plane", parent.id); child.name = "ANIMATED_CHILD";
+    const bp = bpWith([parent, child], {
+      initialDisabledNodeIds: [parent.id],
+      tracks: [{ nodeId: child.id, property: "transform.position.x", keyframeFrames: [0, 100] }],
+    });
+    expect(computeAuthoredPermanentlyHidden(bp, parent.id)).toBe(false);
+  });
+
+  it("Test 5b: parent group with a MASK descendant also stays renderable", () => {
+    // A Group whose subtree contains a mask producer must stay visible so
+    // matrixWorld propagates to the mask correctly.
+    const parent = createNode("group", null); parent.name = "PARENT_WITH_MASK";
+    const mask = createNode("plane", parent.id); mask.name = "INNER_MASK";
+    mask.isMask = true;
+    const bp = bpWith([parent, mask], { initialDisabledNodeIds: [parent.id] });
+    expect(computeAuthoredPermanentlyHidden(bp, parent.id)).toBe(false);
+  });
+
+  it("Test 6: Enable=True nodes are never authoredPermanentlyHidden regardless of other state", () => {
+    const n = createNode("plane", null); n.name = "ENABLED_NODE";
+    const bp = bpWith([n]); // not in initialDisabledNodeIds
+    expect(computeAuthoredPermanentlyHidden(bp, n.id)).toBe(false);
+  });
+});
+

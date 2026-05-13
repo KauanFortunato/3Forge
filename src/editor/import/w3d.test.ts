@@ -812,6 +812,385 @@ describe("W3D import", () => {
       }
     });
 
+    it("Phase 1 visibility regression: a Quad with Enable='False' + Alpha animation is NOT marked as a helper and stays importer-visible (so timeline Alpha reveal works)", () => {
+      // The pre-Block-7 contract that we restored: non-content quads with
+      // Enable="False" get `node.visible = true` at import (design-view
+      // promotion) so timeline tracks that animate `material.opacity` (Alpha)
+      // produce the intended fade-in. Block 7 broke this by force-hiding
+      // the wrapper based on initialDisabledNodeIds. Phase 1 only force-hides
+      // *helpers* (HELPERS/ESCONDER/REFERENCE) so production nodes survive.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Quad Id="bg" Name="BACKGROUND" Enable="False" Alpha="0">
+  <GeometryOptions><Size X="1" Y="1"/></GeometryOptions>
+</Quad>
+<Group Id="ref" Name="REFERENCE" Enable="False">
+  <Children>
+    <Quad Id="g" Name="Guide">
+      <GeometryOptions><Size X="0.1" Y="0.1"/></GeometryOptions>
+    </Quad>
+  </Children>
+</Group>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1" MaxFrames="200" PreviewMarker="100">
+    <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="bg">
+      <KeyFrame FrameNumber="0" Value="0"/>
+      <KeyFrame FrameNumber="100" Value="1"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const bg = result.blueprint.nodes.find((n) => n.name === "BACKGROUND");
+      const refGroup = result.blueprint.nodes.find((n) => n.name === "REFERENCE");
+      const md = result.blueprint.metadata?.w3d as
+        | { initialDisabledNodeIds?: string[]; helperNodeIds?: string[] }
+        | undefined;
+
+      // Both are in initialDisabledNodeIds (authored Enable="False").
+      expect(md?.initialDisabledNodeIds).toContain(bg!.id);
+      expect(md?.initialDisabledNodeIds).toContain(refGroup!.id);
+
+      // CRITICAL: BACKGROUND is NOT a helper — production node that just
+      // happens to start disabled. REFERENCE *is* a helper (name-match).
+      expect(md?.helperNodeIds ?? []).not.toContain(bg!.id);
+      expect(md?.helperNodeIds ?? []).toContain(refGroup!.id);
+
+      // Importer's design-view promotion: non-content quads forced visible.
+      // The renderer's Phase 1 logic relies on this so timeline Alpha can
+      // animate material.opacity from a visible wrapper.
+      expect(bg?.visible).toBe(true);
+
+      // The Alpha track exists for BACKGROUND, so timeline drives the reveal.
+      const clip = result.blueprint.animation.clips.find((c) => c.name === "In");
+      expect(clip).toBeDefined();
+      const alphaTrack = clip!.tracks.find((t) => t.nodeId === bg!.id && t.property === "material.opacity");
+      expect(alphaTrack).toBeDefined();
+      expect(alphaTrack!.keyframes[0].value).toBe(0);
+      expect(alphaTrack!.keyframes[1].value).toBe(1);
+    });
+
+    it("Phase 1 visibility regression: a Group with Enable='True' on a child Quad that has an Enabled timeline track keeps the track intact", () => {
+      // Block 7 also force-hid wrappers based on the static initialDisabledNodeIds
+      // membership. Even if a child had an Enabled animation track at frame N,
+      // Block 7 had already nuked the wrapper.visible BEFORE the timeline
+      // applied. Phase 1 leaves the wrapper visible so the timeline's
+      // discrete-property write (`track.target.visible = true/false`) takes
+      // effect cleanly.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="Toggles" Enable="False">
+  <GeometryOptions><Size X="1" Y="1"/></GeometryOptions>
+</Quad>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="t1" MaxFrames="200" PreviewMarker="100">
+    <KeyFrameAnimationController AnimatedProperty="Enabled" ControllableId="q1">
+      <KeyFrame FrameNumber="50" Value="True"/>
+      <KeyFrame FrameNumber="150" Value="False"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const toggles = result.blueprint.nodes.find((n) => n.name === "Toggles");
+      const clip = result.blueprint.animation.clips.find((c) => c.name === "In");
+      // Importer translates `Enabled` → 3Forge property `visible`.
+      const visibleTrack = clip!.tracks.find((t) => t.nodeId === toggles!.id && t.property === "visible");
+      expect(visibleTrack).toBeDefined();
+      expect(visibleTrack!.keyframes).toHaveLength(2);
+      // True/False conversion happens in the parser:
+      //   booleanAttrAsNumber("True") = 1, "False" = 0
+      expect(visibleTrack!.keyframes[0].value).toBeGreaterThan(0.5);
+      expect(visibleTrack!.keyframes[1].value).toBeLessThan(0.5);
+      // Initial node.visible stays true (importer's design-view promotion).
+      expect(toggles?.visible).toBe(true);
+    });
+
+    it("Block 5: AlphaKey GUID resolves to filename via ctx.textureResources (importer pre-resolves for renderer asset lookup)", () => {
+      // Real LINEUP_LEFT shape: TextureMappingOption Key="<vertical-ramp-guid>"
+      // KeyType="AlphaKey" pointing at the gradient texture. The importer
+      // now resolves the GUID → Texture.Filename basename so the renderer
+      // can look the asset up on blueprint.images without re-walking XML.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<Texture Id="ramp-guid" Name="ramp.png" Filename="ramp.png"/>
+<Texture Id="photo-guid" Name="photo.png" Filename="photo.png"/>
+<TextureLayer Id="LY1" TextureBlending="Multiply">
+  <TextureMappingOption Texture="photo-guid" Key="ramp-guid" KeyType="AlphaKey"/>
+</TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="MaskedPhoto">
+  <GeometryOptions><Size X="1" Y="1"/></GeometryOptions>
+  <Primitive><FaceMappingList>
+    <NamedBaseFaceMapping TextureLayerId="LY1"/>
+  </FaceMappingList></Primitive>
+</Quad>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const photoAsset: ImageAsset = {
+        name: "photo.png", mimeType: "image/png", src: "data:image/png;base64,AAAA",
+        width: 64, height: 64,
+      };
+      const result = parseW3D(xml, { textures: new Map([["photo.png", photoAsset]]) });
+      const node = result.blueprint.nodes.find((n) => n.name === "MaskedPhoto");
+      expect(node?.type).toBe("image");
+      if (node?.type === "image") {
+        const opts = node.material.textureOptions;
+        expect(opts?.alphaKeyTextureId).toBe("ramp-guid");
+        expect(opts?.alphaKeyType).toBe("AlphaKey");
+        // Block 5 addition: resolved filename for renderer asset lookup.
+        expect(opts?.alphaKeyTextureName).toBe("ramp.png");
+        // Block 5 addition: TextureBlending preserved from parent TextureLayer.
+        expect(opts?.textureBlending).toBe("Multiply");
+      }
+    });
+
+    it("Block 5: TextureBlending=Normal / absent is NOT recorded (only meaningful blend modes land)", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<Texture Id="tex" Name="tex.png" Filename="tex.png"/>
+<TextureLayer Id="LY1" TextureBlending="Normal">
+  <TextureMappingOption Texture="tex"/>
+</TextureLayer>
+<TextureLayer Id="LY2">
+  <TextureMappingOption Texture="tex"/>
+</TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="Normal"><Primitive><FaceMappingList>
+  <NamedBaseFaceMapping TextureLayerId="LY1"/>
+</FaceMappingList></Primitive></Quad>
+<Quad Id="q2" Name="NoBlend"><Primitive><FaceMappingList>
+  <NamedBaseFaceMapping TextureLayerId="LY2"/>
+</FaceMappingList></Primitive></Quad>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const texAsset: ImageAsset = {
+        name: "tex.png", mimeType: "image/png", src: "data:image/png;base64,AAAA",
+        width: 1, height: 1,
+      };
+      const result = parseW3D(xml, { textures: new Map([["tex.png", texAsset]]) });
+      const normalNode = result.blueprint.nodes.find((n) => n.name === "Normal");
+      const absentNode = result.blueprint.nodes.find((n) => n.name === "NoBlend");
+      if (normalNode?.type === "image") {
+        expect(normalNode.material.textureOptions?.textureBlending).toBeUndefined();
+      }
+      if (absentNode?.type === "image") {
+        expect(absentNode.material.textureOptions?.textureBlending).toBeUndefined();
+      }
+    });
+
+    it("Block 6: TextureText with FontStyle resolves fontFamily/fontWeight from <TextureTextFontStyle> resource", () => {
+      // Real LINEUP_LEFT shape: SMALL_TEAM_NAME uses FS_08 (Obviously Light Italic).
+      // Importer now writes geometry.fontFamily + fontWeight + fontStyleId so
+      // the renderer's font resolver knows what was authored without walking
+      // metadata.w3d.textFontStyles.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<TextureTextFontStyle Id="fs-01" Name="FS_01" FontName="Obviously Cond" Type="Light"/>
+<TextureTextFontStyle Id="fs-08" Name="FS_08" FontName="Obviously" Type="Light Italic"/>
+</Resources><SceneLayer><SceneNode><Children>
+<TextureText Id="t1" Name="UsesFS01">
+  <GeometryOptions FontStyle="fs-01" Text="HELLO" TextQuality="0.8" HasTextBox="True">
+    <TextBoxSize X="1" Y="0.2"/>
+  </GeometryOptions>
+</TextureText>
+<TextureText Id="t2" Name="UsesFS08">
+  <GeometryOptions FontStyle="fs-08" Text="ITALIC">
+    <TextBoxSize X="1" Y="0.2"/>
+  </GeometryOptions>
+</TextureText>
+<TextureText Id="t3" Name="NoFont">
+  <GeometryOptions Text="NONE"/>
+</TextureText>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const fs01 = result.blueprint.nodes.find((n) => n.name === "UsesFS01");
+      const fs08 = result.blueprint.nodes.find((n) => n.name === "UsesFS08");
+      const none = result.blueprint.nodes.find((n) => n.name === "NoFont");
+      expect(fs01?.type).toBe("text");
+      if (fs01?.type === "text") {
+        expect(fs01.geometry.fontStyleId).toBe("fs-01");
+        expect(fs01.geometry.fontFamily).toBe("Obviously Cond");
+        expect(fs01.geometry.fontWeight).toBe("Light");
+        expect(fs01.geometry.textQuality).toBe("0.8");
+      }
+      if (fs08?.type === "text") {
+        expect(fs08.geometry.fontStyleId).toBe("fs-08");
+        expect(fs08.geometry.fontFamily).toBe("Obviously");
+        expect(fs08.geometry.fontWeight).toBe("Light Italic");
+      }
+      // Text with no FontStyle attribute: no fontFamily / fontWeight set.
+      if (none?.type === "text") {
+        expect(none.geometry.fontStyleId).toBeUndefined();
+        expect(none.geometry.fontFamily).toBeUndefined();
+        expect(none.geometry.fontWeight).toBeUndefined();
+      }
+    });
+
+    it("Block 1: rawNodeAttributes captures SpeedScale / DisplayColor / TextQuality / PivotType / Lock attrs (W3D shadow store)", () => {
+      // Sidecar bag in metadata.w3d.rawNodeAttributes[nodeId] preserves
+      // authored W3D fields the runtime doesn't consume yet. Sidesteps
+      // normalizeImportedNode's allowlist (which caused Phase 10 mask-fields
+      // and Phase 11 textureOptions silent drops). Future renderer/UI work
+      // can read these via metadata.w3d.* without re-parsing the XML.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="WithSpeed" SpeedScale="2" DisplayColor="11119017" Alpha="0.8">
+  <GeometryOptions><Size X="1" Y="1" Lock="XtoY"/></GeometryOptions>
+  <NodeTransform PivotType="Absolute">
+    <Scale X="1" Y="1" Z="1" Lock="XtoYtoZ"/>
+  </NodeTransform>
+</Quad>
+<TextureText Id="t1" Name="WithTextQuality" TextQuality="0.8">
+  <GeometryOptions Text="HELLO" TextQuality="0.8" HasTextBox="True"><TextBoxSize X="1" Y="0.2"/></GeometryOptions>
+</TextureText>
+<Quad Id="q2" Name="PlainQuad">
+  <GeometryOptions><Size X="1" Y="1"/></GeometryOptions>
+</Quad>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const md = result.blueprint.metadata?.w3d as
+        | { rawNodeAttributes?: Record<string, Record<string, unknown>> }
+        | undefined;
+      expect(md?.rawNodeAttributes).toBeDefined();
+      const withSpeed = result.blueprint.nodes.find((n) => n.name === "WithSpeed");
+      const withTextQuality = result.blueprint.nodes.find((n) => n.name === "WithTextQuality");
+      const plain = result.blueprint.nodes.find((n) => n.name === "PlainQuad");
+      expect(withSpeed && withTextQuality && plain).toBeTruthy();
+      if (!withSpeed || !withTextQuality || !plain) return;
+
+      const speedBag = md!.rawNodeAttributes![withSpeed.id];
+      expect(speedBag).toBeDefined();
+      expect(speedBag.speedScale).toBe(2);
+      expect(speedBag.displayColor).toBe("11119017");
+      expect(speedBag.rawAlpha).toBe("0.8");
+      expect(speedBag.pivotType).toBe("Absolute");
+      expect(speedBag.scaleLock).toBe("XtoYtoZ");
+      expect(speedBag.sizeLock).toBe("XtoY");
+
+      const textBag = md!.rawNodeAttributes![withTextQuality.id];
+      expect(textBag).toBeDefined();
+      expect(textBag.textQuality).toBe("0.8");
+
+      // PlainQuad has no raw attributes worth preserving → no entry, no
+      // empty-object noise in the bag.
+      expect(md!.rawNodeAttributes![plain.id]).toBeUndefined();
+    });
+
+    it("Block 1: SpeedScale=1 (the W3D default) is NOT preserved (only meaningful deviations land in raw bag)", () => {
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="DefaultSpeed" SpeedScale="1">
+  <GeometryOptions><Size X="1" Y="1"/></GeometryOptions>
+</Quad>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const md = result.blueprint.metadata?.w3d as
+        | { rawNodeAttributes?: Record<string, { speedScale?: number }> }
+        | undefined;
+      const node = result.blueprint.nodes.find((n) => n.name === "DefaultSpeed");
+      // No raw bag should exist (SpeedScale=1 is the only candidate field
+      // and it matches the default → nothing to preserve).
+      expect(md?.rawNodeAttributes?.[node!.id]).toBeUndefined();
+    });
+
+    it("<Pivot> element on a Group is parsed into pivotOffset with 2D-flip applied (Phase 11 regression — LINEUP_LEFT PLAYER_01..05)", () => {
+      // Real LINEUP_LEFT case: each PLAYER_xx Group carries
+      //   <NodeTransform PivotType="Absolute">
+      //     <Pivot Y="-1.4"/>
+      //     <Position Y="-3.5"/>
+      //   </NodeTransform>
+      // Pre-Phase-11 the <Pivot> element was silently dropped (the importer's
+      // header comment explicitly says "Skew/Pivot ignored with warning") so
+      // children of PLAYER_xx rendered ~1.4 units off vertically — all 5
+      // player cards visibly aligned on the wrong horizontal band. With the
+      // fix, Pivot is read with the same flipY rule as Position so
+      // pivotOffset.y matches the expected Three.js value.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer><SceneNode><Children>
+<Group Id="player-01" Name="PLAYER_01">
+  <NodeTransform PivotType="Absolute">
+    <Position Y="-3.5"/>
+    <Pivot Y="-1.4"/>
+  </NodeTransform>
+</Group>
+<Group Id="other" Name="NoPivot">
+  <NodeTransform>
+    <Position Y="1"/>
+  </NodeTransform>
+</Group>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const player = result.blueprint.nodes.find((n) => n.name === "PLAYER_01");
+      const other = result.blueprint.nodes.find((n) => n.name === "NoPivot");
+      expect(player?.type).toBe("group");
+      if (player?.type === "group") {
+        // 2D flip negates Y → W3D Pivot Y=-1.4 lands as Three pivotOffset Y=+1.4.
+        expect(player.pivotOffset.y).toBeCloseTo(1.4, 5);
+        expect(player.pivotOffset.x).toBe(0);
+        expect(player.pivotOffset.z).toBe(0);
+      }
+      // Group without <Pivot> stays at default pivotOffset {0,0,0}.
+      expect(other?.type).toBe("group");
+      if (other?.type === "group") {
+        expect(other.pivotOffset.x).toBe(0);
+        expect(other.pivotOffset.y).toBe(0);
+        expect(other.pivotOffset.z).toBe(0);
+      }
+    });
+
+    it("AlphaKey + ColorShaping + IsEmissive attributes survive parseTextureSamplingOptions (Phase 11 — LINEUP_LEFT PHOTO_xx)", () => {
+      // LINEUP_LEFT PHOTO_01..05 author <TextureMappingOption Key="<guid>"
+      //   KeyType="AlphaKey" ColorShaping="Shaped" IsEmissive="True" ...>
+      // so the photo is feathered by VERTICAL_RAMP.png. Pre-Phase-11 these
+      // attributes were silently dropped — the renderer couldn't surface a
+      // diagnostic explaining why photos render with wrong alpha. The fix
+      // preserves them on `material.textureOptions` so a future renderer
+      // upgrade (key compositing) can read them without re-parsing XML, and
+      // __r3Dump can flag "AlphaKey present but unimplemented" today.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<Texture Id="ramp" Name="ramp.png" Filename="ramp.png"/>
+<Texture Id="photo" Name="photo.png" Filename="photo.png"/>
+<TextureLayer Id="LY1">
+  <TextureMappingOption Texture="photo" Key="ramp" KeyType="AlphaKey" ColorShaping="Shaped" IsEmissive="True" PremultiplyColor="0" TextureStretchOption="Fill"/>
+</TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="q1" Name="PHOTO_01">
+  <GeometryOptions><Size X="2.3" Y="2.3"/></GeometryOptions>
+  <Primitive><FaceMappingList>
+    <NamedBaseFaceMapping TextureLayerId="LY1"/>
+  </FaceMappingList></Primitive>
+</Quad>
+</Children></SceneNode></SceneLayer></Scene>`;
+      // photo.png isn't in the textures map → importer falls to plane fallback
+      // for the rendered mesh, BUT the sampling options for the LAYER are still
+      // parsed. To test the parser path we feed a fake texture asset map so
+      // PHOTO_01 lands as an image node carrying the options.
+      const fakePhoto: ImageAsset = {
+        name: "photo.png",
+        mimeType: "image/png",
+        src: "data:image/png;base64,AAAA",
+        width: 64,
+        height: 64,
+      };
+      const textures = new Map<string, ImageAsset>([["photo.png", fakePhoto]]);
+      const result = parseW3D(xml, { textures });
+      const node = result.blueprint.nodes.find((n) => n.name === "PHOTO_01");
+      expect(node?.type).toBe("image");
+      if (node?.type === "image") {
+        const opts = node.material.textureOptions;
+        expect(opts).toBeDefined();
+        expect(opts?.alphaKeyTextureId).toBe("ramp");
+        expect(opts?.alphaKeyType).toBe("AlphaKey");
+        expect(opts?.colorShaping).toBe("Shaped");
+        expect(opts?.isEmissive).toBe(true);
+        expect(opts?.textureStretchOption).toBe("Fill");
+        // PremultiplyColor="0" is the default — omitted.
+        expect(opts?.premultiplyColor).toBeUndefined();
+      }
+    });
+
     it("Size.XProp on a quad with static Size X=0 normalizes scale.x against the post-flatten size (Phase 7 regression)", () => {
       // Real LINEUP_LEFT case: BASE_MAIN has <Size X="0"/> in the static XML
       // and animates Size.XProp from 0 (frame 50) to 7.7 (frame 97). With the
@@ -1536,6 +1915,119 @@ describe("W3D import", () => {
       expect(xTrack!.keyframes[1].value).toBeCloseTo(2);
       expect(yTrack!.keyframes[1].value).toBeCloseTo(2);
       expect(zTrack!.keyframes[1].value).toBeCloseTo(2);
+    });
+  });
+
+  // Phase B (LINEUP_LEFT learning fixture) — background-section parsing
+  // assertions. These focus on the exact authored shape of BASE_MAIN /
+  // SMALL_TEAM_NAME / TEXTURE_FULLFRAME_MAIN so we know the importer
+  // preserves the data the runtime fixes will rely on.
+  describe("LINEUP_LEFT background section", () => {
+    it("Phase B.2: TEXTURE_FULLFRAME_MAIN-like Quad preserves PATTERN.png with Wrap, repeat 1.13, Rotation Z=-1, TextureBlending=Multiply", () => {
+      // Real LINEUP_LEFT shape (lines 74-86 + the FF_MAIN <TextureLayer>):
+      //   <TextureLayer Id="FF_MAIN" TextureBlending="Multiply">
+      //     <TextureMappingOption Texture="pat-guid" TextureAddressModeU="Wrap"
+      //                            TextureAddressModeV="Wrap" IsEmissive="True"
+      //                            TextureStretchOption="Fill">
+      //       <Scale X="1.13" Y="1.13"/>
+      //       <Rotation Z="-1"/>
+      //     </TextureMappingOption>
+      //   </TextureLayer>
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<Texture Id="pat-guid" Name="PATTERN.png" Filename="PATTERN.png"/>
+<TextureLayer Id="FF_MAIN" TextureBlending="Multiply">
+  <TextureMappingOption Texture="pat-guid" TextureAddressModeU="Wrap" TextureAddressModeV="Wrap" IsEmissive="True" TextureStretchOption="Fill">
+    <Scale X="1.13" Y="1.13"/>
+    <Rotation Z="-1"/>
+  </TextureMappingOption>
+</TextureLayer>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="ff-main" Name="TEXTURE_FULLFRAME_MAIN" Alpha="0.8">
+  <GeometryOptions><Size X="7.363797" Y="4.142136"/></GeometryOptions>
+  <Primitive><FaceMappingList>
+    <NamedBaseFaceMapping TextureLayerId="FF_MAIN"/>
+  </FaceMappingList></Primitive>
+  <NodeTransform><Position Z="-1"/></NodeTransform>
+</Quad>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const patAsset: ImageAsset = {
+        name: "PATTERN.png", mimeType: "image/png", src: "data:image/png;base64,AAAA",
+        width: 256, height: 256,
+      };
+      const result = parseW3D(xml, { textures: new Map([["pattern.png", patAsset]]) });
+      const node = result.blueprint.nodes.find((n) => n.name === "TEXTURE_FULLFRAME_MAIN");
+      expect(node?.type).toBe("image");
+      if (node?.type === "image") {
+        const opts = node.material.textureOptions;
+        expect(opts).toBeDefined();
+        expect(opts?.wrapU).toBe("repeat");
+        expect(opts?.wrapV).toBe("repeat");
+        expect(opts?.repeatU).toBeCloseTo(1.13);
+        expect(opts?.repeatV).toBeCloseTo(1.13);
+        expect(opts?.textureRotation).toBeCloseTo(-1);
+        expect(opts?.textureBlending).toBe("Multiply");
+        expect(opts?.isEmissive).toBe(true);
+        expect(opts?.textureStretchOption).toBe("Fill");
+        // Alpha attribute (0.8) lands on material.opacity at import time.
+        expect(node.material.opacity).toBeCloseTo(0.8);
+      }
+    });
+
+    it("Phase B.4: SMALL_TEAM_NAME-like TextureText preserves Text, AlignmentX=Right, AlignmentY=Center, TextBox 6.39×0.23, FontStyle, TextQuality, MaskId", () => {
+      // Real LINEUP_LEFT shape (line 56): SMALL_TEAM_NAME consumes BASE_MAIN
+      // as its mask and uses FS_08 (Obviously Light Italic). The importer
+      // must preserve everything geometry-side so the renderer can place
+      // and font-style the text correctly.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><Resources>
+<TextureTextFontStyle Id="fs-08" Name="FS_08" FontName="Obviously" Type="Light Italic"/>
+</Resources><SceneLayer><SceneNode><Children>
+<Quad Id="base-main" Name="BASE_MAIN" IsMask="True"><GeometryOptions><Size X="7.7" Y="2.77"/></GeometryOptions></Quad>
+<TextureText Id="small-team-name" Name="SMALL_TEAM_NAME" MaskId="base-main;">
+  <GeometryOptions AlignmentX="Right" AlignmentY="Center" ConstrainMethod="Width" FontStyle="fs-08" HasNewMetrics="True" HasTextBox="True" IsNewGeometry="True" Text="DETROIT IRONHAWKS" TextQuality="0.8">
+    <TextBoxSize X="6.39" Y="0.23"/>
+  </GeometryOptions>
+  <NodeTransform>
+    <Position X="3.883" Y="-1.545" Z="-1"/>
+    <Scale X="0.8" Y="0.8" Z="0.8" Lock="XtoYtoZ"/>
+  </NodeTransform>
+</TextureText>
+</Children></SceneNode></SceneLayer></Scene>`;
+      const result = parseW3D(xml, { sceneName: "LineupLike" });
+      const node = result.blueprint.nodes.find((n) => n.name === "SMALL_TEAM_NAME");
+      expect(node?.type).toBe("text");
+      if (node?.type === "text") {
+        expect(node.geometry.text).toBe("DETROIT IRONHAWKS");
+        // Alignment + TextBox + FontStyle + TextQuality all land on
+        // node.geometry so the renderer reads everything from one place.
+        const g = node.geometry as unknown as {
+          alignmentX?: string;
+          alignmentY?: string;
+          hasTextBox?: boolean;
+          maxWidth?: number;
+          maxHeight?: number;
+          fontStyleId?: string;
+          fontFamily?: string;
+          fontWeight?: string;
+          textQuality?: string;
+        };
+        expect(g.alignmentX).toBe("Right");
+        expect(g.alignmentY).toBe("Center");
+        expect(g.hasTextBox).toBe(true);
+        expect(g.maxWidth).toBeCloseTo(6.39);
+        expect(g.maxHeight).toBeCloseTo(0.23);
+        // FontStyle GUID + resolved family/weight from the
+        // <TextureTextFontStyle> resource.
+        expect(g.fontStyleId).toBe("fs-08");
+        expect(g.fontFamily).toBe("Obviously");
+        expect(g.fontWeight).toBe("Light Italic");
+        // TextQuality preserved verbatim for diagnostics.
+        expect(g.textQuality).toBe("0.8");
+      }
+      // MaskId → maskId on the TextureText node, pointing at BASE_MAIN.
+      const baseMain = result.blueprint.nodes.find((n) => n.name === "BASE_MAIN");
+      expect(node?.maskId).toBe(baseMain?.id);
     });
   });
 });

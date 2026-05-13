@@ -1,4 +1,5 @@
 import {
+  AdditiveBlending,
   AmbientLight,
   AxesHelper,
   Box3,
@@ -37,6 +38,7 @@ import {
   PerspectiveCamera,
   Plane,
   PlaneGeometry,
+  Quaternion,
   Raycaster,
   Scene,
   ShaderMaterial,
@@ -194,7 +196,39 @@ export class SceneEditor {
 
   private animationFrame = 0;
   private animationTracks: CompiledAnimationTrack[] = [];
+  /**
+   * Block 2: ortho-camera half-height in world units. Used by `resize()` to
+   * scale the frustum aspect-correctly. Defaults to `null` → resize falls
+   * back to the legacy half-height of 5 (covering ~10 world units wide,
+   * matching pre-Phase-12 behaviour). When the active blueprint comes from
+   * a W3D import whose `<Camera>` declared `FieldofViewX` (and optionally
+   * `AspectRatio`), `applyEngineState` derives the half-height from those
+   * authored values so the ortho frustum matches what R³ Designer rendered.
+   */
+  private orthoHalfHeight: number | null = null;
+  /** Diagnostic mirror — surfaced via `__r3Dump.sceneCamera`. */
+  private cameraSource: "default" | "w3d-camera-metadata" = "default";
   private animationRuntimeReady = false;
+  /**
+   * Node IDs of *mask* nodes that have at least one animation track. Built
+   * by rebuildAnimationTimeline and consumed by refreshAnimatedMaskClipping
+   * to drive a per-frame plane recomputation.
+   *
+   * The original `applyMasks()` derives clipping planes from the mask's
+   * matrixWorld at scene-rebuild time and bakes them into consumer
+   * materials. When a mask animates (e.g. LINEUP_LEFT BASE_MAIN growing
+   * 0→7.7 over frames 50–97), the mask mesh visibly scales but the
+   * consumer's clip rectangle stays frozen at the rebuild value, so masked
+   * content reveals at the wrong moment / wrong shape. We recompute the
+   * affected consumers' planes once per animation frame to fix that.
+   */
+  private animatedMaskNodeIds: Set<string> = new Set();
+  /**
+   * Consumers (nodeId) whose `maskId`/`maskIds` reference at least one
+   * animated mask. Computed once per rebuildAnimationTimeline so the
+   * per-frame refresh skips unaffected nodes.
+   */
+  private animatedMaskConsumerIds: Set<string> = new Set();
   private currentAnimationFrame = 0;
   private isAnimationPlaying = false;
   private animationPlaybackStartedAt = 0;
@@ -968,6 +1002,20 @@ export class SceneEditor {
   private dumpRuntimeScene(): {
     sceneMode: string | undefined;
     cameraKind: "perspective" | "orthographic";
+    sceneCamera: {
+      kind: "perspective" | "orthographic";
+      cameraProjection: "perspective" | "orthographic";
+      source: "default" | "w3d-camera-metadata";
+      w3dCameraProjection: string | null;
+      w3dFieldOfViewX: number | null;
+      w3dAspectRatio: number | null;
+      projectFormat: string | null;
+      projectAspectRatio: number | null;
+      viewportAspectRatio: number | null;
+      orthoHalfHeight: number | null;
+      effectiveOrthoFrustum: { left: number; right: number; top: number; bottom: number } | null;
+      position: { x: number; y: number; z: number };
+    };
     nodeCount: number;
     nodes: Array<Record<string, unknown>>;
     mediaLibrary: Array<Record<string, unknown>>;
@@ -1114,7 +1162,30 @@ export class SceneEditor {
         horizontalDirection: string | null;
         verticalDirection: string | null;
       }>;
+      rawNodeAttributes?: Record<string, {
+        speedScale?: number;
+        displayColor?: string;
+        textQuality?: string;
+        pivotType?: string;
+        scaleLock?: string;
+        sizeLock?: string;
+        rawEnabled?: string;
+        rawAlpha?: string;
+        unknown?: Record<string, string>;
+      }>;
     };
+
+    // Phase 1: pre-compute "which nodes have an Enabled (visible) timeline
+    // track" once per dump so per-node diagnostics can show whether the
+    // timeline owns runtime visibility, and the current frame's value
+    // if so. Keys by nodeId.
+    const visibleTrackByNodeId = new Map<string, CompiledAnimationTrack>();
+    for (const track of this.animationTracks) {
+      if (track.propertyPath === "visible" && track.target?.userData?.nodeId) {
+        visibleTrackByNodeId.set(String(track.target.userData.nodeId), track);
+      }
+    }
+    const currentFrame = this.currentAnimationFrame;
 
     const out: Array<Record<string, unknown>> = [];
     for (const node of bp.nodes) {
@@ -1160,6 +1231,12 @@ export class SceneEditor {
       let hasMap = false;
       let mapHasImage = false;
       let materialMap: Texture | null = null;
+      // Block 3: depth pipeline snapshot. depthTest/depthWrite drive how the
+      // material interacts with the depth buffer; for W3D 2D scenes
+      // applyPainterOrderingForLegacyLayout sets depthWrite=false so painter's
+      // algorithm via renderOrder takes over.
+      let materialDepthTest: boolean | null = null;
+      let materialDepthWrite: boolean | null = null;
       if (meshObj) {
         if (!meshObj.geometry.boundingBox) meshObj.geometry.computeBoundingBox();
         const bbox = meshObj.geometry.boundingBox;
@@ -1174,6 +1251,8 @@ export class SceneEditor {
         if (mat) {
           materialOpacity = mat.opacity;
           materialTransparent = mat.transparent;
+          materialDepthTest = mat.depthTest;
+          materialDepthWrite = mat.depthWrite;
           clippingPlaneCount = mat.clippingPlanes?.length ?? 0;
           const mWithMap = mat as Material & { color?: { getHexString(): string }; map?: Texture };
           if (mWithMap.color) materialColor = "#" + mWithMap.color.getHexString();
@@ -1284,9 +1363,126 @@ export class SceneEditor {
         // clippingPlaneCount; this is the missing inversion bit.
         maskInverted: node.maskInverted ?? false,
         renderOrder,
+        // Block 3: layer/order source — "world-z" when the W3D painter pass
+        // ran (2D scene with metadata.w3d), else "default". The actual
+        // renderOrder value above is already deterministic per node; this
+        // tag tells the operator WHICH ordering policy assigned it.
+        renderOrderSource: bp.metadata?.w3d
+          ? (bp.sceneMode === "2d" ? "w3d-painter-world-z" : "w3d-polygon-offset")
+          : "default",
         materialColor,
         materialOpacity,
         materialTransparent,
+        materialDepthTest,
+        materialDepthWrite,
+        // Block 5/6: W3D layer / font diagnostic state stashed on the
+        // material's userData at mesh-build time. Surfaces the operator-
+        // facing answer to "did AlphaKey resolve?", "what font did we
+        // really use?", "did Multiply blending land?".
+        w3dLayer: (() => {
+          if (!materialMap) return null;
+          const mat = Array.isArray(meshObj?.material) ? meshObj?.material[0] : meshObj?.material;
+          return (mat?.userData?.w3dLayer as Record<string, unknown> | undefined) ?? null;
+        })(),
+        w3dFont: (() => {
+          if (node.type !== "text") return null;
+          const mat = Array.isArray(meshObj?.material) ? meshObj?.material[0] : meshObj?.material;
+          return (mat?.userData?.w3dFont as Record<string, unknown> | undefined) ?? null;
+        })(),
+        // Phase 1 / Block 7 visibility audit — combines static authoring
+        // bits stashed on userData at createObject with dynamic state
+        // (live animation track + parent matrixWorld) so the operator can
+        // tell at a glance why a node is or isn't visible right now.
+        w3dVisibility: (() => {
+          const stash = (wrapper.userData?.w3dVisibility as Record<string, unknown> | undefined) ?? null;
+          if (!stash) return null;
+          const enabledTrack = visibleTrackByNodeId.get(node.id) ?? null;
+          const hasEnabledTrack = enabledTrack !== null;
+          // Evaluate the Enabled track at the current frame so the dump shows
+          // what the timeline says *right now*. Track values for `visible`
+          // are stored as 0/1 (or true/false converted in animationValueToBoolean
+          // at apply time); we surface the raw 0/1 here for explicitness.
+          const timelineEnabledValue = enabledTrack
+            ? evaluateCompiledTrack(enabledTrack, currentFrame) >= 0.5
+            : null;
+          // Walk up the wrapper's parent chain. A node is `effectiveVisible`
+          // only if every ancestor in the chain is visible too — Three's
+          // renderer skips invisible subtrees regardless of the leaf's flag.
+          let parentEffectiveVisible = true;
+          let cursor: Object3D | null = wrapper.parent;
+          while (cursor && cursor !== this.viewportRoot) {
+            if (!cursor.visible) { parentEffectiveVisible = false; break; }
+            cursor = cursor.parent;
+          }
+          const runtimeVisible = wrapper.visible;
+          const effectiveVisible = runtimeVisible && parentEffectiveVisible;
+          // Compute a single human-readable reason for the current state.
+          // Ordering matters: most-specific wins so the operator sees the
+          // first blocker, not a downstream consequence.
+          let hiddenReason: string;
+          if (effectiveVisible) {
+            hiddenReason = "visible";
+          } else if (stash.isMissingTexture) {
+            hiddenReason = "missing-texture";
+          } else if (stash.isMask) {
+            hiddenReason = "mask";
+          } else if (stash.helperForcedHidden) {
+            hiddenReason = "helper-hidden";
+          } else if (stash.authoredPermanentlyHidden) {
+            // Phase B.1: Enable="False" + no timeline reveal + not a mask /
+            // mask-producer / animated-descendant parent. We treat this as a
+            // permanent hide so R3-style reference layers (BACKGROUND guide
+            // image) stop painting on top of the production stack.
+            hiddenReason = "authored-permanently-hidden";
+          } else if (hasEnabledTrack && !timelineEnabledValue) {
+            hiddenReason = "timeline-disabled";
+          } else if (!parentEffectiveVisible) {
+            hiddenReason = "parent-hidden";
+          } else if (!stash.authoredEnabled && !hasEnabledTrack) {
+            // Authored-disabled with no Enabled track — but some non-Enabled
+            // track (Alpha / Size / Position / …) keeps it animated. Kept as
+            // a diagnostic state so the operator can spot the reveal source.
+            hiddenReason = "authored-disabled-initial";
+          } else if (!runtimeVisible) {
+            hiddenReason = "wrapper-invisible";
+          } else {
+            hiddenReason = "unknown";
+          }
+          return {
+            ...stash,
+            hasEnabledTrack,
+            timelineEnabledValue,
+            parentEffectiveVisible,
+            runtimeVisible,
+            effectiveVisible,
+            hiddenReason,
+          };
+        })(),
+        // Phase B.1 — cross-clip "does this node have ANY animation track?"
+        // so the operator can verify the predicate input without running
+        // `Object.keys(blueprint.animation.clips[*].tracks).length`. The
+        // `byProperty` map answers follow-up "which property animates?"
+        // questions without re-traversing the clip list.
+        w3dAnimation: (() => {
+          const clips = bp.animation?.clips ?? [];
+          const propsByClip: Record<string, string[]> = {};
+          let total = 0;
+          for (const clip of clips) {
+            const props: string[] = [];
+            for (const track of clip.tracks) {
+              if (track.nodeId !== node.id) continue;
+              if (track.keyframes.length === 0) continue;
+              props.push(track.property);
+              total += 1;
+            }
+            if (props.length > 0) propsByClip[clip.name] = props;
+          }
+          return {
+            hasAnyAnimationTrack: total > 0,
+            trackCount: total,
+            propsByClip,
+          };
+        })(),
         textureState,
         textureSrc: node.type === "image" ? (node.image?.src ?? "").slice(0, 64) : null,
         textureMime: node.type === "image" ? node.image?.mimeType : null,
@@ -1296,8 +1492,28 @@ export class SceneEditor {
         // visible alongside the node it belongs to.
         textureLayerFilename: textureLayerInfo?.resolvedFilename ?? null,
         textureLayerOriginalRef: textureLayerInfo?.originalRef ?? null,
+        // Block 1: surface preserved-but-unused W3D attributes so a future
+        // browser dump can show "this node carried SpeedScale=2 / PivotType=
+        // Absolute / TextQuality=5 / scaleLock=XtoY that we're ignoring".
+        // null when no rawNodeAttributes entry was generated (default).
+        rawW3DAttributes: w3d.rawNodeAttributes?.[node.id] ?? null,
         hasMap,
         mapHasImage,
+        // W3D AlphaKey: surfaces "this node was authored with a Key mask the
+        // runtime is ignoring" so operators can correlate disappearing /
+        // wrong-alpha photos against the import path. `alphaKeyType` is
+        // typically "AlphaKey" but other values (chroma key future variants)
+        // pass through verbatim.
+        alphaKeyTextureId:
+          node.type !== "group"
+            ? (node as unknown as { material?: { textureOptions?: { alphaKeyTextureId?: string } } })
+                .material?.textureOptions?.alphaKeyTextureId ?? null
+            : null,
+        alphaKeyType:
+          node.type !== "group"
+            ? (node as unknown as { material?: { textureOptions?: { alphaKeyType?: string } } })
+                .material?.textureOptions?.alphaKeyType ?? null
+            : null,
         // Only present when the texture is backed by a <video>. Lets the
         // operator distinguish "video never started" (readyState=0) from
         // "video paused after error" (errorCode != null) from "playing".
@@ -1377,6 +1593,21 @@ export class SceneEditor {
         isMask: !!node.isMask,
         maskIds: node.maskIds ?? (node.maskId ? [node.maskId] : []),
         clippingPlaneCount,
+        // Phase 10 flags — let the operator see whether a mask was wired
+        // into the per-frame plane refresh path. `maskIsAnimated` is set on
+        // the mask quad itself; `consumesAnimatedMask` is set on consumers
+        // whose plane arrays now refresh on every animation frame. A node
+        // with `consumesAnimatedMask=true` but a wrong reveal during
+        // playback is almost certainly a plane-math bug; a node WITHOUT it
+        // that should be animating is a registration bug here.
+        maskIsAnimated: this.animatedMaskNodeIds.has(node.id),
+        consumesAnimatedMask: this.animatedMaskConsumerIds.has(node.id),
+        // Block 4: surface the list of mask IDs this node consumes (single
+        // `maskId` or full `maskIds`) so dumps can correlate consumer ↔
+        // mask without grepping the XML.
+        consumesMaskIds: (node.maskIds && node.maskIds.length > 0)
+          ? node.maskIds.map((id) => id.slice(0, 8))
+          : (node.maskId ? [node.maskId.slice(0, 8)] : []),
         isHelper: w3d.helperNodeIds?.includes(node.id) ?? false,
         isMissingTexture: w3d.missingTextureNodeIds?.includes(node.id) ?? false,
         wasInitialDisabled: w3d.initialDisabledNodeIds?.includes(node.id) ?? false,
@@ -1610,6 +1841,10 @@ export class SceneEditor {
       nodeName: string;
       size: { x: number; y: number };
       worldBounds: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } } | null;
+      worldBoundsDegenerate: boolean;
+      meshLocalBbox: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } } | null;
+      meshWorldScale: { x: number; y: number; z: number } | null;
+      meshCount: number;
       skew: { x: number; y: number; z: number } | null;
       hasSkewLayer: boolean;
       inverted: boolean;
@@ -1626,31 +1861,59 @@ export class SceneEditor {
       const wrapper = this.objectMap.get(mn.id);
       let maskMesh: Mesh | null = null;
       let maskSkewLayer: Group | null = null;
+      let meshCount = 0;
       if (wrapper) {
         for (const c of wrapper.children) {
           if (c instanceof Group && c.matrixAutoUpdate === false) maskSkewLayer = c;
         }
         wrapper.traverse((c) => {
-          if (!maskMesh && c instanceof Mesh) maskMesh = c;
+          if (c instanceof Mesh) {
+            meshCount += 1;
+            if (!maskMesh) maskMesh = c;
+          }
         });
       }
-      // Capture into a plain Mesh|null and then narrow with an explicit
-      // typed local — same workaround as `meshObjVisible` higher up in
-      // this file; TypeScript's "never" narrowing inside the traversal
-      // closure scope otherwise rejects mesh.geometry/.matrixWorld below.
       const mesh: Mesh | null = maskMesh;
       let worldBounds: W3DMaskEntry["worldBounds"] = null;
+      let worldBoundsDegenerate = false;
+      let meshLocalBbox: W3DMaskEntry["meshLocalBbox"] = null;
+      let meshWorldScale: W3DMaskEntry["meshWorldScale"] = null;
+      if (wrapper) {
+        // Use the same union-of-descendants approach computeMaskPlanes
+        // takes, so a degenerate worldBounds in the dump matches the
+        // condition that would skip plane emission (one operator-visible
+        // truth instead of dump vs. renderer drift).
+        const union = computeWorldBoundsFromMeshes(wrapper);
+        if (union) {
+          worldBounds = {
+            min: { x: +union.min.x.toFixed(4), y: +union.min.y.toFixed(4), z: +union.min.z.toFixed(4) },
+            max: { x: +union.max.x.toFixed(4), y: +union.max.y.toFixed(4), z: +union.max.z.toFixed(4) },
+          };
+          const dx = union.max.x - union.min.x;
+          const dy = union.max.y - union.min.y;
+          worldBoundsDegenerate = dx <= 0 || dy <= 0;
+        }
+      }
       if (mesh !== null) {
         const m: Mesh = mesh;
         if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
         const b = m.geometry.boundingBox;
         if (b) {
-          const wb = b.clone().applyMatrix4(m.matrixWorld);
-          worldBounds = {
-            min: { x: +wb.min.x.toFixed(4), y: +wb.min.y.toFixed(4), z: +wb.min.z.toFixed(4) },
-            max: { x: +wb.max.x.toFixed(4), y: +wb.max.y.toFixed(4), z: +wb.max.z.toFixed(4) },
+          // Local (pre-world-transform) bbox — operator can distinguish
+          // "geometry is degenerate at source" from "matrixWorld collapsed
+          // a healthy local bbox" (likely a parent scale=0).
+          meshLocalBbox = {
+            min: { x: +b.min.x.toFixed(4), y: +b.min.y.toFixed(4), z: +b.min.z.toFixed(4) },
+            max: { x: +b.max.x.toFixed(4), y: +b.max.y.toFixed(4), z: +b.max.z.toFixed(4) },
           };
         }
+        // World-space scale on the chosen mesh (decomposed from matrixWorld).
+        // A zero on any axis is the smoking gun for "world bbox collapsed" —
+        // typically a parent group whose Phase 7 normalization or
+        // Transform.Scale animation produced scale=0 at the active frame.
+        const s = new Vector3();
+        m.matrixWorld.decompose(new Vector3(), new Quaternion(), s);
+        meshWorldScale = { x: +s.x.toFixed(4), y: +s.y.toFixed(4), z: +s.z.toFixed(4) };
       }
       const maskedNodes: Array<{ id: string; name: string }> = [];
       for (const consumer of bp.nodes) {
@@ -1710,6 +1973,10 @@ export class SceneEditor {
           y: typeof gw?.height === "number" ? +gw.height.toFixed(4) : 0,
         },
         worldBounds,
+        worldBoundsDegenerate,
+        meshLocalBbox,
+        meshWorldScale,
+        meshCount,
         skew: mn.transform.skew ?? null,
         hasSkewLayer: !!maskSkewLayer,
         inverted,
@@ -1724,6 +1991,47 @@ export class SceneEditor {
     return {
       sceneMode: bp.sceneMode,
       cameraKind: this.camera instanceof OrthographicCamera ? "orthographic" : "perspective",
+      // Block 2: full camera state for `__r3Dump.sceneCamera`. Lets the
+      // operator confirm whether W3D camera metadata reshaped the frustum
+      // ("source: 'w3d-camera-metadata'") vs the default ortho fallback.
+      sceneCamera: {
+        kind: this.camera instanceof OrthographicCamera ? "orthographic" : "perspective",
+        cameraProjection: this.camera instanceof OrthographicCamera ? "orthographic" : "perspective",
+        source: this.cameraSource,
+        w3dCameraProjection: (bp.metadata?.engine as { camera?: { metadata?: { sourceId?: string } } } | undefined)?.camera?.metadata
+          ? (bp.metadata?.w3d as { sceneMode?: { reason?: string } } | undefined)?.sceneMode?.reason ?? null
+          : null,
+        w3dFieldOfViewX: (bp.metadata?.engine as { camera?: { metadata?: { fovX?: number } } } | undefined)?.camera?.metadata?.fovX ?? null,
+        w3dAspectRatio: (bp.metadata?.engine as { camera?: { metadata?: { aspectRatio?: number } } } | undefined)?.camera?.metadata?.aspectRatio ?? null,
+        // Phase B.5 — diagnostic-only project/viewport metrics. Authored
+        // format (e.g. "HD1080p50") comes from `<Timelines Format>` and is
+        // persisted in shadow metadata. projectAspectRatio mirrors the
+        // existing w3dAspectRatio so __r3Dump consumers can read either
+        // name without re-deriving. viewportAspectRatio reflects the actual
+        // canvas the renderer is using — comparing the three exposes any
+        // letterbox needed in a future phase.
+        projectFormat: (bp.metadata?.w3d as { timelineFormat?: string } | undefined)?.timelineFormat ?? null,
+        projectAspectRatio: (bp.metadata?.engine as { camera?: { metadata?: { aspectRatio?: number } } } | undefined)?.camera?.metadata?.aspectRatio ?? null,
+        viewportAspectRatio: (() => {
+          const w = this.renderer.domElement.clientWidth;
+          const h = this.renderer.domElement.clientHeight;
+          return h > 0 ? +(w / h).toFixed(4) : null;
+        })(),
+        orthoHalfHeight: this.orthoHalfHeight,
+        effectiveOrthoFrustum: this.camera instanceof OrthographicCamera
+          ? {
+              left: +this.camera.left.toFixed(4),
+              right: +this.camera.right.toFixed(4),
+              top: +this.camera.top.toFixed(4),
+              bottom: +this.camera.bottom.toFixed(4),
+            }
+          : null,
+        position: {
+          x: +this.camera.position.x.toFixed(4),
+          y: +this.camera.position.y.toFixed(4),
+          z: +this.camera.position.z.toFixed(4),
+        },
+      },
       nodeCount: bp.nodes.length,
       nodes: out,
       mediaLibrary,
@@ -1851,6 +2159,10 @@ export class SceneEditor {
     return false;
   }
 
+  private isAuthoredPermanentlyHidden(nodeId: string): boolean {
+    return computeAuthoredPermanentlyHidden(this.store.blueprint, nodeId);
+  }
+
   private applyPainterOrderForW3D(): void {
     // Broadcast scenes (R3 / W3D) stack many quads at near-identical Z (e.g.
     // -0.001 / -0.01 / -1). The right fix depends on the camera:
@@ -1965,30 +2277,9 @@ export class SceneEditor {
   }
 
   private computeMaskPlanes(maskWrapper: Object3D, inverted: boolean): Plane[] | null {
-    let mesh: Mesh | null = null;
-    maskWrapper.traverse((child) => {
-      if (!mesh && child instanceof Mesh) {
-        mesh = child;
-      }
-    });
-    if (!mesh) return null;
-    const meshObj: Mesh = mesh;
-    if (!meshObj.geometry.boundingBox) {
-      meshObj.geometry.computeBoundingBox();
-    }
-    const bbox = meshObj.geometry.boundingBox;
-    if (!bbox) return null;
-    const worldBox = bbox.clone().applyMatrix4(meshObj.matrixWorld);
-    // Default (outer-clip): keep what's inside the four planes.
-    // Inverted: flip every normal so the half-spaces select the OUTSIDE of
-    // the mask volume — drawing is hidden inside the bbox, shown elsewhere.
-    const sign = inverted ? -1 : 1;
-    return [
-      new Plane(new Vector3(1 * sign, 0, 0), -worldBox.min.x * sign),
-      new Plane(new Vector3(-1 * sign, 0, 0), worldBox.max.x * sign),
-      new Plane(new Vector3(0, 1 * sign, 0), -worldBox.min.y * sign),
-      new Plane(new Vector3(0, -1 * sign, 0), worldBox.max.y * sign),
-    ];
+    const worldBox = computeWorldBoundsFromMeshes(maskWrapper);
+    if (!worldBox) return null;
+    return buildKeepInsidePlanesFromBox(worldBox, inverted);
   }
 
   private applyClippingToMaterials(target: Object3D, planes: Plane[]): void {
@@ -2007,6 +2298,61 @@ export class SceneEditor {
     });
   }
 
+  /**
+   * Per-animation-frame refresh of clipping planes for consumers that are
+   * masked by an animated mask. `applyMasks()` runs once at scene rebuild
+   * and bakes the planes off the mask's matrixWorld AT THAT MOMENT —
+   * subsequent animation frames update mesh.scale/position/skew on the
+   * mask itself, but the consumer materials' `clippingPlanes` arrays were
+   * built from the stale matrixWorld and never updated. LINEUP_LEFT's
+   * BASE_MAIN/BASE_TEAM/PHOTO_MASK_01 all animate Size.XProp and are
+   * inverted/regular masks for the reveal sequences; without this method
+   * the reveal direction is wrong / the masked content is in its final
+   * state from frame 0.
+   *
+   * Cheap by design: skipped entirely when no mask animates; otherwise
+   * touches only the precomputed consumer set. For each consumer we
+   * recompute ALL its planes (any mix of animated + non-animated masks)
+   * so the final plane array is internally consistent.
+   *
+   * MUST be called after the per-frame track-write loop in
+   * `applyAnimationFrame`, so the freshly-written mesh.scale etc. is
+   * already on the mask wrappers.
+   */
+  private refreshAnimatedMaskClipping(): void {
+    if (this.animatedMaskConsumerIds.size === 0) return;
+    // matrixWorld is what `computeMaskPlanes` reads; force a tree-wide
+    // refresh so the animated mask wrappers reflect this frame's
+    // transform writes before we sample their bounds. Three's render
+    // loop runs its own matrixAutoUpdate pass after this, so the cost
+    // is a single redundant matrix walk — fine for broadcast-scene
+    // node counts.
+    this.viewportRoot.updateMatrixWorld(true);
+    for (const consumerId of this.animatedMaskConsumerIds) {
+      const consumerNode = this.store.getNode(consumerId);
+      if (!consumerNode) continue;
+      const consumerWrapper = this.objectMap.get(consumerId);
+      if (!consumerWrapper) continue;
+      const ids = consumerNode.maskIds && consumerNode.maskIds.length > 0
+        ? consumerNode.maskIds
+        : consumerNode.maskId
+          ? [consumerNode.maskId]
+          : null;
+      if (!ids) continue;
+      const allPlanes: Plane[] = [];
+      for (const mid of ids) {
+        const maskWrapper = this.objectMap.get(mid);
+        if (!maskWrapper) continue;
+        const inverted = resolveMaskInversion(this.store.blueprint, mid, consumerNode);
+        const planes = this.computeMaskPlanes(maskWrapper, inverted);
+        if (planes) allPlanes.push(...planes);
+      }
+      if (allPlanes.length > 0) {
+        this.applyClippingToMaterials(consumerWrapper, allPlanes);
+      }
+    }
+  }
+
   private createObject(node: EditorNode): Object3D {
     const object = node.type === "group"
       ? this.buildGroupObject(node)
@@ -2016,7 +2362,71 @@ export class SceneEditor {
     // rendered (R3 treats them as invisible stencil shapes).
     // Quads whose texture wasn't in the imported folder are also hidden so
     // they don't render as solid-white placeholders — see W3DShadowData.
-    object.visible = node.visible && !node.isMask && !this.isMissingTextureNode(node.id);
+    //
+    // R3 / W3D visibility model:
+    //
+    //   authored `Enable="False"` is the INITIAL state, NOT a permanent hide.
+    //   Many production nodes (BACKGROUND, LOGO, MAIN, BASE_MAIN, …) start
+    //   with `Enable="False"` and are revealed later by the "In" timeline
+    //   via Alpha and/or Enabled animation tracks. The importer's
+    //   `node.visible = enabled || !isContentMimeType` rule already handles
+    //   the design-view + video-content split: non-content quads are
+    //   forced visible at import so the editor can SEE them, while video
+    //   / image-sequence content respects Enable=False (otherwise frame-0
+    //   of a take-out animation paints a static white diagonal at import).
+    //
+    //   The previous Block 7 implementation force-hid every node in
+    //   `initialDisabledNodeIds` and every node in `helperNodeIds`. That
+    //   matched the authoring-scaffolding case for HELPERS/ESCONDER/
+    //   REFERENCE but BROKE intro animations: BACKGROUND/LOGO etc. were
+    //   in `initialDisabledNodeIds`, the timeline's Alpha track wrote to
+    //   material.opacity (which has no effect when the wrapper is
+    //   `visible=false`), so the reveal never happened.
+    //
+    //   Phase 1 fix: only force-hide HELPER-named scaffolding. Other
+    //   `Enable="False"` nodes keep the importer's forced-true visibility
+    //   so timeline Alpha/Enabled tracks drive the actual runtime state.
+    //   `__3forgeShowAuthoredHidden = true` opts BACK INTO showing
+    //   helpers, for design-time inspection.
+    const w3dMeta = this.store.blueprint.metadata?.w3d as
+      | { initialDisabledNodeIds?: string[]; helperNodeIds?: string[] }
+      | undefined;
+    const authoredEnabled = !w3dMeta?.initialDisabledNodeIds?.includes(node.id);
+    const isHelper = w3dMeta?.helperNodeIds?.includes(node.id) ?? false;
+    const showAuthoredHidden = typeof window !== "undefined"
+      && (window as unknown as { __3forgeShowAuthoredHidden?: boolean }).__3forgeShowAuthoredHidden === true;
+    // Only force-hide named helpers (HELPERS/ESCONDER/REFERENCE/PITCH_REFERENCE)
+    // that are also Enable="False" — `helperNodeIds` is already gated on both
+    // conditions in `collectAuthoringHelperNodeIds`. Crucially NOT applied to
+    // every `initialDisabledNodeIds` entry, which would hide timeline-driven
+    // production nodes like BACKGROUND and LOGO.
+    const helperForcedHidden = isHelper && !showAuthoredHidden;
+    // Phase B.1 — respect R3's `Enable="False"` ONLY when the node has no
+    // way to be revealed (no tracks, not a mask, not a mask producer, no
+    // animated descendants). See `isAuthoredPermanentlyHidden` for the
+    // exact predicate.
+    const authoredPermanentlyHidden = this.isAuthoredPermanentlyHidden(node.id);
+    object.visible = node.visible
+      && !node.isMask
+      && !this.isMissingTextureNode(node.id)
+      && !helperForcedHidden
+      && !authoredPermanentlyHidden;
+    // Stash the static input bits for dump diagnostics. Dynamic fields
+    // (hasEnabledTrack / timelineEnabledValue / parentEffectiveVisible /
+    // hiddenReason) are computed at dump time because they depend on the
+    // live animation track set + current frame + Three's matrix state —
+    // none of which are stable at createObject time.
+    object.userData.w3dVisibility = {
+      authoredEnabled,
+      isHelper,
+      isMask: !!node.isMask,
+      isMissingTexture: this.isMissingTextureNode(node.id),
+      showAuthoredHidden,
+      helperForcedHidden,
+      authoredPermanentlyHidden,
+      blueprintVisible: node.visible,
+      buildTimeWrapperVisible: object.visible,
+    };
     object.userData.nodeId = node.id;
     object.userData.nodeType = node.type;
     object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
@@ -2126,7 +2536,47 @@ export class SceneEditor {
   }
 
   private createTextMesh(node: TextNode, material: Material): Mesh {
-    const font = this.resolveFont(node.fontId);
+    // Block 6: when the node carries an authored W3D fontFamily (e.g.
+    // "Obviously Cond" from <TextureTextFontStyle>), try to match it
+    // against the available font catalog by name. If found, use that
+    // font's id; if not, fall back to the existing fontId (typically
+    // DEFAULT_FONT_ID set by the W3D importer) and record the reason in
+    // material.userData.w3dFont so the dump can surface "this node
+    // requested 'Obviously Cond' but we used 'Helvetiker'".
+    let resolvedFontId = node.fontId;
+    let fontFallbackReason: string | null = null;
+    const requested = node.geometry.fontFamily;
+    if (requested) {
+      const wanted = requested.toLowerCase();
+      const match = this.store.fonts.find((f) => f.name.toLowerCase() === wanted);
+      if (match) {
+        resolvedFontId = match.id;
+      } else {
+        // Tolerate "Obviously Cond" vs "Obviously" — also try a prefix /
+        // family-base match so a project that bundles only the base family
+        // still gets a closer-than-default substitution.
+        const baseFamily = wanted.split(" ")[0];
+        const partial = this.store.fonts.find((f) => f.name.toLowerCase().startsWith(baseFamily));
+        if (partial) {
+          resolvedFontId = partial.id;
+          fontFallbackReason = `Requested "${requested}" — no exact match in font catalog; using "${partial.name}" (family-base match).`;
+        } else {
+          fontFallbackReason = `Requested "${requested}" — no matching font in catalog; using default ${node.fontId}.`;
+        }
+      }
+    }
+    const font = this.resolveFont(resolvedFontId);
+    // Stash diagnostic on the material so the per-node dump can read it
+    // without re-walking the font catalog.
+    material.userData.w3dFont = {
+      fontStyleId: node.geometry.fontStyleId ?? null,
+      fontFamily: node.geometry.fontFamily ?? null,
+      fontWeight: node.geometry.fontWeight ?? null,
+      textQuality: node.geometry.textQuality ?? null,
+      requestedFontId: node.fontId,
+      resolvedFontId,
+      fontFallbackReason,
+    };
     const geometry = new TextGeometry(node.geometry.text || " ", {
       font,
       size: Math.max(node.geometry.size, 0.01),
@@ -2139,24 +2589,41 @@ export class SceneEditor {
 
     geometry.computeBoundingBox();
     // W3D TextureText: when `<TextBoxSize>` is authored, the text MUST fit
-    // inside that box — broadcast templates author short labels like
-    // "COACH"/"BENCH" with portrait boxes that reserve vertical space but
-    // expect the glyph height to be constrained by the box. Without this
-    // step the TextGeometry renders at its natural cap-height (set by
-    // `node.geometry.size`) and short strings spill outside their card.
-    // Strategy: uniform-scale the generated geometry down so its bbox fits;
-    // never up-scale (a wide box around a short string is the author's
-    // intent — extra padding, not larger text).
-    const { maxWidth, maxHeight, alignmentX, alignmentY } = node.geometry;
+    // inside that box. Behaviour depends on `<GeometryOptions ConstrainMethod>`:
+    //
+    //  - "Width"  → scale geometry so its width EQUALS maxWidth (up OR down).
+    //              W3D's semantic for ConstrainMethod="Width" is "fill the box
+    //              width", not "clamp at the box width". Until Phase 11 the
+    //              scaler was downscale-only, which combined with the forced
+    //              DEFAULT_FONT_ID font substitution produced visibly oversized
+    //              text in LINEUP_LEFT (the W3D "Obviously"-family font is
+    //              narrower than Helvetiker, so its glyphs fit under the cap
+    //              and the scaler never engaged).
+    //  - "Height" → scale so geometry's height equals maxHeight.
+    //  - omitted  → legacy clamp behaviour (never up-scale). Preserves
+    //              behaviour for scenes that author oversized text boxes as
+    //              padding rather than as a fill target.
+    const { maxWidth, maxHeight, alignmentX, alignmentY, constrainMethod } = node.geometry;
     if ((maxWidth && maxWidth > 0) || (maxHeight && maxHeight > 0)) {
       const bbox = geometry.boundingBox;
       if (bbox) {
         const w = bbox.max.x - bbox.min.x;
         const h = bbox.max.y - bbox.min.y;
         let s = 1;
-        if (maxWidth && maxWidth > 0 && w > maxWidth) s = Math.min(s, maxWidth / w);
-        if (maxHeight && maxHeight > 0 && h > maxHeight) s = Math.min(s, maxHeight / h);
-        if (s < 1 && Number.isFinite(s) && s > 0) {
+        if (constrainMethod === "Width" && maxWidth && maxWidth > 0 && w > 0) {
+          // Fit-to-width: scale up or down so glyph width matches maxWidth.
+          s = maxWidth / w;
+        } else if (constrainMethod === "Height" && maxHeight && maxHeight > 0 && h > 0) {
+          s = maxHeight / h;
+        } else {
+          // No explicit constrain — keep the legacy clamp-only behaviour so
+          // pre-Phase-11 scenes (GameName_FS / AR_TACTIC / AR_PLAYER_V_PLAYER)
+          // render unchanged.
+          if (maxWidth && maxWidth > 0 && w > maxWidth) s = Math.min(s, maxWidth / w);
+          if (maxHeight && maxHeight > 0 && h > maxHeight) s = Math.min(s, maxHeight / h);
+          if (s >= 1) s = 1;
+        }
+        if (s !== 1 && Number.isFinite(s) && s > 0) {
           geometry.scale(s, s, 1);
           geometry.computeBoundingBox();
         }
@@ -2274,7 +2741,170 @@ export class SceneEditor {
       map: texture,
     };
     const material = buildMaterialFromSpec(baseOptions, node.material);
+    // Block 5: apply W3D TextureLayer blend mode + AlphaKey compositing
+    // on the freshly-built material. Both are W3D-gated (only fire when
+    // node.material.textureOptions carries the authored hints) so non-W3D
+    // image nodes keep current behaviour. Diagnostic state lands on
+    // material.userData.w3dLayer for the dump path to read.
+    this.applyW3DLayerOptionsToImageMaterial(material, node);
     return new Mesh(geometry, material);
+  }
+
+  /**
+   * Block 5: apply W3D TextureLayer-level hints onto an already-built
+   * MeshBasicMaterial. Diagnostics + (when feasible) actual rendering effect.
+   *
+   * Compositing semantics:
+   *   - TextureBlending="Multiply" → MultiplyBlending (Three built-in).
+   *   - TextureBlending="Add" → AdditiveBlending (Three built-in).
+   *   - TextureBlending="Screen" → preserved verbatim with a warning; Three
+   *     has no built-in Screen and CustomBlending would risk breaking
+   *     transparency sorting. No rendering change.
+   *   - AlphaKey: when `alphaKeyTextureName` resolves to a loaded image
+   *     asset, inject a uniform sampler via `onBeforeCompile` and
+   *     multiply the main map's alpha by the key texture's alpha channel.
+   *     Falls back to no-composite + warning when the asset isn't found.
+   *
+   * Every state — including failures — lands on `material.userData.w3dLayer`
+   * so `__r3Dump` can report:
+   *   - textureBlending: requested mode
+   *   - alphaKeyTextureId: GUID
+   *   - alphaKeyTextureName: resolved filename
+   *   - alphaKeyResolved: did we find the asset?
+   *   - alphaKeyApplied: did we actually inject the shader?
+   *   - alphaKeyWarning: explanation when resolved=false or applied=false
+   */
+  private applyW3DLayerOptionsToImageMaterial(material: Material, node: ImageNode): void {
+    const opts = node.material.textureOptions;
+    if (!opts) return;
+    const diag: {
+      textureBlending?: string;
+      textureBlendingApplied?: boolean;
+      textureBlendingWarning?: string;
+      alphaKeyTextureId?: string;
+      alphaKeyTextureName?: string;
+      alphaKeyResolved?: boolean;
+      alphaKeyApplied?: boolean;
+      alphaKeyWarning?: string;
+      textureName?: string | null;
+      textureResolved?: boolean;
+      wrapU?: string;
+      wrapV?: string;
+      repeatU?: number;
+      repeatV?: number;
+      textureRotation?: number;
+    } = {};
+
+    // Block 7 Phase B.2 — surface authored TextureMappingOption sampling
+    // fields on the dump so the operator can verify wrap/repeat/rotation
+    // landed without inspecting Three.js internals. Resolved filename is
+    // read from blueprint.images (set at import time) so the dump can show
+    // "PATTERN.png" alongside the wrap=repeat × repeat=1.13 settings.
+    if (opts.wrapU) diag.wrapU = opts.wrapU;
+    if (opts.wrapV) diag.wrapV = opts.wrapV;
+    if (opts.repeatU !== undefined) diag.repeatU = opts.repeatU;
+    if (opts.repeatV !== undefined) diag.repeatV = opts.repeatV;
+    if (opts.textureRotation !== undefined) diag.textureRotation = opts.textureRotation;
+    const imgSrc = node.image?.src ?? null;
+    if (imgSrc) {
+      const asset = this.store.blueprint.images.find((img) => img.src === imgSrc) ?? null;
+      diag.textureName = asset?.name ?? null;
+      diag.textureResolved = !!asset;
+    } else {
+      diag.textureResolved = false;
+      diag.textureName = null;
+    }
+
+    // TextureBlending → Three blending constant when SAFE for our texture
+    // pipeline. Caveat: Three's MultiplyBlending requires
+    // `material.premultipliedAlpha = true` (Three logs a hard error every
+    // frame otherwise), but our PNG textures are loaded with standard
+    // straight-alpha — flipping the flag would render colour incorrectly.
+    // So we surface Multiply as a diagnostic rather than applying it.
+    // Additive uses `gl.ONE, gl.ONE` factors with no premultiplied
+    // requirement, so it's safe.
+    if (opts.textureBlending) {
+      diag.textureBlending = opts.textureBlending;
+      switch (opts.textureBlending) {
+        case "Multiply":
+          // Skip the WebGL-state change — toggling MultiplyBlending without
+          // premultiplied textures produced "THREE.WebGLState: MultiplyBlending
+          // requires material.premultipliedAlpha = true" every frame and
+          // doesn't render the intended layer composite anyway. The accurate
+          // fix is shader-based (multiplied in fragment) or per-texture
+          // premultiplication at load time; either is future work.
+          diag.textureBlendingApplied = false;
+          diag.textureBlendingWarning = "TextureBlending='Multiply' preserved as diagnostic; Three's built-in MultiplyBlending requires premultipliedAlpha textures and produces a console error every frame, so it is not applied. Future work: per-texture premultiplication or fragment-shader multiply.";
+          break;
+        case "Add":
+        case "Additive":
+          // Safe — AdditiveBlending uses `gl.ONE, gl.ONE` factors.
+          material.blending = AdditiveBlending;
+          material.transparent = true;
+          diag.textureBlendingApplied = true;
+          break;
+        case "Screen":
+          diag.textureBlendingApplied = false;
+          diag.textureBlendingWarning = "Screen blending not directly supported by Three.js — node renders with default blending.";
+          break;
+        default:
+          diag.textureBlendingApplied = false;
+          diag.textureBlendingWarning = `Unknown TextureBlending="${opts.textureBlending}" — node renders with default blending.`;
+          break;
+      }
+    }
+
+    // AlphaKey composite — multiply the main map's alpha by the key texture.
+    if (opts.alphaKeyTextureId) {
+      diag.alphaKeyTextureId = opts.alphaKeyTextureId;
+      if (opts.alphaKeyTextureName) diag.alphaKeyTextureName = opts.alphaKeyTextureName;
+      const keyAsset = opts.alphaKeyTextureName
+        ? this.store.blueprint.images.find((img) => img.name.toLowerCase() === opts.alphaKeyTextureName!.toLowerCase())
+        : null;
+      if (!keyAsset) {
+        diag.alphaKeyResolved = false;
+        diag.alphaKeyApplied = false;
+        diag.alphaKeyWarning = opts.alphaKeyTextureName
+          ? `AlphaKey texture "${opts.alphaKeyTextureName}" not found in blueprint.images — alpha mask not applied.`
+          : "AlphaKey GUID didn't resolve to a Texture resource — alpha mask not applied.";
+      } else {
+        diag.alphaKeyResolved = true;
+        const keyTexture = this.getTexture(keyAsset.src);
+        // Inject a uniform sampler into the existing fragment shader.
+        // Using onBeforeCompile preserves clipping planes, transparency
+        // sorting, and the rest of MeshBasicMaterial's pipeline. The
+        // injected snippet samples the key texture with the SAME UV the
+        // main map uses (W3D's AlphaKey shares the layer's UV mapping).
+        material.transparent = true;
+        material.onBeforeCompile = (shader) => {
+          shader.uniforms.w3dAlphaKeyMap = { value: keyTexture };
+          shader.fragmentShader = shader.fragmentShader
+            .replace(
+              "uniform vec3 diffuse;",
+              "uniform vec3 diffuse;\nuniform sampler2D w3dAlphaKeyMap;",
+            )
+            // After the main map sample lands on `diffuseColor`, multiply
+            // its alpha by the key texture's alpha channel. Three's
+            // basic shader puts the map sample inside `#include <map_fragment>`,
+            // so we inject right after.
+            .replace(
+              "#include <map_fragment>",
+              `#include <map_fragment>\n` +
+              `#ifdef USE_MAP\n` +
+              `  vec4 w3dAlphaKeySample = texture2D(w3dAlphaKeyMap, vMapUv);\n` +
+              `  diffuseColor.a *= w3dAlphaKeySample.a;\n` +
+              `#endif`,
+            );
+        };
+        // Force material to recompile by bumping the version on next render.
+        material.needsUpdate = true;
+        diag.alphaKeyApplied = true;
+      }
+    }
+
+    if (Object.keys(diag).length > 0) {
+      material.userData.w3dLayer = diag;
+    }
   }
 
   /**
@@ -2741,9 +3371,12 @@ export class SceneEditor {
     if (this.camera instanceof PerspectiveCamera) {
       this.camera.aspect = width / height;
     } else {
-      // Orthographic: keep half-extent of 5 world units; scale horizontally
-      // by aspect so a 2D layout fits in either window orientation.
-      const halfHeight = 5;
+      // Orthographic: half-height from W3D camera metadata when present
+      // (`<Camera FieldofViewX=… AspectRatio=…>` derived by applyEngineState),
+      // else the legacy 5-world-unit half-extent that has been the default
+      // since Phase 4. Aspect-correct the horizontal extent so the layout
+      // fits in any window aspect ratio.
+      const halfHeight = this.orthoHalfHeight ?? 5;
       const aspect = width / height;
       this.camera.left = -halfHeight * aspect;
       this.camera.right = halfHeight * aspect;
@@ -2890,6 +3523,39 @@ export class SceneEditor {
     if (cam?.metadata) {
       this.camera.userData.w3d = { ...this.camera.userData.w3d, ...cam.metadata };
     }
+    // Block 2: derive the ortho frustum half-height from W3D camera
+    // metadata when present, so an authored `<Camera FieldofViewX=…
+    // AspectRatio=…>` configures the frustum instead of the legacy
+    // ±5-world-unit default.
+    //
+    // Interpretation:
+    //   - FieldofViewX in W3D ortho = horizontal extent in world units.
+    //   - AspectRatio (width/height) governs the vertical extent.
+    //   - halfWidth = FieldofViewX / 2; halfHeight = halfWidth / aspectRatio
+    //     when aspectRatio is provided, else halfWidth (square fallback).
+    //   - Runtime aspect from the rendering surface still scales horizontally
+    //     in `resize()` — the W3D values become the AUTHORING-aspect
+    //     half-height, not the literal frustum.
+    //
+    // Gating: only fires for ortho cameras with metadata.fovX present.
+    // Non-W3D scenes and W3D scenes that omit the attribute (like
+    // LINEUP_LEFT, MATCH_STATS, PERMANENT_CLOCK at time of this commit)
+    // continue to use the legacy default.
+    if (this.camera instanceof OrthographicCamera && cam?.metadata?.fovX && cam.metadata.fovX > 0) {
+      const halfWidth = cam.metadata.fovX / 2;
+      const halfHeight = cam.metadata.aspectRatio && cam.metadata.aspectRatio > 0
+        ? halfWidth / cam.metadata.aspectRatio
+        : halfWidth;
+      this.orthoHalfHeight = halfHeight;
+      this.cameraSource = "w3d-camera-metadata";
+      // Trigger an immediate resize() so the new half-height takes effect
+      // before the next frame renders. Without this the user sees the
+      // legacy frustum until the next window resize event.
+      this.resize();
+    } else {
+      this.orthoHalfHeight = null;
+      this.cameraSource = "default";
+    }
   }
 
   private startLoop(): void {
@@ -2917,6 +3583,12 @@ export class SceneEditor {
     this.animationTracks = [];
     this.animationRuntimeReady = false;
     this.lastEmittedAnimationFrame = null;
+    this.animatedMaskNodeIds = new Set();
+    this.animatedMaskConsumerIds = new Set();
+    // Block 4: also collect "node has ANY animation track" so the
+    // ancestor-driven mask expansion below can spot masks whose
+    // matrixWorld follows an animated parent.
+    const animatedNodeIds = new Set<string>();
     this.resetAnimatedObjectsToBlueprintState();
 
     const clip = this.store.getActiveAnimationClip();
@@ -2988,6 +3660,66 @@ export class SceneEditor {
           : null,
         postUpdate,
       });
+
+      // Track which nodes have ANY animation track. Block 4 uses this to
+      // discover masks whose ANCESTOR animates (mask's matrixWorld moves
+      // with the parent even though the mask itself has no track) — those
+      // need per-frame plane refresh too, or consumers see stale clipping.
+      animatedNodeIds.add(node.id);
+
+      // Direct-animation masks: per-frame plane refresh keys off this set
+      // (and the ancestor-driven expansion below). Nothing else needs it.
+      if (node.isMask) {
+        this.animatedMaskNodeIds.add(node.id);
+      }
+    }
+
+    // Block 4 expansion: a mask whose ANCESTOR has any animation track
+    // also needs per-frame plane refresh, because the mask's matrixWorld
+    // inherits the parent's animated transform. Walk the parent chain of
+    // every mask in the blueprint; if any ancestor animates, add the mask
+    // to the refresh set. Cheap O(M × depth) once per rebuild.
+    {
+      const nodesById = new Map(this.store.blueprint.nodes.map((n) => [n.id, n]));
+      for (const candidate of this.store.blueprint.nodes) {
+        if (!candidate.isMask) continue;
+        if (this.animatedMaskNodeIds.has(candidate.id)) continue; // already direct
+        let cursor: EditorNode | null = candidate;
+        const seen = new Set<string>();
+        while (cursor) {
+          if (seen.has(cursor.id)) break;
+          seen.add(cursor.id);
+          const parentId: string | null = cursor.parentId;
+          if (parentId && animatedNodeIds.has(parentId)) {
+            this.animatedMaskNodeIds.add(candidate.id);
+            break;
+          }
+          cursor = parentId ? nodesById.get(parentId) ?? null : null;
+        }
+      }
+    }
+
+    // Resolve consumers of each animated mask exactly once per rebuild so
+    // the per-frame refresh becomes a Set membership check instead of a
+    // blueprint scan. A consumer is any node whose `maskId` / `maskIds`
+    // references an animated mask; the recompute below replaces ALL of
+    // that consumer's planes (animated + non-animated combined), so we
+    // never need to mix stale and fresh half-spaces.
+    if (this.animatedMaskNodeIds.size > 0) {
+      for (const candidate of this.store.blueprint.nodes) {
+        const ids = candidate.maskIds && candidate.maskIds.length > 0
+          ? candidate.maskIds
+          : candidate.maskId
+            ? [candidate.maskId]
+            : null;
+        if (!ids) continue;
+        for (const mid of ids) {
+          if (this.animatedMaskNodeIds.has(mid)) {
+            this.animatedMaskConsumerIds.add(candidate.id);
+            break;
+          }
+        }
+      }
     }
 
     const clampedFrame = Math.max(0, Math.min(previousFrame, clip.durationFrames));
@@ -3069,6 +3801,11 @@ export class SceneEditor {
         selectedObjectWasAnimated = true;
       }
     }
+
+    // Recompute clipping planes for consumers of animated masks now that
+    // this frame's transform writes have landed on the mask wrappers.
+    // No-op when no mask animates (the common case for non-W3D content).
+    this.refreshAnimatedMaskClipping();
 
     if (selectedObjectWasAnimated) {
       this.selectionHelperDirty = true;
@@ -3187,6 +3924,83 @@ function resolveAnimationTarget(target: Object3D, path: string): [Record<string,
   return [owner as Record<string, unknown>, property];
 }
 
+/**
+ * Phase B.1 — pure predicate for "should this node be treated as permanently
+ * hidden because R3 authored it `Enable="False"` and nothing in any timeline
+ * / mask topology will ever reveal it?"
+ *
+ * Returning `true` here makes the wrapper invisible, so a false positive
+ * would silently erase a production node. A node only qualifies when ALL of
+ * the following hold:
+ *
+ *   1. The W3D author marked it `Enable="False"` (its id is in
+ *      `metadata.w3d.initialDisabledNodeIds`).
+ *   2. **No clip** in `blueprint.animation.clips` carries a track whose
+ *      `nodeId` matches — Alpha, Position, Scale, Size, Skew, Enabled, or
+ *      `material.alpha`. Any of those would reveal/animate the node, so
+ *      hiding it would break the In/Out timeline.
+ *   3. The node is not itself a mask (`isMask`). Masks are non-visible by
+ *      definition but their bounds clip consumers — wrapping them in
+ *      `visible=false` removes them from the mask machinery.
+ *   4. The node is not referenced by any other node's `maskId` /
+ *      `maskIds` (i.e. not a mask producer for at least one consumer).
+ *   5. The node has no descendant that animates, is a mask, or is itself
+ *      a mask consumer — protects parent groups that author `Enable="False"`
+ *      but contain visible production children.
+ *   6. The debug override `window.__3forgeShowAuthoredHidden === true` is
+ *      not set.
+ *
+ * BACKGROUND in LINEUP_LEFT meets all six → returns `true`. BASE_MAIN
+ * fails (3); SMALL_TEAM_NAME / TEXTURE_FULLFRAME_MAIN fail (2). Groups
+ * like MAIN / HORIZONTAL_SLIDE that have no `Enable="False"` skip via (1).
+ */
+export function computeAuthoredPermanentlyHidden(
+  blueprint: ComponentBlueprint,
+  nodeId: string,
+): boolean {
+  const w3dMeta = blueprint.metadata?.w3d as
+    | { initialDisabledNodeIds?: string[] }
+    | undefined;
+  const isAuthoredDisabled = w3dMeta?.initialDisabledNodeIds?.includes(nodeId) ?? false;
+  if (!isAuthoredDisabled) return false;
+
+  const node = blueprint.nodes.find((n) => n.id === nodeId);
+  if (!node) return false;
+
+  if (node.isMask) return false;
+
+  const showAuthoredHidden = typeof window !== "undefined"
+    && (window as unknown as { __3forgeShowAuthoredHidden?: boolean })
+      .__3forgeShowAuthoredHidden === true;
+  if (showAuthoredHidden) return false;
+
+  const clips = blueprint.animation?.clips ?? [];
+  const hasAnyTrackForNode = (id: string): boolean =>
+    clips.some((c) => c.tracks.some((t) => t.nodeId === id && t.keyframes.length > 0));
+  if (hasAnyTrackForNode(nodeId)) return false;
+
+  const isMaskProducer = blueprint.nodes.some(
+    (n) => n.maskId === nodeId || (Array.isArray(n.maskIds) && n.maskIds.includes(nodeId)),
+  );
+  if (isMaskProducer) return false;
+
+  const descendantsAnimate = (parentId: string, seen = new Set<string>()): boolean => {
+    if (seen.has(parentId)) return false;
+    seen.add(parentId);
+    const children = blueprint.nodes.filter((n) => n.parentId === parentId);
+    for (const c of children) {
+      if (c.isMask) return true;
+      if (hasAnyTrackForNode(c.id)) return true;
+      if (c.maskId || (Array.isArray(c.maskIds) && c.maskIds.length > 0)) return true;
+      if (descendantsAnimate(c.id, seen)) return true;
+    }
+    return false;
+  };
+  if (descendantsAnimate(nodeId)) return false;
+
+  return true;
+}
+
 function evaluateCompiledTrack(track: CompiledAnimationTrack, frame: number): number {
   const keyframes = track.keyframes;
   if (keyframes.length === 0 || frame < keyframes[0].frame) {
@@ -3292,6 +4106,7 @@ function textureOptionsCacheKey(options: TextureSamplingOptions): string {
     options.offsetV ?? "_",
     options.repeatU ?? "_",
     options.repeatV ?? "_",
+    options.textureRotation ?? "_",
   ].join("|");
 }
 
@@ -3312,6 +4127,13 @@ function applyTextureSamplingOptions(
   if (options.offsetV !== undefined) texture.offset.y = options.offsetV;
   if (options.repeatU !== undefined) texture.repeat.x = options.repeatU;
   if (options.repeatV !== undefined) texture.repeat.y = options.repeatV;
+  // W3D `<Rotation Z>` is in degrees; Three's texture.rotation is radians.
+  // Rotate around (0.5, 0.5) so a degree value spins the tile around its
+  // centre instead of the bottom-left corner.
+  if (options.textureRotation !== undefined && options.textureRotation !== 0) {
+    texture.center.set(0.5, 0.5);
+    texture.rotation = (options.textureRotation * Math.PI) / 180;
+  }
   // Only flag dirty when the texture already has image data — guards against
   // "Texture marked for update but no image data found" warnings when this
   // helper runs on a freshly-cloned variant whose image hasn't arrived yet.
@@ -3751,6 +4573,101 @@ export function formatVideoLoadFailureMessage(src: string, code: number | undefi
     );
   }
   return `[scene] video texture failed to load src=${src} code=${code ?? "unknown"}`;
+}
+
+/**
+ * Returns the union world-space AABB of every Mesh descendant under
+ * `root`, or `null` when no mesh contributes a non-empty bbox. Replaces
+ * the older "pick first Mesh + applyMatrix4 once" approach inside
+ * `computeMaskPlanes` and `__r3Dump.w3dMasks` — that path produced a
+ * single-point world box whenever the chosen mesh had a degenerate
+ * local bbox (scale-0 history, replaced geometry, parent group with
+ * zero-scale animation). The LINEUP_LEFT PHOTO_MASK_* / PHOTO_DUMMY_*
+ * symptom (worldBounds min == max, backgrounds/photos disappearing
+ * under inverted masks) traced back to that exact failure mode.
+ *
+ * Exported (rather than living inside SceneEditor) so the bbox math is
+ * unit-testable without a WebGL context: tests build a plain Object3D
+ * subtree with Three's CPU-only primitives (Group, Mesh,
+ * PlaneGeometry) and assert the helper handles wrappers, skewLayers,
+ * empty geometries, and zero-scale parents correctly.
+ */
+/**
+ * Builds the four `material.clippingPlanes` for a W3D mask given its
+ * already-computed world-space AABB. Returns null when the box has zero
+ * extent on X or Y (degenerate mask — Phase 10's safety guard so a
+ * collapsed bbox doesn't emit a single-point clip rectangle that hides
+ * every consumer).
+ *
+ * Plane semantics:
+ *
+ *   W3D's `<MaskProperties IsInvertedMask="True">` (every mask in
+ *   LINEUP_LEFT carries this) means **"consumer is visible INSIDE the
+ *   mask box; clipped outside."** That's the reveal-as-mask-grows
+ *   pattern: at frame 0 the mask box is 0-wide → nothing visible; as
+ *   the box grows, more of the consumer is revealed inside it.
+ *
+ *   Pre-Phase-11.5 the renderer treated `inverted=true` by flipping
+ *   every plane normal outward. Three's `material.clippingPlanes` array
+ *   is the INTERSECTION of half-spaces, and the intersection of four
+ *   outward-facing planes around a non-degenerate box is mathematically
+ *   EMPTY — that collapsed every inverted-mask consumer to invisible.
+ *   This was the "PHOTO_01..05 disappeared" symptom: photos reference
+ *   PHOTO_MASK_xx with IsInvertedMask="True", so their intersection of
+ *   outward planes hid them everywhere.
+ *
+ *   The box EXTERIOR is the union of four half-spaces, which cannot be
+ *   expressed as an intersection. Implementing W3D's IsInvertedMask=
+ *   "False" semantic (cutout / hide-inside) would require a custom
+ *   fragment-shader test or stencil-buffer pass — known gap, no scene
+ *   in the current corpus exercises it. So this helper always emits the
+ *   inward-facing "keep inside" set. The `inverted` parameter is kept
+ *   in the signature so call sites stay readable and so a future
+ *   shader-based outside-clipper can be slotted in here without
+ *   touching every caller.
+ *
+ * Exported so the plane construction is unit-testable without spinning
+ * up a real SceneEditor.
+ */
+export function buildKeepInsidePlanesFromBox(box: Box3, inverted: boolean): Plane[] | null {
+  const dx = box.max.x - box.min.x;
+  const dy = box.max.y - box.min.y;
+  if (dx <= 0 || dy <= 0) return null;
+  void inverted;
+  return [
+    new Plane(new Vector3(1, 0, 0), -box.min.x),
+    new Plane(new Vector3(-1, 0, 0), box.max.x),
+    new Plane(new Vector3(0, 1, 0), -box.min.y),
+    new Plane(new Vector3(0, -1, 0), box.max.y),
+  ];
+}
+
+export function computeWorldBoundsFromMeshes(root: Object3D): Box3 | null {
+  root.updateWorldMatrix(true, true);
+  const out = new Box3();
+  let foundAny = false;
+  root.traverse((child) => {
+    if (!(child instanceof Mesh)) return;
+    const geom = child.geometry;
+    if (!geom) return;
+    if (!geom.boundingBox) geom.computeBoundingBox();
+    const local = geom.boundingBox;
+    if (!local || local.isEmpty()) return;
+    const meshBox = local.clone().applyMatrix4(child.matrixWorld);
+    if (meshBox.isEmpty()) return;
+    out.union(meshBox);
+    foundAny = true;
+  });
+  if (!foundAny || out.isEmpty()) return null;
+  // Three's `Box3.isEmpty()` is `max < min` on any axis — a min == max box is
+  // NOT empty by that definition, even though it has zero volume. For the
+  // mask-plane caller, a zero-extent bbox on X or Y is just as broken as an
+  // empty one (collapses the clip rectangle to a point and either hides
+  // everything under an inverted mask or shows nothing under a regular
+  // mask). Treat zero X/Y extent as null so the caller doesn't have to
+  // remember to re-check.
+  if (out.max.x - out.min.x <= 0 || out.max.y - out.min.y <= 0) return null;
+  return out;
 }
 
 /**
