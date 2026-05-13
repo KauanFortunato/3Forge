@@ -1,4 +1,5 @@
 import type { ModelAsset } from "./types";
+import { inspectModelFileStructure } from "./modelStructure";
 
 export const MAX_MODEL_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 export const MAX_MODEL_FILE_SIZE_LABEL = "25 MB";
@@ -40,6 +41,8 @@ export async function modelFileToAsset(file: File): Promise<ModelAsset> {
       ? "model/gltf+json"
       : "model/gltf-binary";
 
+  const structure = await inspectModelFileStructure(file, format);
+
   return {
     id: "",
     name: file.name || defaultName,
@@ -48,6 +51,7 @@ export async function modelFileToAsset(file: File): Promise<ModelAsset> {
     format,
     originalFileName: file.name || undefined,
     source: "imported",
+    ...(structure ? { structure } : {}),
   };
 }
 

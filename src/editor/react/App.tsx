@@ -19,6 +19,7 @@ import {
 } from "../fileAccess";
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
+import { containsUsdcMagic, tryDecodeDataUrl } from "../modelBuffer";
 import { isModelFile, modelFileToAsset } from "../models";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
@@ -61,6 +62,7 @@ import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
 import type { ProjectImageAsset } from "./components/ImageAssetsPanel";
 import { MaterialAssetEditor } from "./components/MaterialAssetEditor";
 import { MaterialsPanel } from "./components/MaterialsPanel";
+import { ModelAssetsPanel } from "./components/ModelAssetsPanel";
 import { PieMenu } from "./components/PieMenu";
 import type { PieMenuItem } from "./components/PieMenu";
 import {
@@ -231,7 +233,7 @@ function toSceneAnimationPreviewOverrides(overrides: TemporaryAnimationOverrideM
   });
 }
 
-type RuntimePanelTab = "animations" | "images" | "materials";
+type RuntimePanelTab = "animations" | "images" | "models" | "materials";
 type TemporaryAnimationOverride = { frame: number; value: number };
 type TemporaryAnimationOverrideMap = Record<string, TemporaryAnimationOverride>;
 
@@ -428,6 +430,17 @@ function countImageUsage(nodes: EditorNode[]): Record<string, number> {
       continue;
     }
     usage[node.imageId] = (usage[node.imageId] ?? 0) + 1;
+  }
+  return usage;
+}
+
+function countModelUsage(nodes: EditorNode[]): Record<string, number> {
+  const usage: Record<string, number> = {};
+  for (const node of nodes) {
+    if (node.type !== "model" || !node.modelId) {
+      continue;
+    }
+    usage[node.modelId] = (usage[node.modelId] ?? 0) + 1;
   }
   return usage;
 }
@@ -713,6 +726,7 @@ export function App() {
   const [isFieldsPanelCollapsed, setIsFieldsPanelCollapsed] = useState(true);
   const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -804,6 +818,10 @@ export function App() {
     () => countImageUsage(storeView.blueprintNodes),
     [storeView],
   );
+  const totalModelUsage = useMemo(
+    () => countModelUsage(storeView.blueprintNodes),
+    [storeView],
+  );
   const selectedImageNodeCount = useMemo(
     () => storeView.selectedNodes.filter((node) => node.type === "image").length,
     [storeView.selectedNodes],
@@ -828,6 +846,11 @@ export function App() {
       setSelectedImageId(null);
     }
   }, [imageAssets, selectedImageId]);
+  useEffect(() => {
+    if (selectedModelId && !storeView.models.some((model) => model.id === selectedModelId)) {
+      setSelectedModelId(null);
+    }
+  }, [storeView.models, selectedModelId]);
   const selectedRootIds = useMemo(
     () => store.getSelectionRootIds(selectedNodeIds),
     [selectedNodeIds, store, storeView.blueprintNodes],
@@ -1975,6 +1998,35 @@ export function App() {
         const insertionIndex = target.index === undefined ? undefined : target.index + importedCount;
         lastNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
         importedCount += 1;
+
+        // If this is a USDC-binary USDZ, also surface its embedded textures
+        // as standalone ImageAssets so users can inspect what shipped with the
+        // model — including any textures that aren't rendering on the mesh.
+        // Failures here must NOT abort the import; we already have the model.
+        if (asset.format === "usdz") {
+          const bytes = tryDecodeDataUrl(asset.src);
+          if (bytes && containsUsdcMagic(bytes)) {
+            try {
+              const buffer = bytes.buffer.slice(
+                bytes.byteOffset,
+                bytes.byteOffset + bytes.byteLength,
+              ) as ArrayBuffer;
+              const { extractUsdcImages } = await import("../usdcParser");
+              const images = await extractUsdcImages(buffer);
+              for (const img of images) {
+                store.addImageAsset({
+                  name: `${asset.name} - ${img.name}`,
+                  mimeType: img.mimeType,
+                  src: img.src,
+                  width: img.width,
+                  height: img.height,
+                });
+              }
+            } catch (err) {
+              console.warn("Failed to extract USDC textures as assets:", err);
+            }
+          }
+        }
       }
 
       if (lastNodeId) {
@@ -3418,6 +3470,8 @@ export function App() {
                   <span className="panel__hd-meta">
                     {runtimePanelTab === "materials"
                       ? storeView.materials.length
+                      : runtimePanelTab === "models"
+                        ? storeView.models.length
                       : runtimePanelTab === "images"
                         ? imageAssets.length
                         : storeView.animation.clips.length}
@@ -3448,6 +3502,17 @@ export function App() {
                     >
                       <ImagePropertyIcon width={12} height={12} />
                       <span>Images</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`panel__subhd-tab${runtimePanelTab === "models" ? " is-active" : ""}`}
+                      onClick={() => setRuntimePanelTab("models")}
+                      role="tab"
+                      aria-selected={runtimePanelTab === "models"}
+                      title="Models"
+                    >
+                      <MeshIcon width={12} height={12} />
+                      <span>Models</span>
                     </button>
                     <button
                       type="button"
@@ -3512,6 +3577,13 @@ export function App() {
                         onReplace={(imageId) => requestImageImport({ mode: "replaceAsset", imageId })}
                         onRemove={handleRemoveImageAsset}
                         canRemoveImage={canRemoveImageAsset}
+                      />
+                    ) : runtimePanelTab === "models" ? (
+                      <ModelAssetsPanel
+                        models={storeView.models}
+                        selectedModelId={selectedModelId}
+                        usageById={totalModelUsage}
+                        onSelectModel={setSelectedModelId}
                       />
                     ) : (
                       <MaterialsPanel

@@ -157,6 +157,27 @@ export interface ModelAsset {
   format: "glb" | "gltf" | "usdz";
   originalFileName?: string;
   source?: "imported" | "external";
+  structure?: ModelAssetStructure;
+}
+
+export interface ModelAssetStructureNode {
+  id: string;
+  name: string;
+  type: string;
+  childCount: number;
+  meshCount: number;
+  materialCount: number;
+  children: ModelAssetStructureNode[];
+}
+
+export interface ModelAssetStructure {
+  format: ModelAsset["format"];
+  source: "three" | "tinyusdz" | "archive" | "unknown";
+  nodeCount: number;
+  meshCount: number;
+  materialCount: number;
+  textureCount: number;
+  roots: ModelAssetStructureNode[];
 }
 
 export interface EditableBinding {

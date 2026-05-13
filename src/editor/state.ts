@@ -1069,6 +1069,7 @@ function normalizeModelAsset(rawModel: unknown, usedIds: Set<string>): ModelAsse
     ? source.originalFileName.trim()
     : undefined;
   const modelSource = source.source === "external" ? "external" : source.source === "imported" ? "imported" : undefined;
+  const structure = normalizeModelAssetStructure(source.structure, format);
 
   return {
     id,
@@ -1078,7 +1079,60 @@ function normalizeModelAsset(rawModel: unknown, usedIds: Set<string>): ModelAsse
     format,
     ...(originalFileName ? { originalFileName } : {}),
     ...(modelSource ? { source: modelSource } : {}),
+    ...(structure ? { structure } : {}),
   };
+}
+
+function normalizeModelAssetStructure(rawStructure: unknown, format: ModelAsset["format"]): ModelAsset["structure"] {
+  if (!rawStructure || typeof rawStructure !== "object") {
+    return undefined;
+  }
+  const source = rawStructure as Record<string, unknown>;
+  const roots = Array.isArray(source.roots)
+    ? source.roots.map((node, index) => normalizeModelAssetStructureNode(node, `root-${index}`)).filter((node): node is NonNullable<ModelAsset["structure"]>["roots"][number] => Boolean(node))
+    : [];
+  return {
+    format,
+    source: source.source === "tinyusdz" || source.source === "three" || source.source === "archive"
+      ? source.source
+      : "unknown",
+    nodeCount: normalizeNonNegativeInteger(source.nodeCount, roots.reduce((total, root) => total + countModelAssetStructureNodes(root), 0)),
+    meshCount: normalizeNonNegativeInteger(source.meshCount, roots.reduce((total, root) => total + root.meshCount, 0)),
+    materialCount: normalizeNonNegativeInteger(source.materialCount, 0),
+    textureCount: normalizeNonNegativeInteger(source.textureCount, 0),
+    roots,
+  };
+}
+
+function normalizeModelAssetStructureNode(rawNode: unknown, fallbackId: string): NonNullable<ModelAsset["structure"]>["roots"][number] | null {
+  if (!rawNode || typeof rawNode !== "object") {
+    return null;
+  }
+  const source = rawNode as Record<string, unknown>;
+  const children = Array.isArray(source.children)
+    ? source.children.map((child, index) => normalizeModelAssetStructureNode(child, `${fallbackId}.${index}`)).filter((node): node is NonNullable<ModelAsset["structure"]>["roots"][number] => Boolean(node))
+    : [];
+  const type = (typeof source.type === "string" && source.type.trim()) || "node";
+  const name = (typeof source.name === "string" && source.name.trim()) || type;
+  return {
+    id: (typeof source.id === "string" && source.id.trim()) || fallbackId,
+    name,
+    type,
+    childCount: normalizeNonNegativeInteger(source.childCount, children.length),
+    meshCount: normalizeNonNegativeInteger(source.meshCount, children.reduce((total, child) => total + child.meshCount, 0)),
+    materialCount: normalizeNonNegativeInteger(source.materialCount, 0),
+    children,
+  };
+}
+
+function countModelAssetStructureNodes(node: NonNullable<ModelAsset["structure"]>["roots"][number]): number {
+  return 1 + node.children.reduce((total, child) => total + countModelAssetStructureNodes(child), 0);
+}
+
+function normalizeNonNegativeInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : fallback;
 }
 
 function normalizeImportedNode(rawNode: unknown): EditorNode | null {
@@ -3508,6 +3562,7 @@ export class EditorStore extends EventTarget {
         format,
         ...(model.originalFileName ? { originalFileName: model.originalFileName } : {}),
         ...(model.source ? { source: model.source } : {}),
+        ...(model.structure ? { structure: model.structure } : {}),
       },
     ];
     this.notify({ reason: "model", source });

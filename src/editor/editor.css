@@ -4821,6 +4821,195 @@ code {
   color: var(--c-accent);
 }
 
+.model-assets-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.model-assets-panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-content: space-between;
+  color: var(--c-text-dim);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.model-assets-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.model-assets-panel__item {
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-bg-2);
+  color: var(--c-text-med);
+  overflow: hidden;
+}
+
+.model-assets-panel__item:hover {
+  background: var(--c-bg-3);
+  color: var(--c-text);
+}
+
+.model-assets-panel__item.is-active {
+  border-color: color-mix(in srgb, var(--c-accent) 65%, var(--c-border));
+  background: color-mix(in srgb, var(--c-accent) 12%, var(--c-bg-2));
+  color: var(--c-text);
+}
+
+.model-assets-panel__item-main {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 52px;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.model-assets-panel__thumb,
+.model-assets-panel__tree-icon {
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--c-bg-3);
+  color: var(--c-accent);
+}
+
+.model-assets-panel__thumb {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--c-border);
+}
+
+.model-assets-panel__meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.model-assets-panel__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.model-assets-panel__sub {
+  color: var(--c-text-dim);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+}
+
+.model-assets-panel__toggle {
+  display: grid;
+  place-items: center;
+  color: var(--c-text-dim);
+}
+
+.model-assets-panel__details {
+  border-top: 1px solid var(--c-border);
+  background: color-mix(in srgb, var(--c-bg-1) 80%, var(--c-bg-2));
+}
+
+.model-assets-panel__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: var(--sp-2);
+  color: var(--c-text-dim);
+  font-family: var(--f-mono);
+  font-size: var(--fs-xs);
+}
+
+.model-assets-panel__stats span {
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-bg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-assets-panel__tree {
+  padding: 0 var(--sp-2) var(--sp-2);
+}
+
+.model-assets-panel__tree-row {
+  display: grid;
+  grid-template-columns: 12px 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 6px 2px calc(6px + var(--tree-depth, 0) * 12px);
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--c-text-med);
+  cursor: pointer;
+  text-align: left;
+}
+
+.model-assets-panel__tree-row:disabled {
+  cursor: default;
+}
+
+.model-assets-panel__tree-row:hover:not(:disabled) {
+  background: var(--c-bg-3);
+  color: var(--c-text);
+}
+
+.model-assets-panel__tree-toggle {
+  display: grid;
+  place-items: center;
+  color: var(--c-text-dim);
+}
+
+.model-assets-panel__tree-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.model-assets-panel__tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text);
+  font-size: var(--fs-xs);
+}
+
+.model-assets-panel__tree-type {
+  color: var(--c-text-dim);
+  font-family: var(--f-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.model-assets-panel__empty {
+  padding: var(--sp-3);
+  color: var(--c-text-dim);
+  font-size: var(--fs-xs);
+}
+
 .panel--assets {
   position: relative;
 }

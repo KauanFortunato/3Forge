@@ -186,10 +186,11 @@ class TinyUSDZLoader extends Loader {
 
         const ok = usd.loadFromBinary(binary, filePath);
         if (!ok) {
-            _onError(new Error('TinyUSDZLoader: Failed to load USD from binary data.', {cause: usd.error()}));
-        } else {
-            onLoad(usd);
+            _onError(new Error('TinyUSDZLoader: Failed to load USD from binary data.', { cause: usd.error() }));
+            return;
         }
+
+        onLoad(usd);
     }
 
     //

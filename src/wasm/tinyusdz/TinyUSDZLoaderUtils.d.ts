@@ -1,4 +1,4 @@
-import { Material, Object3D } from "three";
+import { Material, MeshPhysicalMaterial, Object3D } from "three";
 
 export interface BuildThreeNodeOptions {
   overrideMaterial?: boolean;
@@ -12,5 +12,17 @@ export class TinyUSDZLoaderUtils {
     defaultMtl?: Material | null,
     usdScene?: unknown,
     options?: BuildThreeNodeOptions,
-  ): Object3D;
+  ): Promise<Object3D>;
+
+  static setupMesh(
+    mesh: unknown,
+    defaultMtl: Material | null,
+    usdScene: unknown,
+    options: BuildThreeNodeOptions,
+  ): Promise<Object3D>;
+
+  static convertUsdMaterialToMeshPhysicalMaterial(
+    usdMaterial: unknown,
+    usdScene: unknown,
+  ): Promise<MeshPhysicalMaterial>;
 }
