@@ -34,6 +34,11 @@ export type AnimationPropertyPath =
   | "transform.scale.x"
   | "transform.scale.y"
   | "transform.scale.z"
+  // Animated skew (degrees per axis). Routes to a runtime skewLayer Group
+  // that the scene inserts on demand — see SceneEditor.rebuildAnimationTimeline.
+  | "transform.skew.x"
+  | "transform.skew.y"
+  | "transform.skew.z"
   | "material.opacity"
   | "material.textureOptions.offsetU"
   | "material.textureOptions.offsetV"

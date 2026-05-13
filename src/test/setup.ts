@@ -1,8 +1,10 @@
 import { cleanup } from "@testing-library/react";
-import * as matchers from "@testing-library/jest-dom/matchers";
-import { afterEach, expect, vi } from "vitest";
-
-expect.extend(matchers);
+// `/vitest` registers the matchers AND augments vitest's Assertion type so
+// `expect(...).toBeInTheDocument()` typechecks. Replaces the explicit
+// `expect.extend(matchers)` (which worked at runtime but missed the type
+// augmentation, leaving every jest-dom matcher as a TS2339 error).
+import "@testing-library/jest-dom/vitest";
+import { afterEach, vi } from "vitest";
 
 afterEach(() => {
   cleanup();

@@ -812,6 +812,97 @@ describe("W3D import", () => {
       }
     });
 
+    it("Size.XProp on a quad with static Size X=0 normalizes scale.x against the post-flatten size (Phase 7 regression)", () => {
+      // Real LINEUP_LEFT case: BASE_MAIN has <Size X="0"/> in the static XML
+      // and animates Size.XProp from 0 (frame 50) to 7.7 (frame 97). With the
+      // pre-existing flatten step, the post-flatten Size.X becomes 7.7 (last
+      // keyframe ≤ PreviewMarker=799), so node.geometry.width = 7.7.
+      //
+      // Before Phase 7, the importer emitted raw absolute values into the
+      // transform.scale.x track, so playback rendered 7.7 × 7.7 = 59.29 at
+      // peak — the mask blew up offscreen. Phase 7 normalizes the track by
+      // the post-flatten width so scale.x stays in [0..1] and rendered =
+      // geometry.width × scale.x = 7.7 × 1 = 7.7 ✓.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<Quad Id="base-main" Name="BASE_MAIN" IsMask="True">
+  <GeometryOptions AlignmentX="Right"><Size X="0" Y="1.404"/></GeometryOptions>
+</Quad>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="in1" MaxFrames="800" PreviewMarker="799">
+    <KeyFrameAnimationController AnimatedProperty="Size.XProp" ControllableId="base-main">
+      <KeyFrame FrameNumber="50" Value="0" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="97" Value="7.7" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const mask = result.blueprint.nodes.find((n) => n.name === "BASE_MAIN");
+      expect(mask).toBeDefined();
+      if (!mask || mask.type === "group") throw new Error("expected non-group node for BASE_MAIN");
+
+      // Post-flatten geometry width is the W3D PreviewMarker sample.
+      const g = (mask as unknown as { geometry: { width: number } }).geometry;
+      expect(g.width).toBeCloseTo(7.7);
+
+      // The In clip's transform.scale.x track exists and is normalized:
+      // raw values 0 and 7.7 → 0/7.7 = 0 and 7.7/7.7 = 1.
+      const inClip = result.blueprint.animation.clips.find((c) => c.name === "In");
+      expect(inClip).toBeDefined();
+      const scaleX = inClip!.tracks.find((t) => t.nodeId === mask.id && t.property === "transform.scale.x");
+      expect(scaleX).toBeDefined();
+      expect(scaleX!.keyframes).toHaveLength(2);
+      expect(scaleX!.keyframes[0].value).toBeCloseTo(0);
+      expect(scaleX!.keyframes[1].value).toBeCloseTo(1.0);
+
+      // Sanity: rendered width = geometry.width × scale.x matches the W3D
+      // absolute values at the keyframes.
+      expect(g.width * scaleX!.keyframes[0].value).toBeCloseTo(0);
+      expect(g.width * scaleX!.keyframes[1].value).toBeCloseTo(7.7);
+    });
+
+    it("Size.XProp pathological case: animation ends at 0 at PreviewMarker — promotes max |value| to geometry size", () => {
+      // Hypothetical edge: a quad whose static Size is missing AND whose
+      // animation evaluates to 0 at the PreviewMarker (e.g. an "Out" timeline
+      // imported as the active clip). With baseSize=0, normalization would
+      // divide by zero. Phase 7 promotes the largest |keyframe| to the
+      // geometry size so scale stays bounded and the static rest state
+      // renders the post-flatten 0 correctly.
+      const xml = `<?xml version="1.0" encoding="utf-8"?>
+<Scene Is2DScene="True"><SceneLayer>
+<SceneNode><Children>
+<Quad Id="q1" Name="ShrinkBar"/>
+</Children></SceneNode>
+<Timelines Format="HD1080i50">
+  <Timeline Name="In" Id="in1" MaxFrames="200" PreviewMarker="100">
+    <KeyFrameAnimationController AnimatedProperty="Size.XProp" ControllableId="q1">
+      <KeyFrame FrameNumber="0" Value="5" LeftType="Linear" RightType="Linear"/>
+      <KeyFrame FrameNumber="100" Value="0" LeftType="Linear" RightType="Linear"/>
+    </KeyFrameAnimationController>
+  </Timeline>
+</Timelines>
+</SceneLayer></Scene>`;
+      const result = parseW3D(xml);
+      const bar = result.blueprint.nodes.find((n) => n.name === "ShrinkBar");
+      expect(bar).toBeDefined();
+      if (!bar || bar.type === "group") throw new Error("expected non-group node for ShrinkBar");
+      const g = (bar as unknown as { geometry: { width: number } }).geometry;
+      // Post-flatten width = 0 (PreviewMarker keyframe value). Importer
+      // promotes geometry.width to max |keyframe| = 5 so the scale track
+      // stays in [0..1].
+      expect(g.width).toBeCloseTo(5);
+
+      const inClip = result.blueprint.animation.clips.find((c) => c.name === "In");
+      const scaleX = inClip!.tracks.find((t) => t.nodeId === bar.id && t.property === "transform.scale.x");
+      expect(scaleX).toBeDefined();
+      // 5/5 = 1, 0/5 = 0.
+      expect(scaleX!.keyframes[0].value).toBeCloseTo(1.0);
+      expect(scaleX!.keyframes[1].value).toBeCloseTo(0);
+    });
+
     it("FlowChildren Direction='YMinus' offsets children along -Y instead of X", () => {
       // Real LINEUP_LEFT case: BENCH_LIST is
       //   <GeometryOptions LeadingSpace="-0.084" FlowChildren="True"
@@ -1318,6 +1409,133 @@ describe("W3D import", () => {
       expect(pf?.appliedControllers).toBeGreaterThanOrEqual(1);
       expect(pf?.appliedExportProperties).toBeGreaterThanOrEqual(1);
       expect(pf?.changedNodeCount).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe("Phase 6: animated property mappings (Size / Skew / compound Position)", () => {
+    // Hand-crafted minimal scene — one Quad with animated Size.YProp,
+    // Transform.Skew.YProp, and a compound Transform.Position controller.
+    // Uses ControllableId-driven targeting like the real importer and a
+    // single "In" timeline so PreviewMarker / fps detection stay sane.
+    const buildMinimalScene = (controllers: string): string => `<?xml version="1.0" encoding="utf-8"?>
+<Scene Name="MinimalPhase6" Is2DScene="True">
+  <SceneLayer Name="Default">
+    <CameraManager>
+      <Camera Name="Camera" />
+    </CameraManager>
+    <SceneNode Name="RootNode">
+      <Children>
+        <Quad Id="quad-1" Name="Box1">
+          <NodeTransform>
+            <Position X="0" Y="0" Z="0" />
+            <Rotation X="0" Y="0" Z="0" />
+            <Scale X="1" Y="1" Z="1" />
+          </NodeTransform>
+        </Quad>
+      </Children>
+    </SceneNode>
+  </SceneLayer>
+  <Timelines Format="HD1080p50">
+    <Timeline Name="In" MaxFrames="200" PreviewMarker="100">
+      ${controllers}
+    </Timeline>
+  </Timelines>
+</Scene>`;
+
+    it("maps Size.YProp to a transform.scale.y track, normalized by post-flatten geometry.height", () => {
+      // W3D Size.YProp values are absolute geometry sizes at each keyframe.
+      // The renderer multiplies geometry.height by transform.scale.y, so the
+      // importer divides each track value by the post-flatten geometry size
+      // — the rendered output (height × scale) still equals the W3D value.
+      const xml = buildMinimalScene(`
+        <KeyFrameAnimationController ControllableId="quad-1" AnimatedProperty="Size.YProp">
+          <KeyFrame FrameNumber="0" Value="1" />
+          <KeyFrame FrameNumber="100" Value="2.5" />
+        </KeyFrameAnimationController>
+      `);
+      const result = parseW3D(xml, { sceneName: "MinimalPhase6" });
+      const inClip = result.blueprint.animation.clips.find((c) => c.name === "In");
+      expect(inClip).toBeDefined();
+      const sizeTrack = inClip!.tracks.find((t) => t.property === "transform.scale.y");
+      expect(sizeTrack).toBeDefined();
+      expect(sizeTrack!.keyframes).toHaveLength(2);
+      // Post-flatten height = 2.5 (the PreviewMarker=100 sample). Normalized
+      // track values: 1/2.5 = 0.4, 2.5/2.5 = 1.0. Rendered (height × scale):
+      // 2.5 × 0.4 = 1.0 at frame 0, 2.5 × 1.0 = 2.5 at frame 100 — matches
+      // the W3D absolute values.
+      const quad = result.blueprint.nodes.find((n) => n.name === "Box1");
+      expect(quad).toBeDefined();
+      if (quad && quad.type !== "group") {
+        const g = (quad as unknown as { geometry: { height: number } }).geometry;
+        expect(g.height).toBeCloseTo(2.5);
+      }
+      expect(sizeTrack!.keyframes[0].value).toBeCloseTo(0.4);
+      expect(sizeTrack!.keyframes[1].value).toBeCloseTo(1.0);
+      // Should NOT show up in the importer's "no track mapping" warnings.
+      expect(result.warnings.find((w) => w.includes('Size.YProp'))).toBeUndefined();
+    });
+
+    it("maps Transform.Skew.YProp to a transform.skew.y track and seeds node.transform.skew", () => {
+      const xml = buildMinimalScene(`
+        <KeyFrameAnimationController ControllableId="quad-1" AnimatedProperty="Transform.Skew.YProp">
+          <KeyFrame FrameNumber="0" Value="0" />
+          <KeyFrame FrameNumber="50" Value="15" />
+        </KeyFrameAnimationController>
+      `);
+      const result = parseW3D(xml, { sceneName: "MinimalPhase6" });
+      const inClip = result.blueprint.animation.clips.find((c) => c.name === "In");
+      const skewTrack = inClip!.tracks.find((t) => t.property === "transform.skew.y");
+      expect(skewTrack).toBeDefined();
+      expect(skewTrack!.keyframes).toHaveLength(2);
+      expect(skewTrack!.keyframes[1].value).toBeCloseTo(15);
+      // Static skew must be seeded so the runtime skewLayer mounts. (The
+      // flatten pre-pass legitimately overwrites .y with the PreviewMarker
+      // keyframe value — we only assert the field exists and the un-animated
+      // axes default to 0, which is what proves the seeding ran.)
+      const quad = result.blueprint.nodes.find((n) => n.name === "Box1");
+      expect(quad?.transform.skew).toBeDefined();
+      expect(quad?.transform.skew?.x).toBe(0);
+      expect(quad?.transform.skew?.z).toBe(0);
+    });
+
+    it("fans Transform.Position compound out to x/y/z, decoding CSV vector values", () => {
+      const xml = buildMinimalScene(`
+        <KeyFrameAnimationController ControllableId="quad-1" AnimatedProperty="Transform.Position">
+          <KeyFrame FrameNumber="0" Value="0,0,0" />
+          <KeyFrame FrameNumber="100" Value="1.7,0.5,-3" />
+        </KeyFrameAnimationController>
+      `);
+      const result = parseW3D(xml, { sceneName: "MinimalPhase6" });
+      const inClip = result.blueprint.animation.clips.find((c) => c.name === "In");
+      const xTrack = inClip!.tracks.find((t) => t.property === "transform.position.x");
+      const yTrack = inClip!.tracks.find((t) => t.property === "transform.position.y");
+      const zTrack = inClip!.tracks.find((t) => t.property === "transform.position.z");
+      expect(xTrack).toBeDefined();
+      expect(yTrack).toBeDefined();
+      expect(zTrack).toBeDefined();
+      expect(xTrack!.keyframes[1].value).toBeCloseTo(1.7);
+      // Y axis: importer applies a Y-flip ONLY for the per-axis Transform.Position.YProp
+      // map entry; the compound path goes through decodeCompoundKeyframeAxis
+      // and is not flipped, matching the legacy compound-Scale precedent.
+      expect(yTrack!.keyframes[1].value).toBeCloseTo(0.5);
+      expect(zTrack!.keyframes[1].value).toBeCloseTo(-3);
+    });
+
+    it("falls back to broadcast-to-all-axes when a compound Transform.Position keyframe ships a single number", () => {
+      const xml = buildMinimalScene(`
+        <KeyFrameAnimationController ControllableId="quad-1" AnimatedProperty="Transform.Position">
+          <KeyFrame FrameNumber="0" Value="0" />
+          <KeyFrame FrameNumber="100" Value="2" />
+        </KeyFrameAnimationController>
+      `);
+      const result = parseW3D(xml, { sceneName: "MinimalPhase6" });
+      const inClip = result.blueprint.animation.clips.find((c) => c.name === "In");
+      const xTrack = inClip!.tracks.find((t) => t.property === "transform.position.x");
+      const yTrack = inClip!.tracks.find((t) => t.property === "transform.position.y");
+      const zTrack = inClip!.tracks.find((t) => t.property === "transform.position.z");
+      expect(xTrack!.keyframes[1].value).toBeCloseTo(2);
+      expect(yTrack!.keyframes[1].value).toBeCloseTo(2);
+      expect(zTrack!.keyframes[1].value).toBeCloseTo(2);
     });
   });
 });

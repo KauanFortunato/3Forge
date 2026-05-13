@@ -64,6 +64,26 @@ function isQuotaError(error: unknown): boolean {
   );
 }
 
+/**
+ * Per-session record of keys whose `safeSetItem` already hit a quota error.
+ * Once a key lands here, subsequent persist attempts for THE SAME key are
+ * skipped silently inside `safeSetItem` so a tight React re-render loop
+ * (e.g. autosave effect firing on every blueprint snapshot change) can't
+ * spam the console with hundreds of identical "quota exceeded" warnings.
+ *
+ * The cache is cleared automatically the first time a write to a key
+ * succeeds again (e.g. after the user shrinks the blueprint or evicts
+ * stale recent snapshots).
+ *
+ * Exported for test-only access via `__resetWorkspaceQuotaCache`.
+ */
+const quotaExceededKeys = new Set<string>();
+
+/** @internal test-only — clears the per-session quota suppression cache. */
+export function __resetWorkspaceQuotaCache(): void {
+  quotaExceededKeys.clear();
+}
+
 function evictRecentSnapshots(storage: StorageLike, keepKey: string): number {
   if (typeof storage.length !== "number" || typeof storage.key !== "function") {
     return 0;
@@ -83,12 +103,22 @@ function evictRecentSnapshots(storage: StorageLike, keepKey: string): number {
 
 /**
  * setItem with one retry after evicting other recent-snapshot entries when the
- * quota fires. Final fallback: warn + skip silently rather than crashing the
- * caller (an import succeeded, the recent-list entry is just expendable).
+ * quota fires. Final fallback: warn ONCE per key per session + skip silently
+ * rather than crashing the caller (an import succeeded, the recent-list entry
+ * is just expendable).
+ *
+ * Once a key has hit quota, subsequent attempts for the SAME key short-circuit
+ * silently — without this guard, a React re-render loop (autosave effect
+ * firing on every blueprint snapshot change) produces hundreds of identical
+ * quota warnings. The suppression is cleared the moment a key succeeds again.
  */
 function safeSetItem(storage: StorageLike, key: string, value: string): boolean {
   try {
     storage.setItem(key, value);
+    // A successful write clears the per-key suppression — the next quota
+    // failure for this key will log a fresh warning (the situation has
+    // genuinely changed since the last log).
+    quotaExceededKeys.delete(key);
     return true;
   } catch (error) {
     if (!isQuotaError(error)) throw error;
@@ -96,6 +126,7 @@ function safeSetItem(storage: StorageLike, key: string, value: string): boolean 
     if (evicted > 0) {
       try {
         storage.setItem(key, value);
+        quotaExceededKeys.delete(key);
         // eslint-disable-next-line no-console
         console.warn(`[workspace] localStorage quota hit; evicted ${evicted} old recent-snapshot entr${evicted === 1 ? "y" : "ies"} and retried "${key}".`);
         return true;
@@ -103,8 +134,16 @@ function safeSetItem(storage: StorageLike, key: string, value: string): boolean 
         if (!isQuotaError(retryError)) throw retryError;
       }
     }
-    // eslint-disable-next-line no-console
-    console.warn(`[workspace] localStorage quota exceeded; skipping persist of "${key}".`);
+    // Log the "skipping persist" warning ONCE per key per session. Without
+    // this guard, a tight React re-render loop hammering the autosave
+    // effect (e.g. immediately after a large W3D import lands several
+    // setStates in waves) produces hundreds of identical warnings in the
+    // console. Suppression auto-clears the first time a write succeeds.
+    if (!quotaExceededKeys.has(key)) {
+      quotaExceededKeys.add(key);
+      // eslint-disable-next-line no-console
+      console.warn(`[workspace] localStorage quota exceeded; skipping persist of "${key}". Further "${key}" quota warnings are suppressed until a write succeeds.`);
+    }
     return false;
   }
 }

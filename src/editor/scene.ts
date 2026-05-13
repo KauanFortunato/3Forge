@@ -15,6 +15,7 @@ import {
   HemisphereLight,
   LinearFilter,
   LinearMipMapLinearFilter,
+  Matrix4,
   Mesh,
   Material,
   MeshBasicMaterial,
@@ -80,6 +81,7 @@ import type {
   NodeOriginSpec,
   TextNode,
   TextureSamplingOptions,
+  Vec3Like,
 } from "./types";
 
 type GizmoMode = "translate" | "rotate" | "scale";
@@ -146,6 +148,9 @@ interface CompiledAnimationTrack {
   keyframes: AnimationKeyframe[];
   target?: Object3D;
   visibilityMesh?: Mesh | null;
+  /** Optional post-write hook. Used by `transform.skew.*` tracks so the
+   * shared skewLayer matrix gets rebuilt after any axis is updated. */
+  postUpdate?: () => void;
 }
 
 export class SceneEditor {
@@ -1005,6 +1010,7 @@ export class SceneEditor {
       playbackSupported: boolean;
       playbackGuarded: boolean;
       scrubGuarded: boolean;
+      playbackAdvisoryMessage: string | null;
       lastGuardWarning: string | null;
       // Phase 4 diagnostics
       clipCount: number;
@@ -1126,7 +1132,10 @@ export class SceneEditor {
       wrapper.traverse((c) => {
         if (!mesh && c instanceof Mesh) mesh = c;
       });
-      const meshObj: Mesh | null = mesh;
+      // TS narrows `mesh` to `null` because the callback's reassignment
+      // happens inside a closure it can't statically track. Re-cast to the
+      // intended union before consumer reads.
+      const meshObj = mesh as Mesh | null;
       // Capture meshObj.visible into a plain `boolean | null` BEFORE any
       // closure reads it. Inside the per-IIFE scopes below, TypeScript
       // narrows the local `mesh` to `never` after the `if (!mesh && …)`
@@ -1214,6 +1223,26 @@ export class SceneEditor {
         ndcZ: +ndc.z.toFixed(4),
       };
       const flowInfo = w3d.flowByNodeId?.[node.id] ?? null;
+      // Geometry size — for plane/image/box nodes. Phase 7 diagnostic: lets
+      // the operator see the raw post-flatten W3D <Size> directly alongside
+      // the scale track values that animate against it. Group nodes have no
+      // geometry field so this stays null.
+      const geometrySize: { width: number | null; height: number | null; depth: number | null } | null = (() => {
+        if (node.type === "group") return null;
+        const g = (node as unknown as { geometry?: Record<string, unknown> }).geometry;
+        if (!g) return null;
+        const pick = (k: string): number | null => (typeof g[k] === "number" ? +(g[k] as number).toFixed(4) : null);
+        return { width: pick("width"), height: pick("height"), depth: pick("depth") };
+      })();
+      // Texture layer wiring for this node — resolved name/filename pulled
+      // from blueprint.metadata so "LOGO disappeared" reports can confirm
+      // the LOGO Quad is still wired to TextureLayer "LOGO" → IronHawks.png.
+      // (The layer GUID itself is emitted later in this object as
+      // `textureLayerId`.)
+      const dumpTextureLayerId = w3d.textureLayerByNodeId?.[node.id] ?? null;
+      const textureLayerInfo = dumpTextureLayerId
+        ? w3d.textureDiagnostics?.textureLayers.find((tl) => tl.id === dumpTextureLayerId) ?? null
+        : null;
       out.push({
         id: node.id.slice(0, 8),
         name: node.name,
@@ -1245,6 +1274,15 @@ export class SceneEditor {
           z: +node.transform.scale.z.toFixed(3),
         },
         worldBoxSize,
+        // Raw post-flatten geometry (width/height/depth) so the operator can
+        // spot Size.*Prop normalization mismatches at a glance — rendered
+        // size = geometry × scale, and either factor being unexpected points
+        // at a specific import bug.
+        geometry: geometrySize,
+        // Mask inversion flag (W3D <MaskProperties IsInvertedMask="…">).
+        // `isMask` + `maskIds` are emitted later in this object alongside
+        // clippingPlaneCount; this is the missing inversion bit.
+        maskInverted: node.maskInverted ?? false,
         renderOrder,
         materialColor,
         materialOpacity,
@@ -1252,6 +1290,12 @@ export class SceneEditor {
         textureState,
         textureSrc: node.type === "image" ? (node.image?.src ?? "").slice(0, 64) : null,
         textureMime: node.type === "image" ? node.image?.mimeType : null,
+        // Resolved layer filename / authored ref (textureLayerId is emitted
+        // separately later in this object). Pulled from
+        // metadata.w3d.textureDiagnostics so "LOGO" Quad → IronHawks.png is
+        // visible alongside the node it belongs to.
+        textureLayerFilename: textureLayerInfo?.resolvedFilename ?? null,
+        textureLayerOriginalRef: textureLayerInfo?.originalRef ?? null,
         hasMap,
         mapHasImage,
         // Only present when the texture is backed by a <video>. Lets the
@@ -1749,7 +1793,10 @@ export class SceneEditor {
           snapshotMode,
           playbackSupported: diag.playbackSupported && renderLoopActive,
           playbackGuarded: guarded,
-          scrubGuarded: guarded,
+          // Scrub is no longer hard-blocked for W3D imports. The advisory is
+          // shown in the toolbar but Play/Scrub run normally.
+          scrubGuarded: false,
+          playbackAdvisoryMessage: diag.playbackAdvisoryMessage || null,
           lastGuardWarning: guarded ? W3D_PLAYBACK_GUARD_WARNING : null,
           warning: guarded ? W3D_PLAYBACK_GUARD_WARNING : null,
           // Phase 4 diagnostics
@@ -2006,6 +2053,7 @@ export class SceneEditor {
     // nodes keep their original wrapper→mesh shape.
     if (!isIdentitySkew(node.transform.skew)) {
       const skewLayer = new Group();
+      skewLayer.userData.isSkewLayer = true;
       skewLayer.matrix.copy(buildSkewMatrix(node.transform.skew!));
       skewLayer.matrixAutoUpdate = false;
       skewLayer.add(mesh);
@@ -2014,6 +2062,35 @@ export class SceneEditor {
       wrapper.add(mesh);
     }
     return wrapper;
+  }
+
+  /**
+   * Find or insert the per-wrapper skewLayer Group used by `transform.skew.*`
+   * animation tracks. When the node was imported with no static skew the
+   * layer doesn't exist yet — re-parent the wrapper's existing children
+   * under a fresh layer so the runtime can shear them via matrix updates.
+   * Initial matrix mirrors `initialSkew` (or identity), so wrappers with a
+   * static-baked skew keep that exact value before the first keyframe writes.
+   */
+  private ensureSkewLayer(wrapper: Object3D, initialSkew: Vec3Like | undefined): Group {
+    for (const child of wrapper.children) {
+      if (child instanceof Group && child.userData.isSkewLayer) {
+        return child;
+      }
+    }
+    const skewLayer = new Group();
+    skewLayer.userData.isSkewLayer = true;
+    skewLayer.matrixAutoUpdate = false;
+    skewLayer.matrix.copy(
+      initialSkew ? buildSkewMatrix(initialSkew) : new Matrix4(),
+    );
+    const existingChildren = [...wrapper.children];
+    for (const child of existingChildren) {
+      wrapper.remove(child);
+      skewLayer.add(child);
+    }
+    wrapper.add(skewLayer);
+    return skewLayer;
   }
 
   private buildMeshObject(node: Exclude<EditorNode, { type: "group" }>): Mesh {
@@ -2353,24 +2430,62 @@ export class SceneEditor {
     if (!options) {
       const cached = this.textureCache.get(src);
       if (cached) return cached;
+      // Variants registered against a still-loading base get their image
+      // populated from the base's onLoad callback. Three's `Texture.clone()`
+      // captures `image` by reference at clone time, so a clone made before
+      // the image arrives stays empty even after the base finishes loading
+      // — we must propagate explicitly. The base is created below and the
+      // closure references it via `texture`.
+      const variants: Texture[] = [];
+      const onLoad = (loaded: Texture) => {
+        // Three sets `loaded.needsUpdate = true` itself on the internal
+        // ImageLoader onLoad. Propagate the image to every variant that
+        // cloned from this base before the network round-trip completed.
+        for (const v of variants) {
+          v.image = loaded.image;
+          v.needsUpdate = true;
+        }
+      };
       // Three's TextureLoader signature is (url, onLoad, onProgress, onError).
       // Without onError a 404 / CORS / mime mismatch leaves the texture
       // permanently blank and the user just sees the material's flat colour
       // with no console signal. Swap to a debug magenta image and warn so
       // the broken layer is obvious in-editor.
-      const onError = (event: ErrorEvent | Event) => {
-        const reason = event instanceof ErrorEvent ? event.message : "load error";
+      // Three's loader contract is `(err: unknown) => void`; widen the param
+      // type so it satisfies the call site below while still narrowing to
+      // ErrorEvent for the diagnostic message.
+      const onError = (err: unknown) => {
+        const reason = err instanceof ErrorEvent ? err.message : "load error";
         // eslint-disable-next-line no-console
         console.warn(`[scene] texture failed to load src=${src} reason=${reason}`);
         const fallback = this.getDebugFallbackImage();
         if (fallback) {
-          texture.image = fallback;
+          // Three.Texture.image is typed as HTMLImageElement, but it accepts
+          // any TexImageSource at runtime — including the HTMLCanvasElement
+          // we synthesise as a debug fallback. Cast to keep typecheck happy
+          // without changing the runtime swap.
+          texture.image = fallback as unknown as HTMLImageElement;
           texture.needsUpdate = true;
+          // Variants registered against a never-loaded base would otherwise
+          // stay blank — paint the same fallback into them so the warning
+          // is visible everywhere the broken texture is referenced.
+          for (const v of variants) {
+            v.image = fallback as unknown as HTMLImageElement;
+            v.needsUpdate = true;
+          }
         }
       };
-      const texture = this.textureLoader.load(src, undefined, undefined, onError);
+      const texture = this.textureLoader.load(src, onLoad, undefined, onError);
       texture.colorSpace = SRGBColorSpace;
-      texture.needsUpdate = true;
+      // Stash the variants list on the texture so the variant-clone branch
+      // below can register itself for image propagation. Typed via a
+      // structural cast — the field is purely internal to this method.
+      (texture as Texture & { __r3Variants?: Texture[] }).__r3Variants = variants;
+      // NOTE: do NOT set `texture.needsUpdate = true` here. The image is
+      // still loading; marking the texture dirty before image data exists
+      // produces the "Texture marked for update but no image data found"
+      // WebGL warning. Three's internal onLoad bumps needsUpdate itself
+      // once the image arrives.
       this.textureCache.set(src, texture);
       return texture;
     }
@@ -2389,7 +2504,16 @@ export class SceneEditor {
     const variant = base.clone();
     variant.colorSpace = SRGBColorSpace;
     applyTextureSamplingOptions(variant, options, this.renderer.capabilities.getMaxAnisotropy());
-    variant.needsUpdate = true;
+    // If the base already has its image (synchronous cache hit or load
+    // finished between calls), mark the variant ready immediately. Otherwise
+    // register it on the base's variants list so the eventual onLoad
+    // callback pushes the image into this clone.
+    if (variant.image) {
+      setTextureUpdateIfReady(variant);
+    } else {
+      const variants = (base as Texture & { __r3Variants?: Texture[] }).__r3Variants;
+      if (variants) variants.push(variant);
+    }
     this.textureCache.set(key, variant);
     return variant;
   }
@@ -2816,8 +2940,33 @@ export class SceneEditor {
         continue;
       }
 
-      const objectPath = toObjectAnimationPath(track.property);
-      const [owner, property] = resolveAnimationTarget(target, objectPath);
+      // `transform.skew.*` lives on a runtime skewLayer Group rather than the
+      // wrapper itself — set up (or reuse) the layer + a mutable runtimeSkew
+      // record before resolving owner/property. The post-write hook below
+      // rebuilds the shear matrix once any axis has been written.
+      let owner: Record<string, unknown> | null = null;
+      let property: string | null = null;
+      let postUpdate: (() => void) | undefined;
+      if (track.property.startsWith("transform.skew.")) {
+        const axis = track.property.slice("transform.skew.".length);
+        if (axis !== "x" && axis !== "y" && axis !== "z") {
+          continue;
+        }
+        const skewLayer = this.ensureSkewLayer(target, node.transform.skew);
+        const runtimeSkew = (target.userData.runtimeSkew ??= {
+          x: node.transform.skew?.x ?? 0,
+          y: node.transform.skew?.y ?? 0,
+          z: node.transform.skew?.z ?? 0,
+        }) as { x: number; y: number; z: number };
+        owner = runtimeSkew as unknown as Record<string, unknown>;
+        property = axis;
+        postUpdate = () => {
+          skewLayer.matrix.copy(buildSkewMatrix(runtimeSkew));
+        };
+      } else {
+        const objectPath = toObjectAnimationPath(track.property);
+        [owner, property] = resolveAnimationTarget(target, objectPath);
+      }
       if (!owner || !property) {
         continue;
       }
@@ -2837,6 +2986,7 @@ export class SceneEditor {
         visibilityMesh: isDiscreteAnimationProperty(track.property)
           ? this.getAnimatedVisibilityMeshTarget(target)
           : null,
+        postUpdate,
       });
     }
 
@@ -2909,6 +3059,9 @@ export class SceneEditor {
       } else {
         track.owner[track.property] = value;
       }
+      // Skew tracks need the shared 4×4 shear matrix rebuilt after every
+      // axis write — no-op for everything else.
+      track.postUpdate?.();
       if (
         track.target &&
         this.store.selectedNodeIds.includes(String(track.target.userData.nodeId ?? ""))
@@ -3159,10 +3312,11 @@ function applyTextureSamplingOptions(
   if (options.offsetV !== undefined) texture.offset.y = options.offsetV;
   if (options.repeatU !== undefined) texture.repeat.x = options.repeatU;
   if (options.repeatV !== undefined) texture.repeat.y = options.repeatV;
-  // Switching to a wrap mode other than ClampToEdge requires repeat>0,
-  // which Three already enforces, but make sure offset/repeat changes are
-  // visible immediately.
-  texture.needsUpdate = true;
+  // Only flag dirty when the texture already has image data — guards against
+  // "Texture marked for update but no image data found" warnings when this
+  // helper runs on a freshly-cloned variant whose image hasn't arrived yet.
+  // The variant will be re-marked dirty by the base's onLoad propagation.
+  setTextureUpdateIfReady(texture);
 }
 
 function wrapToThree(value: NonNullable<TextureSamplingOptions["wrapU"]>): Texture["wrapS"] {

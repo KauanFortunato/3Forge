@@ -7,6 +7,8 @@ declare module "node:fs" {
   export function readFileSync(path: string, encoding: string): string;
   export function readdirSync(path: string): string[];
   export function statSync(path: string): { isDirectory(): boolean; isFile(): boolean };
+  export function mkdirSync(path: string, options?: { recursive?: boolean }): string | undefined;
+  export function writeFileSync(path: string, data: string, encoding?: string): void;
 }
 
 declare const process: { env: Record<string, string | undefined> };

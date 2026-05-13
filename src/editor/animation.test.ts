@@ -21,6 +21,7 @@ import {
   secondsToFrame,
   frameToSeconds,
   sortTrackKeyframes,
+  W3D_PLAYBACK_ADVISORY,
   W3D_PLAYBACK_GUARD_WARNING,
 } from "./animation";
 import { createNode } from "./state";
@@ -317,7 +318,7 @@ describe("isW3DPlaybackGuarded", () => {
 });
 
 describe("getPlaybackDiagnostics (Phase 4)", () => {
-  const makeNode = (id: string) => ({ ...createNode("plane", { name: id, parentId: null }), id });
+  const makeNode = (id: string) => ({ ...createNode("plane", null), id });
   const makeClip = (durationFrames: number, tracks: Array<{ nodeId: string; property: string }> = []) => {
     const clip = createAnimationClip("c", { fps: 25, durationFrames });
     clip.tracks = tracks.map((t) => {
@@ -342,17 +343,44 @@ describe("getPlaybackDiagnostics (Phase 4)", () => {
     expect(diag.invalidTrackCount).toBe(0);
   });
 
-  it("returns 'guarded' for a W3D blueprint with PreviewMarker", () => {
+  it("does NOT block a W3D blueprint with PreviewMarker — guard is advisory only (LINEUP_LEFT regression)", () => {
+    // Reproduces the LINEUP_LEFT case: W3D scene with a PreviewMarker AND
+    // valid keyframe tracks. Before the advisory split this returned
+    // playbackBlockedReason='guarded' and Play was silently swallowed.
+    const n = makeNode("n1");
     const clip = createAnimationClip("In", { fps: 25, durationFrames: 800 });
     clip.previewFrame = 799;
+    const tr = createAnimationTrack(n.id, "transform.position.x");
+    tr.keyframes = [createAnimationKeyframe(0, 0)];
+    clip.tracks = [tr];
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: { w3d: { originalXml: "<x/>" } },
+      clips: [clip],
+      nodeIds: new Set([n.id]),
+    });
+    // Play must NOT be blocked — guard is advisory.
+    expect(diag.playbackSupported).toBe(true);
+    expect(diag.playbackBlockedReason).toBeNull();
+    expect(diag.playbackBlockedMessage).toBe("");
+    // But the guard signal stays exposed so the UI can show an advisory.
+    expect(diag.playbackGuarded).toBe(true);
+    expect(diag.playbackAdvisoryMessage).toBe(W3D_PLAYBACK_ADVISORY);
+    expect(diag.compiledTrackCount).toBe(1);
+  });
+
+  it("a W3D blueprint with NO valid tracks still blocks (zero-tracks wins over guard)", () => {
+    const clip = createAnimationClip("In", { fps: 25, durationFrames: 800 });
+    clip.previewFrame = 799;
+    // No tracks at all → zero-tracks blocks regardless of guard.
     const diag = getPlaybackDiagnostics({
       blueprintMetadata: { w3d: { originalXml: "<x/>" } },
       clips: [clip],
       nodeIds: new Set(),
     });
-    expect(diag.playbackBlockedReason).toBe("guarded");
-    expect(diag.playbackBlockedMessage).toMatch(/W3D|PreviewMarker/i);
+    expect(diag.playbackBlockedReason).toBe("zero-tracks");
     expect(diag.playbackGuarded).toBe(true);
+    // Advisory only fires when playback is actually supported.
+    expect(diag.playbackAdvisoryMessage).toBe("");
   });
 
   it("returns 'no-clips' when there are zero clips", () => {
@@ -412,6 +440,23 @@ describe("getPlaybackDiagnostics (Phase 4)", () => {
     expect(diag.playbackBlockedReason).toBe("unsupported-properties");
     expect(diag.unsupportedAnimatedProperties).toEqual(["material.color"]);
     expect(diag.invalidTrackCount).toBe(1);
+  });
+
+  it("Phase 6: transform.skew.{x,y,z} are supported animated properties", () => {
+    const n = makeNode("n1");
+    const clip = makeClip(120, [
+      { nodeId: n.id, property: "transform.skew.x" },
+      { nodeId: n.id, property: "transform.skew.y" },
+      { nodeId: n.id, property: "transform.skew.z" },
+    ]);
+    const diag = getPlaybackDiagnostics({
+      blueprintMetadata: null,
+      clips: [clip],
+      nodeIds: new Set([n.id]),
+    });
+    expect(diag.playbackSupported).toBe(true);
+    expect(diag.compiledTrackCount).toBe(3);
+    expect(diag.unsupportedAnimatedProperties).toEqual([]);
   });
 
   it("does NOT block when SOME tracks are valid even if others are bad", () => {

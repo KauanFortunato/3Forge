@@ -15,7 +15,7 @@ import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset, imageSequenceToAsset, isVideoFileName, isVideoMimeType, videoFileToAsset } from "../images";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor, summariseSequenceResolverWarnings } from "../scene";
-import { getPlaybackDiagnostics, isW3DPlaybackGuarded, maxPreviewFrameFromClips, W3D_PLAYBACK_GUARD_WARNING } from "../animation";
+import { getPlaybackDiagnostics, maxPreviewFrameFromClips } from "../animation";
 import {
   createDefaultBlueprint,
   EditorStore,
@@ -669,32 +669,92 @@ export function App() {
     window.localStorage.setItem(TIMELINE_VISIBLE_KEY, isTimelineVisible ? "true" : "false");
   }, [isTimelineVisible]);
 
+  // Per-session record of the last persist attempt's input identities. The
+  // persist effect re-runs on every blueprintSnapshot/projectContext identity
+  // change — which during a large W3D import can fire several times in quick
+  // succession across React batches (loadBlueprint → setProjectContext →
+  // setIsStarted all flip in the same import handler). Without this guard
+  // the effect body fires again with identical inputs and re-attempts
+  // localStorage writes that are guaranteed to throw QuotaExceededError,
+  // generating cascading warnings and (in some cases) tripping React's
+  // "Maximum update depth exceeded" detector via the setRecentProjects
+  // setter inside.
+  //
+  // We compare by reference identity (blueprintSnapshot is a structuredClone,
+  // so any real store mutation produces a new reference; idle re-renders
+  // reuse the same memo'd clone). When identities match the last fire, we
+  // skip — the workspace state on disk is already in sync.
+  const lastPersistSignatureRef = useRef<{
+    blueprintSnapshot: unknown;
+    projectContext: unknown;
+    shouldPersistWorkspace: boolean;
+  } | null>(null);
   useEffect(() => {
     if (!shouldPersistWorkspace) {
       return;
     }
 
-    persistWorkspace(blueprintSnapshot, projectContext);
-    setPersistedWorkspace({
-      blueprint: blueprintSnapshot,
-      context: {
-        ...projectContext,
-        updatedAt: Date.now(),
-      },
-    });
-
-    if (projectContext.recentProjectId) {
-      persistRecentSnapshot(projectContext.recentProjectId, blueprintSnapshot);
-      const entry = createRecentProjectEntry({
-        id: projectContext.recentProjectId,
-        label: buildRecentProjectLabel(projectContext.fileName, blueprintSnapshot.componentName),
-        componentName: blueprintSnapshot.componentName,
-        source: projectContext.fileHandleId ? "file-handle" : "snapshot",
-        fileName: projectContext.fileName,
-        fileHandleId: projectContext.fileHandleId,
-      });
-      setRecentProjects(upsertRecentProject(entry));
+    // No-op skip: same inputs as the last completed persist attempt. Cheap
+    // identity compare; correct because blueprintSnapshot is a fresh
+    // structuredClone whenever the store mutates.
+    const last = lastPersistSignatureRef.current;
+    if (
+      last &&
+      last.blueprintSnapshot === blueprintSnapshot &&
+      last.projectContext === projectContext &&
+      last.shouldPersistWorkspace === shouldPersistWorkspace
+    ) {
+      return;
     }
+
+    // Debounce by one tick so several React setState batches inside a single
+    // import handler coalesce into ONE persist attempt. Without this we get
+    // 2–4 persist attempts per import as state setters land in waves.
+    const handle = window.setTimeout(() => {
+      lastPersistSignatureRef.current = {
+        blueprintSnapshot,
+        projectContext,
+        shouldPersistWorkspace,
+      };
+      persistWorkspace(blueprintSnapshot, projectContext);
+      setPersistedWorkspace((previous) => {
+        // Skip the state update when the persisted blueprint identity matches
+        // — `persistedWorkspace` is a state object that, when reassigned with
+        // a NEW object literal, forces every downstream consumer to re-render.
+        // The LandingPage observes it, and a quick succession of identical
+        // setStates here was visible as repeated re-renders in profiler.
+        if (previous && previous.blueprint === blueprintSnapshot && previous.context === projectContext) {
+          return previous;
+        }
+        return {
+          blueprint: blueprintSnapshot,
+          context: {
+            ...projectContext,
+            updatedAt: Date.now(),
+          },
+        };
+      });
+
+      if (projectContext.recentProjectId) {
+        persistRecentSnapshot(projectContext.recentProjectId, blueprintSnapshot);
+        const entry = createRecentProjectEntry({
+          id: projectContext.recentProjectId,
+          label: buildRecentProjectLabel(projectContext.fileName, blueprintSnapshot.componentName),
+          componentName: blueprintSnapshot.componentName,
+          source: projectContext.fileHandleId ? "file-handle" : "snapshot",
+          fileName: projectContext.fileName,
+          fileHandleId: projectContext.fileHandleId,
+        });
+        setRecentProjects(upsertRecentProject(entry));
+      }
+    }, 0);
+
+    return () => {
+      // Cancel the pending persist if the effect re-fires before it runs.
+      // This is what makes the debounce actually coalesce: each new fire
+      // cancels the previous timer; only the final state's timer survives.
+      window.clearTimeout(handle);
+    };
   }, [blueprintSnapshot, projectContext, shouldPersistWorkspace]);
 
   useEffect(() => {
@@ -910,27 +970,14 @@ export function App() {
     setCurrentFrame((previousFrame) => previousFrame === nextFrame ? previousFrame : nextFrame);
   }, [store]);
 
-  // W3D imports are accurate ONLY at their PreviewMarker frame (see
-  // isW3DPlaybackGuarded). The handlers below intercept every navigation
-  // input (Play, Stop, Scrub, Skip{Back,Forward}, Rewind, FastForward) so
-  // pressing Play / dragging the timeline doesn't put the scene into a
-  // visibly-broken animated state until the runtime refresh pipeline
-  // lands. Each interception:
-  //   - keeps `currentFrame` pinned to the preview frame
-  //   - re-seeks the scene if it drifted
-  //   - shows a transient warning via `setTransientStatus`
-  // The guard is computed via the shared helper so the dump (scene.ts)
-  // and the interception logic (App.tsx) can never disagree.
-  const w3dPlaybackGuarded = useMemo(
-    () => isW3DPlaybackGuarded({
-      blueprintMetadata: store.blueprint.metadata,
-      clips: storeView.animation.clips,
-    }),
-    [storeView.animation, store],
-  );
-  // Phase 4: full playback diagnostics (W3D guard, no-clips, zero-tracks,
-  // missing targets, unsupported properties). Drives the visible banner +
-  // disabled Play state below.
+  // W3D imports land at their PreviewMarker frame (set by applyWorkspaceBlueprint).
+  // The guard is now ADVISORY only: Play/Scrub/Stop/Skip all run normally on
+  // W3D scenes — the runtime drives every supported animation track. The
+  // banner shown by the toolbar warns that some W3D-only systems
+  // (FlowChildren, masks, TextureText fit) only refresh at flatten/import
+  // time, so the playing image is approximate compared to R³ Designer.
+  // `isW3DPlaybackGuarded` / `playbackGuarded` stay exposed as a signal,
+  // but no longer block input.
   const playbackDiagnostics = useMemo(
     () => getPlaybackDiagnostics({
       blueprintMetadata: store.blueprint.metadata,
@@ -939,24 +986,13 @@ export function App() {
     }),
     [store, storeView.animation.clips, storeView.blueprintNodes],
   );
-  const w3dPreviewFrame = useMemo(
-    () => Math.max(0, maxPreviewFrameFromClips(storeView.animation.clips)),
-    [storeView.animation.clips],
-  );
-  const guardSnapBack = useCallback(() => {
-    setCurrentFrame(w3dPreviewFrame);
-    setIsAnimationPlaying(false);
-    sceneRef.current?.seekAnimation(w3dPreviewFrame);
-    setTransientStatus(W3D_PLAYBACK_GUARD_WARNING);
-  }, [w3dPreviewFrame, setTransientStatus]);
 
   const handleTimelineFrameChange = useCallback((frame: number) => {
-    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     const nextFrame = Math.max(0, Math.min(Math.round(frame), store.getActiveAnimationClip()?.durationFrames ?? 0));
     setCurrentFrame(nextFrame);
     setIsAnimationPlaying(false);
     sceneRef.current?.seekAnimation(nextFrame);
-  }, [store, w3dPlaybackGuarded, guardSnapBack]);
+  }, [store]);
 
   const handleAnimationPlayToggle = useCallback(() => {
     if (isAnimationPlaying) {
@@ -965,9 +1001,10 @@ export function App() {
       setTransientStatus("Animation paused.");
       return;
     }
-    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
-    // Phase 4: non-W3D blocked reasons (no-clips, duration-zero, etc.)
-    // surface a clear status instead of silently ignoring the click.
+    // Real blocked reasons (no-clips, duration-zero, zero-tracks,
+    // missing-targets, unsupported-properties) surface a clear status
+    // instead of silently ignoring the click. The W3D guard is NOT in
+    // this set — guarded blueprints play normally with an advisory banner.
     if (playbackDiagnostics.playbackBlockedReason !== null) {
       setTransientStatus(playbackDiagnostics.playbackBlockedMessage);
       // eslint-disable-next-line no-console
@@ -979,48 +1016,47 @@ export function App() {
 
     sceneRef.current?.playAnimation();
     setIsAnimationPlaying(true);
-    setTransientStatus("Animation playing.");
-  }, [isAnimationPlaying, setTransientStatus, w3dPlaybackGuarded, guardSnapBack, playbackDiagnostics]);
+    setTransientStatus(
+      playbackDiagnostics.playbackGuarded
+        ? "Animation playing (W3D approximation)."
+        : "Animation playing.",
+    );
+  }, [isAnimationPlaying, setTransientStatus, playbackDiagnostics]);
 
   const handleAnimationStop = useCallback(() => {
-    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     sceneRef.current?.stopAnimation();
     setCurrentFrame(0);
     setIsAnimationPlaying(false);
     setTransientStatus("Animation stopped.");
-  }, [setTransientStatus, w3dPlaybackGuarded, guardSnapBack]);
+  }, [setTransientStatus]);
 
   const handleAnimationSkipBack = useCallback(() => {
-    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     sceneRef.current?.seekAnimation(0);
     setCurrentFrame(0);
-  }, [w3dPlaybackGuarded, guardSnapBack]);
+  }, []);
 
   const handleAnimationSkipForward = useCallback(() => {
-    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     const endFrame = store.getActiveAnimationClip()?.durationFrames ?? 0;
     sceneRef.current?.seekAnimation(endFrame);
     setCurrentFrame(endFrame);
-  }, [store, w3dPlaybackGuarded, guardSnapBack]);
+  }, [store]);
 
   const handleAnimationRewind = useCallback(() => {
-    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     setCurrentFrame((previous) => {
       const next = Math.max(0, previous - 10);
       sceneRef.current?.seekAnimation(next);
       return next;
     });
-  }, [w3dPlaybackGuarded, guardSnapBack]);
+  }, []);
 
   const handleAnimationFastForward = useCallback(() => {
-    if (w3dPlaybackGuarded) { guardSnapBack(); return; }
     const endFrame = store.getActiveAnimationClip()?.durationFrames ?? 0;
     setCurrentFrame((previous) => {
       const next = Math.min(endFrame, previous + 10);
       sceneRef.current?.seekAnimation(next);
       return next;
     });
-  }, [store, w3dPlaybackGuarded, guardSnapBack]);
+  }, [store]);
 
   const handleAddAnimationTrack = useCallback((property: AnimationPropertyPath) => {
     if (!selectedNode) {
@@ -3011,13 +3047,14 @@ export function App() {
             onFastForward: handleAnimationFastForward,
             onSkipBack: handleAnimationSkipBack,
             onSkipForward: handleAnimationSkipForward,
-            // Phase 4: persistent banner shown next to Play when blocked.
-            // For W3D-guarded scenes shows the snapshot text; for non-W3D
-            // failures (no clips, missing targets, etc.) shows the
-            // operator-facing reason. Empty string ⇒ no banner.
-            blockedMessage: playbackDiagnostics.playbackBlockedReason === "guarded"
-              ? "W3D snapshot — playback disabled until live W3D animation is supported."
-              : (playbackDiagnostics.playbackBlockedMessage || undefined),
+            // Persistent banner shown next to Play. Two modes:
+            //   - blockedMessage: a real failure (no clips, missing targets,
+            //     unsupported props on every track) — Play is disabled.
+            //   - advisoryMessage: W3D PreviewMarker hint — Play stays enabled,
+            //     banner just warns that the runtime preview is approximate
+            //     (FlowChildren/masks/TextureText only refresh at import).
+            blockedMessage: playbackDiagnostics.playbackBlockedMessage || undefined,
+            advisoryMessage: playbackDiagnostics.playbackAdvisoryMessage || undefined,
           } : null}
           onComponentNameChange={(value) => store.updateComponentName(value)}
           onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultBlueprint } from "./state";
 import {
+  __resetWorkspaceQuotaCache,
   createRecentProjectEntry,
   createWorkspaceProjectContext,
   markWorkspaceSessionActive,
@@ -106,6 +107,107 @@ describe("workspace", () => {
     expect(persistedWorkspace?.blueprint.componentName).toBe(blueprint.componentName);
     expect(persistedWorkspace?.context.fileName).toBe("fixture.json");
     expect(persistedWorkspace?.context.fileHandleId).toBe("handle-1");
+  });
+});
+
+describe("workspace quota suppression (Phase 8 regression)", () => {
+  function createQuotaStorage(): {
+    storage: { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void };
+    setItemCalls: { key: string; threw: boolean }[];
+  } {
+    // Quota-bounded storage stub: throws a DOMException with name
+    // QuotaExceededError on every setItem so we can verify the safeSetItem
+    // guards behave as documented.
+    const setItemCalls: { key: string; threw: boolean }[] = [];
+    const storage = {
+      getItem: () => null,
+      setItem(key: string, _value: string) {
+        // jsdom's DOMException doesn't reliably extend Error; use a plain
+        // Error with a manually-set `name` so isQuotaError's name check
+        // recognises it without depending on jsdom's prototype chain.
+        const err = new Error("Quota exceeded");
+        err.name = "QuotaExceededError";
+        setItemCalls.push({ key, threw: true });
+        throw err;
+      },
+      removeItem: (_key: string) => undefined,
+    };
+    return { storage, setItemCalls };
+  }
+
+  it("warns once per key when localStorage quota is exceeded, then suppresses future warnings (LINEUP_LEFT regression)", () => {
+    // Before the suppression: a tight React re-render loop on a large
+    // blueprint produced one quota-exceeded console.warn per render. Now
+    // each key is warned about exactly once and subsequent attempts to
+    // persist the same key short-circuit silently.
+    __resetWorkspaceQuotaCache();
+    const { storage } = createQuotaStorage();
+    const blueprint = createDefaultBlueprint();
+    const context = createWorkspaceProjectContext();
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: string) => { warnings.push(msg); };
+    try {
+      // First fire: BOTH safeSetItem calls inside persistWorkspace go through
+      // the throw path and each logs its quota warning once. That's 2 warns.
+      persistWorkspace(blueprint, context, storage);
+      // Subsequent fires (mimicking the React re-render loop): both keys are
+      // already in the suppression cache, so safeSetItem returns false
+      // silently without logging anything additional.
+      persistWorkspace(blueprint, context, storage);
+      persistWorkspace(blueprint, context, storage);
+      persistWorkspace(blueprint, context, storage);
+    } finally {
+      console.warn = originalWarn;
+    }
+    // The two distinct keys (EDITOR_AUTOSAVE_KEY + WORKSPACE_CONTEXT_KEY)
+    // each generate exactly one warning across the four persist attempts.
+    expect(warnings.length).toBe(2);
+    expect(warnings.every((w) => w.includes("quota exceeded"))).toBe(true);
+    // Distinct keys mentioned, not the same one twice.
+    const keysMentioned = new Set(warnings.map((w) => w.match(/"([^"]+)"/)?.[1] ?? ""));
+    expect(keysMentioned.size).toBe(2);
+  });
+
+  it("re-arms the warning when a key successfully persists again (suppression is not permanent)", () => {
+    // Once the user shrinks the blueprint or frees up space, a successful
+    // write must clear the suppression so future quota errors are logged.
+    __resetWorkspaceQuotaCache();
+    let shouldThrow = true;
+    const storage = {
+      getItem: () => null,
+      setItem(_key: string, _value: string) {
+        if (shouldThrow) {
+          // jsdom's DOMException doesn't reliably extend Error; mint a plain
+          // Error with a manually-set `name` so isQuotaError can recognise it.
+          const err = new Error("Quota exceeded");
+          err.name = "QuotaExceededError";
+          throw err;
+        }
+      },
+      removeItem: () => undefined,
+    };
+    const blueprint = createDefaultBlueprint();
+    const context = createWorkspaceProjectContext();
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: string) => { warnings.push(msg); };
+    try {
+      // First call: throws → 2 warnings + 2 keys suppressed.
+      persistWorkspace(blueprint, context, storage);
+      expect(warnings.length).toBe(2);
+      // Storage stops throwing — simulates user freeing localStorage space.
+      shouldThrow = false;
+      // Second call: succeeds → suppression cleared, no new warnings.
+      persistWorkspace(blueprint, context, storage);
+      // Storage starts throwing again — simulates re-import of a larger
+      // blueprint. Warnings fire again (suppression was correctly reset).
+      shouldThrow = true;
+      persistWorkspace(blueprint, context, storage);
+      expect(warnings.length).toBe(4);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 });
 

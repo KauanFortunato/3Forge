@@ -291,6 +291,11 @@ const W3D_PROPERTY_TO_PATHS: Record<string, AnimationPropertyPath[]> = {
   "Transform.Position.XProp": ["transform.position.x"],
   "Transform.Position.YProp": ["transform.position.y"],
   "Transform.Position.ZProp": ["transform.position.z"],
+  // Compound Transform.Position controller — fan out to all three axes. The
+  // keyframe `Value` may be a single number (uniform offset) or a CSV / space
+  // separated triple ("X,Y,Z"); see `decodeCompoundKeyframeAxis` for the
+  // per-axis pick.
+  "Transform.Position": ["transform.position.x", "transform.position.y", "transform.position.z"],
   "Transform.Rotation.XProp": ["transform.rotation.x"],
   "Transform.Rotation.YProp": ["transform.rotation.y"],
   "Transform.Rotation.ZProp": ["transform.rotation.z"],
@@ -305,6 +310,21 @@ const W3D_PROPERTY_TO_PATHS: Record<string, AnimationPropertyPath[]> = {
   // R3 sometimes ships a single uniform Transform.Scale controller that
   // moves all three axes together (typical In/Out scaling). Fan it out.
   "Transform.Scale": ["transform.scale.x", "transform.scale.y", "transform.scale.z"],
+  // W3D `Size` is a multiplier on the authored geometry width/height. The
+  // 3Forge runtime applies the same effect by writing to mesh.scale, so
+  // synthesise Size as a transform.scale track. Lossy if a node also has a
+  // Transform.Scale controller on the same axis (rare in broadcast scenes);
+  // collisions are reported via `__r3Dump` aggregateSkip warnings.
+  "Size.XProp": ["transform.scale.x"],
+  "Size.YProp": ["transform.scale.y"],
+  "Size.ZProp": ["transform.scale.z"],
+  // Animated shear — routes to a runtime skewLayer Group inserted on demand
+  // by SceneEditor.ensureSkewLayer. Static skew already lives on
+  // node.transform.skew; the importer seeds it (zeros) when only an animated
+  // controller is present so applyAnimationValue can write into it.
+  "Transform.Skew.XProp": ["transform.skew.x"],
+  "Transform.Skew.YProp": ["transform.skew.y"],
+  "Transform.Skew.ZProp": ["transform.skew.z"],
   Enabled: ["visible"],
   // R3 broadcast scenes animate Alpha very heavily for In/Out fades —
   // mapping it to material.opacity recovers most fade animations.
@@ -1818,6 +1838,31 @@ const FORMAT_FPS: Record<string, number> = {
 
 const KNOWN_FORMATS = new Set(Object.keys(FORMAT_FPS));
 
+/**
+ * Returns the post-flatten geometry size on the requested axis, or 0 when
+ * the node type doesn't carry that field. Used by Size.*Prop track
+ * normalization in parseTimeline.
+ */
+function readNodeGeometryAxis(node: EditorNode, axis: "width" | "height" | "depth"): number {
+  if (node.type === "group") return 0;
+  const g = (node as unknown as { geometry?: Record<string, unknown> }).geometry;
+  if (!g) return 0;
+  const v = g[axis];
+  return typeof v === "number" ? v : 0;
+}
+
+/**
+ * Writes the post-flatten geometry size for an axis when the node carries
+ * that field. Used to seed a non-zero base when Size.*Prop animation values
+ * are all zero at PreviewMarker (rare).
+ */
+function writeNodeGeometryAxis(node: EditorNode, axis: "width" | "height" | "depth", value: number): void {
+  if (node.type === "group") return;
+  const g = (node as unknown as { geometry?: Record<string, unknown> }).geometry;
+  if (!g) return;
+  if (axis in g) g[axis] = value;
+}
+
 function fpsForFormat(format: string): number {
   if (!format) {
     return 25;
@@ -1904,45 +1949,144 @@ function parseTimeline(el: Element, ctx: ParseContext, formatFps: number): Anima
     // Scale (repeat) is a magnitude, not a direction — no flip needed.
     const flipKeyframeOffsetV = animatedProperty === "TextureMappingOption.Offset.YProp";
 
+    // Compound vector controllers (Transform.Position) ship a single
+    // `Value` string that may encode the whole triple ("X,Y,Z" or "X Y Z").
+    // Fan-out emits one track per axis, and `decodeCompoundKeyframeAxis`
+    // picks the per-axis component from each KeyFrame. For uniform Scale we
+    // keep the legacy "single-number-applied-to-all-axes" behaviour by
+    // returning the number for every axis when only one component is present.
+    const isCompoundVectorProperty = animatedProperty === "Transform.Position";
+
+    // Animated Skew: ensure node.transform.skew is at least a zero Vec3 so
+    // applyAnimationValue can write into it on nodes that had no static skew.
+    if (animatedProperty.startsWith("Transform.Skew.")) {
+      for (const nodeId of nodeIds) {
+        const node = ctx.nodes.find((n) => n.id === nodeId);
+        if (node && !node.transform.skew) {
+          node.transform.skew = { x: 0, y: 0, z: 0 };
+        }
+      }
+    }
+
+    // Size.*Prop in W3D is the *absolute geometry size at each keyframe*,
+    // not a multiplier on the static base. Our renderer multiplies
+    // geometry.{width,height,depth} (set from the post-flatten <Size>
+    // attribute) by transform.scale, so a raw 1:1 map double-counts during
+    // playback (e.g. LINEUP_LEFT BASE_MAIN: static Size.X=7.7 × scale.x=7.7
+    // → rendered width 59 instead of 7.7). Normalize each track value by
+    // the node's post-flatten geometry size on the corresponding axis so
+    // transform.scale collapses to a true [0..1+] multiplier.
+    const sizePropAxis: "width" | "height" | "depth" | null =
+      animatedProperty === "Size.XProp" ? "width"
+      : animatedProperty === "Size.YProp" ? "height"
+      : animatedProperty === "Size.ZProp" ? "depth"
+      : null;
+
     // Walk every (node, target path) pair. Most properties resolve to a
     // single node + single path; uniform Scale fans out to three paths;
     // shared TextureLayers fan out to N nodes. Using a stable cached value
     // array prevents the import from re-decoding the same XML per axis.
-    for (const nodeId of nodeIds) for (const propertyPath of propertyPaths) {
-      const track = createAnimationTrack(nodeId, propertyPath);
-      // Same trackKey for every fan-out so the exporter folds them back
-      // onto the original single controller — patchKeyframe is idempotent
-      // when the values match across axes (which they do for uniform Scale).
-      ctx.shadow.trackKeys[track.id] = `${controllableId}|${animatedProperty}`;
-
-      sortedKeyframes.forEach((kfEl, index) => {
-        const frame = parseNumberAttr(kfEl, "FrameNumber", 0);
-        const rawValue = parseNumberAttr(kfEl, "Value", 0);
-        const value = animatedProperty === "Enabled"
-          ? booleanAttrAsNumber(kfEl.getAttribute("Value"))
-          : flipKeyframeY ? -rawValue
-          : flipKeyframeZ ? -rawValue
-          : flipKeyframeOffsetV ? -rawValue
-          : rawValue;
-        const ease = mapEase(
-          sortedKeyframes[index - 1]?.getAttribute("RightType") ?? "Linear",
-          kfEl.getAttribute("LeftType") ?? "Linear",
-        );
-        const kf = createAnimationKeyframe(frame, value, ease);
-        const kfId = kfEl.getAttribute("Id");
-        if (kfId) {
-          ctx.shadow.keyframeIds[kf.id] = kfId.toLowerCase();
+    for (const nodeId of nodeIds) {
+      // Per-node base size for Size.*Prop normalization. Pulled from
+      // ctx.nodes (already post-flatten). If the static value is 0
+      // (rare: animation ends at 0 at PreviewMarker), promote the largest
+      // |keyframe| to the base so scale stays in a sane range AND the
+      // static rest state still renders correctly when the playhead lands
+      // on a frame with a non-zero animation value.
+      let sizeBase = 0;
+      let sizeBaseNode: EditorNode | undefined;
+      if (sizePropAxis) {
+        sizeBaseNode = ctx.nodes.find((n) => n.id === nodeId);
+        if (sizeBaseNode) {
+          sizeBase = readNodeGeometryAxis(sizeBaseNode, sizePropAxis);
+          if (sizeBase === 0) {
+            let maxAbs = 0;
+            for (const kf of sortedKeyframes) {
+              const v = Math.abs(parseNumberAttr(kf, "Value", 0));
+              if (v > maxAbs) maxAbs = v;
+            }
+            if (maxAbs > 0) {
+              sizeBase = maxAbs;
+              writeNodeGeometryAxis(sizeBaseNode, sizePropAxis, maxAbs);
+            }
+          }
         }
-        track.keyframes.push(kf);
-      });
+      }
 
-      if (track.keyframes.length > 0) {
-        clip.tracks.push(track);
+      for (const propertyPath of propertyPaths) {
+        const track = createAnimationTrack(nodeId, propertyPath);
+        // Same trackKey for every fan-out so the exporter folds them back
+        // onto the original single controller — patchKeyframe is idempotent
+        // when the values match across axes (which they do for uniform Scale).
+        ctx.shadow.trackKeys[track.id] = `${controllableId}|${animatedProperty}`;
+        const axisIndex = propertyPath.endsWith(".x")
+          ? 0
+          : propertyPath.endsWith(".y")
+            ? 1
+            : propertyPath.endsWith(".z")
+              ? 2
+              : 0;
+
+        sortedKeyframes.forEach((kfEl, index) => {
+          const frame = parseNumberAttr(kfEl, "FrameNumber", 0);
+          const rawValue = isCompoundVectorProperty
+            ? decodeCompoundKeyframeAxis(kfEl.getAttribute("Value"), axisIndex)
+            : parseNumberAttr(kfEl, "Value", 0);
+          const flipped = animatedProperty === "Enabled"
+            ? booleanAttrAsNumber(kfEl.getAttribute("Value"))
+            : flipKeyframeY ? -rawValue
+            : flipKeyframeZ ? -rawValue
+            : flipKeyframeOffsetV ? -rawValue
+            : rawValue;
+          // Normalize Size.*Prop into a scale multiplier; leave every other
+          // property untouched.
+          const value = sizePropAxis && sizeBase > 0 ? flipped / sizeBase : flipped;
+          const ease = mapEase(
+            sortedKeyframes[index - 1]?.getAttribute("RightType") ?? "Linear",
+            kfEl.getAttribute("LeftType") ?? "Linear",
+          );
+          const kf = createAnimationKeyframe(frame, value, ease);
+          const kfId = kfEl.getAttribute("Id");
+          if (kfId) {
+            ctx.shadow.keyframeIds[kf.id] = kfId.toLowerCase();
+          }
+          track.keyframes.push(kf);
+        });
+
+        if (track.keyframes.length > 0) {
+          clip.tracks.push(track);
+        }
       }
     }
   }
 
   return clip.tracks.length > 0 ? clip : null;
+}
+
+/**
+ * Decode the per-axis component of a compound vector keyframe (Transform.Position).
+ * Accepted Value formats, in order of attempt:
+ *   - "1.7"            → applied to every axis (uniform scalar — matches the
+ *                        legacy compound-Scale convention)
+ *   - "1.7,0,-5"       → CSV triple
+ *   - "1.7 0 -5"       → space-separated triple
+ *   - "1.7;0;-5"       → semicolon-separated triple
+ * Returns 0 when no axis component can be parsed.
+ */
+function decodeCompoundKeyframeAxis(raw: string | null, axisIndex: number): number {
+  if (raw == null || raw === "") return 0;
+  const trimmed = raw.trim();
+  // Single number → broadcast to all axes.
+  const single = Number(trimmed);
+  if (Number.isFinite(single) && !/[,\s;]/.test(trimmed)) {
+    return single;
+  }
+  const parts = trimmed.split(/[,\s;]+/).map((p) => Number(p)).filter((n) => Number.isFinite(n));
+  if (parts.length === 0) return 0;
+  if (axisIndex < parts.length) return parts[axisIndex];
+  // Fewer components than expected — fall back to last for higher indices so
+  // partial vectors still produce a sensible result instead of zero.
+  return parts[parts.length - 1];
 }
 
 function mapEase(prevRight: string, currentLeft: string): AnimationEasePreset {

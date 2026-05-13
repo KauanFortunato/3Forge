@@ -58,10 +58,10 @@ describe("shouldAttachTransformGizmo", () => {
 
 describe("resolveMaskInversion", () => {
   it("returns true when the mask node is marked inverted", () => {
-    const mask = createNode("plane", { name: "Mask", parentId: null });
+    const mask = createNode("plane", null); mask.name = "Mask";
     mask.isMask = true;
     mask.maskInverted = true;
-    const target = createNode("plane", { name: "Target", parentId: null });
+    const target = createNode("plane", null); target.name = "Target";
     target.maskId = mask.id;
     const bp = makeBlueprint([mask, target]);
 
@@ -69,9 +69,9 @@ describe("resolveMaskInversion", () => {
   });
 
   it("returns false when the mask node is not inverted", () => {
-    const mask = createNode("plane", { name: "Mask", parentId: null });
+    const mask = createNode("plane", null); mask.name = "Mask";
     mask.isMask = true;
-    const target = createNode("plane", { name: "Target", parentId: null });
+    const target = createNode("plane", null); target.name = "Target";
     target.maskId = mask.id;
     const bp = makeBlueprint([mask, target]);
 
@@ -82,9 +82,9 @@ describe("resolveMaskInversion", () => {
     // Older blueprints (or hand-edited data) might still set maskInverted on
     // the target. The new contract treats only the mask as authoritative so
     // a target-only flag MUST NOT flip clipping.
-    const mask = createNode("plane", { name: "Mask", parentId: null });
+    const mask = createNode("plane", null); mask.name = "Mask";
     mask.isMask = true;
-    const target = createNode("plane", { name: "Target", parentId: null });
+    const target = createNode("plane", null); target.name = "Target";
     target.maskId = mask.id;
     target.maskInverted = true; // stale, must be ignored
     const bp = makeBlueprint([mask, target]);
@@ -93,7 +93,7 @@ describe("resolveMaskInversion", () => {
   });
 
   it("returns false when the mask id does not resolve to any node", () => {
-    const target = createNode("plane", { name: "Target", parentId: null });
+    const target = createNode("plane", null); target.name = "Target";
     target.maskId = "missing-mask-id";
     const bp = makeBlueprint([target]);
 

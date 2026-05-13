@@ -134,7 +134,8 @@ describe("GameName_FS blueprint dump", () => {
         scale: node.transform.scale,
         rotationDeg: node.transform.rotation,
         skew: node.transform.skew ?? null,
-        material: node.material
+        // GroupNode has no `material` field — narrow first.
+        material: node.type !== "group"
           ? {
               type: node.material.type,
               color: node.material.color,

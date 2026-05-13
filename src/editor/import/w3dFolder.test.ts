@@ -14,7 +14,12 @@ function makeFile(relativePath: string): File {
 }
 
 function makeFileWithBytes(relativePath: string, bytes: Uint8Array): File {
-  const file = new File([bytes], relativePath.split("/").pop() ?? "f");
+  // TS lib.dom narrows BlobPart's ArrayBufferView to ArrayBuffer-backed views,
+  // but Uint8Array's generic ArrayBufferLike (which can be SharedArrayBuffer)
+  // doesn't satisfy that. Slice into a fresh ArrayBuffer to keep typecheck
+  // happy without copying the bytes through any typed-array conversion.
+  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const file = new File([buf], relativePath.split("/").pop() ?? "f");
   Object.defineProperty(file, "webkitRelativePath", {
     value: relativePath,
     configurable: true,

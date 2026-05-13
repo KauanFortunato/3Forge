@@ -43,10 +43,15 @@ export interface PlaybackToolbarProps {
   onFastForward: () => void;
   onSkipBack: () => void;
   onSkipForward: () => void;
-  /** Phase 4: persistent message rendered inline next to the timeline
-   * controls when playback can't run end-to-end (W3D guard, no clips,
-   * missing targets, etc.). Empty string ⇒ no banner. */
+  /** Persistent message rendered inline next to the timeline controls when
+   * playback can't run end-to-end (no clips, missing targets, every track
+   * unsupported, etc.). When set, the Play button is disabled. */
   blockedMessage?: string;
+  /** Persistent advisory rendered inline next to Play when playback IS
+   * supported but the runtime image is approximate (e.g. W3D imports whose
+   * mask/FlowChildren state only refreshes at flatten time). The Play button
+   * stays enabled — this is a hint, not a block. */
+  advisoryMessage?: string;
 }
 
 interface SecondaryToolbarProps {
@@ -289,9 +294,15 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
     onSkipBack,
     onSkipForward,
     blockedMessage,
+    advisoryMessage,
   } = props;
   const blocked = !!blockedMessage;
-  const playTitle = blocked ? blockedMessage : (isPlaying ? "Pause" : "Play");
+  const advisory = !blocked && !!advisoryMessage;
+  const playTitle = blocked
+    ? blockedMessage
+    : advisory
+      ? `${isPlaying ? "Pause" : "Play"} — ${advisoryMessage}`
+      : (isPlaying ? "Pause" : "Play");
 
   return (
     <div className="playbar" role="group" aria-label="Playback controls">
@@ -304,6 +315,16 @@ function PlaybarGroup(props: PlaybackToolbarProps) {
           data-testid="playback-blocked-banner"
         >
           {blockedMessage}
+        </span>
+      ) : advisory ? (
+        <span
+          className="playbar__banner playbar__banner--advisory"
+          role="status"
+          aria-live="polite"
+          title={advisoryMessage}
+          data-testid="playback-advisory-banner"
+        >
+          {advisoryMessage}
         </span>
       ) : null}
       <button

@@ -24,6 +24,9 @@ export const ANIMATION_PROPERTIES: Array<{ path: AnimationPropertyPath; label: s
   { path: "transform.scale.x", label: "Scale X" },
   { path: "transform.scale.y", label: "Scale Y" },
   { path: "transform.scale.z", label: "Scale Z" },
+  { path: "transform.skew.x", label: "Skew X" },
+  { path: "transform.skew.y", label: "Skew Y" },
+  { path: "transform.skew.z", label: "Skew Z" },
   { path: "material.opacity", label: "Opacity" },
   { path: "material.textureOptions.offsetU", label: "Texture Offset U" },
   { path: "material.textureOptions.offsetV", label: "Texture Offset V" },
@@ -163,9 +166,21 @@ export function isW3DPlaybackGuarded(opts: {
 export const W3D_PLAYBACK_GUARD_WARNING =
   "Live W3D playback is not fully supported yet. This import is shown as a PreviewMarker snapshot.";
 
-/** Reasons playback cannot start. `null` when playback is supported. */
+/** Non-blocking advisory shown when a W3D-origin scene is playing. The runtime
+ * applies all supported animation tracks (Position/Scale/Rotation/Alpha/Visible
+ * + texture UV), but W3D-only systems (FlowChildren layout, mask clipping
+ * planes, TextureText fit-to-box) only refresh at flatten/import time, so the
+ * playing/scrubbing image is approximate compared to R³ Designer. */
+export const W3D_PLAYBACK_ADVISORY =
+  "W3D playback approximation: position/scale/alpha animate, but FlowChildren, masks and TextureText fit only refresh at import.";
+
+/** Reasons playback cannot start. `null` when playback is supported.
+ *
+ * Note: the W3D preview-marker guard is intentionally NOT a blocked reason.
+ * W3D imports remain playable when they have valid tracks; the guard is
+ * surfaced separately as `playbackGuarded` + `playbackAdvisoryMessage` so
+ * the UI can show a non-blocking advisory without disabling Play. */
 export type PlaybackBlockedReason =
-  | "guarded"
   | "no-clips"
   | "duration-zero"
   | "zero-tracks"
@@ -196,8 +211,13 @@ export interface PlaybackDiagnostics {
   playbackBlockedMessage: string;
   /** True when playback can run end-to-end. Equivalent to `playbackBlockedReason === null`. */
   playbackSupported: boolean;
-  /** True when the W3D guard is active (subset of `!playbackSupported`). */
+  /** True when the blueprint originates from a W3D import with a PreviewMarker.
+   * Advisory only — does NOT block playback. The UI uses this to show the
+   * `playbackAdvisoryMessage` banner alongside an *enabled* Play button. */
   playbackGuarded: boolean;
+  /** Operator-facing advisory shown when `playbackGuarded` is true and playback
+   * is still supported. Empty when not applicable. */
+  playbackAdvisoryMessage: string;
 }
 
 /** Property paths the runtime can drive end-to-end. Mirrors what
@@ -213,6 +233,9 @@ const SUPPORTED_ANIMATED_PROPERTIES: ReadonlySet<string> = new Set<AnimationProp
   "transform.scale.x",
   "transform.scale.y",
   "transform.scale.z",
+  "transform.skew.x",
+  "transform.skew.y",
+  "transform.skew.z",
   "material.opacity",
   "material.textureOptions.offsetU",
   "material.textureOptions.offsetV",
@@ -234,17 +257,24 @@ export interface PlaybackDiagnosticsInput {
  * Pure helper: classifies playback readiness so the App can disable the Play
  * button AND surface a visible reason.
  *
- * Order of checks (only the first one fires — the rest are still computed for
- * the diagnostic object):
- *   1. W3D guard       → `guarded`
- *   2. No clips        → `no-clips`
- *   3. Duration zero   → `duration-zero`
- *   4. Zero tracks     → `zero-tracks`
- *   5. Missing targets → `missing-targets`
- *   6. Unsupported     → `unsupported-properties`
+ * Blocking cascade (only the first match fires — the rest are still computed
+ * into the diagnostic object):
+ *   1. No clips           → `no-clips`
+ *   2. Duration zero      → `duration-zero`
+ *   3. Zero tracks        → `zero-tracks`
+ *   4. Missing targets    → `missing-targets`     (only when ALL tracks invalid)
+ *   5. Unsupported props  → `unsupported-properties` (only when ALL tracks invalid)
+ *
+ * The W3D PreviewMarker guard is *not* in the cascade. W3D imports always
+ * remain playable; `playbackGuarded` + `playbackAdvisoryMessage` carry the
+ * "runtime preview is approximate" hint without disabling Play.
+ *
+ * Partial-validity rule: when SOME tracks compile and others don't, playback
+ * is supported and the bad ones are reported via `invalidTrackCount` /
+ * `unsupportedAnimatedProperties` — the runtime simply doesn't drive them.
  *
  * `render-loop-inactive` is a runtime symptom (raf cancelled / scene unmounted);
- * App.tsx layers that on top of this output when it knows the runtime state.
+ * scene.ts layers that on top of this output when it knows the runtime state.
  */
 export function getPlaybackDiagnostics(input: PlaybackDiagnosticsInput): PlaybackDiagnostics {
   const supported = input.supportedProperties ?? SUPPORTED_ANIMATED_PROPERTIES;
@@ -277,10 +307,7 @@ export function getPlaybackDiagnostics(input: PlaybackDiagnosticsInput): Playbac
 
   let reason: PlaybackBlockedReason = null;
   let message = "";
-  if (guarded) {
-    reason = "guarded";
-    message = W3D_PLAYBACK_GUARD_WARNING;
-  } else if (clipCount === 0) {
+  if (clipCount === 0) {
     reason = "no-clips";
     message = "Playback failed: no animation clips.";
   } else if (totalDuration <= 0) {
@@ -308,6 +335,7 @@ export function getPlaybackDiagnostics(input: PlaybackDiagnosticsInput): Playbac
     playbackBlockedMessage: message,
     playbackSupported: reason === null,
     playbackGuarded: guarded,
+    playbackAdvisoryMessage: guarded && reason === null ? W3D_PLAYBACK_ADVISORY : "",
   };
 }
 
@@ -428,6 +456,15 @@ export function applyAnimationValue(node: EditorNode, property: AnimationPropert
   const lastSegment = segments.pop();
   if (!lastSegment) {
     return;
+  }
+
+  // `transform.skew` is an optional Vec3Like — auto-create the container so
+  // animated skew tracks can write into it on a node that didn't have static
+  // skew. Mirrors the runtime which inserts a skewLayer Group on demand.
+  if (segments.length === 2 && segments[0] === "transform" && segments[1] === "skew") {
+    if (!node.transform.skew) {
+      node.transform.skew = { x: 0, y: 0, z: 0 };
+    }
   }
 
   const target = segments.reduce<unknown>((current, segment) => {

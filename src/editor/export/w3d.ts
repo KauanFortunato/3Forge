@@ -39,8 +39,15 @@ const PROPERTY_TO_W3D: Record<AnimationPropertyPath, string> = {
   "transform.scale.x": "Transform.Scale.XProp",
   "transform.scale.y": "Transform.Scale.YProp",
   "transform.scale.z": "Transform.Scale.ZProp",
+  "transform.skew.x": "Transform.Skew.XProp",
+  "transform.skew.y": "Transform.Skew.YProp",
+  "transform.skew.z": "Transform.Skew.ZProp",
   visible: "Enabled",
   "material.opacity": "Alpha",
+  "material.textureOptions.offsetU": "TextureMappingOption.Offset.XProp",
+  "material.textureOptions.offsetV": "TextureMappingOption.Offset.YProp",
+  "material.textureOptions.repeatU": "TextureMappingOption.Scale.XProp",
+  "material.textureOptions.repeatV": "TextureMappingOption.Scale.YProp",
 };
 
 export function exportToW3D(blueprint: ComponentBlueprint): W3DExportResult {
