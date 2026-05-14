@@ -19,6 +19,7 @@ import {
 } from "../fileAccess";
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
+import { parseW3DFromFolder } from "../import/w3dFolder";
 import { isModelFile, modelFileToAsset } from "../models";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
@@ -757,6 +758,7 @@ export function App() {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const fontInputRef = useRef<HTMLInputElement | null>(null);
+  const w3dFolderInputRef = useRef<HTMLInputElement | null>(null);
   const jsonDragDepthRef = useRef(0);
   const imageDragDepthRef = useRef(0);
   const assetImageDragDepthRef = useRef(0);
@@ -2345,6 +2347,33 @@ export function App() {
     );
   }, [applyWorkspaceBlueprint]);
 
+  const handleImportW3DFolder = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+    try {
+      const result = await runTask("Importing W3D scene…", () => parseW3DFromFolder(files));
+      activeFileHandleRef.current = null;
+      applyWorkspaceBlueprint(
+        result.blueprint,
+        createWorkspaceProjectContext({
+          source: "local",
+          fileName: result.sceneFileName,
+          recentProjectId: createRecentProjectId(),
+          fileHandleId: null,
+          canOverwriteFile: false,
+        }),
+        result.warnings.length > 0
+          ? `Imported W3D scene with ${result.warnings.length} warning(s).`
+          : "Imported W3D scene metadata.",
+      );
+      if (result.warnings.length > 0) {
+        // eslint-disable-next-line no-console
+        console.warn("[w3d import]", result.warnings);
+      }
+    } catch (error) {
+      setTransientStatus(error instanceof Error ? error.message : "Unable to import W3D folder.");
+    }
+  }, [applyWorkspaceBlueprint, setTransientStatus]);
+
   const handleContinueWorkspace = useCallback(() => {
     if (!persistedWorkspace) {
       setTransientStatus("No local project available.");
@@ -2995,6 +3024,7 @@ export function App() {
         { id: "file-import-image", label: "Import Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
         { id: "file-import-model", label: "Import Model", icon: <MeshIcon width={14} height={14} />, onSelect: () => modelInputRef.current?.click() },
         { id: "file-import-font", label: "Import Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
+        { id: "file-import-w3d", label: "Import W3D Folder", icon: <FrameIcon width={14} height={14} />, onSelect: () => w3dFolderInputRef.current?.click() },
         { id: "file-divider-3", separator: true },
         {
           id: "file-export",
@@ -3863,6 +3893,21 @@ export function App() {
           } catch {
             setTransientStatus("Unable to import font.");
           }
+        }}
+      />
+
+      <input
+        ref={w3dFolderInputRef}
+        className="app__hidden-input"
+        type="file"
+        // @ts-expect-error webkitdirectory is non-standard but widely supported
+        webkitdirectory=""
+        directory=""
+        multiple
+        onChange={async (event) => {
+          const files = Array.from(event.target.files ?? []);
+          event.currentTarget.value = "";
+          await handleImportW3DFolder(files);
         }}
       />
 
