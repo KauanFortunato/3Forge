@@ -430,6 +430,12 @@ export interface ModelNode extends BaseEditorNode {
   modelId: string;
   material: MaterialSpec;
   materialId?: string;
+  /**
+   * Per-part visibility overrides keyed by structure part ID (child-index
+   * path — see {@link buildStructureFromGroup}). Only entries with value
+   * `false` are meaningful; missing entries mean the part is visible.
+   */
+  partVisibility?: Record<string, boolean>;
 }
 
 export type EditorNode =

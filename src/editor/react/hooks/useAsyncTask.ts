@@ -5,10 +5,12 @@ export interface ActiveTask {
   label: string;
   blocking: boolean;
   startedAt: number;
+  estimatedDurationMs?: number;
 }
 
 interface TaskOptions {
   blocking?: boolean;
+  estimatedDurationMs?: number;
 }
 
 let nextId = 0;
@@ -34,7 +36,13 @@ function getSnapshot(): ActiveTask[] {
 
 export function startTask(label: string, options: TaskOptions = {}): string {
   const id = `task-${++nextId}`;
-  active = [...active, { id, label, blocking: Boolean(options.blocking), startedAt: Date.now() }];
+  active = [...active, {
+    id,
+    label,
+    blocking: Boolean(options.blocking),
+    startedAt: Date.now(),
+    estimatedDurationMs: options.estimatedDurationMs,
+  }];
   emit();
   return id;
 }

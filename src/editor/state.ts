@@ -57,6 +57,7 @@ import type {
   MaterialSpec,
   MaterialType,
   ModelAsset,
+  ModelAssetStructure,
   ModelNode,
   NodeOriginDepth,
   NodeOriginHorizontal,
@@ -1420,6 +1421,9 @@ export class EditorStore extends EventTarget {
   private _activeHistoryDirty = false;
   private _revision = 0;
   private _propertyClipboard: PropertyClipboard | null = null;
+  // Transient (not persisted): which sub-part of a ModelNode is currently
+  // highlighted in the hierarchy. Cleared whenever node selection changes.
+  private _selectedPartId: string | null = null;
 
   constructor(initialBlueprint?: unknown) {
     super();
@@ -1442,6 +1446,56 @@ export class EditorStore extends EventTarget {
 
   get selectedNode(): EditorNode | undefined {
     return this.getNode(this._selectedNodeId);
+  }
+
+  get selectedPartId(): string | null {
+    return this._selectedPartId;
+  }
+
+  /**
+   * Selects (or clears) a sub-part of a ModelNode's structure. The
+   * selection is transient (not persisted) — it survives until the
+   * user picks a different node, opens another file, etc.
+   */
+  setSelectedPartId(partId: string | null, source: EditorStoreChange["source"] = "ui"): void {
+    if (this._selectedPartId === partId) return;
+    this._selectedPartId = partId;
+    this.notify({ reason: "selection", source });
+  }
+
+  /**
+   * Toggle or set the visibility of a sub-part within a ModelNode. The
+   * override is persisted on the node as `partVisibility[partId]`.
+   * Passing `visible=true` removes the override (default state).
+   */
+  setModelNodePartVisibility(
+    nodeId: string,
+    partId: string,
+    visible: boolean,
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    const node = this.getNode(nodeId);
+    if (!node || node.type !== "model") return;
+    const modelNode = node as ModelNode;
+    const current = modelNode.partVisibility ?? {};
+    const isHiddenNow = current[partId] === false;
+    const wantsHidden = !visible;
+    if (isHiddenNow === wantsHidden) return;
+
+    const next = { ...current };
+    if (wantsHidden) {
+      next[partId] = false;
+    } else {
+      delete next[partId];
+    }
+
+    this.recordHistorySnapshot();
+    if (Object.keys(next).length > 0) {
+      modelNode.partVisibility = next;
+    } else {
+      delete modelNode.partVisibility;
+    }
+    this.notify({ reason: "node", source, nodeId });
   }
 
   get selectedNodes(): EditorNode[] {
@@ -2385,6 +2439,10 @@ export class EditorStore extends EventTarget {
 
     this._selectedNodeId = nextPrimaryId;
     this._selectedNodeIds = nextNodeIds;
+    // Picking a different node clears any selected sub-part — keeps the
+    // hierarchy/inspector consistent (a part only makes sense in the context
+    // of its owning model node being selected).
+    this._selectedPartId = null;
     this.notify({ reason: "selection", source, nodeId: nextPrimaryId });
   }
 
@@ -3567,6 +3625,32 @@ export class EditorStore extends EventTarget {
     ];
     this.notify({ reason: "model", source });
     return id;
+  }
+
+  /**
+   * Replace the `structure` field of an existing ModelAsset (lazy
+   * population from the scene's render parser). Skipped silently if the
+   * asset no longer exists or the new structure is identical.
+   *
+   * Does NOT record an undo snapshot — structure is derived data, not a
+   * user edit, and we don't want viewport loads to spam the history.
+   */
+  updateModelAssetStructure(
+    modelId: string,
+    structure: ModelAssetStructure,
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    const models = this.models;
+    const index = models.findIndex((m) => m.id === modelId);
+    if (index === -1) return;
+    const existing = models[index];
+    if (!existing || existing.structure === structure) return;
+    this._blueprint.models = [
+      ...models.slice(0, index),
+      { ...existing, structure },
+      ...models.slice(index + 1),
+    ];
+    this.notify({ reason: "model", source });
   }
 
   addFont(font: FontAsset, source: EditorStoreChange["source"] = "ui"): string {

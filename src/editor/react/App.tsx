@@ -62,7 +62,6 @@ import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
 import type { ProjectImageAsset } from "./components/ImageAssetsPanel";
 import { MaterialAssetEditor } from "./components/MaterialAssetEditor";
 import { MaterialsPanel } from "./components/MaterialsPanel";
-import { ModelAssetsPanel } from "./components/ModelAssetsPanel";
 import { PieMenu } from "./components/PieMenu";
 import type { PieMenuItem } from "./components/PieMenu";
 import {
@@ -233,7 +232,7 @@ function toSceneAnimationPreviewOverrides(overrides: TemporaryAnimationOverrideM
   });
 }
 
-type RuntimePanelTab = "animations" | "images" | "models" | "materials";
+type RuntimePanelTab = "animations" | "images" | "materials";
 type TemporaryAnimationOverride = { frame: number; value: number };
 type TemporaryAnimationOverrideMap = Record<string, TemporaryAnimationOverride>;
 
@@ -430,17 +429,6 @@ function countImageUsage(nodes: EditorNode[]): Record<string, number> {
       continue;
     }
     usage[node.imageId] = (usage[node.imageId] ?? 0) + 1;
-  }
-  return usage;
-}
-
-function countModelUsage(nodes: EditorNode[]): Record<string, number> {
-  const usage: Record<string, number> = {};
-  for (const node of nodes) {
-    if (node.type !== "model" || !node.modelId) {
-      continue;
-    }
-    usage[node.modelId] = (usage[node.modelId] ?? 0) + 1;
   }
   return usage;
 }
@@ -726,7 +714,6 @@ export function App() {
   const [isFieldsPanelCollapsed, setIsFieldsPanelCollapsed] = useState(true);
   const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [currentTool, setCurrentTool] = useState<ToolMode>("select");
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -818,10 +805,6 @@ export function App() {
     () => countImageUsage(storeView.blueprintNodes),
     [storeView],
   );
-  const totalModelUsage = useMemo(
-    () => countModelUsage(storeView.blueprintNodes),
-    [storeView],
-  );
   const selectedImageNodeCount = useMemo(
     () => storeView.selectedNodes.filter((node) => node.type === "image").length,
     [storeView.selectedNodes],
@@ -846,11 +829,6 @@ export function App() {
       setSelectedImageId(null);
     }
   }, [imageAssets, selectedImageId]);
-  useEffect(() => {
-    if (selectedModelId && !storeView.models.some((model) => model.id === selectedModelId)) {
-      setSelectedModelId(null);
-    }
-  }, [storeView.models, selectedModelId]);
   const selectedRootIds = useMemo(
     () => store.getSelectionRootIds(selectedNodeIds),
     [selectedNodeIds, store, storeView.blueprintNodes],
@@ -1901,7 +1879,7 @@ export function App() {
 
   const downloadExportPackage = useCallback(async () => {
     try {
-      const archive = await runTask("Packaging export ZIP…", () => createExportPackageZip(blueprintSnapshot));
+      const archive = await runTask("Packaging export ZIP…", () => createExportPackageZip(blueprintSnapshot), { blocking: true });
       downloadBlobFile(archive.blob, archive.fileName);
       setTransientStatus(`Downloaded ${archive.fileName}.`);
     } catch (error) {
@@ -1917,7 +1895,7 @@ export function App() {
           : format === "usdz"
             ? exportBlueprintToUsdzBlob(blueprintSnapshot)
             : exportBlueprintToGltfBlob(blueprintSnapshot)
-      ));
+      ), { blocking: true });
       const fileName = `${blueprintSnapshot.componentName || "3forge-component"}.${format}`;
       downloadBlobFile(blob, fileName);
       setTransientStatus(`Downloaded ${fileName}.`);
@@ -1993,7 +1971,7 @@ export function App() {
       let lastNodeId: string | null = null;
       const target = resolveSelectionInsertTarget();
       for (const file of modelFiles) {
-        const asset = await runTask(`Importing ${file.name}...`, () => modelFileToAsset(file));
+        const asset = await runTask(`Importing ${file.name}...`, () => modelFileToAsset(file), { blocking: true });
         const modelId = store.addModelAsset(asset);
         const insertionIndex = target.index === undefined ? undefined : target.index + importedCount;
         lastNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
@@ -3424,14 +3402,30 @@ export function App() {
                 <div className="panel__bd panel__bd--flush">
                   <SceneGraphPanel
                     nodes={storeView.blueprintNodes}
+                    models={storeView.models}
                     animatedNodeIds={animatedNodeIds}
                     selectedNodeId={storeView.selectedNodeId}
                     selectedNodeIds={storeView.selectedNodeIds}
+                    selectedPartId={storeView.selectedPartId}
                     collapsedIds={collapsedHierarchyIds}
                     onCollapsedIdsChange={setCollapsedHierarchyIds}
                     onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
+                    onSelectPart={(modelNodeId, partId) => {
+                      // Selecting a part also selects its owning model node so
+                      // the inspector / outline pick up the right context.
+                      if (store.selectedNodeId !== modelNodeId) {
+                        store.selectNode(modelNodeId, "ui", false);
+                      }
+                      store.setSelectedPartId(partId);
+                    }}
                     onMoveNode={handleSceneMove}
                     onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
+                    onTogglePartVisibility={(modelNodeId, partId) => {
+                      const node = storeView.blueprintNodes.find((n) => n.id === modelNodeId);
+                      const isHidden = node?.type === "model"
+                        && (node as { partVisibility?: Record<string, boolean> }).partVisibility?.[partId] === false;
+                      store.setModelNodePartVisibility(modelNodeId, partId, isHidden);
+                    }}
                     onDuplicateNode={(nodeId) => handleDuplicate(nodeId)}
                     onDeleteNode={(nodeId) => handleDelete(nodeId)}
                     onContextMenu={openSceneGraphContextMenu}
@@ -3470,8 +3464,6 @@ export function App() {
                   <span className="panel__hd-meta">
                     {runtimePanelTab === "materials"
                       ? storeView.materials.length
-                      : runtimePanelTab === "models"
-                        ? storeView.models.length
                       : runtimePanelTab === "images"
                         ? imageAssets.length
                         : storeView.animation.clips.length}
@@ -3502,17 +3494,6 @@ export function App() {
                     >
                       <ImagePropertyIcon width={12} height={12} />
                       <span>Images</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`panel__subhd-tab${runtimePanelTab === "models" ? " is-active" : ""}`}
-                      onClick={() => setRuntimePanelTab("models")}
-                      role="tab"
-                      aria-selected={runtimePanelTab === "models"}
-                      title="Models"
-                    >
-                      <MeshIcon width={12} height={12} />
-                      <span>Models</span>
                     </button>
                     <button
                       type="button"
@@ -3577,13 +3558,6 @@ export function App() {
                         onReplace={(imageId) => requestImageImport({ mode: "replaceAsset", imageId })}
                         onRemove={handleRemoveImageAsset}
                         canRemoveImage={canRemoveImageAsset}
-                      />
-                    ) : runtimePanelTab === "models" ? (
-                      <ModelAssetsPanel
-                        models={storeView.models}
-                        selectedModelId={selectedModelId}
-                        usageById={totalModelUsage}
-                        onSelectModel={setSelectedModelId}
                       />
                     ) : (
                       <MaterialsPanel

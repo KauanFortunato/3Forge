@@ -16,6 +16,7 @@ export function useEditorStoreSnapshot(store: EditorStore): EditorStoreView {
       selectedNodeIds: store.selectedNodeIds,
       selectedNode: store.selectedNode,
       selectedNodes: store.selectedNodes,
+      selectedPartId: store.selectedPartId,
       fonts: store.fonts,
       materials: store.materials,
       models: store.models,

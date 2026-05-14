@@ -25,6 +25,7 @@ export interface EditorStoreView {
   selectedNodeIds: string[];
   selectedNode: EditorNode | undefined;
   selectedNodes: EditorNode[];
+  selectedPartId: string | null;
   fonts: FontAsset[];
   materials: MaterialAsset[];
   models: ModelAsset[];

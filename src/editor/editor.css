@@ -5233,6 +5233,51 @@ code {
   letter-spacing: 0.01em;
 }
 
+.loading-overlay__bar {
+  position: relative;
+  width: 220px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.12);
+  overflow: hidden;
+}
+
+.loading-overlay__bar-fill {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(139, 92, 246, 0.1) 0%,
+    var(--c-accent) 50%,
+    rgba(139, 92, 246, 0.1) 100%
+  );
+  animation: loadingOverlayBarSlide 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+
+.loading-overlay__bar--determinate .loading-overlay__bar-fill {
+  left: 0;
+  right: auto;
+  background: linear-gradient(90deg, var(--c-accent) 0%, rgba(139, 92, 246, 0.85) 100%);
+  animation: none;
+  transition: width 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.45);
+}
+
+.loading-overlay__elapsed {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+@keyframes loadingOverlayBarSlide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
 @keyframes loadingOverlaySpin {
   to { transform: rotate(360deg); }
 }
@@ -5249,7 +5294,8 @@ code {
 
 @media (prefers-reduced-motion: reduce) {
   .statusbar-progress__pulse-bar,
-  .loading-overlay__ring {
+  .loading-overlay__ring,
+  .loading-overlay__bar-fill {
     animation-duration: 2.4s;
   }
   .loading-overlay__card {
