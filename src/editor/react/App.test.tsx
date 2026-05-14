@@ -581,7 +581,7 @@ describe("App", () => {
     const windowDataTransfer = createDropDataTransfer([file]);
     fireEvent.dragEnter(window, { dataTransfer: windowDataTransfer });
     expect(screen.getByText("Drop image asset")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: /Images/i }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: /Media/i }).getAttribute("aria-selected")).toBe("true");
 
     fireEvent.drop(window, { dataTransfer: windowDataTransfer });
     expect(screen.queryByText("panel-texture.png")).toBeNull();
@@ -591,7 +591,7 @@ describe("App", () => {
     const dataTransfer = createDropDataTransfer([file]);
     fireEvent.dragEnter(assetsPanel, { dataTransfer });
     expect(screen.getByText("Drop image asset")).toBeTruthy();
-    expect(screen.getByRole("tab", { name: /Images/i }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: /Media/i }).getAttribute("aria-selected")).toBe("true");
 
     fireEvent.drop(assetsPanel, { dataTransfer });
 

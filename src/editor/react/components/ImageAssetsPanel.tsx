@@ -49,7 +49,7 @@ export function ImageAssetsPanel(props: ImageAssetsPanelProps) {
   return (
     <div className="image-assets-panel">
       <div className="image-assets-panel__head">
-        <span>Images</span>
+        <span>Media</span>
         <div className="image-assets-panel__head-actions">
           <button
             type="button"

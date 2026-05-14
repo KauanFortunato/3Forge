@@ -3511,10 +3511,10 @@ export function App() {
                       onClick={() => setRuntimePanelTab("images")}
                       role="tab"
                       aria-selected={runtimePanelTab === "images"}
-                      title="Images"
+                      title="Media"
                     >
                       <ImagePropertyIcon width={12} height={12} />
-                      <span>Images</span>
+                      <span>Media</span>
                     </button>
                     <button
                       type="button"
