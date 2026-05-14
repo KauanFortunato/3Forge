@@ -1,4 +1,4 @@
-import type { ImageAsset } from "./types";
+import type { ImageAsset, ImageSequenceMetadata, SequenceFallbackReason, SequenceFormat, SequenceStorageType } from "./types";
 
 export const EMPTY_IMAGE_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9erVkAAAAASUVORK5CYII=";
@@ -15,7 +15,7 @@ export function createTransparentImageAsset(): ImageAsset {
 
 export function normalizeImageAsset(value: unknown, fallback: ImageAsset = createTransparentImageAsset()): ImageAsset {
   if (!value || typeof value !== "object") {
-    return { ...fallback };
+    return cloneImageAsset(fallback);
   }
 
   const source = value as Record<string, unknown>;
@@ -23,7 +23,7 @@ export function normalizeImageAsset(value: unknown, fallback: ImageAsset = creat
     ? source.src
     : fallback.src;
 
-  return {
+  const normalized: ImageAsset = {
     ...(typeof source.id === "string" && source.id.trim() ? { id: source.id.trim() } : {}),
     name: typeof source.name === "string" && source.name.trim() ? source.name.trim() : fallback.name,
     mimeType: typeof source.mimeType === "string" && source.mimeType.trim() ? source.mimeType.trim() : fallback.mimeType,
@@ -31,6 +31,13 @@ export function normalizeImageAsset(value: unknown, fallback: ImageAsset = creat
     width: clampNumber(normalizeNumber(source.width, fallback.width), 1),
     height: clampNumber(normalizeNumber(source.height, fallback.height), 1),
   };
+
+  const sequence = normalizeImageSequenceMetadata(source.sequence, fallback.sequence);
+  if (sequence) {
+    normalized.sequence = sequence;
+  }
+
+  return normalized;
 }
 
 export function normalizeImageLibrary(value: unknown): ImageAsset[] {
@@ -72,6 +79,77 @@ export async function imageFileToAsset(file: File): Promise<ImageAsset> {
   };
 }
 
+export function imageSequenceToAsset(name: string, sequence: ImageSequenceMetadata): ImageAsset {
+  const width = clampNumber(sequence.width || 1, 1);
+  const height = clampNumber(sequence.height || 1, 1);
+
+  return {
+    name: name || sequence.source || "Image sequence",
+    mimeType: "application/x-image-sequence",
+    src: sequence.frameUrls[0] ?? EMPTY_IMAGE_DATA_URL,
+    width,
+    height,
+    sequence: {
+      ...sequence,
+      width,
+      height,
+      frameUrls: [...sequence.frameUrls],
+    },
+  };
+}
+
+const VIDEO_EXT_PATTERN = /\.(mov|mp4|webm|m4v)$/i;
+
+export function isVideoMimeType(mimeType: string): boolean {
+  return mimeType.startsWith("video/");
+}
+
+export function isVideoFileName(fileName: string): boolean {
+  return VIDEO_EXT_PATTERN.test(fileName);
+}
+
+/**
+ * Wrap a video file as an ImageAsset using a session-scoped object URL.
+ * Note: object URLs do NOT survive a page reload; videos must be re-imported
+ * from the source folder. They are also too big to data-URL into localStorage.
+ */
+export async function videoFileToAsset(file: File): Promise<ImageAsset> {
+  const src = URL.createObjectURL(file);
+  const dimensions = await readVideoDimensions(src);
+  return {
+    name: file.name || "Video",
+    mimeType: file.type || inferVideoMimeType(file.name),
+    src,
+    width: dimensions.width,
+    height: dimensions.height,
+  };
+}
+
+function readVideoDimensions(src: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.onloadedmetadata = () => {
+      resolve({
+        width: video.videoWidth || 1,
+        height: video.videoHeight || 1,
+      });
+      video.src = "";
+    };
+    video.onerror = () => reject(new Error("Failed to read video metadata."));
+    video.src = src;
+  });
+}
+
+export function inferVideoMimeType(fileName: string): string {
+  const normalized = fileName.toLowerCase();
+  if (normalized.endsWith(".mov")) return "video/quicktime";
+  if (normalized.endsWith(".mp4") || normalized.endsWith(".m4v")) return "video/mp4";
+  if (normalized.endsWith(".webm")) return "video/webm";
+  return "application/octet-stream";
+}
+
 export function fitImageToMaxSize(width: number, height: number, maxSize = 2): { width: number; height: number } {
   const safeWidth = Math.max(width, 1);
   const safeHeight = Math.max(height, 1);
@@ -107,7 +185,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-function readImageDimensions(src: string): Promise<{ width: number; height: number }> {
+export function readImageDimensions(src: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => {
@@ -156,4 +234,129 @@ function toImageAssetId(name: string, fallbackIndex: number): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized ? `image-${normalized}` : `image-${fallbackIndex}`;
+}
+
+function cloneImageAsset(asset: ImageAsset): ImageAsset {
+  return {
+    ...asset,
+    ...(asset.sequence ? { sequence: cloneImageSequenceMetadata(asset.sequence) } : {}),
+  };
+}
+
+function cloneImageSequenceMetadata(sequence: ImageSequenceMetadata): ImageSequenceMetadata {
+  return {
+    ...sequence,
+    frameUrls: [...sequence.frameUrls],
+  };
+}
+
+function normalizeImageSequenceMetadata(
+  value: unknown,
+  fallback?: ImageSequenceMetadata,
+): ImageSequenceMetadata | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const source = value as Record<string, unknown>;
+  const framePattern = typeof source.framePattern === "string" && source.framePattern.trim()
+    ? source.framePattern.trim()
+    : fallback?.framePattern;
+  const format = normalizeSequenceFormat(source.format, framePattern, fallback?.format);
+  const frameUrls = Array.isArray(source.frameUrls)
+    ? source.frameUrls.filter((entry): entry is string => typeof entry === "string")
+    : fallback
+      ? [...fallback.frameUrls]
+      : [];
+  const fallbackFrameCount = fallback?.frameCount ?? Math.max(frameUrls.length, 1);
+
+  const normalized: ImageSequenceMetadata = {
+    type: "image-sequence",
+    version: normalizeSequenceVersion(source.version, fallback?.version),
+    format,
+    source: typeof source.source === "string" && source.source.trim()
+      ? source.source.trim()
+      : fallback?.source ?? "sequence.mov",
+    framePattern: framePattern ?? `frame_%06d.${format}`,
+    frameCount: clampInteger(normalizeNumber(source.frameCount, fallbackFrameCount), 1),
+    fps: clampNumber(normalizeNumber(source.fps, fallback?.fps ?? 25), 0.0001),
+    width: clampNumber(normalizeNumber(source.width, fallback?.width ?? 0), 0),
+    height: clampNumber(normalizeNumber(source.height, fallback?.height ?? 0), 0),
+    durationSec: clampNumber(normalizeNumber(source.durationSec, fallback?.durationSec ?? 0), 0),
+    loop: typeof source.loop === "boolean" ? source.loop : fallback?.loop ?? true,
+    alpha: typeof source.alpha === "boolean" ? source.alpha : fallback?.alpha ?? true,
+    pixelFormat: "rgba",
+    frameUrls,
+  };
+
+  const fallbackReason = normalizeSequenceFallbackReason(source.fallbackReason);
+  if (fallbackReason) {
+    normalized.fallbackReason = fallbackReason;
+  } else if (fallback?.fallbackReason) {
+    normalized.fallbackReason = fallback.fallbackReason;
+  }
+  if (source.autoRepaired === true || fallback?.autoRepaired === true) {
+    normalized.autoRepaired = true;
+  }
+  if (source.legacy === true || fallback?.legacy === true) {
+    normalized.legacy = true;
+  }
+
+  const storageType = normalizeStorageType(source.storageType, fallback?.storageType);
+  if (storageType) {
+    normalized.storageType = storageType;
+  }
+  const manifestPath = typeof source.manifestPath === "string" && source.manifestPath.trim()
+    ? source.manifestPath.trim()
+    : fallback?.manifestPath;
+  if (manifestPath) {
+    normalized.manifestPath = manifestPath;
+  }
+  const sourceHash = typeof source.sourceHash === "string" && /^sha256:[0-9a-fA-F]{8,}$/.test(source.sourceHash.trim())
+    ? source.sourceHash.trim()
+    : fallback?.sourceHash;
+  if (sourceHash) {
+    normalized.sourceHash = sourceHash;
+  }
+
+  return normalized;
+}
+
+function normalizeSequenceVersion(value: unknown, fallback: 1 | 2 | 3 | undefined): 1 | 2 | 3 {
+  if (value === 1 || value === 2 || value === 3) return value;
+  return fallback ?? 3;
+}
+
+function normalizeStorageType(value: unknown, fallback: SequenceStorageType | undefined): SequenceStorageType | undefined {
+  if (value === "project-folder" || value === "dev-cache") return value;
+  return fallback;
+}
+
+function normalizeSequenceFormat(
+  value: unknown,
+  framePattern: string | undefined,
+  fallback: SequenceFormat | undefined,
+): SequenceFormat {
+  if (value === "webp" || value === "png") {
+    return value;
+  }
+  const lowerPattern = framePattern?.toLowerCase() ?? "";
+  if (lowerPattern.endsWith(".webp")) {
+    return "webp";
+  }
+  if (lowerPattern.endsWith(".png")) {
+    return "png";
+  }
+  return fallback ?? "png";
+}
+
+function normalizeSequenceFallbackReason(value: unknown): SequenceFallbackReason | undefined {
+  if (value === "webp_encoder_unavailable" || value === "webp_validation_failed") {
+    return value;
+  }
+  return undefined;
+}
+
+function clampInteger(value: number, min: number): number {
+  return Math.max(Math.round(value), min);
 }

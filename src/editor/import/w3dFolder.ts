@@ -1,16 +1,26 @@
 /**
- * Minimal W3D folder walker (Phase C).
+ * W3D folder walker (Phase C + D).
  *
- * Accepts the `FileList` produced by `<input type="file" webkitdirectory>`
- * and locates the `scene.w3d` entry. Reads the XML and delegates to
- * `parseW3DSceneMetadata` to produce a blueprint with engine/scene
- * metadata only. Texture/MOV asset handling arrives in later phases.
+ * Accepts the `FileList` produced by `<input type="file" webkitdirectory>`,
+ * locates the `scene.w3d` entry, and parses scene/SceneLayer/Camera
+ * metadata via `parseW3DSceneMetadata`. Phase D additionally collects
+ * `.mov` files under `Resources/Textures/` so callers can hand them to
+ * the backend converter (`convertMovsViaBackend`) and surface the
+ * resulting image sequences as project assets.
+ *
+ * Texture (raster) discovery still belongs to Phase E.
  */
 import { parseW3DSceneMetadata, type W3DImportResult } from "./w3d";
 
 export interface W3DFolderImportResult extends W3DImportResult {
   sceneFileName: string;
+  /** `.mov` files discovered under `Resources/Textures/`. The caller is
+   * expected to route these through `convertMovsViaBackend` and merge
+   * the resulting sequences back into `blueprint.images`. */
+  movFiles: File[];
 }
+
+const VIDEO_EXTENSIONS = [".mov", ".mp4", ".webm"];
 
 export async function parseW3DFromFolder(
   files: FileList | File[],
@@ -22,20 +32,31 @@ export async function parseW3DFromFolder(
 
   let sceneFile: File | null = null;
   let sceneFileFallback: File | null = null;
+  const movFiles: File[] = [];
 
   for (const file of list) {
     const relPath = relativePath(file);
+    const lower = relPath.toLowerCase();
     const baseName = basenameOf(relPath).toLowerCase();
     const depth = depthOf(relPath);
+    const ext = extensionOf(baseName);
 
     if (baseName === "scene.w3d" && depth <= 1) {
       sceneFile = file;
-      break;
+      continue;
     }
     if (baseName.endsWith(".w3d")) {
       // Older R3 saves keep `scene_<version>.w3d` siblings; use one as a
       // fallback only if the canonical scene.w3d is absent.
       sceneFileFallback = file;
+      continue;
+    }
+
+    if (
+      lower.includes("/resources/textures/") &&
+      VIDEO_EXTENSIONS.includes(ext)
+    ) {
+      movFiles.push(file);
     }
   }
 
@@ -53,6 +74,7 @@ export async function parseW3DFromFolder(
   return {
     ...parsed,
     sceneFileName: relativePath(chosen),
+    movFiles,
   };
 }
 
@@ -70,4 +92,9 @@ function basenameOf(path: string): string {
 function depthOf(path: string): number {
   const normalized = path.replace(/\\/g, "/");
   return (normalized.match(/\//g)?.length ?? 0);
+}
+
+function extensionOf(name: string): string {
+  const idx = name.lastIndexOf(".");
+  return idx === -1 ? "" : name.slice(idx).toLowerCase();
 }

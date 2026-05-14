@@ -49,4 +49,28 @@ describe("parseW3DFromFolder", () => {
   it("throws on an empty file list", async () => {
     await expect(parseW3DFromFolder([])).rejects.toThrowError(/No files/);
   });
+
+  it("collects .mov files under Resources/Textures/", async () => {
+    const files = [
+      makeFile("PROJ/scene.w3d", MINIMAL_SCENE_XML),
+      makeFile("PROJ/Resources/Textures/Pitch_In.mov", "binary"),
+      makeFile("PROJ/Resources/Textures/Pitch_Out.MP4", "binary"),
+      makeFile("PROJ/Resources/Textures/Background.png", "binary"),
+      // .mov outside of Resources/Textures should be ignored.
+      makeFile("PROJ/Other/foo.mov", "binary"),
+    ];
+
+    const result = await parseW3DFromFolder(files);
+    const names = result.movFiles.map((f) => f.name).sort();
+
+    expect(names).toEqual(["Pitch_In.mov", "Pitch_Out.MP4"]);
+  });
+
+  it("returns empty movFiles when the folder has none", async () => {
+    const files = [makeFile("PROJ/scene.w3d", MINIMAL_SCENE_XML)];
+
+    const result = await parseW3DFromFolder(files);
+
+    expect(result.movFiles).toEqual([]);
+  });
 });

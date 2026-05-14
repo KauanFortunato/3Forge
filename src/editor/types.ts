@@ -147,6 +147,69 @@ export interface ImageAsset {
   src: string;
   width: number;
   height: number;
+  /** Present only for application/x-image-sequence assets. */
+  sequence?: ImageSequenceMetadata;
+}
+
+export type { SequenceFormat, SequenceFallbackReason } from "./import/sequenceSchema";
+import type { SequenceFormat, SequenceFallbackReason } from "./import/sequenceSchema";
+
+/**
+ * Where the canonical frame files for an image sequence live.
+ * - `project-folder`: frames are persisted alongside the user's project,
+ *   in `Resources/Textures/<slug>_sequence_<hash8>/`. Survives reload.
+ * - `dev-cache`: frames live in the dev server's temp cache. Convenient
+ *   during conversion but not persisted across reloads.
+ */
+export type SequenceStorageType = "project-folder" | "dev-cache";
+
+export interface ImageSequenceMetadata {
+  /** Discriminator. Always "image-sequence". */
+  type: "image-sequence";
+  /** sequence.json schema version. v1/v2 are read-only legacy; v3 writers
+   * also emit `sourceHash` / `createdBy` / `converterVersion`. */
+  version: 1 | 2 | 3;
+  /** Image format used for every frame. Implicit "png" on legacy v1. */
+  format: SequenceFormat;
+  /** Source .mov filename the sequence was generated from. */
+  source: string;
+  /** ffmpeg %d-style pattern. Extension must match `format`. */
+  framePattern: string;
+  /** Count of frame files actually written by the conversion. */
+  frameCount: number;
+  /** Frames per second. v2+ writers must emit > 0 (defaulting to 25). */
+  fps: number;
+  /** Pixel width / height (0 when ffprobe is unavailable). */
+  width: number;
+  height: number;
+  /** Duration in seconds (0 when unknown). */
+  durationSec: number;
+  /** Loop on the last frame. */
+  loop: boolean;
+  /** True when the encoder produced an alpha channel. */
+  alpha: boolean;
+  /** Always "rgba" for both webp and png paths. */
+  pixelFormat: "rgba";
+  /** Resolved blob: URLs for each frame, in order. Browser-only, never persisted. */
+  frameUrls: string[];
+  /** Set when the conversion fell back from webp to png. */
+  fallbackReason?: SequenceFallbackReason;
+  /** Set in-memory only: resolver auto-generated this metadata because sequence.json was missing. Never persisted. */
+  autoRepaired?: boolean;
+  /** Set in-memory only: resolved via a legacy `<basename>_frames/` layer. */
+  legacy?: boolean;
+  /** Where the canonical frame files live. Persisted. Defaults to
+   * `"dev-cache"` for legacy blueprints that pre-date the project-folder
+   * pipeline. */
+  storageType?: SequenceStorageType;
+  /** Project-root-relative path to `sequence.json`, e.g.
+   * `Resources/Textures/<slug>_sequence_<hash8>/sequence.json`. Present
+   * when `storageType === "project-folder"`. Persisted. */
+  manifestPath?: string;
+  /** Full sha256 of the source .mov, formatted `sha256:<full-hex>`.
+   * Used to detect "same video already converted" so re-imports skip
+   * ffmpeg. Persisted. The folder name encodes only the first 8 chars. */
+  sourceHash?: string;
 }
 
 export interface ModelAsset {

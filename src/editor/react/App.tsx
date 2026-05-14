@@ -20,6 +20,8 @@ import {
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
 import { parseW3DFromFolder } from "../import/w3dFolder";
+import { convertMovsViaBackend, ConvertViaBackendError } from "../import/movConvertViaBackend";
+import { imageSequenceToAsset } from "../images";
 import { isModelFile, modelFileToAsset } from "../models";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
@@ -2351,9 +2353,37 @@ export function App() {
     if (files.length === 0) return;
     try {
       const result = await runTask("Importing W3D scene…", () => parseW3DFromFolder(files));
+      const warnings = [...result.warnings];
+      const blueprint = result.blueprint;
+
+      if (result.movFiles.length > 0) {
+        const controller = new AbortController();
+        try {
+          const conversion = await runTask(
+            `Converting ${result.movFiles.length} .mov file(s)…`,
+            () => convertMovsViaBackend({ movFiles: result.movFiles, signal: controller.signal }),
+          );
+          for (const [movName, sequence] of conversion.sequences) {
+            const asset = imageSequenceToAsset(movName, sequence);
+            asset.id = `image-${movName.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+            blueprint.images.push(asset);
+          }
+          for (const failure of conversion.failed) {
+            warnings.push(`MOV "${failure.mov}" failed to convert: ${failure.error}`);
+          }
+        } catch (movError) {
+          const reason = movError instanceof ConvertViaBackendError
+            ? `${movError.code}: ${movError.message}`
+            : movError instanceof Error
+              ? movError.message
+              : "Unknown error";
+          warnings.push(`MOV conversion unavailable (${reason}). Image sequences were skipped.`);
+        }
+      }
+
       activeFileHandleRef.current = null;
       applyWorkspaceBlueprint(
-        result.blueprint,
+        blueprint,
         createWorkspaceProjectContext({
           source: "local",
           fileName: result.sceneFileName,
@@ -2361,13 +2391,13 @@ export function App() {
           fileHandleId: null,
           canOverwriteFile: false,
         }),
-        result.warnings.length > 0
-          ? `Imported W3D scene with ${result.warnings.length} warning(s).`
+        warnings.length > 0
+          ? `Imported W3D scene with ${warnings.length} warning(s).`
           : "Imported W3D scene metadata.",
       );
-      if (result.warnings.length > 0) {
+      if (warnings.length > 0) {
         // eslint-disable-next-line no-console
-        console.warn("[w3d import]", result.warnings);
+        console.warn("[w3d import]", warnings);
       }
     } catch (error) {
       setTransientStatus(error instanceof Error ? error.message : "Unable to import W3D folder.");

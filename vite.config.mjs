@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { createPwaHeadTags, pwaManifest } from "./scripts/pwa-config.mjs";
+import { movConvertPlugin } from "./scripts/movConvertPlugin.mjs";
 
 const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 const appVersion = `v${packageJson.version}`;
@@ -12,6 +13,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(appVersion),
   },
   plugins: [
+    movConvertPlugin(),
     react(),
     {
       name: "3forge-pwa-head",
