@@ -57,10 +57,10 @@ export function LoadingOverlay() {
         </div>
         <p className="loading-overlay__elapsed">
           {remaining === null
-            ? `${elapsed.toFixed(1)}s decorridos`
+            ? `${elapsed.toFixed(1)}s elapsed`
             : isOverEstimate
-              ? `Quase lá... (${elapsed.toFixed(1)}s)`
-              : `Faltam ~${remaining.toFixed(1)}s`}
+              ? `Almost there... (${elapsed.toFixed(1)}s)`
+              : `~${remaining.toFixed(1)}s remaining`}
         </p>
       </div>
     </div>
