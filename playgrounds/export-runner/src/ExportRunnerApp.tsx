@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AmbientLight, Box3, Color, DirectionalLight, GridHelper, Group, PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { discoverGeneratedModules, getAnimationCapabilities, resolveExportedComponent, type ExportRunnerComponentInstance } from "./runtime";
@@ -13,6 +13,7 @@ export function ExportRunnerApp() {
   const controlsRef = useRef<OrbitControls | null>(null);
   const sceneRef = useRef<Scene | null>(null);
   const cameraRef = useRef<PerspectiveCamera | null>(null);
+  const gridHelperRef = useRef<GridHelper | null>(null);
   const mountedGroupRef = useRef<Group | null>(null);
   const frameHandleRef = useRef<number | null>(null);
   const instanceRef = useRef<ExportRunnerComponentInstance | null>(null);
@@ -24,6 +25,23 @@ export function ExportRunnerApp() {
   const [buildCount, setBuildCount] = useState(0);
   const [selectedModulePath, setSelectedModulePath] = useState(() => generatedModules[0]?.modulePath ?? "");
   const [selectedModuleExportName, setSelectedModuleExportName] = useState<string | null>(null);
+  const [showGrid, setShowGrid] = useState(true);
+  const [backgroundPreset, setBackgroundPreset] = useState<"dark" | "light" | "transparent">("dark");
+  const [boundsSummary, setBoundsSummary] = useState<string | null>(null);
+
+  const optionsParseError = useMemo(() => {
+    const trimmed = optionsJson.trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed !== "object" || parsed === null) {
+        return "Options JSON must be an object.";
+      }
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "Invalid JSON.";
+    }
+  }, [optionsJson]);
 
   const animationCapabilities = getAnimationCapabilities(instanceRef.current);
   const selectedModule = generatedModules.find((entry) => entry.modulePath === selectedModulePath) ?? null;
@@ -63,7 +81,9 @@ export function ExportRunnerApp() {
     const key = new DirectionalLight("#ffffff", 2.2);
     key.castShadow = true;
     key.position.set(6, 10, 8);
-    scene.add(ambient, key, new GridHelper(16, 16, "#3a3f4a", "#2a2f38"));
+    const gridHelper = new GridHelper(16, 16, "#3a3f4a", "#2a2f38");
+    scene.add(ambient, key, gridHelper);
+    gridHelperRef.current = gridHelper;
 
     const resize = () => {
       const width = Math.max(host.clientWidth, 1);
@@ -115,7 +135,35 @@ export function ExportRunnerApp() {
 
     instanceRef.current?.dispose();
     instanceRef.current = null;
+    setBoundsSummary(null);
   }, []);
+
+  useEffect(() => {
+    if (gridHelperRef.current) {
+      gridHelperRef.current.visible = showGrid;
+    }
+  }, [showGrid]);
+
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (backgroundPreset === "transparent") {
+      scene.background = null;
+    } else {
+      scene.background = new Color(backgroundPreset === "light" ? "#e9eaef" : "#111318");
+    }
+  }, [backgroundPreset]);
+
+  const handleFormatOptions = useCallback(() => {
+    const trimmed = optionsJson.trim();
+    if (!trimmed) return;
+    try {
+      const parsed = JSON.parse(trimmed);
+      setOptionsJson(`${JSON.stringify(parsed, null, 2)}\n`);
+    } catch {
+      // Live error already shown via optionsParseError.
+    }
+  }, [optionsJson]);
 
   const fitCameraToGroup = useCallback((group: Group) => {
     const camera = cameraRef.current;
@@ -187,6 +235,16 @@ export function ExportRunnerApp() {
         return availableClips.includes(current.trim()) ? current.trim() : availableClips[0];
       });
       fitCameraToGroup(instance.group);
+
+      const bounds = new Box3().setFromObject(instance.group);
+      if (!bounds.isEmpty()) {
+        const size = new Vector3();
+        bounds.getSize(size);
+        setBoundsSummary(`${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)}`);
+      } else {
+        setBoundsSummary("empty");
+      }
+
       setSelectedModuleExportName(resolvedComponent.exportName);
       setBuildCount((value) => value + 1);
       setStatus(`Built ${resolvedComponent.exportName} from ${selectedModule.fileName}.ts.`);
@@ -324,7 +382,14 @@ export function ExportRunnerApp() {
 
         <div className="runner-card runner-card--stack">
           <label className="runner-field">
-            <span>Runtime Options JSON</span>
+            <span>
+              Runtime Options JSON
+              {optionsParseError ? (
+                <em style={{ marginLeft: 8, color: "#ff8585", fontStyle: "normal" }}>
+                  · {optionsParseError}
+                </em>
+              ) : null}
+            </span>
             <textarea
               className="runner-textarea"
               value={optionsJson}
@@ -334,13 +399,53 @@ export function ExportRunnerApp() {
           </label>
 
           <div className="runner-button-row">
-            <button type="button" className="runner-button runner-button--primary" onClick={() => void handleBuild()}>
+            <button
+              type="button"
+              className="runner-button runner-button--primary"
+              onClick={() => void handleBuild()}
+              disabled={Boolean(optionsParseError)}
+              title={optionsParseError ?? "Build the exported component"}
+            >
               Build export
+            </button>
+            <button type="button" className="runner-button" onClick={handleFormatOptions} disabled={Boolean(optionsParseError) || !optionsJson.trim()}>
+              Format JSON
             </button>
             <button type="button" className="runner-button" onClick={handleDispose}>
               Dispose
             </button>
           </div>
+        </div>
+
+        <div className="runner-card runner-card--stack">
+          <p className="runner-section-title">Viewport</p>
+          <div className="runner-button-row">
+            <button
+              type="button"
+              className={`runner-button${showGrid ? " runner-button--primary" : ""}`}
+              onClick={() => setShowGrid((value) => !value)}
+            >
+              Grid {showGrid ? "on" : "off"}
+            </button>
+          </div>
+          <div className="runner-button-row">
+            {(["dark", "light", "transparent"] as const).map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className={`runner-button${backgroundPreset === preset ? " runner-button--primary" : ""}`}
+                onClick={() => setBackgroundPreset(preset)}
+              >
+                {preset}
+              </button>
+            ))}
+          </div>
+          {boundsSummary ? (
+            <div className="runner-meta">
+              <span>Bounds (W×H×D)</span>
+              <strong>{boundsSummary}</strong>
+            </div>
+          ) : null}
         </div>
 
         <div className="runner-card runner-card--stack">
