@@ -614,6 +614,15 @@ export class SceneEditor {
       return;
     }
 
+    if (change.reason === "import") {
+      // Re-apply scene mode + canvas after a fresh blueprint load so the
+      // viewport's letterbox/lock/2D state matches the imported scene's
+      // sceneSettings.mode (W3D Ortographic → 2D locked).
+      this.applySceneSettings();
+      this.rebuildScene();
+      return;
+    }
+
     if (change.reason === "editable" || change.reason === "meta") {
       return;
     }
