@@ -100,6 +100,11 @@ async function bytesToTexture(bytes: Uint8Array): Promise<Texture | null> {
     // Texture.flipY for ImageBitmap sources (Three.js ignores it for those).
     const bitmap = await createImageBitmap(blob, { imageOrientation: "flipY" });
     const tex = new Texture(bitmap as unknown as HTMLImageElement);
+    // The bitmap is already flipped at decode time. Three.js ignores
+    // Texture.flipY for ImageBitmap during render, but GLTFExporter honors it
+    // when baking images to canvas. Keep it false to avoid a second flip in
+    // exported GLB/GLTF/USDZ files.
+    tex.flipY = false;
     tex.needsUpdate = true;
     tex.wrapS = RepeatWrapping;
     tex.wrapT = RepeatWrapping;

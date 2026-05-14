@@ -83,6 +83,7 @@ export async function exportBlueprintToUsdzBlob(blueprint: ComponentBlueprint): 
   const group = await createBlueprintExportGroup(blueprint);
   group.updateMatrixWorld(true);
   convertMaterialsForUsdz(group);
+  normalizeTexturesForCanvasExport(group);
   const result = await new USDZExporter().parseAsync(group);
   return new Blob([result as BlobPart], { type: "model/vnd.usdz+zip" });
 }
@@ -153,6 +154,7 @@ async function exportGroup(
   binary: boolean,
   animations: ThreeAnimationClip[] = [],
 ): Promise<ArrayBuffer | { [key: string]: unknown }> {
+  normalizeTexturesForCanvasExport(group);
   const scene = new Scene();
   scene.name = group.name;
   scene.add(group);
@@ -164,6 +166,162 @@ async function exportGroup(
     onlyVisible: false,
     trs: true,
   });
+}
+
+export function normalizeTexturesForCanvasExport(group: Group): void {
+  group.traverse((object) => {
+    if (!(object instanceof Mesh)) {
+      return;
+    }
+
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      for (const value of Object.values(material)) {
+        if (!value || typeof value !== "object" || !("isTexture" in value) || value.isTexture !== true) {
+          continue;
+        }
+
+        normalizeTextureForCanvasExport(value as Texture);
+      }
+    }
+  });
+}
+
+function normalizeTextureForCanvasExport(texture: Texture): void {
+  const image = texture.image as unknown;
+  if (!image || (isCanvasDrawableImage(image) && !hasDataTextureShape(image))) {
+    return;
+  }
+
+  const canvas = textureImageToCanvas(image);
+  if (!canvas) {
+    return;
+  }
+
+  texture.image = canvas;
+  texture.needsUpdate = true;
+}
+
+function textureImageToCanvas(image: unknown): HTMLCanvasElement | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const size = getTextureImageSize(image);
+  if (!size) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return null;
+  }
+
+  if (hasDataTextureShape(image)) {
+    const pixelCount = size.width * size.height;
+    const source = image.data;
+    const channelCount = Math.max(1, Math.floor(source.length / pixelCount));
+    const rgba = new Uint8ClampedArray(pixelCount * 4);
+
+    for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+      const src = pixel * channelCount;
+      const dst = pixel * 4;
+      rgba[dst + 0] = source[src + 0] ?? 0;
+      rgba[dst + 1] = source[src + 1] ?? source[src + 0] ?? 0;
+      rgba[dst + 2] = source[src + 2] ?? source[src + 0] ?? 0;
+      rgba[dst + 3] = source[src + 3] ?? 255;
+    }
+
+    const imageData = createCanvasImageData(context, rgba, size.width, size.height);
+    if (!imageData) {
+      return null;
+    }
+    context.putImageData(imageData, 0, 0);
+    return canvas;
+  }
+
+  if (isCanvasDrawableImage(image)) {
+    try {
+      context.drawImage(image, 0, 0, size.width, size.height);
+      return canvas;
+    } catch (error) {
+      console.warn("Unable to normalize texture image for export:", error);
+    }
+  }
+
+  return null;
+}
+
+function createCanvasImageData(
+  context: CanvasRenderingContext2D,
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+): ImageData | null {
+  if (typeof ImageData !== "undefined") {
+    const imageDataArray = new Uint8ClampedArray(data.length);
+    imageDataArray.set(data);
+    return new ImageData(imageDataArray, width, height);
+  }
+
+  if (typeof context.createImageData === "function") {
+    const imageData = context.createImageData(width, height);
+    imageData.data.set(data);
+    return imageData;
+  }
+
+  return null;
+}
+
+function getTextureImageSize(image: unknown): { width: number; height: number } | null {
+  if (!image || typeof image !== "object") {
+    return null;
+  }
+
+  const source = image as { width?: unknown; height?: unknown; videoWidth?: unknown; videoHeight?: unknown };
+  const width = typeof source.width === "number"
+    ? source.width
+    : typeof source.videoWidth === "number"
+      ? source.videoWidth
+      : 0;
+  const height = typeof source.height === "number"
+    ? source.height
+    : typeof source.videoHeight === "number"
+      ? source.videoHeight
+      : 0;
+
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function hasDataTextureShape(image: unknown): image is { data: ArrayLike<number>; width: number; height: number } {
+  return !!image
+    && typeof image === "object"
+    && "data" in image
+    && "width" in image
+    && "height" in image
+    && typeof (image as { width?: unknown }).width === "number"
+    && typeof (image as { height?: unknown }).height === "number"
+    && isArrayLikeNumberData((image as { data?: unknown }).data);
+}
+
+function isArrayLikeNumberData(value: unknown): value is ArrayLike<number> {
+  return !!value
+    && typeof value === "object"
+    && "length" in value
+    && typeof (value as { length?: unknown }).length === "number";
+}
+
+function isCanvasDrawableImage(value: unknown): value is CanvasImageSource {
+  return (typeof HTMLImageElement !== "undefined" && value instanceof HTMLImageElement)
+    || (typeof HTMLCanvasElement !== "undefined" && value instanceof HTMLCanvasElement)
+    || (typeof HTMLVideoElement !== "undefined" && value instanceof HTMLVideoElement)
+    || (typeof ImageBitmap !== "undefined" && value instanceof ImageBitmap)
+    || (typeof OffscreenCanvas !== "undefined" && value instanceof OffscreenCanvas)
+    || (typeof SVGImageElement !== "undefined" && value instanceof SVGImageElement)
+    || (typeof VideoFrame !== "undefined" && value instanceof VideoFrame);
 }
 
 type TransformTrackFamily = "position" | "rotation" | "scale";
@@ -422,9 +580,17 @@ class BlueprintObjectBuilder {
       return gltf.scene.clone(true);
     }
 
-    if (containsUsdcMagic(bytes)) {
-      const { parseUsdc } = await import("./usdcParser");
-      return awaitTextureLoadsDuring(() => parseUsdc(buffer));
+    if (asset.format === "usdz") {
+      try {
+        const { parseUsdz } = await import("../lib/openusd/openusdParser");
+        return await parseUsdz(buffer, asset.name ?? "asset.usdz");
+      } catch (openUsdError) {
+        console.warn("OpenUSD export parse failed, falling back:", openUsdError);
+        if (containsUsdcMagic(bytes)) {
+          const { parseUsdc } = await import("./usdcParser");
+          return awaitTextureLoadsDuring(() => parseUsdc(buffer));
+        }
+      }
     }
 
     return parseUsdzWithTextures(this.usdLoader, buffer);

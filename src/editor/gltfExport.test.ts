@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { AnimationMixer, BoxGeometry, Color, Group, LoopOnce, Matrix4, Mesh, MeshStandardMaterial, Quaternion, Texture, TextureLoader } from "three";
+import { AnimationMixer, BoxGeometry, Color, DataTexture, Group, LoopOnce, Matrix4, Mesh, MeshStandardMaterial, Quaternion, RGBAFormat, Texture, TextureLoader } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
@@ -24,6 +24,7 @@ import {
   createBlueprintExportGroup,
   exportBlueprintToGlbBlob,
   exportBlueprintToGltfJson,
+  normalizeTexturesForCanvasExport,
   parseUsdzWithTextures,
 } from "./gltfExport";
 import type { ModelAsset, ModelNode } from "./types";
@@ -374,6 +375,51 @@ describe("gltfExport", () => {
     });
     expect(markedMeshes.length).toBe(1);
     expect(markedMeshes[0]?.userData.assetId).toBe(asset.id);
+  });
+
+  it("normalizes raw data textures to canvas images before exporter drawImage paths", () => {
+    const context = {
+      createImageData: (width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+        width,
+        height,
+        colorSpace: "srgb",
+      }),
+      putImageData: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, "getContext");
+    getContextSpy.mockImplementation(((contextId: string) => (
+      contextId === "2d" ? context : null
+    )) as HTMLCanvasElement["getContext"]);
+    const texture = new DataTexture(
+      new Uint8Array([
+        255, 0, 0, 255,
+        0, 255, 0, 255,
+        0, 0, 255, 255,
+        255, 255, 255, 255,
+      ]),
+      2,
+      2,
+      RGBAFormat,
+    );
+    texture.needsUpdate = true;
+    const mesh = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({
+      metalnessMap: texture,
+      roughnessMap: texture,
+    }));
+    const group = new Group();
+    group.add(mesh);
+
+    try {
+      normalizeTexturesForCanvasExport(group);
+
+      expect(texture.image).toBeInstanceOf(HTMLCanvasElement);
+      expect(texture.image.width).toBe(2);
+      expect(texture.image.height).toBe(2);
+    } finally {
+      getContextSpy.mockRestore();
+    }
   });
 
   describe("parseUsdzWithTextures", () => {
