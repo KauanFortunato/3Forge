@@ -9,10 +9,13 @@
   "scripts": {
     "dev": "node ./scripts/vite-wrapper.mjs dev --open --host",
     "dev:export-runner": "node ./scripts/vite-wrapper.mjs dev --config playgrounds/export-runner/vite.config.mjs --open --host",
+    "dev:w3d-translation": "node ./scripts/vite-wrapper.mjs dev --config playgrounds/w3d-translation/vite.config.mjs --open --host",
     "build": "node ./scripts/vite-wrapper.mjs build",
     "build:export-runner": "node ./scripts/vite-wrapper.mjs build --config playgrounds/export-runner/vite.config.mjs",
+    "build:w3d-translation": "node ./scripts/vite-wrapper.mjs build --config playgrounds/w3d-translation/vite.config.mjs",
     "preview": "node ./scripts/vite-wrapper.mjs preview --host",
     "preview:export-runner": "node ./scripts/vite-wrapper.mjs preview --config playgrounds/export-runner/vite.config.mjs --host",
+    "preview:w3d-translation": "node ./scripts/vite-wrapper.mjs preview --config playgrounds/w3d-translation/vite.config.mjs --host",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
