@@ -18,10 +18,9 @@ import {
   supportsFileSystemAccess,
 } from "../fileAccess";
 import { fontFileToAsset } from "../fonts";
-import { imageFileToAsset } from "../images";
+import { imageFileToAsset, imageSequenceToAsset } from "../images";
 import { parseW3DFromFolder } from "../import/w3dFolder";
 import { convertMovsViaBackend, ConvertViaBackendError } from "../import/movConvertViaBackend";
-import { imageSequenceToAsset } from "../images";
 import { isModelFile, modelFileToAsset } from "../models";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
@@ -2355,6 +2354,23 @@ export function App() {
       const result = await runTask("Importing W3D scene…", () => parseW3DFromFolder(files));
       const warnings = [...result.warnings];
       const blueprint = result.blueprint;
+
+      if (result.rasterTextureFiles.length > 0) {
+        await runTask(
+          `Importing ${result.rasterTextureFiles.length} texture(s)…`,
+          async () => {
+            for (const file of result.rasterTextureFiles) {
+              try {
+                const asset = await imageFileToAsset(file);
+                asset.id = `image-${file.name.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+                blueprint.images.push(asset);
+              } catch (err) {
+                warnings.push(`Texture "${file.name}" failed to load: ${err instanceof Error ? err.message : "unknown"}`);
+              }
+            }
+          },
+        );
+      }
 
       if (result.movFiles.length > 0) {
         const controller = new AbortController();

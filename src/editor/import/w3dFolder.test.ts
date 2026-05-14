@@ -72,5 +72,27 @@ describe("parseW3DFromFolder", () => {
     const result = await parseW3DFromFolder(files);
 
     expect(result.movFiles).toEqual([]);
+    expect(result.rasterTextureFiles).toEqual([]);
+  });
+
+  it("collects raster textures under Resources/Textures/", async () => {
+    const files = [
+      makeFile("PROJ/scene.w3d", MINIMAL_SCENE_XML),
+      makeFile("PROJ/Resources/Textures/Background.png", "binary"),
+      makeFile("PROJ/Resources/Textures/Player 1.png", "binary"),
+      makeFile("PROJ/Resources/Textures/badge.JPG", "binary"),
+      makeFile("PROJ/Resources/Textures/logo.svg", "binary"),
+      makeFile("PROJ/Resources/Textures/Pitch_In.mov", "binary"),
+      // Raster outside Resources/Textures/ is ignored.
+      makeFile("PROJ/Other/icon.png", "binary"),
+      // Unknown extensions ignored.
+      makeFile("PROJ/Resources/Textures/notes.txt", "txt"),
+    ];
+
+    const result = await parseW3DFromFolder(files);
+    const rasters = result.rasterTextureFiles.map((f) => f.name).sort();
+
+    expect(rasters).toEqual(["Background.png", "Player 1.png", "badge.JPG", "logo.svg"]);
+    expect(result.movFiles.map((f) => f.name)).toEqual(["Pitch_In.mov"]);
   });
 });

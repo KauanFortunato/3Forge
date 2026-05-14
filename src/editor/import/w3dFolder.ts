@@ -18,9 +18,14 @@ export interface W3DFolderImportResult extends W3DImportResult {
    * expected to route these through `convertMovsViaBackend` and merge
    * the resulting sequences back into `blueprint.images`. */
   movFiles: File[];
+  /** Raster textures (PNG/JPG/JPEG/WEBP/SVG) found under
+   * `Resources/Textures/`. The caller turns them into `ImageAsset`s
+   * via `imageFileToAsset`. */
+  rasterTextureFiles: File[];
 }
 
 const VIDEO_EXTENSIONS = [".mov", ".mp4", ".webm"];
+const RASTER_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".svg"];
 
 export async function parseW3DFromFolder(
   files: FileList | File[],
@@ -33,6 +38,7 @@ export async function parseW3DFromFolder(
   let sceneFile: File | null = null;
   let sceneFileFallback: File | null = null;
   const movFiles: File[] = [];
+  const rasterTextureFiles: File[] = [];
 
   for (const file of list) {
     const relPath = relativePath(file);
@@ -52,11 +58,12 @@ export async function parseW3DFromFolder(
       continue;
     }
 
-    if (
-      lower.includes("/resources/textures/") &&
-      VIDEO_EXTENSIONS.includes(ext)
-    ) {
-      movFiles.push(file);
+    if (lower.includes("/resources/textures/")) {
+      if (VIDEO_EXTENSIONS.includes(ext)) {
+        movFiles.push(file);
+      } else if (RASTER_EXTENSIONS.includes(ext)) {
+        rasterTextureFiles.push(file);
+      }
     }
   }
 
@@ -75,6 +82,7 @@ export async function parseW3DFromFolder(
     ...parsed,
     sceneFileName: relativePath(chosen),
     movFiles,
+    rasterTextureFiles,
   };
 }
 
