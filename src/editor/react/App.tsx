@@ -18,6 +18,7 @@ import {
   supportsFileSystemAccess,
 } from "../fileAccess";
 import { fontFileToAsset } from "../fonts";
+import { hdrFileToAsset, isHdrFile } from "../hdr";
 import { imageFileToAsset } from "../images";
 import { containsUsdcMagic, tryDecodeDataUrl } from "../modelBuffer";
 import { isModelFile, modelFileToAsset } from "../models";
@@ -758,6 +759,7 @@ export function App() {
   const jsonInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const modelInputRef = useRef<HTMLInputElement | null>(null);
+  const hdrInputRef = useRef<HTMLInputElement | null>(null);
   const fontInputRef = useRef<HTMLInputElement | null>(null);
   const jsonDragDepthRef = useRef(0);
   const imageDragDepthRef = useRef(0);
@@ -2019,6 +2021,29 @@ export function App() {
     }
   }, [resolveSelectionInsertTarget, setTransientStatus, store]);
 
+  const importHdrFiles = useCallback(async (files: File[]) => {
+    const hdrFiles = files.filter(isHdrFile);
+    if (hdrFiles.length === 0) {
+      setTransientStatus("Unsupported HDR file. Use .hdr.");
+      return;
+    }
+
+    try {
+      let importedCount = 0;
+      for (const file of hdrFiles) {
+        const asset = await runTask(`Importing ${file.name}...`, () => hdrFileToAsset(file));
+        store.addHdrAsset(asset);
+        importedCount += 1;
+      }
+
+      setTransientStatus(importedCount === 1
+        ? `Imported HDR environment "${hdrFiles[0].name}".`
+        : `Imported ${importedCount} HDR environments.`);
+    } catch (error) {
+      setTransientStatus(error instanceof Error ? error.message : "Unable to import HDR. Use a valid .hdr file.");
+    }
+  }, [setTransientStatus, store]);
+
   const clearAssetImageDropState = useCallback(() => {
     assetImageDragDepthRef.current = 0;
     setIsAssetImageDropActive(false);
@@ -3032,6 +3057,7 @@ export function App() {
             { id: "file-import-json", label: "JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
             { id: "file-import-image", label: "Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
             { id: "file-import-model", label: "Model", icon: <MeshIcon width={14} height={14} />, onSelect: () => modelInputRef.current?.click() },
+            { id: "file-import-hdr", label: "HDR Environment", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => hdrInputRef.current?.click() },
             { id: "file-import-font", label: "Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
           ],
         },
@@ -3902,6 +3928,23 @@ export function App() {
       />
 
       <input
+        ref={hdrInputRef}
+        className="app__hidden-input"
+        type="file"
+        accept=".hdr,image/vnd.radiance"
+        multiple
+        onChange={async (event) => {
+          const files = Array.from(event.target.files ?? []);
+          event.currentTarget.value = "";
+          if (files.length === 0) {
+            return;
+          }
+
+          await importHdrFiles(files);
+        }}
+      />
+
+      <input
         ref={fontInputRef}
         className="app__hidden-input"
         type="file"
@@ -3967,6 +4010,8 @@ export function App() {
         theme={theme}
         onChangeTheme={setTheme}
         sceneSettings={storeView.sceneSettings}
+        hdrAssets={storeView.hdrs}
+        onImportHdr={() => hdrInputRef.current?.click()}
         onChangeSceneSettings={(patch) => store.updateSceneSettings(patch)}
       />
 

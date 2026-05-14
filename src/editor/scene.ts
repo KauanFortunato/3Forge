@@ -39,6 +39,7 @@ import {
   PerspectiveCamera,
   PlaneGeometry,
   PCFShadowMap,
+  PMREMGenerator,
   Raycaster,
   RingGeometry,
   Scene,
@@ -53,6 +54,7 @@ import {
   Vector2,
   Vector3,
   WebGLRenderer,
+  WebGLRenderTarget,
   CircleGeometry,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -60,6 +62,7 @@ import { TransformControls } from "three/examples/jsm/controls/TransformControls
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import {
   animationValueToBoolean,
@@ -243,6 +246,7 @@ export class SceneEditor {
   private readonly childContainerMap = new Map<string, Object3D>();
   private readonly gltfLoader = new GLTFLoader();
   private readonly usdLoader = new USDLoader();
+  private readonly rgbeLoader = new RGBELoader();
   // Parsed-model cache: maps asset.id → Promise<Group> so each model is parsed
   // once. Subsequent scene rebuilds clone the cached Group instead of re-parsing.
   private readonly modelGroupCache = new Map<string, Promise<Group>>();
@@ -254,6 +258,8 @@ export class SceneEditor {
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribe: () => void;
   private readonly textureCache = new Map<string, Texture>();
+  private readonly pmremGenerator: PMREMGenerator;
+  private readonly hdrEnvironmentCache = new Map<string, { target: WebGLRenderTarget; source: Texture }>();
   private readonly animationFrameListeners = new Set<(frame: number) => void>();
 
   private animationFrame = 0;
@@ -281,6 +287,7 @@ export class SceneEditor {
   private isTransformDragging = false;
   private skipNextSelectionPick = false;
   private readonly ORIENTATION_SIZE = 86;
+  private environmentLoadToken = 0;
 
   constructor(container: HTMLElement, store: EditorStore, options: SceneEditorOptions = {}) {
     this.container = container;
@@ -294,6 +301,8 @@ export class SceneEditor {
     this.renderer.domElement.style.touchAction = "none";
     this.renderer.domElement.style.display = "block";
     this.container.appendChild(this.renderer.domElement);
+    this.pmremGenerator = new PMREMGenerator(this.renderer);
+    this.pmremGenerator.compileEquirectangularShader();
 
     this.scene = new Scene();
     this.scene.background = new Color(this.store.sceneSettings.backgroundColor);
@@ -552,10 +561,12 @@ export class SceneEditor {
     this.transformControls.dispose();
     this.orbitControls.dispose();
     this.clearViewportRoot();
+    this.clearHdrEnvironmentCache();
     this.selectionHelper?.removeFromParent();
     this.infiniteGrid.geometry.dispose();
     this.infiniteGrid.material.dispose();
     this.renderer.dispose();
+    this.pmremGenerator.dispose();
     this.orientationRenderer.dispose();
     this.orientationRenderer.domElement.removeEventListener("pointerdown", this.handleOrientationPointerDown);
     this.renderer.domElement.remove();
@@ -715,7 +726,40 @@ export class SceneEditor {
       this.mainLight.color.set(settings.lighting.directionalColor);
       this.mainLight.intensity = settings.lighting.directionalIntensity;
     }
+    void this.applyEnvironmentSettings();
     this.updateViewMode();
+  }
+
+  private async applyEnvironmentSettings(): Promise<void> {
+    const token = ++this.environmentLoadToken;
+    const settings = this.store.sceneSettings;
+    const environmentScene = this.scene as Scene & { environmentIntensity?: number };
+    environmentScene.environmentIntensity = settings.environment.intensity;
+
+    if (settings.environment.type !== "hdr" || !settings.environment.hdrAssetId) {
+      this.scene.environment = null;
+      return;
+    }
+
+    const asset = this.store.getHdrAsset(settings.environment.hdrAssetId);
+    if (!asset || !asset.src) {
+      this.scene.environment = null;
+      return;
+    }
+
+    try {
+      const environment = await this.getHdrEnvironment(asset.src);
+      if (token !== this.environmentLoadToken) {
+        return;
+      }
+
+      this.scene.environment = environment.target.texture;
+      environmentScene.environmentIntensity = this.store.sceneSettings.environment.intensity;
+    } catch {
+      if (token === this.environmentLoadToken) {
+        this.scene.environment = null;
+      }
+    }
   }
 
   private createInfiniteGrid(): Mesh<PlaneGeometry, ShaderMaterial> {
@@ -1332,6 +1376,19 @@ export class SceneEditor {
     return texture;
   }
 
+  private async getHdrEnvironment(src: string): Promise<{ target: WebGLRenderTarget; source: Texture }> {
+    const cached = this.hdrEnvironmentCache.get(src);
+    if (cached) {
+      return cached;
+    }
+
+    const source = await this.rgbeLoader.loadAsync(src);
+    const target = this.pmremGenerator.fromEquirectangular(source);
+    const environment = { target, source };
+    this.hdrEnvironmentCache.set(src, environment);
+    return environment;
+  }
+
   private refreshSelection(): void {
     const selectedObjects = this.store.selectedNodeIds
       .map((nodeId) => this.objectMap.get(nodeId))
@@ -1572,6 +1629,15 @@ export class SceneEditor {
     });
 
     this.viewportRoot.clear();
+  }
+
+  private clearHdrEnvironmentCache(): void {
+    this.scene.environment = null;
+    for (const environment of this.hdrEnvironmentCache.values()) {
+      environment.target.dispose();
+      environment.source.dispose();
+    }
+    this.hdrEnvironmentCache.clear();
   }
 
   private resize(): void {

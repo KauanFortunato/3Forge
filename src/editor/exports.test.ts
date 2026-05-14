@@ -1037,4 +1037,32 @@ describe("export after property clipboard", () => {
     expect(output).toContain('"type": "linear"');
     expect(output).toContain('"enabled": false');
   });
+
+  it("exports packaged HDR environment path in scene settings metadata", () => {
+    const blueprint = createDefaultBlueprint();
+    blueprint.hdrs = [{
+      id: "studio",
+      name: "Studio.hdr",
+      mimeType: "image/vnd.radiance",
+      src: "data:image/vnd.radiance;base64,aGRy",
+    }];
+    blueprint.sceneSettings = {
+      ...createDefaultSceneSettings(),
+      environment: {
+        type: "hdr",
+        hdrAssetId: "studio",
+        intensity: 1.6,
+      },
+    };
+
+    const output = generateTypeScriptComponent(blueprint, {
+      hdrAssetPathsById: {
+        studio: "./assets/environments/studio.hdr",
+      },
+    });
+
+    expect(output).toContain('"type": "hdr"');
+    expect(output).toContain('"hdrAssetId": "studio"');
+    expect(output).toContain('"hdrAssetPath": "./assets/environments/studio.hdr"');
+  });
 });

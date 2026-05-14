@@ -16,6 +16,7 @@ import {
   sortTrackKeyframes,
 } from "./animation";
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset } from "./fonts";
+import { normalizeHdrAsset, normalizeHdrLibrary } from "./hdr";
 import { createTransparentImageAsset, fitImageToMaxSize, normalizeImageAsset, normalizeImageLibrary } from "./images";
 import {
   cloneMaterialSpec,
@@ -51,6 +52,7 @@ import type {
   FontAsset,
   GroupNode,
   GroupPivotPreset,
+  HdrAsset,
   ImageAsset,
   ImageNode,
   MaterialAsset,
@@ -266,6 +268,7 @@ export function createDefaultBlueprint(): ComponentBlueprint {
     materials: [],
     images: [],
     models: [],
+    hdrs: [],
     sceneSettings: createDefaultSceneSettings(),
     nodes: [panel, accent, title],
     animation: createDefaultAnimation(),
@@ -714,13 +717,16 @@ function normalizeSceneSettings(rawSettings: unknown, fallback = createDefaultSc
     ? source.shadows as Record<string, unknown>
     : {};
 
+  const environmentType = environment.type === "hdr" ? "hdr" : "none";
+  const hdrAssetId = typeof environment.hdrAssetId === "string" && environment.hdrAssetId.trim()
+    ? environment.hdrAssetId.trim()
+    : null;
+
   return {
     backgroundColor: normalizeOptionalColor(source.backgroundColor, fallback.backgroundColor),
     environment: {
-      type: "none",
-      hdrAssetId: typeof environment.hdrAssetId === "string" && environment.hdrAssetId.trim()
-        ? environment.hdrAssetId.trim()
-        : null,
+      type: environmentType === "hdr" && hdrAssetId ? "hdr" : "none",
+      hdrAssetId,
       intensity: clampNumber(normalizeNumber(environment.intensity, fallback.environment.intensity), 0, 10),
     },
     lighting: {
@@ -1320,7 +1326,16 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
   const availableImages = new Map(importedImages.map((image) => [image.id, image] as const));
   const importedModels = normalizeModelLibrary(source.models);
   const availableModelIds = new Set(importedModels.map((model) => model.id));
+  const importedHdrs = normalizeHdrLibrary(source.hdrs);
+  const availableHdrIds = new Set(importedHdrs.map((hdr) => hdr.id));
   const sceneSettings = normalizeSceneSettings(source.sceneSettings, fallback.sceneSettings ?? createDefaultSceneSettings());
+  if (sceneSettings.environment.type === "hdr" && (!sceneSettings.environment.hdrAssetId || !availableHdrIds.has(sceneSettings.environment.hdrAssetId))) {
+    sceneSettings.environment = {
+      ...sceneSettings.environment,
+      type: "none",
+      hdrAssetId: null,
+    };
+  }
   const importedNodes = Array.isArray(source.nodes)
     ? source.nodes.map(normalizeImportedNode).filter((node): node is EditorNode => Boolean(node))
     : [];
@@ -1398,6 +1413,7 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     materials: importedMaterials,
     images: importedImages,
     models: importedModels,
+    hdrs: importedHdrs,
     sceneSettings,
     nodes: importedNodes,
     animation,
@@ -1518,6 +1534,10 @@ export class EditorStore extends EventTarget {
 
   get models(): ModelAsset[] {
     return this._blueprint.models ?? [];
+  }
+
+  get hdrs(): HdrAsset[] {
+    return this._blueprint.hdrs ?? [];
   }
 
   get sceneSettings(): SceneSettings {
@@ -1702,6 +1722,10 @@ export class EditorStore extends EventTarget {
 
   getModelAsset(modelId: string): ModelAsset | undefined {
     return this.models.find((model) => model.id === modelId);
+  }
+
+  getHdrAsset(hdrId: string): HdrAsset | undefined {
+    return this.hdrs.find((hdr) => hdr.id === hdrId);
   }
 
   getNodesUsingMaterial(materialId: string): EditorNode[] {
@@ -3653,6 +3677,66 @@ export class EditorStore extends EventTarget {
     this.notify({ reason: "model", source });
   }
 
+  addHdrAsset(
+    hdr: HdrAsset,
+    options: { name?: string; id?: string; select?: boolean } = {},
+    source: EditorStoreChange["source"] = "ui",
+  ): string {
+    const id = this.makeUniqueHdrId(options.id ?? hdr.id);
+    const normalized = normalizeHdrAsset(hdr);
+    const proposedName = (options.name ?? normalized.name ?? "").trim() || "Environment.hdr";
+    const name = this.makeUniqueHdrName(proposedName);
+
+    this.recordHistorySnapshot();
+    this._blueprint.hdrs = [
+      ...this.hdrs,
+      {
+        ...normalized,
+        id,
+        name,
+      },
+    ];
+
+    if (options.select !== false) {
+      this._blueprint.sceneSettings = normalizeSceneSettings({
+        ...this.sceneSettings,
+        environment: {
+          ...this.sceneSettings.environment,
+          type: "hdr",
+          hdrAssetId: id,
+        },
+      }, this.sceneSettings);
+    }
+
+    this.notify({ reason: "hdr", source });
+    return id;
+  }
+
+  removeHdrAsset(
+    hdrId: string,
+    source: EditorStoreChange["source"] = "ui",
+  ): boolean {
+    const index = this.hdrs.findIndex((hdr) => hdr.id === hdrId);
+    if (index < 0) {
+      return false;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.hdrs = this.hdrs.filter((hdr) => hdr.id !== hdrId);
+    if (this.sceneSettings.environment.hdrAssetId === hdrId) {
+      this._blueprint.sceneSettings = normalizeSceneSettings({
+        ...this.sceneSettings,
+        environment: {
+          ...this.sceneSettings.environment,
+          type: "none",
+          hdrAssetId: null,
+        },
+      }, this.sceneSettings);
+    }
+    this.notify({ reason: "hdr", source });
+    return true;
+  }
+
   addFont(font: FontAsset, source: EditorStoreChange["source"] = "ui"): string {
     const matchingFont = this.fonts.find((item) => getFontData(item) === getFontData(font));
     if (matchingFont) {
@@ -3907,6 +3991,37 @@ export class EditorStore extends EventTarget {
       this.models
         .filter((model) => model.id !== excludeId)
         .map((model) => model.name),
+    );
+    if (!taken.has(base)) {
+      return base;
+    }
+    let counter = 2;
+    while (taken.has(`${base} ${counter}`)) {
+      counter += 1;
+    }
+    return `${base} ${counter}`;
+  }
+
+  private makeUniqueHdrId(proposed?: string): string {
+    const existing = new Set(this.hdrs.map((hdr) => hdr.id));
+    const trimmed = proposed?.trim();
+    if (trimmed && !existing.has(trimmed)) {
+      return trimmed;
+    }
+
+    let id = generateId("hdr-asset");
+    while (existing.has(id)) {
+      id = generateId("hdr-asset");
+    }
+    return id;
+  }
+
+  private makeUniqueHdrName(proposed: string, excludeId: string | null = null): string {
+    const base = proposed.trim() || "Environment.hdr";
+    const taken = new Set(
+      this.hdrs
+        .filter((hdr) => hdr.id !== excludeId)
+        .map((hdr) => hdr.name),
     );
     if (!taken.has(base)) {
       return base;

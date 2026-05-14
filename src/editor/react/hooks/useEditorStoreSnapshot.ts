@@ -21,6 +21,7 @@ export function useEditorStoreSnapshot(store: EditorStore): EditorStoreView {
       materials: store.materials,
       models: store.models,
       images: store.images,
+      hdrs: store.hdrs,
       sceneSettings: store.sceneSettings,
       editableFields: store.listEditableFields(),
       animation: store.animation,
