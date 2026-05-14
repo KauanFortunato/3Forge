@@ -59,6 +59,7 @@ import {
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
@@ -259,6 +260,7 @@ export class SceneEditor {
   private readonly unsubscribe: () => void;
   private readonly textureCache = new Map<string, Texture>();
   private readonly pmremGenerator: PMREMGenerator;
+  private readonly neutralEnvironmentTarget: WebGLRenderTarget;
   private readonly hdrEnvironmentCache = new Map<string, { target: WebGLRenderTarget; source: Texture }>();
   private readonly animationFrameListeners = new Set<(frame: number) => void>();
 
@@ -303,6 +305,9 @@ export class SceneEditor {
     this.container.appendChild(this.renderer.domElement);
     this.pmremGenerator = new PMREMGenerator(this.renderer);
     this.pmremGenerator.compileEquirectangularShader();
+    const neutralEnvironment = new RoomEnvironment();
+    this.neutralEnvironmentTarget = this.pmremGenerator.fromScene(neutralEnvironment);
+    neutralEnvironment.dispose();
 
     this.scene = new Scene();
     this.scene.background = new Color(this.store.sceneSettings.backgroundColor);
@@ -566,6 +571,7 @@ export class SceneEditor {
     this.infiniteGrid.geometry.dispose();
     this.infiniteGrid.material.dispose();
     this.renderer.dispose();
+    this.neutralEnvironmentTarget.dispose();
     this.pmremGenerator.dispose();
     this.orientationRenderer.dispose();
     this.orientationRenderer.domElement.removeEventListener("pointerdown", this.handleOrientationPointerDown);
@@ -664,7 +670,7 @@ export class SceneEditor {
   }
 
   private addHelpers(): void {
-    this.hemisphereLight = new HemisphereLight(0xe4e0ea, 0x1f2024, 1.1);
+    this.hemisphereLight = new HemisphereLight(0xffffff, 0xffffff, 0.8);
     this.scene.add(this.hemisphereLight);
 
     this.ambientLight = new AmbientLight(0xffffff, 0.3);
@@ -722,6 +728,11 @@ export class SceneEditor {
       this.ambientLight.color.set(settings.lighting.ambientColor);
       this.ambientLight.intensity = settings.lighting.ambientIntensity;
     }
+    if (this.hemisphereLight) {
+      this.hemisphereLight.color.set(0xffffff);
+      this.hemisphereLight.groundColor.set(0xffffff);
+      this.hemisphereLight.intensity = Math.max(0.4, settings.lighting.ambientIntensity);
+    }
     if (this.mainLight) {
       this.mainLight.color.set(settings.lighting.directionalColor);
       this.mainLight.intensity = settings.lighting.directionalIntensity;
@@ -737,13 +748,15 @@ export class SceneEditor {
     environmentScene.environmentIntensity = settings.environment.intensity;
 
     if (settings.environment.type !== "hdr" || !settings.environment.hdrAssetId) {
-      this.scene.environment = null;
+      this.scene.environment = this.neutralEnvironmentTarget.texture;
+      environmentScene.environmentIntensity = 1;
       return;
     }
 
     const asset = this.store.getHdrAsset(settings.environment.hdrAssetId);
     if (!asset || !asset.src) {
-      this.scene.environment = null;
+      this.scene.environment = this.neutralEnvironmentTarget.texture;
+      environmentScene.environmentIntensity = 1;
       return;
     }
 
@@ -757,7 +770,8 @@ export class SceneEditor {
       environmentScene.environmentIntensity = this.store.sceneSettings.environment.intensity;
     } catch {
       if (token === this.environmentLoadToken) {
-        this.scene.environment = null;
+        this.scene.environment = this.neutralEnvironmentTarget.texture;
+        environmentScene.environmentIntensity = 1;
       }
     }
   }
