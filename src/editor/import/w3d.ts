@@ -49,7 +49,6 @@ export function parseW3DSceneMetadata(xml: string): W3DImportResult {
 
   const sceneName = sceneEl.getAttribute("Name")?.trim() || "Imported Scene";
   const is2DScene = parseBoolAttr(sceneEl.getAttribute("Is2DScene"), false);
-  const mode: SceneMode = is2DScene ? "2d" : "3d";
 
   const sceneLayerEl = findDirectChild(sceneEl, "SceneLayer");
   const backgroundColor = sceneLayerEl
@@ -58,6 +57,14 @@ export function parseW3DSceneMetadata(xml: string): W3DImportResult {
 
   const cameraManagerEl = sceneLayerEl ? findDirectChild(sceneLayerEl, "CameraManager") : null;
   const cameraEl = cameraManagerEl ? findDirectChild(cameraManagerEl, "Camera") : null;
+  // The W3D projection trumps Is2DScene for our viewport behaviour: many R3
+  // scenes ship `Is2DScene="False"` but with an Ortographic camera (the
+  // engine renders them as locked broadcast cards). Treat them as 2D so the
+  // viewport locks the camera, hides controls, and letterboxes the canvas.
+  const cameraIsOrtho = cameraEl
+    ? /^ort/i.test(cameraEl.getAttribute("Projection")?.trim() ?? "")
+    : false;
+  const mode: SceneMode = is2DScene || cameraIsOrtho ? "2d" : "3d";
   const cameraSettings = cameraEl ? readCamera(cameraEl, mode) : undefined;
 
   const engine: EngineViewportSettings = {

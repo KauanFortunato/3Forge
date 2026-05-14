@@ -24,7 +24,9 @@ describe("parseW3DSceneMetadata", () => {
 
     expect(warnings).toHaveLength(0);
     expect(blueprint.componentName).toBe("LINEUP_LEFT");
-    expect(blueprint.sceneSettings?.mode).toBe("3d");
+    // Is2DScene="False" but Projection="Ortographic" → 2D viewport (locked,
+    // letterboxed). The W3D engine renders these as broadcast cards.
+    expect(blueprint.sceneSettings?.mode).toBe("2d");
     expect(blueprint.sceneSettings?.backgroundColor).toBe("#000000");
     expect(blueprint.engine?.background).toEqual({ type: "color", color: "#000000", alpha: 1 });
     expect(blueprint.engine?.camera?.mode).toBe("orthographic");
@@ -35,6 +37,21 @@ describe("parseW3DSceneMetadata", () => {
     expect(blueprint.importMetadata?.source).toBe("w3d");
     // Node tree intentionally empty in Phase C — only the default root group.
     expect(blueprint.nodes.length).toBeLessThanOrEqual(1);
+  });
+
+  it("stays in 3D mode when Is2DScene is False AND camera is perspective", () => {
+    const xml = `<?xml version="1.0"?>
+<Scene Name="Spatial" Is2DScene="False">
+  <SceneLayer BackgroundColor="-1">
+    <CameraManager>
+      <Camera Projection="Perspective"><Position Z="-30" /></Camera>
+    </CameraManager>
+  </SceneLayer>
+</Scene>`;
+    const { blueprint } = parseW3DSceneMetadata(xml);
+
+    expect(blueprint.sceneSettings?.mode).toBe("3d");
+    expect(blueprint.engine?.camera?.mode).toBe("perspective");
   });
 
   it("flips to 2D scene mode when Is2DScene is True", () => {
