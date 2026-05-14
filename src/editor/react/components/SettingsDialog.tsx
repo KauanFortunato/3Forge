@@ -1,7 +1,7 @@
 import { Modal } from "./Modal";
 import { THEME_PRESETS } from "../hooks/useTheme";
 import type { ThemeId } from "../hooks/useTheme";
-import type { SceneSettings } from "../../types";
+import type { SceneCanvasSize, SceneMode, SceneSettings } from "../../types";
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -11,6 +11,8 @@ interface SettingsDialogProps {
   sceneSettings?: SceneSettings;
   onChangeSceneSettings?: (patch: {
     backgroundColor?: string;
+    mode?: SceneMode;
+    canvas?: Partial<SceneCanvasSize>;
     lighting?: Partial<SceneSettings["lighting"]>;
     toneMapping?: Partial<SceneSettings["toneMapping"]>;
     shadows?: Partial<SceneSettings["shadows"]>;
@@ -71,6 +73,63 @@ export function SettingsDialog({ isOpen, onClose, theme, onChangeTheme, sceneSet
                 step={0.1}
                 value={sceneSettings.toneMapping.exposure}
                 onChange={(event) => onChangeSceneSettings({ toneMapping: { exposure: Number(event.currentTarget.value) } })}
+              />
+            </label>
+          </div>
+
+          <div className="settings-row">
+            <span className="settings-field__label">Camera</span>
+            <div className="settings-segmented" aria-label="Camera projection">
+              {[
+                ["2d", "Orthographic"],
+                ["3d", "Perspective"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`settings-segmented__button${sceneSettings.mode === value ? " is-active" : ""}`}
+                  onClick={() => onChangeSceneSettings({ mode: value as SceneMode })}
+                  title={value === "2d"
+                    ? "Locked centered camera, no zoom or pan, scene letterboxed to canvas aspect"
+                    : "Free perspective camera with orbit/zoom"}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="settings-grid">
+            <label className="settings-field">
+              <span className="settings-field__label">Canvas width</span>
+              <input
+                className="settings-field__input"
+                type="number"
+                min={1}
+                step={1}
+                value={sceneSettings.canvas.width}
+                onChange={(event) => {
+                  const next = Number(event.currentTarget.value);
+                  if (Number.isFinite(next) && next >= 1) {
+                    onChangeSceneSettings({ canvas: { width: Math.round(next) } });
+                  }
+                }}
+              />
+            </label>
+            <label className="settings-field">
+              <span className="settings-field__label">Canvas height</span>
+              <input
+                className="settings-field__input"
+                type="number"
+                min={1}
+                step={1}
+                value={sceneSettings.canvas.height}
+                onChange={(event) => {
+                  const next = Number(event.currentTarget.value);
+                  if (Number.isFinite(next) && next >= 1) {
+                    onChangeSceneSettings({ canvas: { height: Math.round(next) } });
+                  }
+                }}
               />
             </label>
           </div>
