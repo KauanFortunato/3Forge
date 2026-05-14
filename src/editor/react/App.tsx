@@ -7,7 +7,7 @@ import { compareComponentBlueprints } from "../blueprintDiff";
 import type { BlueprintDiffChangedObject, BlueprintDiffSummary } from "../blueprintDiff";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { createExportPackageZip } from "../exportPackage";
-import { exportBlueprintToGlbBlob, exportBlueprintToGltfBlob } from "../gltfExport";
+import { exportBlueprintToGlbBlob, exportBlueprintToGltfBlob, exportBlueprintToUsdzBlob } from "../gltfExport";
 import {
   BrowserFileSystemFileHandle,
   getBlueprintFileName,
@@ -19,6 +19,7 @@ import {
 } from "../fileAccess";
 import { fontFileToAsset } from "../fonts";
 import { imageFileToAsset } from "../images";
+import { containsUsdcMagic, tryDecodeDataUrl } from "../modelBuffer";
 import { isModelFile, modelFileToAsset } from "../models";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
@@ -450,6 +451,7 @@ function dataTransferHasModelFile(dataTransfer: DataTransfer): boolean {
     item.kind === "file" && (
       item.type === "model/gltf-binary"
       || item.type === "model/gltf+json"
+      || item.type === "model/vnd.usdz+zip"
       || item.type === ""
     )
   ));
@@ -1877,7 +1879,7 @@ export function App() {
 
   const downloadExportPackage = useCallback(async () => {
     try {
-      const archive = await runTask("Packaging export ZIP…", () => createExportPackageZip(blueprintSnapshot));
+      const archive = await runTask("Packaging export ZIP…", () => createExportPackageZip(blueprintSnapshot), { blocking: true });
       downloadBlobFile(archive.blob, archive.fileName);
       setTransientStatus(`Downloaded ${archive.fileName}.`);
     } catch (error) {
@@ -1885,18 +1887,20 @@ export function App() {
     }
   }, [blueprintSnapshot, setTransientStatus]);
 
-  const downloadSceneModel = useCallback(async (format: "glb" | "gltf") => {
+  const downloadSceneModel = useCallback(async (format: "glb" | "gltf" | "usdz") => {
     try {
       const blob = await runTask(`Exporting ${format.toUpperCase()}...`, () => (
         format === "glb"
           ? exportBlueprintToGlbBlob(blueprintSnapshot)
-          : exportBlueprintToGltfBlob(blueprintSnapshot)
-      ));
+          : format === "usdz"
+            ? exportBlueprintToUsdzBlob(blueprintSnapshot)
+            : exportBlueprintToGltfBlob(blueprintSnapshot)
+      ), { blocking: true });
       const fileName = `${blueprintSnapshot.componentName || "3forge-component"}.${format}`;
       downloadBlobFile(blob, fileName);
       setTransientStatus(`Downloaded ${fileName}.`);
-    } catch {
-      setTransientStatus(`Unable to export ${format.toUpperCase()} model.`);
+    } catch (err) {
+      setTransientStatus(err instanceof Error && err.message ? err.message : `Unable to export ${format.toUpperCase()} model.`);
     }
   }, [blueprintSnapshot, setTransientStatus]);
 
@@ -1967,11 +1971,40 @@ export function App() {
       let lastNodeId: string | null = null;
       const target = resolveSelectionInsertTarget();
       for (const file of modelFiles) {
-        const asset = await runTask(`Importing ${file.name}...`, () => modelFileToAsset(file));
+        const asset = await runTask(`Importing ${file.name}...`, () => modelFileToAsset(file), { blocking: true });
         const modelId = store.addModelAsset(asset);
         const insertionIndex = target.index === undefined ? undefined : target.index + importedCount;
         lastNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
         importedCount += 1;
+
+        // If this is a USDC-binary USDZ, also surface its embedded textures
+        // as standalone ImageAssets so users can inspect what shipped with the
+        // model — including any textures that aren't rendering on the mesh.
+        // Failures here must NOT abort the import; we already have the model.
+        if (asset.format === "usdz") {
+          const bytes = tryDecodeDataUrl(asset.src);
+          if (bytes && containsUsdcMagic(bytes)) {
+            try {
+              const buffer = bytes.buffer.slice(
+                bytes.byteOffset,
+                bytes.byteOffset + bytes.byteLength,
+              ) as ArrayBuffer;
+              const { extractUsdcImages } = await import("../usdcParser");
+              const images = await extractUsdcImages(buffer);
+              for (const img of images) {
+                store.addImageAsset({
+                  name: `${asset.name} - ${img.name}`,
+                  mimeType: img.mimeType,
+                  src: img.src,
+                  width: img.width,
+                  height: img.height,
+                });
+              }
+            } catch (err) {
+              console.warn("Failed to extract USDC textures as assets:", err);
+            }
+          }
+        }
       }
 
       if (lastNodeId) {
@@ -2991,10 +3024,17 @@ export function App() {
         { id: "file-save", label: "Save", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+S", onSelect: () => void handleSaveProject() },
         { id: "file-save-as", label: "Save As", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+Shift+S", onSelect: () => void handleSaveAsProject() },
         { id: "file-divider-2", separator: true },
-        { id: "file-import-json", label: "Import JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
-        { id: "file-import-image", label: "Import Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
-        { id: "file-import-model", label: "Import Model", icon: <MeshIcon width={14} height={14} />, onSelect: () => modelInputRef.current?.click() },
-        { id: "file-import-font", label: "Import Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
+        {
+          id: "file-import",
+          label: "Import",
+          icon: <FileIcon width={14} height={14} />,
+          children: [
+            { id: "file-import-json", label: "JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
+            { id: "file-import-image", label: "Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
+            { id: "file-import-model", label: "Model", icon: <MeshIcon width={14} height={14} />, onSelect: () => modelInputRef.current?.click() },
+            { id: "file-import-font", label: "Font", icon: <TextPropertyIcon width={14} height={14} />, onSelect: () => fontInputRef.current?.click() },
+          ],
+        },
         { id: "file-divider-3", separator: true },
         {
           id: "file-export",
@@ -3005,6 +3045,7 @@ export function App() {
             { id: "file-export-zip", label: "ZIP file", onSelect: () => void downloadExportPackage() },
             { id: "file-export-gltf", label: "GLTF scene", onSelect: () => void downloadSceneModel("gltf") },
             { id: "file-export-glb", label: "GLB scene", onSelect: () => void downloadSceneModel("glb") },
+            { id: "file-export-usdz", label: "USDZ scene", onSelect: () => void downloadSceneModel("usdz") },
           ],
         },
         { id: "file-divider-4", separator: true },
@@ -3361,14 +3402,30 @@ export function App() {
                 <div className="panel__bd panel__bd--flush">
                   <SceneGraphPanel
                     nodes={storeView.blueprintNodes}
+                    models={storeView.models}
                     animatedNodeIds={animatedNodeIds}
                     selectedNodeId={storeView.selectedNodeId}
                     selectedNodeIds={storeView.selectedNodeIds}
+                    selectedPartId={storeView.selectedPartId}
                     collapsedIds={collapsedHierarchyIds}
                     onCollapsedIdsChange={setCollapsedHierarchyIds}
                     onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
+                    onSelectPart={(modelNodeId, partId) => {
+                      // Selecting a part also selects its owning model node so
+                      // the inspector / outline pick up the right context.
+                      if (store.selectedNodeId !== modelNodeId) {
+                        store.selectNode(modelNodeId, "ui", false);
+                      }
+                      store.setSelectedPartId(partId);
+                    }}
                     onMoveNode={handleSceneMove}
                     onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
+                    onTogglePartVisibility={(modelNodeId, partId) => {
+                      const node = storeView.blueprintNodes.find((n) => n.id === modelNodeId);
+                      const isHidden = node?.type === "model"
+                        && (node as { partVisibility?: Record<string, boolean> }).partVisibility?.[partId] === false;
+                      store.setModelNodePartVisibility(modelNodeId, partId, isHidden);
+                    }}
                     onDuplicateNode={(nodeId) => handleDuplicate(nodeId)}
                     onDeleteNode={(nodeId) => handleDelete(nodeId)}
                     onContextMenu={openSceneGraphContextMenu}
@@ -3831,7 +3888,7 @@ export function App() {
         ref={modelInputRef}
         className="app__hidden-input"
         type="file"
-        accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+        accept=".glb,.gltf,.usdz,model/gltf-binary,model/gltf+json,model/vnd.usdz+zip"
         multiple
         onChange={async (event) => {
           const files = Array.from(event.target.files ?? []);

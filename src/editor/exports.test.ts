@@ -72,6 +72,109 @@ describe("exports", () => {
     expect(transpiled.diagnostics ?? []).toEqual([]);
   });
 
+  it("generates TypeScript that loads external USDZ model assets via USDLoader", () => {
+    const blueprint = createBlueprintFixture();
+    blueprint.componentName = "Usdz Export";
+    blueprint.models = [{
+      id: "model-rocket",
+      name: "Rocket.usdz",
+      mimeType: "model/vnd.usdz+zip",
+      src: "data:model/vnd.usdz+zip;base64,cm9ja2V0",
+      format: "usdz",
+    }];
+    blueprint.nodes.push({
+      id: "rocket-node",
+      name: "Hero Rocket",
+      type: "model",
+      parentId: null,
+      visible: true,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      origin: { x: "center", y: "center", z: "center" },
+      editable: {},
+      modelId: "model-rocket",
+    } as never);
+
+    const output = generateTypeScriptComponent(blueprint, {
+      modelAssetPathsById: {
+        "model-rocket": "./assets/models/rocket.usdz",
+      },
+    });
+
+    expect(output).toContain('import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";');
+    expect(output).toContain("const usdLoader = new USDLoader();");
+    expect(output).toContain("usdLoader.loadAsync(");
+    expect(output).toContain(".clone(true) as Group");
+    expect(output).not.toContain(".scene.clone(true)");
+    expect(output).not.toContain("gltfLoader.loadAsync");
+    expect(output).not.toContain("GLTFLoader");
+  });
+
+  it("generates TypeScript that loads both GLB and USDZ assets, each with its matching loader", () => {
+    const blueprint = createBlueprintFixture();
+    blueprint.componentName = "Mixed Export";
+    blueprint.models = [
+      {
+        id: "model-ship",
+        name: "Ship.glb",
+        mimeType: "model/gltf-binary",
+        src: "data:model/gltf-binary;base64,c2hpcA==",
+        format: "glb",
+      },
+      {
+        id: "model-rocket",
+        name: "Rocket.usdz",
+        mimeType: "model/vnd.usdz+zip",
+        src: "data:model/vnd.usdz+zip;base64,cm9ja2V0",
+        format: "usdz",
+      },
+    ];
+    blueprint.nodes.push({
+      id: "ship-node",
+      name: "Hero Ship",
+      type: "model",
+      parentId: null,
+      visible: true,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      origin: { x: "center", y: "center", z: "center" },
+      editable: {},
+      modelId: "model-ship",
+    } as never);
+    blueprint.nodes.push({
+      id: "rocket-node",
+      name: "Hero Rocket",
+      type: "model",
+      parentId: null,
+      visible: true,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      origin: { x: "center", y: "center", z: "center" },
+      editable: {},
+      modelId: "model-rocket",
+    } as never);
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toContain('import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";');
+    expect(output).toContain('import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";');
+    expect(output).toContain("const gltfLoader = new GLTFLoader();");
+    expect(output).toContain("const usdLoader = new USDLoader();");
+    expect(output).toContain("gltfLoader.loadAsync(");
+    expect(output).toContain("usdLoader.loadAsync(");
+    expect(output).toContain("const heroShip = heroShipGltf.scene.clone(true) as Group;");
+    expect(output).toContain("const heroRocket = heroRocketGltf.clone(true) as Group;");
+  });
+
   it("generates a TypeScript component that covers runtime bindings, assets, fonts, and animation", () => {
     const blueprint = createBlueprintFixture();
     blueprint.componentName = "Hero Banner";

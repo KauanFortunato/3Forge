@@ -59,6 +59,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import {
   animationValueToBoolean,
@@ -67,6 +68,9 @@ import {
   isTrackMuted,
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
+import { containsUsdcMagic, tryDecodeDataUrl } from "./modelBuffer";
+import { buildStructureFromGroup, findObjectByIndexPath } from "./modelStructure";
+import { runTask } from "./react/hooks/useAsyncTask";
 import { EditorStore } from "./state";
 import type {
   AnimationEasePreset,
@@ -238,6 +242,10 @@ export class SceneEditor {
   private readonly objectMap = new Map<string, Object3D>();
   private readonly childContainerMap = new Map<string, Object3D>();
   private readonly gltfLoader = new GLTFLoader();
+  private readonly usdLoader = new USDLoader();
+  // Parsed-model cache: maps asset.id → Promise<Group> so each model is parsed
+  // once. Subsequent scene rebuilds clone the cached Group instead of re-parsing.
+  private readonly modelGroupCache = new Map<string, Promise<Group>>();
   private readonly selectionBounds = new Box3();
   private readonly selectionSize = new Vector3();
   private readonly selectionCenter = new Vector3();
@@ -893,7 +901,13 @@ export class SceneEditor {
     for (const hit of hits) {
       const nodeId = this.findNodeId(hit.object);
       if (nodeId) {
+        // For model nodes, also resolve the nearest part (sub-mesh) and stash
+        // it as the selected part so the selection box wraps only that piece.
+        const partId = this.findPartId(hit.object);
         this.store.selectNode(nodeId, "scene", additive);
+        if (!additive) {
+          this.store.setSelectedPartId(partId, "scene");
+        }
         return;
       }
     }
@@ -914,6 +928,23 @@ export class SceneEditor {
       const nodeId = current.userData?.nodeId;
       if (typeof nodeId === "string") {
         return nodeId;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  /**
+   * Walk ancestors looking for `userData.partId`. Stops at the first hit OR
+   * when it reaches a node boundary (`userData.nodeId`-bearing ancestor) —
+   * partIds beyond that boundary belong to a different model and don't apply.
+   */
+  private findPartId(object: Object3D | null): string | null {
+    let current: Object3D | null = object;
+    while (current && current !== this.viewportRoot) {
+      const partId = current.userData?.partId;
+      if (typeof partId === "string") {
+        return partId;
       }
       current = current.parent;
     }
@@ -979,24 +1010,105 @@ export class SceneEditor {
       return wrapper;
     }
 
-    this.gltfLoader.load(
-      asset.src,
-      (gltf) => {
-        wrapper.clear();
-        const scene = gltf.scene.clone(true);
-        scene.traverse((child) => {
-          child.userData.nodeId = node.id;
-          child.userData.nodeType = node.type;
-          if (child instanceof Mesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
+    const tagForNode = (root: Group): void => {
+      root.traverse((child) => {
+        child.userData.nodeId = node.id;
+        child.userData.nodeType = node.type;
+        if (child instanceof Mesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      // Tag each part with its index-path partId (matching ModelAssetStructure).
+      // The structure treats root.children as roots ("0", "1", "2"…), then nests
+      // by `${parentPath}.${index}` — so the root itself stays untagged.
+      const tagPart = (object: Object3D, path: string) => {
+        object.userData.partId = path;
+        object.children.forEach((nested, idx) => tagPart(nested, `${path}.${idx}`));
+      };
+      root.children.forEach((child, idx) => tagPart(child, String(idx)));
+    };
+
+    // Cache the parsed Group per-asset so subsequent scene rebuilds clone the
+    // cached result instead of re-parsing. Without this, ANY scene update
+    // (move, select, property change) would re-run the WASM parser.
+    let parsePromise = this.modelGroupCache.get(asset.id);
+    if (!parsePromise) {
+      const taskLabel = `Loading ${asset.name ?? asset.format.toUpperCase()}`;
+      if (asset.format === "usdz") {
+        const bytes = tryDecodeDataUrl(asset.src);
+        if (bytes) {
+          const buffer = bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ) as ArrayBuffer;
+          // ~1s per MB heuristic from measured parses (13MB ≈ 12-15s on Chrome).
+          // Used purely to drive the progress bar / ETA — actual time may vary.
+          const estimatedDurationMs = Math.max(2000, (buffer.byteLength / (1024 * 1024)) * 1000);
+          // Primary path: OpenUSD WASM. Falls back to tinyusdz (USDC) or three.js
+          // USDZ loader if OpenUSD throws.
+          parsePromise = runTask(taskLabel, async () => {
+            try {
+              const { parseUsdz } = await import("../lib/openusd/openusdParser");
+              return await parseUsdz(buffer, asset.name ?? "asset.usdz");
+            } catch (openUsdError) {
+              console.warn("OpenUSD parse failed, falling back:", openUsdError);
+              if (containsUsdcMagic(bytes)) {
+                const { parseUsdc } = await import("./usdcParser");
+                return await parseUsdc(buffer);
+              }
+              return await new Promise<Group>((resolve, reject) => {
+                this.usdLoader.load(asset.src, resolve, undefined, reject);
+              });
+            }
+          }, { blocking: true, estimatedDurationMs });
+        } else {
+          parsePromise = runTask(taskLabel, () => new Promise<Group>((resolve, reject) => {
+            this.usdLoader.load(asset.src, resolve, undefined, reject);
+          }), { blocking: true });
+        }
+      } else {
+        parsePromise = runTask(taskLabel, () => new Promise<Group>((resolve, reject) => {
+          this.gltfLoader.load(asset.src, (gltf) => resolve(gltf.scene), undefined, reject);
+        }), { blocking: true });
+      }
+
+      this.modelGroupCache.set(asset.id, parsePromise);
+      // Drop the cache entry on failure so the next attempt re-tries the parse
+      // instead of replaying the cached rejection.
+      parsePromise.catch(() => this.modelGroupCache.delete(asset.id));
+      // Once the parse succeeds, derive the structure from the actual rendered
+      // tree (with index-path IDs that survive clone()) and publish it on the
+      // ModelAsset so the hierarchy panel can render it.
+      parsePromise.then((cached) => {
+        const structure = buildStructureFromGroup(cached, asset.format);
+        this.store.updateModelAssetStructure(asset.id, structure);
+      }).catch(() => {/* already logged below */});
+    }
+
+    parsePromise
+      .then((cached) => {
+        const clone = cached.clone(true);
+        tagForNode(clone);
+
+        // Apply per-part visibility overrides. partId is the same index-path
+        // used to build asset.structure, so walking clone.children by the
+        // same path resolves to the matching Object3D in this instance.
+        const overrides = node.partVisibility;
+        if (overrides) {
+          for (const [partId, visible] of Object.entries(overrides)) {
+            if (visible !== false) continue;
+            const target = findObjectByIndexPath(clone, partId);
+            if (target) target.visible = false;
           }
-        });
-        wrapper.add(scene);
-      },
-      undefined,
-      () => {},
-    );
+        }
+
+        wrapper.clear();
+        wrapper.add(clone);
+      })
+      .catch((error) => {
+        console.error("Failed to load model:", error);
+      });
 
     return wrapper;
   }
@@ -1245,7 +1357,11 @@ export class SceneEditor {
       this.transformHelper.visible = false;
     }
 
-    this.updateSelectionHelper(selectedObjects);
+    // If a sub-part of a model is selected, narrow the selection box to that
+    // part's Object3D instead of the whole model wrapper. The gizmo stays on
+    // the wrapper (we don't support per-part transforms yet).
+    const partObjects = this.collectSelectionPartObjects(selectedObjects);
+    this.updateSelectionHelper(partObjects ?? selectedObjects);
     this.selectionHelperDirty = false;
   }
 
@@ -1338,6 +1454,26 @@ export class SceneEditor {
     return createAlignmentShape(nodeId, worldPivot, worldBounds.min, worldBounds.max);
   }
 
+  /**
+   * If the store has a selectedPartId AND exactly one node is selected and it
+   * is a model node, returns the array of part Object3Ds that the selection
+   * box should wrap. Returns null in any other case (caller falls back to the
+   * full node wrappers).
+   */
+  private collectSelectionPartObjects(selectedObjects: Object3D[]): Object3D[] | null {
+    const partId = this.store.selectedPartId;
+    if (!partId) return null;
+    if (selectedObjects.length !== 1) return null;
+    const wrapper = selectedObjects[0];
+    if (!wrapper) return null;
+    // The model's parseUsdz Group lives at wrapper.children[0] (see buildModelObject).
+    // Structure index-paths start from clone.children.
+    const clone = wrapper.children[0];
+    if (!clone) return null;
+    const part = findObjectByIndexPath(clone, partId);
+    return part ? [part] : null;
+  }
+
   private updateSelectionHelper(objects: Object3D[]): void {
     if (!this.computeSelectionBounds(objects)) {
       this.selectionHelper?.removeFromParent();
@@ -1377,7 +1513,8 @@ export class SceneEditor {
       return;
     }
 
-    this.updateSelectionHelper(this.selectedObjects);
+    const partObjects = this.collectSelectionPartObjects(this.selectedObjects);
+    this.updateSelectionHelper(partObjects ?? this.selectedObjects);
     this.selectionHelperDirty = false;
   }
 

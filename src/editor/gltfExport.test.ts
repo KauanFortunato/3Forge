@@ -1,9 +1,33 @@
-import { AnimationMixer, LoopOnce, Mesh, Quaternion } from "three";
+import JSZip from "jszip";
+import { AnimationMixer, BoxGeometry, Color, DataTexture, Group, LoopOnce, Matrix4, Mesh, MeshStandardMaterial, Quaternion, RGBAFormat, Texture, TextureLoader } from "three";
+import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { describe, expect, it } from "vitest";
+import type { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./usdcParser", () => ({
+  parseUsdc: async (): Promise<Group> => {
+    const root = new Group();
+    root.name = "USDC Mock Root";
+    const mesh = new Mesh(new BoxGeometry(0.5, 0.5, 0.5), new MeshStandardMaterial({ color: 0x00ff00 }));
+    mesh.name = "USDCMockMesh";
+    mesh.userData.usdcStub = true;
+    root.add(mesh);
+    return root;
+  },
+}));
+
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "./animation";
-import { createDefaultBlueprint, ROOT_NODE_ID } from "./state";
-import { createBlueprintExportGroup, exportBlueprintToGlbBlob, exportBlueprintToGltfJson } from "./gltfExport";
+import { createDefaultBlueprint, createNode, ROOT_NODE_ID } from "./state";
+import {
+  convertMaterialsForUsdz,
+  createBlueprintExportGroup,
+  exportBlueprintToGlbBlob,
+  exportBlueprintToGltfJson,
+  normalizeTexturesForCanvasExport,
+  parseUsdzWithTextures,
+} from "./gltfExport";
+import type { ModelAsset, ModelNode } from "./types";
 
 describe("gltfExport", () => {
   it("builds an exportable Three group from a blueprint", async () => {
@@ -148,6 +172,54 @@ describe("gltfExport", () => {
     expect(parsed.animations[1]?.tracks[0]?.name).toContain(".scale");
   });
 
+  it("composes matrices and converts non-standard materials before USDZ export", async () => {
+    const blueprint = createDefaultBlueprint();
+    const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
+    expect(panel).toBeTruthy();
+    if (!panel || panel.type !== "box") {
+      throw new Error("Expected panel node.");
+    }
+
+    panel.transform.position.x = 1;
+    panel.transform.position.y = 2;
+    panel.transform.position.z = 3;
+    panel.transform.rotation.y = 1.5;
+    panel.transform.scale.x = 2;
+    panel.transform.scale.y = 2;
+    panel.transform.scale.z = 2;
+    panel.material.type = "phong";
+    panel.material.color = "#33aa77";
+
+    const group = await createBlueprintExportGroup(blueprint);
+    const wrapper = group.getObjectByName(panel.name);
+    const mesh = group.getObjectByName(`${panel.name} Mesh`);
+    expect(wrapper).toBeTruthy();
+    expect(mesh).toBeInstanceOf(Mesh);
+    if (!wrapper || !(mesh instanceof Mesh)) {
+      throw new Error("Expected wrapper and mesh.");
+    }
+    const originalColor = ((mesh.material as { color: Color }).color).clone();
+
+    expect(wrapper.matrix.equals(new Matrix4())).toBe(true);
+    expect((mesh.material as { isMeshStandardMaterial?: boolean }).isMeshStandardMaterial).not.toBe(true);
+
+    group.updateMatrixWorld(true);
+    convertMaterialsForUsdz(group);
+
+    const convertedWrapper = group.getObjectByName(panel.name);
+    const converted = group.getObjectByName(`${panel.name} Mesh`);
+    expect(convertedWrapper).toBeTruthy();
+    expect(converted).toBeInstanceOf(Mesh);
+    if (!convertedWrapper || !(converted instanceof Mesh)) {
+      throw new Error("Expected wrapper and mesh after conversion.");
+    }
+
+    expect(convertedWrapper.matrix.equals(new Matrix4())).toBe(false);
+    const material = converted.material as { isMeshStandardMaterial?: boolean; color: Color };
+    expect(material.isMeshStandardMaterial).toBe(true);
+    expect(material.color.getHex()).toBe(originalColor.getHex());
+  });
+
   it("plays exported animation at the same key values as the editor timeline", async () => {
     const blueprint = createDefaultBlueprint();
     const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
@@ -195,8 +267,326 @@ describe("gltfExport", () => {
     mixer.setTime(1);
     expect(exportedPanel.position.x).toBeCloseTo(1.25, 5);
   });
+
+  it("embeds imported GLB geometry into the exported scene group", async () => {
+    const dataUrl = await makeGlbDataUrl();
+    const asset: ModelAsset = {
+      id: "asset-embed",
+      name: "Fixture.glb",
+      mimeType: "model/gltf-binary",
+      src: dataUrl,
+      format: "glb",
+    };
+    const blueprint = createDefaultBlueprint();
+    const modelNode = createNode("model", null) as ModelNode;
+    modelNode.modelId = asset.id;
+    blueprint.models = [asset];
+    blueprint.nodes = [modelNode];
+
+    const group = await createBlueprintExportGroup(blueprint);
+    let foundMesh: Mesh | null = null;
+    group.traverse((child) => {
+      if (child instanceof Mesh && child.userData.assetId === asset.id) {
+        foundMesh = child;
+      }
+    });
+    expect(foundMesh).not.toBeNull();
+  });
+
+  it("converts embedded GLB materials to MeshStandardMaterial for USDZ", async () => {
+    const dataUrl = await makeGlbDataUrl();
+    const asset: ModelAsset = {
+      id: "asset-usdz-mat",
+      name: "Fixture.glb",
+      mimeType: "model/gltf-binary",
+      src: dataUrl,
+      format: "glb",
+    };
+    const blueprint = createDefaultBlueprint();
+    const modelNode = createNode("model", null) as ModelNode;
+    modelNode.modelId = asset.id;
+    blueprint.models = [asset];
+    blueprint.nodes = [modelNode];
+
+    const group = await createBlueprintExportGroup(blueprint);
+    convertMaterialsForUsdz(group);
+
+    const embeddedMeshes: Mesh[] = [];
+    group.traverse((child) => {
+      if (child instanceof Mesh && child.userData.assetId === asset.id) {
+        embeddedMeshes.push(child);
+      }
+    });
+    expect(embeddedMeshes.length).toBeGreaterThan(0);
+    for (const mesh of embeddedMeshes) {
+      const material = mesh.material as { isMeshStandardMaterial?: boolean };
+      expect(material.isMeshStandardMaterial).toBe(true);
+    }
+  });
+
+  it("caches model parsing across multiple references", async () => {
+    const dataUrl = await makeGlbDataUrl();
+    const asset: ModelAsset = {
+      id: "asset-cache",
+      name: "Fixture.glb",
+      mimeType: "model/gltf-binary",
+      src: dataUrl,
+      format: "glb",
+    };
+    const blueprint = createDefaultBlueprint();
+    const firstNode = createNode("model", null) as ModelNode;
+    firstNode.modelId = asset.id;
+    const secondNode = createNode("model", null) as ModelNode;
+    secondNode.modelId = asset.id;
+    blueprint.models = [asset];
+    blueprint.nodes = [firstNode, secondNode];
+
+    const parseSpy = vi.spyOn(GLTFLoader.prototype, "parseAsync");
+    try {
+      await createBlueprintExportGroup(blueprint);
+      expect(parseSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
+  it("routes USDC-binary USDZ assets through the tinyusdz parser", async () => {
+    const dataUrl = await makeUsdcUsdzDataUrl();
+    const asset: ModelAsset = {
+      id: "asset-usdc",
+      name: "Binary.usdz",
+      mimeType: "model/vnd.usdz+zip",
+      src: dataUrl,
+      format: "usdz",
+    };
+    const blueprint = createDefaultBlueprint();
+    const modelNode = createNode("model", null) as ModelNode;
+    modelNode.modelId = asset.id;
+    blueprint.models = [asset];
+    blueprint.nodes = [modelNode];
+
+    const group = await createBlueprintExportGroup(blueprint);
+
+    const markedMeshes: Mesh[] = [];
+    group.traverse((child) => {
+      if (child instanceof Mesh && child.userData.usdcStub === true) {
+        markedMeshes.push(child);
+      }
+    });
+    expect(markedMeshes.length).toBe(1);
+    expect(markedMeshes[0]?.userData.assetId).toBe(asset.id);
+  });
+
+  it("normalizes raw data textures to canvas images before exporter drawImage paths", () => {
+    const context = {
+      createImageData: (width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+        width,
+        height,
+        colorSpace: "srgb",
+      }),
+      putImageData: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, "getContext");
+    getContextSpy.mockImplementation(((contextId: string) => (
+      contextId === "2d" ? context : null
+    )) as HTMLCanvasElement["getContext"]);
+    const texture = new DataTexture(
+      new Uint8Array([
+        255, 0, 0, 255,
+        0, 255, 0, 255,
+        0, 0, 255, 255,
+        255, 255, 255, 255,
+      ]),
+      2,
+      2,
+      RGBAFormat,
+    );
+    texture.needsUpdate = true;
+    const mesh = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({
+      metalnessMap: texture,
+      roughnessMap: texture,
+    }));
+    const group = new Group();
+    group.add(mesh);
+
+    try {
+      normalizeTexturesForCanvasExport(group);
+
+      expect(texture.image).toBeInstanceOf(HTMLCanvasElement);
+      expect(texture.image.width).toBe(2);
+      expect(texture.image.height).toBe(2);
+    } finally {
+      getContextSpy.mockRestore();
+    }
+  });
+
+  describe("parseUsdzWithTextures", () => {
+    it("waits for TextureLoader callbacks before resolving", async () => {
+      const originalLoad = TextureLoader.prototype.load;
+      const sourceData = { fake: "image", width: 1, height: 1 };
+      let triggerOnLoad: (() => void) | undefined;
+
+      // Replace the real loader so the test never depends on jsdom decoding an
+      // actual <img> element. The patched-in stub inside parseUsdzWithTextures
+      // will call THIS function (since we treat it as the "original") and
+      // schedule its onLoad to be triggered later from the test.
+      const stubLoad = function stubLoad(
+        this: TextureLoader,
+        _url: string,
+        onLoad?: (texture: Texture) => void,
+      ): Texture {
+        const texture = new Texture();
+        triggerOnLoad = (): void => {
+          (texture as unknown as { source: { data: unknown } }).source = { data: sourceData };
+          texture.needsUpdate = true;
+          if (onLoad) onLoad(texture);
+        };
+        return texture;
+      };
+      (TextureLoader.prototype as unknown as { load: typeof stubLoad }).load = stubLoad;
+
+      let capturedTexture: Texture | null = null;
+      const fakeLoader = {
+        parse: (_buffer: ArrayBuffer): Group => {
+          const group = new Group();
+          const texture = new TextureLoader().load("memory://fixture.png");
+          capturedTexture = texture;
+          group.add(new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ map: texture })));
+          return group;
+        },
+      } as unknown as USDLoader;
+
+      try {
+        const exportPromise = parseUsdzWithTextures(fakeLoader, new ArrayBuffer(8));
+        // Microtask flush to ensure parse() has run and waiter is registered
+        // before we fire the callback.
+        await Promise.resolve();
+        expect(triggerOnLoad).toBeTypeOf("function");
+        triggerOnLoad?.();
+        const group = await exportPromise;
+
+        expect(group).toBeInstanceOf(Group);
+        expect(capturedTexture).not.toBeNull();
+        const sourceFromTexture = (capturedTexture as unknown as Texture & { source: { data: unknown } }).source.data;
+        expect(sourceFromTexture).toBe(sourceData);
+        // Prototype must be restored to the value that was in place when the
+        // helper was invoked (our stubLoad — captured from the prototype slot
+        // before patching).
+        expect(TextureLoader.prototype.load).toBe(stubLoad);
+      } finally {
+        (TextureLoader.prototype as unknown as { load: typeof originalLoad }).load = originalLoad;
+      }
+    });
+
+    it("restores prototype on parse exception", async () => {
+      const loadBefore = TextureLoader.prototype.load;
+      const fakeLoader = {
+        parse: (): Group => {
+          throw new Error("boom");
+        },
+      } as unknown as USDLoader;
+
+      await expect(parseUsdzWithTextures(fakeLoader, new ArrayBuffer(8))).rejects.toThrow(/boom/);
+      expect(TextureLoader.prototype.load).toBe(loadBefore);
+    });
+
+    it("continues when one texture load errors", async () => {
+      const originalLoad = TextureLoader.prototype.load;
+      const goodSourceData = { fake: "good", width: 1, height: 1 };
+      const triggers: Array<() => void> = [];
+
+      const stubLoad = function stubLoad(
+        this: TextureLoader,
+        url: string,
+        onLoad?: (texture: Texture) => void,
+        _onProgress?: (event: ProgressEvent) => void,
+        onError?: (error: unknown) => void,
+      ): Texture {
+        const texture = new Texture();
+        if (url.startsWith("bad://")) {
+          triggers.push((): void => {
+            if (onError) onError(new Error(`image decode failed for ${url}`));
+          });
+        } else {
+          triggers.push((): void => {
+            (texture as unknown as { source: { data: unknown } }).source = { data: goodSourceData };
+            texture.needsUpdate = true;
+            if (onLoad) onLoad(texture);
+          });
+        }
+        return texture;
+      };
+      (TextureLoader.prototype as unknown as { load: typeof stubLoad }).load = stubLoad;
+
+      let goodTexture: Texture | null = null;
+      const fakeLoader = {
+        parse: (_buffer: ArrayBuffer): Group => {
+          const group = new Group();
+          const loader = new TextureLoader();
+          goodTexture = loader.load("memory://good.png");
+          loader.load("bad://nonexistent.png");
+          group.add(new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ map: goodTexture })));
+          return group;
+        },
+      } as unknown as USDLoader;
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const exportPromise = parseUsdzWithTextures(fakeLoader, new ArrayBuffer(8));
+        await Promise.resolve();
+        expect(triggers.length).toBe(2);
+        for (const trigger of triggers) trigger();
+        const group = await exportPromise;
+
+        expect(group).toBeInstanceOf(Group);
+        expect(goodTexture).not.toBeNull();
+        const sourceFromTexture = (goodTexture as unknown as Texture & { source: { data: unknown } }).source.data;
+        expect(sourceFromTexture).toBe(goodSourceData);
+        expect(warnSpy).toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+        (TextureLoader.prototype as unknown as { load: typeof originalLoad }).load = originalLoad;
+      }
+    });
+  });
 });
 
 function parseGltfJson(gltfJson: string): Promise<Awaited<ReturnType<GLTFLoader["parseAsync"]>>> {
   return new GLTFLoader().parseAsync(gltfJson, "");
+}
+
+async function makeGlbDataUrl(): Promise<string> {
+  const scene = new Group();
+  const mesh = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ color: 0xff0000 }));
+  mesh.name = "FixtureMesh";
+  scene.add(mesh);
+  const exporter = new GLTFExporter();
+  const result = await exporter.parseAsync(scene, { binary: true });
+  if (!(result instanceof ArrayBuffer)) {
+    throw new Error("Expected GLB ArrayBuffer.");
+  }
+  const base64 = bytesToBase64(new Uint8Array(result));
+  return `data:model/gltf-binary;base64,${base64}`;
+}
+
+async function makeUsdcUsdzDataUrl(): Promise<string> {
+  const zip = new JSZip();
+  const payload = new Uint8Array(64);
+  const magic = [0x50, 0x58, 0x52, 0x2D, 0x55, 0x53, 0x44, 0x43];
+  for (let index = 0; index < magic.length; index += 1) {
+    payload[index] = magic[index];
+  }
+  zip.file("root.usdc", payload);
+  const archive = await zip.generateAsync({ type: "uint8array" });
+  return `data:model/vnd.usdz+zip;base64,${bytesToBase64(archive)}`;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return typeof btoa === "function" ? btoa(binary) : Buffer.from(bytes).toString("base64");
 }

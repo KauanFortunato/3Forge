@@ -8,6 +8,7 @@ import type {
   FontAsset,
   ImageAsset,
   MaterialAsset,
+  ModelAsset,
   NodePropertyDefinition,
   SceneSettings,
   ViewMode,
@@ -24,8 +25,10 @@ export interface EditorStoreView {
   selectedNodeIds: string[];
   selectedNode: EditorNode | undefined;
   selectedNodes: EditorNode[];
+  selectedPartId: string | null;
   fonts: FontAsset[];
   materials: MaterialAsset[];
+  models: ModelAsset[];
   images: ImageAsset[];
   sceneSettings: SceneSettings;
   editableFields: EditableFieldEntry[];

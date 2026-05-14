@@ -9,6 +9,11 @@ describe("model file imports", () => {
     expect(isModelFile(new File(["png"], "hero.png", { type: "image/png" }))).toBe(false);
   });
 
+  it("accepts USDZ files by extension or MIME type", () => {
+    expect(isModelFile(new File(["usdz"], "hero.usdz", { type: "" }))).toBe(true);
+    expect(isModelFile(new File(["usdz"], "hero.bin", { type: "model/vnd.usdz+zip" }))).toBe(true);
+  });
+
   it("converts a GLTF file to serializable model asset metadata", async () => {
     const asset = await modelFileToAsset(new File(["{}"], "Hero Model.gltf", { type: "model/gltf+json" }));
 
@@ -21,6 +26,19 @@ describe("model file imports", () => {
       source: "imported",
     });
     expect(asset.src).toMatch(/^data:model\/gltf\+json;base64,/);
+  });
+
+  it("converts a USDZ file to serializable model asset metadata", async () => {
+    const asset = await modelFileToAsset(new File(["usdz"], "hero.usdz", { type: "" }));
+
+    expect(asset).toMatchObject({
+      id: "",
+      name: "hero.usdz",
+      mimeType: "model/vnd.usdz+zip",
+      format: "usdz",
+      originalFileName: "hero.usdz",
+      source: "imported",
+    });
   });
 
   it("rejects unsupported files", async () => {

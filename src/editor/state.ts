@@ -57,6 +57,7 @@ import type {
   MaterialSpec,
   MaterialType,
   ModelAsset,
+  ModelAssetStructure,
   ModelNode,
   NodeOriginDepth,
   NodeOriginHorizontal,
@@ -1041,8 +1042,16 @@ function normalizeModelAsset(rawModel: unknown, usedIds: Set<string>): ModelAsse
   }
 
   const rawFormat = typeof source.format === "string" ? source.format.toLowerCase() : "";
-  const format = rawFormat === "gltf" ? "gltf" : "glb";
-  const fallbackName = format === "gltf" ? "Model.gltf" : "Model.glb";
+  const format: ModelAsset["format"] = rawFormat === "usdz"
+    ? "usdz"
+    : rawFormat === "gltf"
+      ? "gltf"
+      : "glb";
+  const fallbackName = format === "usdz"
+    ? "Model.usdz"
+    : format === "gltf"
+      ? "Model.gltf"
+      : "Model.glb";
   const name = (typeof source.name === "string" ? source.name.trim() : "") || fallbackName;
   const proposedId = (typeof source.id === "string" ? source.id.trim() : "") || toCamelCase(stripExtension(name));
   let id = proposedId || generateId("model-asset");
@@ -1052,11 +1061,16 @@ function normalizeModelAsset(rawModel: unknown, usedIds: Set<string>): ModelAsse
   usedIds.add(id);
 
   const mimeType = (typeof source.mimeType === "string" ? source.mimeType.trim() : "")
-    || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary");
+    || (format === "usdz"
+      ? "model/vnd.usdz+zip"
+      : format === "gltf"
+        ? "model/gltf+json"
+        : "model/gltf-binary");
   const originalFileName = typeof source.originalFileName === "string" && source.originalFileName.trim()
     ? source.originalFileName.trim()
     : undefined;
   const modelSource = source.source === "external" ? "external" : source.source === "imported" ? "imported" : undefined;
+  const structure = normalizeModelAssetStructure(source.structure, format);
 
   return {
     id,
@@ -1066,7 +1080,60 @@ function normalizeModelAsset(rawModel: unknown, usedIds: Set<string>): ModelAsse
     format,
     ...(originalFileName ? { originalFileName } : {}),
     ...(modelSource ? { source: modelSource } : {}),
+    ...(structure ? { structure } : {}),
   };
+}
+
+function normalizeModelAssetStructure(rawStructure: unknown, format: ModelAsset["format"]): ModelAsset["structure"] {
+  if (!rawStructure || typeof rawStructure !== "object") {
+    return undefined;
+  }
+  const source = rawStructure as Record<string, unknown>;
+  const roots = Array.isArray(source.roots)
+    ? source.roots.map((node, index) => normalizeModelAssetStructureNode(node, `root-${index}`)).filter((node): node is NonNullable<ModelAsset["structure"]>["roots"][number] => Boolean(node))
+    : [];
+  return {
+    format,
+    source: source.source === "tinyusdz" || source.source === "three" || source.source === "archive"
+      ? source.source
+      : "unknown",
+    nodeCount: normalizeNonNegativeInteger(source.nodeCount, roots.reduce((total, root) => total + countModelAssetStructureNodes(root), 0)),
+    meshCount: normalizeNonNegativeInteger(source.meshCount, roots.reduce((total, root) => total + root.meshCount, 0)),
+    materialCount: normalizeNonNegativeInteger(source.materialCount, 0),
+    textureCount: normalizeNonNegativeInteger(source.textureCount, 0),
+    roots,
+  };
+}
+
+function normalizeModelAssetStructureNode(rawNode: unknown, fallbackId: string): NonNullable<ModelAsset["structure"]>["roots"][number] | null {
+  if (!rawNode || typeof rawNode !== "object") {
+    return null;
+  }
+  const source = rawNode as Record<string, unknown>;
+  const children = Array.isArray(source.children)
+    ? source.children.map((child, index) => normalizeModelAssetStructureNode(child, `${fallbackId}.${index}`)).filter((node): node is NonNullable<ModelAsset["structure"]>["roots"][number] => Boolean(node))
+    : [];
+  const type = (typeof source.type === "string" && source.type.trim()) || "node";
+  const name = (typeof source.name === "string" && source.name.trim()) || type;
+  return {
+    id: (typeof source.id === "string" && source.id.trim()) || fallbackId,
+    name,
+    type,
+    childCount: normalizeNonNegativeInteger(source.childCount, children.length),
+    meshCount: normalizeNonNegativeInteger(source.meshCount, children.reduce((total, child) => total + child.meshCount, 0)),
+    materialCount: normalizeNonNegativeInteger(source.materialCount, 0),
+    children,
+  };
+}
+
+function countModelAssetStructureNodes(node: NonNullable<ModelAsset["structure"]>["roots"][number]): number {
+  return 1 + node.children.reduce((total, child) => total + countModelAssetStructureNodes(child), 0);
+}
+
+function normalizeNonNegativeInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : fallback;
 }
 
 function normalizeImportedNode(rawNode: unknown): EditorNode | null {
@@ -1354,6 +1421,9 @@ export class EditorStore extends EventTarget {
   private _activeHistoryDirty = false;
   private _revision = 0;
   private _propertyClipboard: PropertyClipboard | null = null;
+  // Transient (not persisted): which sub-part of a ModelNode is currently
+  // highlighted in the hierarchy. Cleared whenever node selection changes.
+  private _selectedPartId: string | null = null;
 
   constructor(initialBlueprint?: unknown) {
     super();
@@ -1376,6 +1446,56 @@ export class EditorStore extends EventTarget {
 
   get selectedNode(): EditorNode | undefined {
     return this.getNode(this._selectedNodeId);
+  }
+
+  get selectedPartId(): string | null {
+    return this._selectedPartId;
+  }
+
+  /**
+   * Selects (or clears) a sub-part of a ModelNode's structure. The
+   * selection is transient (not persisted) — it survives until the
+   * user picks a different node, opens another file, etc.
+   */
+  setSelectedPartId(partId: string | null, source: EditorStoreChange["source"] = "ui"): void {
+    if (this._selectedPartId === partId) return;
+    this._selectedPartId = partId;
+    this.notify({ reason: "selection", source });
+  }
+
+  /**
+   * Toggle or set the visibility of a sub-part within a ModelNode. The
+   * override is persisted on the node as `partVisibility[partId]`.
+   * Passing `visible=true` removes the override (default state).
+   */
+  setModelNodePartVisibility(
+    nodeId: string,
+    partId: string,
+    visible: boolean,
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    const node = this.getNode(nodeId);
+    if (!node || node.type !== "model") return;
+    const modelNode = node as ModelNode;
+    const current = modelNode.partVisibility ?? {};
+    const isHiddenNow = current[partId] === false;
+    const wantsHidden = !visible;
+    if (isHiddenNow === wantsHidden) return;
+
+    const next = { ...current };
+    if (wantsHidden) {
+      next[partId] = false;
+    } else {
+      delete next[partId];
+    }
+
+    this.recordHistorySnapshot();
+    if (Object.keys(next).length > 0) {
+      modelNode.partVisibility = next;
+    } else {
+      delete modelNode.partVisibility;
+    }
+    this.notify({ reason: "node", source, nodeId });
   }
 
   get selectedNodes(): EditorNode[] {
@@ -2319,6 +2439,10 @@ export class EditorStore extends EventTarget {
 
     this._selectedNodeId = nextPrimaryId;
     this._selectedNodeIds = nextNodeIds;
+    // Picking a different node clears any selected sub-part — keeps the
+    // hierarchy/inspector consistent (a part only makes sense in the context
+    // of its owning model node being selected).
+    this._selectedPartId = null;
     this.notify({ reason: "selection", source, nodeId: nextPrimaryId });
   }
 
@@ -3474,8 +3598,16 @@ export class EditorStore extends EventTarget {
     const id = this.makeUniqueModelId(options.id ?? model.id);
     const proposedName = (options.name ?? model.name ?? "").trim() || "Model";
     const name = this.makeUniqueModelName(proposedName);
-    const format = model.format === "gltf" ? "gltf" : "glb";
-    const mimeType = model.mimeType || (format === "gltf" ? "model/gltf+json" : "model/gltf-binary");
+    const format: ModelAsset["format"] = model.format === "usdz"
+      ? "usdz"
+      : model.format === "gltf"
+        ? "gltf"
+        : "glb";
+    const mimeType = model.mimeType || (format === "usdz"
+      ? "model/vnd.usdz+zip"
+      : format === "gltf"
+        ? "model/gltf+json"
+        : "model/gltf-binary");
 
     this.recordHistorySnapshot();
     this._blueprint.models = [
@@ -3488,10 +3620,37 @@ export class EditorStore extends EventTarget {
         format,
         ...(model.originalFileName ? { originalFileName: model.originalFileName } : {}),
         ...(model.source ? { source: model.source } : {}),
+        ...(model.structure ? { structure: model.structure } : {}),
       },
     ];
     this.notify({ reason: "model", source });
     return id;
+  }
+
+  /**
+   * Replace the `structure` field of an existing ModelAsset (lazy
+   * population from the scene's render parser). Skipped silently if the
+   * asset no longer exists or the new structure is identical.
+   *
+   * Does NOT record an undo snapshot — structure is derived data, not a
+   * user edit, and we don't want viewport loads to spam the history.
+   */
+  updateModelAssetStructure(
+    modelId: string,
+    structure: ModelAssetStructure,
+    source: EditorStoreChange["source"] = "ui",
+  ): void {
+    const models = this.models;
+    const index = models.findIndex((m) => m.id === modelId);
+    if (index === -1) return;
+    const existing = models[index];
+    if (!existing || existing.structure === structure) return;
+    this._blueprint.models = [
+      ...models.slice(0, index),
+      { ...existing, structure },
+      ...models.slice(index + 1),
+    ];
+    this.notify({ reason: "model", source });
   }
 
   addFont(font: FontAsset, source: EditorStoreChange["source"] = "ui"): string {
