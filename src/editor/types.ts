@@ -196,9 +196,17 @@ export interface ComponentAnimation {
 
 export type SceneToneMapping = "none" | "linear" | "acesFilmic";
 export type SceneShadowType = "basic" | "pcf" | "pcfSoft";
+export type SceneMode = "2d" | "3d";
+
+export interface SceneCanvasSize {
+  width: number;
+  height: number;
+}
 
 export interface SceneSettings {
   backgroundColor: string;
+  mode: SceneMode;
+  canvas: SceneCanvasSize;
   environment: {
     type: "none";
     hdrAssetId: string | null;

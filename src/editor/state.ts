@@ -65,6 +65,8 @@ import type {
   NodePropertyDefinition,
   NodePropertyPath,
   PlaneNode,
+  SceneCanvasSize,
+  SceneMode,
   SceneSettings,
   SceneShadowType,
   SceneToneMapping,
@@ -274,6 +276,8 @@ export function createDefaultBlueprint(): ComponentBlueprint {
 export function createDefaultSceneSettings(): SceneSettings {
   return {
     backgroundColor: "#25272c",
+    mode: "3d",
+    canvas: { width: 1920, height: 1080 },
     environment: {
       type: "none",
       hdrAssetId: null,
@@ -694,6 +698,20 @@ function normalizeSceneShadowType(value: unknown, fallback: SceneShadowType): Sc
   return value === "basic" || value === "pcf" || value === "pcfSoft" ? value : fallback;
 }
 
+function normalizeSceneMode(value: unknown, fallback: SceneMode): SceneMode {
+  return value === "2d" || value === "3d" ? value : fallback;
+}
+
+function normalizeSceneCanvas(value: unknown, fallback: SceneCanvasSize): SceneCanvasSize {
+  if (!value || typeof value !== "object") {
+    return { ...fallback };
+  }
+  const source = value as Record<string, unknown>;
+  const width = Math.max(1, Math.round(normalizeNumber(source.width, fallback.width)));
+  const height = Math.max(1, Math.round(normalizeNumber(source.height, fallback.height)));
+  return { width, height };
+}
+
 function normalizeSceneSettings(rawSettings: unknown, fallback = createDefaultSceneSettings()): SceneSettings {
   if (!rawSettings || typeof rawSettings !== "object") {
     return structuredClone(fallback);
@@ -715,6 +733,8 @@ function normalizeSceneSettings(rawSettings: unknown, fallback = createDefaultSc
 
   return {
     backgroundColor: normalizeOptionalColor(source.backgroundColor, fallback.backgroundColor),
+    mode: normalizeSceneMode(source.mode, fallback.mode),
+    canvas: normalizeSceneCanvas(source.canvas, fallback.canvas),
     environment: {
       type: "none",
       hdrAssetId: typeof environment.hdrAssetId === "string" && environment.hdrAssetId.trim()
@@ -1443,6 +1463,8 @@ export class EditorStore extends EventTarget {
 
   updateSceneSettings(patch: {
     backgroundColor?: string;
+    mode?: SceneMode;
+    canvas?: Partial<SceneCanvasSize>;
     environment?: Partial<SceneSettings["environment"]>;
     lighting?: Partial<SceneSettings["lighting"]>;
     toneMapping?: Partial<SceneSettings["toneMapping"]>;
@@ -1452,6 +1474,10 @@ export class EditorStore extends EventTarget {
     const nextSettings = normalizeSceneSettings({
       ...currentSettings,
       ...patch,
+      canvas: {
+        ...currentSettings.canvas,
+        ...patch.canvas,
+      },
       environment: {
         ...currentSettings.environment,
         ...patch.environment,

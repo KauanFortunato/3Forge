@@ -3242,6 +3242,8 @@ export function App() {
           canRedo={storeView.canRedo}
           currentTool={currentTool}
           viewMode={storeView.viewMode}
+          sceneMode={storeView.sceneSettings.mode}
+          onSceneModeChange={(mode) => store.updateSceneSettings({ mode })}
           onToolChange={handleToolChange}
           onFrameSelection={handleFrameSelection}
           onViewModeChange={(mode) => store.setViewMode(mode)}

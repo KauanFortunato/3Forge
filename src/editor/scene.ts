@@ -36,6 +36,7 @@ import {
   Object3D,
   OctahedronGeometry,
   NoToneMapping,
+  OrthographicCamera,
   PerspectiveCamera,
   PlaneGeometry,
   PCFShadowMap,
@@ -78,6 +79,7 @@ import type {
   MaterialSpec,
   ModelNode,
   NodeOriginSpec,
+  SceneMode,
   TextNode,
 } from "./types";
 
@@ -222,6 +224,10 @@ export class SceneEditor {
   private readonly renderer: WebGLRenderer;
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
+  private readonly orthoCamera: OrthographicCamera;
+  private currentSceneMode: SceneMode = "3d";
+  private viewportRect2D = { x: 0, y: 0, width: 0, height: 0 };
+  private readonly ORTHO_VIEW_HEIGHT = 10;
   private readonly orientationRenderer: WebGLRenderer;
   private readonly orientationScene: Scene;
   private readonly orientationCamera: PerspectiveCamera;
@@ -292,6 +298,10 @@ export class SceneEditor {
 
     this.camera = new PerspectiveCamera(45, 1, 0.01, 2000);
     this.camera.position.set(6, 5, 8);
+
+    this.orthoCamera = new OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+    this.orthoCamera.position.set(0, 0, 10);
+    this.orthoCamera.lookAt(0, 0, 0);
 
     this.orientationRenderer = new WebGLRenderer({ antialias: true, alpha: true });
     this.orientationRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -372,6 +382,7 @@ export class SceneEditor {
 
     this.unsubscribe = this.store.subscribe((change) => this.handleStoreChange(change));
     this.rebuildScene();
+    this.applySceneMode(this.store.sceneSettings.mode);
     this.resize();
     this.startLoop();
   }
@@ -683,6 +694,11 @@ export class SceneEditor {
 
   private applySceneSettings(): void {
     const settings = this.store.sceneSettings;
+    if (settings.mode !== this.currentSceneMode) {
+      this.applySceneMode(settings.mode);
+    } else if (this.currentSceneMode === "2d") {
+      this.resize();
+    }
     const background = new Color(settings.backgroundColor);
     this.scene.background = background;
     this.renderer.setClearColor(background, 1);
@@ -1446,18 +1462,86 @@ export class SceneEditor {
     this.orientationCamera.aspect = 1;
     this.orientationCamera.updateProjectionMatrix();
     this.orientationRenderer.setSize(this.ORIENTATION_SIZE, this.ORIENTATION_SIZE, false);
+
+    if (this.currentSceneMode === "2d") {
+      const canvas = this.store.sceneSettings.canvas;
+      const targetAspect = canvas.width / canvas.height;
+      const containerAspect = width / height;
+      let viewportWidth: number;
+      let viewportHeight: number;
+      if (containerAspect > targetAspect) {
+        viewportHeight = height;
+        viewportWidth = height * targetAspect;
+      } else {
+        viewportWidth = width;
+        viewportHeight = width / targetAspect;
+      }
+      this.viewportRect2D = {
+        x: Math.round((width - viewportWidth) / 2),
+        y: Math.round((height - viewportHeight) / 2),
+        width: Math.round(viewportWidth),
+        height: Math.round(viewportHeight),
+      };
+      this.applyOrthoFrustum(targetAspect);
+    }
+  }
+
+  private applyOrthoFrustum(aspect: number): void {
+    const halfHeight = this.ORTHO_VIEW_HEIGHT / 2;
+    const halfWidth = halfHeight * aspect;
+    this.orthoCamera.left = -halfWidth;
+    this.orthoCamera.right = halfWidth;
+    this.orthoCamera.top = halfHeight;
+    this.orthoCamera.bottom = -halfHeight;
+    this.orthoCamera.updateProjectionMatrix();
+  }
+
+  private applySceneMode(mode: SceneMode): void {
+    this.currentSceneMode = mode;
+    const is2D = mode === "2d";
+
+    this.orbitControls.enabled = !is2D;
+    this.transformControls.showZ = !is2D;
+    this.infiniteGrid.visible = !is2D;
+    this.orientationRenderer.domElement.style.display = is2D ? "none" : "";
+
+    this.resize();
   }
 
   private startLoop(): void {
     const tick = () => {
       this.animationFrame = requestAnimationFrame(tick);
       this.updateAnimationPlayback();
-      this.orbitControls.update();
+      if (this.currentSceneMode === "3d") {
+        this.orbitControls.update();
+      }
       this.updateInfiniteGrid();
       this.updateSelectionHelperFromCache();
-      this.renderer.render(this.scene, this.camera);
-      this.orientationRoot.quaternion.copy(this.camera.quaternion).invert();
-      this.orientationRenderer.render(this.orientationScene, this.orientationCamera);
+
+      if (this.currentSceneMode === "2d") {
+        const rect = this.viewportRect2D;
+        const containerWidth = Math.max(this.container.clientWidth, 1);
+        const containerHeight = Math.max(this.container.clientHeight, 1);
+        const yFromBottom = containerHeight - rect.y - rect.height;
+        const background = new Color(this.store.sceneSettings.backgroundColor);
+
+        this.renderer.setScissorTest(true);
+        this.renderer.setViewport(0, 0, containerWidth, containerHeight);
+        this.renderer.setScissor(0, 0, containerWidth, containerHeight);
+        this.renderer.setClearColor(0x000000, 1);
+        this.renderer.clear();
+
+        this.renderer.setViewport(rect.x, yFromBottom, rect.width, rect.height);
+        this.renderer.setScissor(rect.x, yFromBottom, rect.width, rect.height);
+        this.renderer.setClearColor(background, 1);
+        this.renderer.clear();
+        this.renderer.render(this.scene, this.orthoCamera);
+        this.renderer.setScissorTest(false);
+      } else {
+        this.renderer.render(this.scene, this.camera);
+        this.orientationRoot.quaternion.copy(this.camera.quaternion).invert();
+        this.orientationRenderer.render(this.orientationScene, this.orientationCamera);
+      }
     };
 
     tick();

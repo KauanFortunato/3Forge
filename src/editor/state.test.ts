@@ -278,6 +278,35 @@ describe("EditorStore", () => {
     expect(store.sceneSettings.shadows).toEqual({ enabled: true, type: "pcfSoft" });
   });
 
+  it("defaults scene mode to 3d and canvas to 1920x1080", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    expect(store.sceneSettings.mode).toBe("3d");
+    expect(store.sceneSettings.canvas).toEqual({ width: 1920, height: 1080 });
+  });
+
+  it("normalizes invalid scene mode and canvas to defaults", () => {
+    const store = new EditorStore({
+      ...createDefaultBlueprint(),
+      sceneSettings: {
+        mode: "isometric",
+        canvas: { width: -5, height: "ten" },
+      } as never,
+    });
+
+    expect(store.sceneSettings.mode).toBe("3d");
+    expect(store.sceneSettings.canvas).toEqual({ width: 1, height: 1080 });
+  });
+
+  it("updates scene mode and canvas via updateSceneSettings", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+
+    store.updateSceneSettings({ mode: "2d", canvas: { width: 1280 } });
+
+    expect(store.sceneSettings.mode).toBe("2d");
+    expect(store.sceneSettings.canvas).toEqual({ width: 1280, height: 1080 });
+  });
+
   it("round-trips a valid blueprint through JSON export and import", () => {
     const blueprint = new EditorStore(createBlueprintFixture()).getSnapshot();
     const json = exportBlueprintToJson(blueprint);

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { ToolMode } from "../ui-types";
-import type { EditorNodeType, ViewMode } from "../../types";
+import type { EditorNodeType, SceneMode, ViewMode } from "../../types";
 import {
   BoxIcon,
   CursorIcon,
@@ -53,6 +53,8 @@ interface SecondaryToolbarProps {
   canRedo: boolean;
   currentTool: ToolMode;
   viewMode?: ViewMode;
+  sceneMode?: SceneMode;
+  onSceneModeChange?: (mode: SceneMode) => void;
   isTimelineVisible: boolean;
   playback?: PlaybackToolbarProps | null;
   onComponentNameChange: (value: string) => void;
@@ -80,6 +82,8 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
     canRedo,
     currentTool,
     viewMode,
+    sceneMode,
+    onSceneModeChange,
     isTimelineVisible,
     playback,
     onComponentNameChange,
@@ -198,6 +202,31 @@ export function SecondaryToolbar(props: SecondaryToolbarProps) {
       </div>
 
       <div className="toolbar__right">
+        {onSceneModeChange && sceneMode ? (
+          <div className="tgroup tgroup--scene-mode" aria-label="Scene mode">
+            <button
+              type="button"
+              className={`ibtn${sceneMode === "2d" ? " is-active" : ""}`}
+              onClick={() => onSceneModeChange("2d")}
+              aria-pressed={sceneMode === "2d"}
+              aria-label="2D mode"
+              title="2D mode (fixed canvas)"
+            >
+              <span style={{ fontSize: 10, fontWeight: 700 }}>2D</span>
+            </button>
+            <button
+              type="button"
+              className={`ibtn${sceneMode === "3d" ? " is-active" : ""}`}
+              onClick={() => onSceneModeChange("3d")}
+              aria-pressed={sceneMode === "3d"}
+              aria-label="3D mode"
+              title="3D mode"
+            >
+              <span style={{ fontSize: 10, fontWeight: 700 }}>3D</span>
+            </button>
+          </div>
+        ) : null}
+
         {onViewModeChange && viewMode ? (
           <div className="tgroup tgroup--shading" aria-label="Viewport shading">
             <ToolbarIconButton
