@@ -65,6 +65,8 @@ import type {
   NodePropertyDefinition,
   NodePropertyPath,
   PlaneNode,
+  EngineViewportSettings,
+  ImportMetadata,
   SceneCanvasSize,
   SceneMode,
   SceneSettings,
@@ -1343,6 +1345,8 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     }
 
   const animation = normalizeAnimation(source.animation, new Set(importedNodes.map((node) => node.id)));
+  const engine = normalizeEngineViewportSettings(source.engine);
+  const importMetadata = normalizeImportMetadata(source.importMetadata);
 
   return {
     version: 1,
@@ -1352,9 +1356,32 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
     images: importedImages,
     models: importedModels,
     sceneSettings,
+    ...(engine ? { engine } : {}),
+    ...(importMetadata ? { importMetadata } : {}),
     nodes: importedNodes,
     animation,
   };
+}
+
+function normalizeEngineViewportSettings(value: unknown): EngineViewportSettings | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  // Light pass-through: types are populated by importers and consumed by the
+  // renderer; the store is just a courier here. Concrete validation lives at
+  // the import boundary.
+  return value as EngineViewportSettings;
+}
+
+function normalizeImportMetadata(value: unknown): ImportMetadata | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  if (typeof source.source !== "string") {
+    return undefined;
+  }
+  return value as ImportMetadata;
 }
 
 interface EditorStoreSnapshot {

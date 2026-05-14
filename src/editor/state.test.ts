@@ -298,6 +298,36 @@ describe("EditorStore", () => {
     expect(store.sceneSettings.canvas).toEqual({ width: 1, height: 1080 });
   });
 
+  it("round-trips engine and importMetadata through normalizeBlueprint", () => {
+    const store = new EditorStore({
+      ...createDefaultBlueprint(),
+      engine: {
+        background: { type: "color", color: "#101820", alpha: 1 },
+        camera: { mode: "orthographic", position: { x: 0, y: 0, z: 10 } },
+      },
+      importMetadata: {
+        source: "w3d",
+        lights: [{ id: "l1", name: "Sun", kind: "directional", intensity: 1.4 }],
+        shaderFiles: ["Primitive_X_PS.hlsl"],
+      },
+    } as never);
+
+    const snapshot = store.getSnapshot();
+    expect(snapshot.engine?.background).toEqual({ type: "color", color: "#101820", alpha: 1 });
+    expect(snapshot.engine?.camera?.mode).toBe("orthographic");
+    expect(snapshot.importMetadata?.source).toBe("w3d");
+    expect(snapshot.importMetadata?.lights?.[0].kind).toBe("directional");
+  });
+
+  it("drops importMetadata when source is missing", () => {
+    const store = new EditorStore({
+      ...createDefaultBlueprint(),
+      importMetadata: { notes: ["dangling"] },
+    } as never);
+
+    expect(store.getSnapshot().importMetadata).toBeUndefined();
+  });
+
   it("updates scene mode and canvas via updateSceneSettings", () => {
     const store = new EditorStore(createDefaultBlueprint());
 

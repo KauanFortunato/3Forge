@@ -444,8 +444,88 @@ export interface ComponentBlueprint {
   images: ImageAsset[];
   models?: ModelAsset[];
   sceneSettings?: SceneSettings;
+  /**
+   * Engine/viewport defaults harvested at import time (background colour,
+   * authored camera pose, FOV). Consumed once when the blueprint is mounted —
+   * subsequent navigation belongs to the user, not the asset.
+   */
+  engine?: EngineViewportSettings;
+  /**
+   * Lossy import side-channel: anything we recognised but don't fully render
+   * yet (lights, custom shaders, exotic primitives). Stored so a future
+   * version of the renderer can pick it up and so round-trip tools can
+   * surface it to the user.
+   */
+  importMetadata?: ImportMetadata;
   nodes: EditorNode[];
   animation: ComponentAnimation;
+}
+
+export interface ImportedLight {
+  id: string;
+  name: string;
+  kind: "directional" | "point" | "spot" | "ambient";
+  intensity?: number;
+  color?: string;
+  position?: Vec3Like;
+  rotation?: Vec3Like;
+}
+
+export interface ImportMetadata {
+  source: "w3d" | string;
+  /** Lights captured from the source scene that we don't yet instantiate. */
+  lights?: ImportedLight[];
+  /** HLSL/CSO shader filenames discovered next to the scene. Not yet used. */
+  shaderFiles?: string[];
+  /** Anything else worth surfacing later — left open for forward-compat. */
+  notes?: string[];
+}
+
+export type EngineBackgroundSettings =
+  | { type: "color"; color: string; alpha?: number }
+  | { type: "transparent" };
+
+export interface EngineCameraMetadata {
+  isTracked?: boolean;
+  trackingCamera?: string;
+  renderTarget?: string;
+  aspectRatio?: number;
+  fovX?: number;
+  /** Original source-engine camera Id GUID, lower-cased. */
+  sourceId?: string;
+  /** Camera name, preserved verbatim. */
+  sourceName?: string;
+}
+
+export interface EngineCameraSettings {
+  /** Mirrors `sceneSettings.mode` for convenience; importers should keep the two in sync. */
+  mode: "perspective" | "orthographic";
+  /** Vertical field-of-view in degrees. Perspective only. */
+  fovY?: number;
+  /** Authored camera position in editor (Three.js) space. */
+  position?: Vec3Like;
+  /** Authored camera Euler rotation in degrees, X/Y/Z. */
+  rotation?: Vec3Like;
+  /** Optional explicit look-at target. When absent, derived from rotation+position. */
+  target?: Vec3Like;
+  near?: number;
+  far?: number;
+  /**
+   * Source-engine camera flags worth keeping for broadcast integrations:
+   * tracked / tracking-channel / render-target / aspect / horizontal FOV.
+   * Renderer copies into camera.userData; not consumed for projection yet.
+   */
+  metadata?: EngineCameraMetadata;
+}
+
+/**
+ * Asset-authored viewport defaults. The renderer consumes these once on import
+ * to set the initial framing/background; the user's subsequent orbit/pan/zoom
+ * is not written back here.
+ */
+export interface EngineViewportSettings {
+  background?: EngineBackgroundSettings;
+  camera?: EngineCameraSettings;
 }
 
 export interface NodePropertyDefinition {
