@@ -24,10 +24,13 @@ import {
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { ComponentBlueprint, EditorNode } from "../../../src/editor/types";
+import { buildNodeTree } from "./nodes/builder";
+import type { W3DNodeData } from "./nodes/data";
 
 export interface PlaygroundViewport {
   /** Replace what's drawn. Call whenever the blueprint changes. */
   setBlueprint(blueprint: ComponentBlueprint): void;
+  setNodes(roots: W3DNodeData[]): void;
   dispose(): void;
 }
 
@@ -57,6 +60,7 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   scene.add(key);
 
   let mounted: Group | null = null;
+  let mountedNodes: Group | null = null;
   let controls: OrbitControls | null = new OrbitControls(perspectiveCam, renderer.domElement);
   controls.enableDamping = true;
 
@@ -124,7 +128,21 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       scene.add(mounted);
       resize();
     },
+    setNodes(roots) {
+      if (mountedNodes) {
+        scene.remove(mountedNodes);
+        disposeGroup(mountedNodes);
+        mountedNodes = null;
+      }
+      mountedNodes = buildNodeTree(roots);
+      scene.add(mountedNodes);
+    },
     dispose() {
+      if (mountedNodes) {
+        scene.remove(mountedNodes);
+        disposeGroup(mountedNodes);
+        mountedNodes = null;
+      }
       cancelAnimationFrame(frame);
       ro.disconnect();
       controls?.dispose();

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseW3DFromFolder } from "../../../src/editor/import/w3dFolder";
 import type { ComponentBlueprint } from "../../../src/editor/types";
 import { analyzeW3dXml, type DocumentStats } from "./analyze";
+import { dumpNodes, type DumpRow } from "./nodes/diagnostics";
+import type { W3DNodeData } from "./nodes/data";
 import { translateBlueprint } from "./translate";
 import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
 
@@ -9,6 +11,7 @@ interface LoadedScene {
   sceneFileName: string;
   xml: string;
   blueprint: ComponentBlueprint;
+  nodes: W3DNodeData[];
   warnings: string[];
   stats: DocumentStats;
   movFiles: number;
@@ -18,7 +21,7 @@ interface LoadedScene {
 export function App() {
   const [loaded, setLoaded] = useState<LoadedScene | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activePanel, setActivePanel] = useState<"stats" | "xml" | "blueprint">("stats");
+  const [activePanel, setActivePanel] = useState<"stats" | "xml" | "blueprint" | "quads">("stats");
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const viewportHostRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<PlaygroundViewport | null>(null);
@@ -37,6 +40,7 @@ export function App() {
   useEffect(() => {
     if (loaded && viewportRef.current) {
       viewportRef.current.setBlueprint(loaded.blueprint);
+      viewportRef.current.setNodes(loaded.nodes);
     }
   }, [loaded]);
 
@@ -53,6 +57,7 @@ export function App() {
         sceneFileName: folder.sceneFileName,
         xml,
         blueprint: translated.blueprint,
+        nodes: translated.nodes,
         warnings: [...folder.warnings, ...translated.warnings],
         stats,
         movFiles: folder.movFiles.length,
@@ -67,7 +72,7 @@ export function App() {
     if (!loaded) return;
     try {
       const translated = translateBlueprint(loaded.xml);
-      setLoaded({ ...loaded, blueprint: translated.blueprint, warnings: translated.warnings });
+      setLoaded({ ...loaded, blueprint: translated.blueprint, nodes: translated.nodes, warnings: translated.warnings });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -121,6 +126,9 @@ export function App() {
             <button className={activePanel === "blueprint" ? "is-active" : ""} onClick={() => setActivePanel("blueprint")}>
               Blueprint
             </button>
+            <button className={activePanel === "quads" ? "is-active" : ""} onClick={() => setActivePanel("quads")}>
+              Quads
+            </button>
           </div>
           <div className="playground__panel-body">
             {!loaded ? (
@@ -132,8 +140,12 @@ export function App() {
               <StatsView loaded={loaded} />
             ) : activePanel === "xml" ? (
               <pre className="playground__code">{loaded.xml}</pre>
-            ) : (
+            ) : activePanel === "blueprint" ? (
               <pre className="playground__code">{blueprintPreview}</pre>
+            ) : activePanel === "quads" ? (
+              <QuadsView loaded={loaded} />
+            ) : (
+              <StatsView loaded={loaded} />
             )}
           </div>
         </aside>
@@ -192,4 +204,54 @@ function StatsView({ loaded }: { loaded: LoadedScene }) {
 function relPath(file: File): string {
   const withPath = file as File & { webkitRelativePath?: string };
   return withPath.webkitRelativePath?.length ? withPath.webkitRelativePath : file.name;
+}
+
+function QuadsView({ loaded }: { loaded: LoadedScene }) {
+  const rows: DumpRow[] = dumpNodes(loaded.nodes);
+  const quadRows = rows.filter((r) => r.kind === "Quad");
+  const summary = {
+    quads: quadRows.length,
+    masks: quadRows.filter((r) => r.isMask).length,
+    disabled: quadRows.filter((r) => r.disabledByEnable).length,
+    alphaZero: quadRows.filter((r) => r.transparentByAlpha0).length,
+    groups: rows.filter((r) => r.kind === "Group").length,
+  };
+  return (
+    <div className="playground__quads">
+      <div className="playground__quads-summary">
+        {summary.quads} quads · {summary.masks} masks · {summary.disabled} disabled · {summary.alphaZero} alpha-zero · {summary.groups} groups
+      </div>
+      <table className="playground__quads-table">
+        <thead>
+          <tr>
+            <th>Kind</th><th>Name</th><th>Size</th><th>Pos</th><th>Scale</th><th>Rot</th>
+            <th>α</th><th>Vis</th><th>Mask</th><th>Material</th><th>Texture</th><th>#kids</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id + ":" + r.path} className={r.kind === "Group" ? "is-group" : ""}>
+              <td>{r.kind}</td>
+              <td style={{ paddingLeft: r.depth * 10 + 6 }}><code>{r.name}</code></td>
+              <td>{r.size}</td>
+              <td><code>{r.position}</code></td>
+              <td><code>{r.scale}</code></td>
+              <td><code>{r.rotation}</code></td>
+              <td>{r.alpha}</td>
+              <td title={r.disabledByEnable ? "Enable=False" : r.transparentByAlpha0 ? "Alpha=0" : ""}>{r.effectiveVisible ? "✓" : "—"}</td>
+              <td>{r.isMask ? `mask(${r.maskProperties})` : r.maskIds.length > 0 ? `→ ${r.maskIds.join(",")}` : "—"}</td>
+              <td><code title={r.materialId}>{shortId(r.materialId)}</code></td>
+              <td><code title={r.textureLayerId}>{shortId(r.textureLayerId)}</code></td>
+              <td>{r.childrenCount}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function shortId(s: string): string {
+  if (s === "—" || s === "Standard") return s;
+  return s.length > 12 ? s.slice(0, 8) + "…" : s;
 }

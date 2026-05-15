@@ -128,3 +128,26 @@ body {
   max-width: 60%;
 }
 .playground__viewport-meta details ul { margin: 4px 0 0 16px; padding: 0; }
+
+.playground__quads-summary {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.playground__quads-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.playground__quads-table th,
+.playground__quads-table td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  white-space: nowrap;
+}
+.playground__quads-table th { color: var(--muted); font-weight: 500; }
+.playground__quads-table tr.is-group td { background: rgba(124, 68, 222, 0.07); }
+.playground__quads-table code { font-size: 11px; }
