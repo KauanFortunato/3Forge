@@ -56,8 +56,12 @@ import {
   WebGLRenderer,
   WebGLRenderTarget,
   CircleGeometry,
+  Clock,
 } from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import * as THREE from "three";
+import CameraControls from "camera-controls";
+
+CameraControls.install({ THREE });
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
@@ -237,7 +241,8 @@ export class SceneEditor {
   private readonly orientationInteractive: Object3D[] = [];
   private readonly orientationRaycaster = new Raycaster();
   private readonly orientationPointer = new Vector2();
-  private readonly orbitControls: OrbitControls;
+  private readonly cameraControls: CameraControls;
+  private readonly cameraClock = new Clock();
   private readonly transformControls: TransformControls;
   private readonly transformHelper: Object3D;
   private readonly raycaster = new Raycaster();
@@ -335,11 +340,18 @@ export class SceneEditor {
     this.orientationScene.add(this.orientationRoot);
     this.orientationRenderer.domElement.addEventListener("pointerdown", this.handleOrientationPointerDown);
 
-    this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.orbitControls.enableDamping = true;
-    this.orbitControls.target.set(0, 1, 0);
-    this.orbitControls.maxDistance = Infinity;
-    this.orbitControls.minDistance = 1;
+    this.cameraControls = new CameraControls(this.camera, this.renderer.domElement);
+    this.cameraControls.setTarget(0, 1, 0, false);
+    this.cameraControls.minDistance = 1;
+    this.cameraControls.maxDistance = Infinity;
+    this.cameraControls.smoothTime = 0.18;
+    this.cameraControls.draggingSmoothTime = 0.08;
+    this.cameraControls.dollyToCursor = true;
+    this.cameraControls.infinityDolly = true;
+    this.cameraControls.mouseButtons.left = CameraControls.ACTION.ROTATE;
+    this.cameraControls.mouseButtons.middle = CameraControls.ACTION.DOLLY;
+    this.cameraControls.mouseButtons.right = CameraControls.ACTION.TRUCK;
+    this.cameraControls.mouseButtons.wheel = CameraControls.ACTION.DOLLY;
 
     this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
     this.transformHelper = this.transformControls.getHelper();
@@ -350,7 +362,7 @@ export class SceneEditor {
     this.transformControls.showZ = true;
     this.transformControls.addEventListener("dragging-changed", (event) => {
       this.isTransformDragging = Boolean((event as { value?: boolean }).value);
-      this.orbitControls.enabled = !this.isTransformDragging;
+      this.cameraControls.enabled = !this.isTransformDragging;
     });
     this.transformControls.addEventListener("mouseDown", () => {
       this.skipNextSelectionPick = true;
@@ -429,7 +441,7 @@ export class SceneEditor {
       .filter((object): object is Object3D => Boolean(object));
 
     if (!this.computeSelectionBounds(selectedObjects.length > 0 ? selectedObjects : [this.viewportRoot])) {
-      this.orbitControls.target.set(0, 0, 0);
+      this.cameraControls.setTarget(0, 0, 0, true);
       return;
     }
 
@@ -440,9 +452,16 @@ export class SceneEditor {
     const direction = new Vector3(1, 0.75, 1).normalize();
     const distance = radius * 2.2;
 
-    this.camera.position.copy(this.selectionCenter).addScaledVector(direction, distance);
-    this.orbitControls.target.copy(this.selectionCenter);
-    this.orbitControls.update();
+    const eye = this.selectionCenter.clone().addScaledVector(direction, distance);
+    this.cameraControls.setLookAt(
+      eye.x,
+      eye.y,
+      eye.z,
+      this.selectionCenter.x,
+      this.selectionCenter.y,
+      this.selectionCenter.z,
+      true,
+    );
   }
 
   onAnimationFrameChange(listener: (frame: number) => void): () => void {
@@ -564,7 +583,7 @@ export class SceneEditor {
     window.removeEventListener("blur", this.handleWindowBlur);
     this.transformControls.detach();
     this.transformControls.dispose();
-    this.orbitControls.dispose();
+    this.cameraControls.dispose();
     this.clearViewportRoot();
     this.clearHdrEnvironmentCache();
     this.selectionHelper?.removeFromParent();
@@ -886,7 +905,8 @@ export class SceneEditor {
   }
 
   private snapCameraToAxis(axis: string): void {
-    const focus = this.orbitControls.target.clone();
+    const focus = new Vector3();
+    this.cameraControls.getTarget(focus);
     const distance = Math.max(this.camera.position.distanceTo(focus), 2);
     const direction = new Vector3();
     const verticalSnapOffset = 0.0001;
@@ -899,7 +919,6 @@ export class SceneEditor {
         direction.set(-1, 0, 0);
         break;
       case "posY":
-        // OrbitControls expects a stable up-vector, so avoid a perfect pole snap.
         direction.set(0, 1, verticalSnapOffset).normalize();
         break;
       case "negY":
@@ -915,12 +934,8 @@ export class SceneEditor {
         return;
     }
 
-    this.camera.position.copy(focus).addScaledVector(direction, distance);
-    this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(focus);
-    this.camera.updateMatrixWorld();
-    this.orbitControls.target.copy(focus);
-    this.orbitControls.update();
+    const eye = focus.clone().addScaledVector(direction, distance);
+    this.cameraControls.setLookAt(eye.x, eye.y, eye.z, focus.x, focus.y, focus.z, true);
   }
 
   private bindPointerSelection(): void {
@@ -1666,7 +1681,7 @@ export class SceneEditor {
     const tick = () => {
       this.animationFrame = requestAnimationFrame(tick);
       this.updateAnimationPlayback();
-      this.orbitControls.update();
+      this.cameraControls.update(this.cameraClock.getDelta());
       this.updateInfiniteGrid();
       this.updateSelectionHelperFromCache();
       this.renderer.render(this.scene, this.camera);
