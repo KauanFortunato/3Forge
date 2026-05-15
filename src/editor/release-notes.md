@@ -1,13 +1,5 @@
 # What's New
 
-- USDZ import now uses the new OpenUSD WASM pipeline for production assets, with better material binding, texture extraction, UV handling, and fallback support.
+- Viewport camera now uses the camera-controls library, bringing Blender-like smooth damping, dolly-to-cursor zoom, infinite dolly, and animated transitions when framing the selection or snapping to an axis from the orientation gizmo.
 
-- GLB, GLTF, and USDZ export now handle imported USDZ textures more reliably, including raw texture data and correct texture orientation.
-
-- HDR environment assets can now be imported, previewed, selected, packaged, and exported through the editor settings.
-
-- Model structure is surfaced in the scene graph so imported model parts can be inspected and managed more easily.
-
-- The Assets panel has been simplified by removing the model/object asset tab, keeping the panel focused on animations, images, and materials.
-
-- Long-running import and export tasks now show a blocking progress overlay with estimated remaining time.
+- USDZ import on Windows is more reliable: the legacy tinyusdz fallback has been removed and the OpenUSD WASM pipeline is now hardened as the single import path.
