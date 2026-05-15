@@ -1,8 +1,6 @@
 import { Mesh, Object3D } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
 
-import { containsUsdcMagic } from "./modelBuffer";
 import type { ModelAsset, ModelAssetStructure, ModelAssetStructureNode } from "./types";
 
 export async function inspectModelFileStructure(
@@ -10,16 +8,15 @@ export async function inspectModelFileStructure(
   format: ModelAsset["format"],
 ): Promise<ModelAssetStructure | undefined> {
   try {
-    const buffer = await file.arrayBuffer();
+    // USDZ is parsed by the OpenUSD WASM at scene-build time; the structure is
+    // populated lazily then via `EditorStore.updateModelAssetStructure` (see
+    // `scene.ts → buildModelObject`). Don't attempt to inspect it here — three's
+    // bundled USDLoader can't parse binary USDC payloads and just throws.
     if (format === "usdz") {
-      const bytes = new Uint8Array(buffer);
-      if (containsUsdcMagic(bytes)) {
-        const { inspectUsdcStructure } = await import("./usdcParser");
-        return inspectUsdcStructure(buffer);
-      }
-      return inspectObjectStructure(new USDLoader().parse(buffer), format, "three");
+      return undefined;
     }
 
+    const buffer = await file.arrayBuffer();
     if (format === "glb") {
       const gltf = await new GLTFLoader().parseAsync(buffer, "");
       return inspectObjectStructure(gltf.scene, format, "three");

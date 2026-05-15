@@ -12,6 +12,7 @@
     "build": "node ./scripts/vite-wrapper.mjs build",
     "build:export-runner": "node ./scripts/vite-wrapper.mjs build --config playgrounds/export-runner/vite.config.mjs",
     "preview": "node ./scripts/vite-wrapper.mjs preview --host",
+    "prev": "npm run build && npm run preview",
     "preview:export-runner": "node ./scripts/vite-wrapper.mjs preview --config playgrounds/export-runner/vite.config.mjs --host",
     "test": "vitest run",
     "test:watch": "vitest",

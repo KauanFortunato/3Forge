@@ -1,8 +1,8 @@
 import type { ModelAsset } from "./types";
 import { inspectModelFileStructure } from "./modelStructure";
 
-export const MAX_MODEL_FILE_SIZE_BYTES = 25 * 1024 * 1024;
-export const MAX_MODEL_FILE_SIZE_LABEL = "25 MB";
+export const MAX_MODEL_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+export const MAX_MODEL_FILE_SIZE_LABEL = "50 MB";
 export const MODEL_FILE_TOO_LARGE_MESSAGE = `Model is too large. Maximum supported size is ${MAX_MODEL_FILE_SIZE_LABEL}.`;
 
 export function isModelFile(file: File): boolean {

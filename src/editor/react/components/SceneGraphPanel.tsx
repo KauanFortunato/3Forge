@@ -90,6 +90,19 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
   useEffect(() => {
     const next = new Set<string>();
     for (const id of collapsedIds) {
+      // Two flavours of collapse keys live in this set:
+      //   - plain node IDs (group / model nodes from the blueprint)
+      //   - composite part keys "<modelNodeId>::<partId>" produced by
+      //     partCollapseKey() for synthetic part rows
+      // Keep node IDs that still exist, and keep all composite keys whose
+      // owning model node still exists.
+      if (id.includes("::")) {
+        const [ownerId] = id.split("::");
+        if (ownerId && validNodeIds.has(ownerId)) {
+          next.add(id);
+        }
+        continue;
+      }
       if (validNodeIds.has(id)) {
         next.add(id);
       }

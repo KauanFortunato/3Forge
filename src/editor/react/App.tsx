@@ -20,7 +20,6 @@ import {
 import { fontFileToAsset } from "../fonts";
 import { hdrFileToAsset, isHdrFile } from "../hdr";
 import { imageFileToAsset } from "../images";
-import { containsUsdcMagic, tryDecodeDataUrl } from "../modelBuffer";
 import { isModelFile, modelFileToAsset } from "../models";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
@@ -1979,32 +1978,27 @@ export function App() {
         lastNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
         importedCount += 1;
 
-        // If this is a USDC-binary USDZ, also surface its embedded textures
-        // as standalone ImageAssets so users can inspect what shipped with the
-        // model — including any textures that aren't rendering on the mesh.
-        // Failures here must NOT abort the import; we already have the model.
+        // For USDZ (a ZIP archive), surface its embedded images as standalone
+        // ImageAssets so the user can see what textures shipped with the model
+        // — including ones the parser may not have wired onto the mesh.
+        // Failures here must NOT abort the import; the model itself is already
+        // in place above.
         if (asset.format === "usdz") {
-          const bytes = tryDecodeDataUrl(asset.src);
-          if (bytes && containsUsdcMagic(bytes)) {
-            try {
-              const buffer = bytes.buffer.slice(
-                bytes.byteOffset,
-                bytes.byteOffset + bytes.byteLength,
-              ) as ArrayBuffer;
-              const { extractUsdcImages } = await import("../usdcParser");
-              const images = await extractUsdcImages(buffer);
-              for (const img of images) {
-                store.addImageAsset({
-                  name: `${asset.name} - ${img.name}`,
-                  mimeType: img.mimeType,
-                  src: img.src,
-                  width: img.width,
-                  height: img.height,
-                });
-              }
-            } catch (err) {
-              console.warn("Failed to extract USDC textures as assets:", err);
+          try {
+            const buffer = await file.arrayBuffer();
+            const { extractUsdzImages } = await import("../usdzImageExtractor");
+            const images = await extractUsdzImages(buffer);
+            for (const img of images) {
+              store.addImageAsset({
+                name: `${asset.name} - ${img.name}`,
+                mimeType: img.mimeType,
+                src: img.src,
+                width: img.width,
+                height: img.height,
+              });
             }
+          } catch (err) {
+            console.warn("Failed to extract USDZ textures as assets:", err);
           }
         }
       }

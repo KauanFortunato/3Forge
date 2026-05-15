@@ -172,7 +172,7 @@ export interface ModelAssetStructureNode {
 
 export interface ModelAssetStructure {
   format: ModelAsset["format"];
-  source: "three" | "tinyusdz" | "archive" | "unknown";
+  source: "three" | "openusd" | "archive" | "unknown";
   nodeCount: number;
   meshCount: number;
   materialCount: number;

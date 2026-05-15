@@ -48,7 +48,6 @@ import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { evaluateAnimationTrackValue, frameToSeconds, getAnimationValue, isTrackMuted, sortTrackKeyframes } from "./animation";
 import { decodeDataUrl } from "./exportPackage";
 import { DEFAULT_FONT_ID, getAvailableFonts, parseFontAsset } from "./fonts";
-import { containsUsdcMagic } from "./modelBuffer";
 import { awaitTextureLoadsDuring } from "./textureLoadWait";
 import type { AnimationClip, AnimationPropertyPath, AnimationTrack, ComponentBlueprint, EditorNode, ImageAsset, ImageNode, MaterialSpec, ModelAsset, NodeOriginSpec, TextNode } from "./types";
 
@@ -585,11 +584,7 @@ class BlueprintObjectBuilder {
         const { parseUsdz } = await import("../lib/openusd/openusdParser");
         return await parseUsdz(buffer, asset.name ?? "asset.usdz");
       } catch (openUsdError) {
-        console.warn("OpenUSD export parse failed, falling back:", openUsdError);
-        if (containsUsdcMagic(bytes)) {
-          const { parseUsdc } = await import("./usdcParser");
-          return awaitTextureLoadsDuring(() => parseUsdc(buffer));
-        }
+        console.warn("OpenUSD export parse failed, falling back to three.js USDLoader:", openUsdError);
       }
     }
 

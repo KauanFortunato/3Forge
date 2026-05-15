@@ -1100,7 +1100,7 @@ function normalizeModelAssetStructure(rawStructure: unknown, format: ModelAsset[
     : [];
   return {
     format,
-    source: source.source === "tinyusdz" || source.source === "three" || source.source === "archive"
+    source: source.source === "openusd" || source.source === "three" || source.source === "archive"
       ? source.source
       : "unknown",
     nodeCount: normalizeNonNegativeInteger(source.nodeCount, roots.reduce((total, root) => total + countModelAssetStructureNodes(root), 0)),

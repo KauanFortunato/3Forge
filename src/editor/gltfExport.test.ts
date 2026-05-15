@@ -1,21 +1,8 @@
-import JSZip from "jszip";
 import { AnimationMixer, BoxGeometry, Color, DataTexture, Group, LoopOnce, Matrix4, Mesh, MeshStandardMaterial, Quaternion, RGBAFormat, Texture, TextureLoader } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
 import { describe, expect, it, vi } from "vitest";
-
-vi.mock("./usdcParser", () => ({
-  parseUsdc: async (): Promise<Group> => {
-    const root = new Group();
-    root.name = "USDC Mock Root";
-    const mesh = new Mesh(new BoxGeometry(0.5, 0.5, 0.5), new MeshStandardMaterial({ color: 0x00ff00 }));
-    mesh.name = "USDCMockMesh";
-    mesh.userData.usdcStub = true;
-    root.add(mesh);
-    return root;
-  },
-}));
 
 import { createAnimationClip, createAnimationKeyframe, createAnimationTrack } from "./animation";
 import { createDefaultBlueprint, createNode, ROOT_NODE_ID } from "./state";
@@ -350,33 +337,6 @@ describe("gltfExport", () => {
     }
   });
 
-  it("routes USDC-binary USDZ assets through the tinyusdz parser", async () => {
-    const dataUrl = await makeUsdcUsdzDataUrl();
-    const asset: ModelAsset = {
-      id: "asset-usdc",
-      name: "Binary.usdz",
-      mimeType: "model/vnd.usdz+zip",
-      src: dataUrl,
-      format: "usdz",
-    };
-    const blueprint = createDefaultBlueprint();
-    const modelNode = createNode("model", null) as ModelNode;
-    modelNode.modelId = asset.id;
-    blueprint.models = [asset];
-    blueprint.nodes = [modelNode];
-
-    const group = await createBlueprintExportGroup(blueprint);
-
-    const markedMeshes: Mesh[] = [];
-    group.traverse((child) => {
-      if (child instanceof Mesh && child.userData.usdcStub === true) {
-        markedMeshes.push(child);
-      }
-    });
-    expect(markedMeshes.length).toBe(1);
-    expect(markedMeshes[0]?.userData.assetId).toBe(asset.id);
-  });
-
   it("normalizes raw data textures to canvas images before exporter drawImage paths", () => {
     const context = {
       createImageData: (width: number, height: number) => ({
@@ -569,18 +529,6 @@ async function makeGlbDataUrl(): Promise<string> {
   }
   const base64 = bytesToBase64(new Uint8Array(result));
   return `data:model/gltf-binary;base64,${base64}`;
-}
-
-async function makeUsdcUsdzDataUrl(): Promise<string> {
-  const zip = new JSZip();
-  const payload = new Uint8Array(64);
-  const magic = [0x50, 0x58, 0x52, 0x2D, 0x55, 0x53, 0x44, 0x43];
-  for (let index = 0; index < magic.length; index += 1) {
-    payload[index] = magic[index];
-  }
-  zip.file("root.usdc", payload);
-  const archive = await zip.generateAsync({ type: "uint8array" });
-  return `data:model/vnd.usdz+zip;base64,${bytesToBase64(archive)}`;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

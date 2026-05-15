@@ -8,23 +8,22 @@ This document captures **how the USDZ import pipeline in 3Forge was built**: why
 
 3Forge needs to import USDZ files (Apple/Pixar's distribution format for 3D scenes) and render them in a Three.js editor. USDZ wraps a USDC binary stage plus textures into a single ZIP archive.
 
-We started with [`tinyusdz`](https://github.com/lighttransport/tinyusdz) — a lightweight WASM USD reader. It worked for **simple** USDZ files but failed on real-world models because tinyusdz does not propagate:
+We initially tried [`tinyusdz`](https://github.com/lighttransport/tinyusdz) — a lightweight WASM USD reader — but it failed on real-world models because tinyusdz does not propagate:
 
 - **`materialBindingAPI` inheritance** — when a parent Xform binds a material that children inherit, tinyusdz reports `materialId=-1` on child meshes
 - **`GeomSubset`-based bindings** — when a single mesh splits faces across multiple materials via `UsdGeomSubset`, tinyusdz only exposes the first material
 
-The biplane model worked partially; the seahorse model rendered grey because **its material binding lived inside `GeomSubset` partitions** that tinyusdz couldn't see. After a long investigation we concluded that tinyusdz cannot cover production USDZ assets without significant patching.
+The biplane worked partially; the seahorse rendered grey because **its material binding lived inside `GeomSubset` partitions** tinyusdz couldn't see. We concluded tinyusdz couldn't cover production USDZ assets without significant patching, **removed it from the project entirely**, and committed to OpenUSD WASM as the only USDZ parser.
 
 ### Alternatives considered
 
 | Option | Verdict |
 |---|---|
-| [tinyusdz](https://github.com/lighttransport/tinyusdz) | Used initially. Insufficient for production USDZ (see above). Kept as **fallback** in case OpenUSD fails. |
-| [needle-tools/usd-viewer](https://github.com/needle-tools/usd-viewer) | Pre-built OpenUSD WASM with Hydra render delegate. Apache 2.0, would work, but ~30MB of artifacts and tight coupling to needle's own engine. Considered as fallback. |
+| [tinyusdz](https://github.com/lighttransport/tinyusdz) | Tried first; removed. See above. |
+| [needle-tools/usd-viewer](https://github.com/needle-tools/usd-viewer) | Pre-built OpenUSD WASM with Hydra render delegate. Apache 2.0, would work, but ~30MB of artifacts and tight coupling to needle's own engine. |
 | **Build OpenUSD ourselves** | What we ended up doing. Full control, minimal API surface, ~14MB total artifacts. |
-| Keep using tinyusdz + patch it | Rejected — too many missing features to bolt on. |
 
-We chose to **compile a custom OpenUSD WASM** with only the bindings we need.
+We chose to **compile a custom OpenUSD WASM** with only the bindings we need. Three.js's bundled `USDLoader` is kept as a final last-resort fallback (it ships with three, no extra dependency).
 
 ---
 
@@ -180,7 +179,7 @@ The `.slice()` is essential — it copies the bytes into JS heap so the typed ar
 | `getMeshData(stageId, primPath)` | Geometry: `points / normals / uvs / faceVertexCounts / faceVertexIndices / normalsInterpolation / uvsInterpolation / subsets`. |
 | `getLocalTransform(stageId, primPath)` | 4×4 matrix as `Float32Array[16]` (column-major). |
 | `getWorldTransform(stageId, primPath, t)` | World matrix at time `t` (`NaN` = default). |
-| `getMaterialBinding(stageId, primPath)` | Resolved bound material path (handles `materialBindingAPI` inheritance — this was the tinyusdz showstopper). |
+| `getMaterialBinding(stageId, primPath)` | Resolved bound material path (handles `materialBindingAPI` inheritance — this was the tinyusdz showstopper that drove us to OpenUSD). |
 | `getMaterialParams(stageId, matPath)` | All `UsdPreviewSurface` inputs as `{type: "value"|"texture", ...}`. |
 | `getAssetBytes(stageId, assetPath)` | Raw bytes of an asset (texture). **Requires stage context binding** — see §5.1. |
 | `getStageTimeInfo(stageId)` | `{startTime, endTime, framesPerSecond, timeCodesPerSecond}` for animation. |
@@ -236,7 +235,7 @@ The artifacts live in `public/wasm/openusd/`. They are deployed verbatim by Vite
 The USDZ branch of `applyModelSceneNode`:
 
 1. Checks `modelGroupCache` (`Map<assetId, Promise<Group>>`)
-2. **Cache miss**: wraps the parse in `runTask({ blocking: true, estimatedDurationMs })`. The OpenUSD path is primary; on failure, falls back to tinyusdz (`parseUsdc`) and then to Three.js's `USDLoader`.
+2. **Cache miss**: wraps the parse in `runTask({ blocking: true, estimatedDurationMs })`. The OpenUSD path is primary; on failure, falls back to Three.js's `USDLoader`.
 3. **Cache hit**: skips the parse entirely
 4. Clones the cached Group (`group.clone(true)`) so each scene instance can be tagged and lit independently without touching the cached template
 5. Tags userData for picking and enables shadows
@@ -414,6 +413,21 @@ parsePromise.then((cached) => {
 
 **Not actually a bug.** Emscripten doesn't implement `madvise` (a memory-hint syscall on Linux). USD uses it only as an optimization hint and degrades gracefully. The warnings are noise — ignore them.
 
+### 5.9. `Plugin info file /usd/plugInfo.json couldn't be read (line 2, col 9): Invalid value` on Windows
+
+**Symptom**: Right after `parseUsdz` is first called, the WASM crashes with the message above and the parser falls back to Three.js's `USDLoader`.
+
+**Cause**: `openusd.data` is the Emscripten preload, packed with `--preload-file $LIBDIR/usd@/usd`. Most of its bytes are ASCII (it's a stream of `plugInfo.json` files), so Git on Windows treats it as text by default. With `core.autocrlf=true` (the Windows default), every `\n` becomes `\r\n` on checkout, inflating the file from 779 888 → 800 226 bytes and corrupting the embedded JSON so the OpenUSD plugin loader bails out.
+
+**Fix**: the repo ships a `.gitattributes` that marks `*.data`, `*.wasm`, and the other binary asset extensions as `binary`. If you ever see this error after a fresh clone or branch switch, run:
+
+```bash
+rm public/wasm/openusd/openusd.data public/wasm/openusd/openusd.js
+git checkout HEAD -- public/wasm/openusd/openusd.data public/wasm/openusd/openusd.js
+```
+
+If you add a new generated artifact extension to the repo, add it to `.gitattributes` too.
+
 ---
 
 ## 6. Failure modes and fallback paths
@@ -425,16 +439,14 @@ USDZ buffer
   │
   ├─► OpenUSD (parseUsdz)
   │       │
-  │       └─► fails ─► tinyusdz (parseUsdc) if USDC magic present
-  │                          │
-  │                          └─► fails ─► Three.js USDLoader
+  │       └─► fails ─► Three.js USDLoader (last resort)
   │
   └─► success ─► Three.js Group
 ```
 
-`tinyusdz` is kept as fallback because some pathological USD files (composition arcs that OpenUSD WASM build doesn't support yet, etc.) still resolve under tinyusdz's looser parser. The Three.js USDLoader is the last resort.
+Three.js's bundled `USDLoader` is the last-resort fallback for pathological files OpenUSD WASM throws on (e.g. composition arcs not covered by our build). It ships with Three so there's no extra dependency cost.
 
-The fallback chain lives in `scene.ts` around line 1010–1040.
+The fallback chain lives in `scene.ts` (`buildModelObject` → `runTask`) and in `gltfExport.ts` (`loadModelAssetGroup`).
 
 ---
 

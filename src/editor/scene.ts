@@ -72,7 +72,7 @@ import {
   isTrackMuted,
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
-import { containsUsdcMagic, tryDecodeDataUrl } from "./modelBuffer";
+import { tryDecodeDataUrl } from "./modelBuffer";
 import { buildStructureFromGroup, findObjectByIndexPath } from "./modelStructure";
 import { runTask } from "./react/hooks/useAsyncTask";
 import { EditorStore } from "./state";
@@ -338,7 +338,7 @@ export class SceneEditor {
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
     this.orbitControls.target.set(0, 1, 0);
-    this.orbitControls.maxDistance = 80;
+    this.orbitControls.maxDistance = Infinity;
     this.orbitControls.minDistance = 1;
 
     this.transformControls = new TransformControls(this.camera, this.renderer.domElement);
@@ -1103,18 +1103,15 @@ export class SceneEditor {
           // ~1s per MB heuristic from measured parses (13MB ≈ 12-15s on Chrome).
           // Used purely to drive the progress bar / ETA — actual time may vary.
           const estimatedDurationMs = Math.max(2000, (buffer.byteLength / (1024 * 1024)) * 1000);
-          // Primary path: OpenUSD WASM. Falls back to tinyusdz (USDC) or three.js
-          // USDZ loader if OpenUSD throws.
+          // Primary path: OpenUSD WASM. Falls back to three.js USDLoader if
+          // OpenUSD throws (covers ASCII USDA where OpenUSD plugin coverage may
+          // be incomplete in our build).
           parsePromise = runTask(taskLabel, async () => {
             try {
               const { parseUsdz } = await import("../lib/openusd/openusdParser");
               return await parseUsdz(buffer, asset.name ?? "asset.usdz");
             } catch (openUsdError) {
-              console.warn("OpenUSD parse failed, falling back:", openUsdError);
-              if (containsUsdcMagic(bytes)) {
-                const { parseUsdc } = await import("./usdcParser");
-                return await parseUsdc(buffer);
-              }
+              console.warn("OpenUSD parse failed, falling back to three.js USDLoader:", openUsdError);
               return await new Promise<Group>((resolve, reject) => {
                 this.usdLoader.load(asset.src, resolve, undefined, reject);
               });

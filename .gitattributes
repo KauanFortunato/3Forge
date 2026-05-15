@@ -1,0 +1,33 @@
+# Force LF for source/text files (cross-platform consistency)
+* text=auto eol=lf
+
+# Treat WASM artifacts and binary assets as binary so Git on Windows
+# (with autocrlf=true) does not corrupt them with CRLF conversion.
+# Critical: openusd.data is an Emscripten preload that the OpenUSD WASM
+# parses verbatim — CRLF inflation breaks plugInfo.json parsing.
+*.wasm binary
+*.data binary
+*.glb binary
+*.gltf binary
+*.usd binary
+*.usda binary
+*.usdc binary
+*.usdz binary
+*.hdr binary
+*.exr binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.mp3 binary
+*.mp4 binary
+*.webm binary
+*.zip binary
+*.gz binary
