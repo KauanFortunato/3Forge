@@ -24,13 +24,13 @@ import {
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { ComponentBlueprint, EditorNode } from "../../../src/editor/types";
-import { buildNodeTree } from "./nodes/builder";
+import { buildNodeTree, type BuildContext } from "./nodes/builder";
 import type { W3DNodeData } from "./nodes/data";
 
 export interface PlaygroundViewport {
   /** Replace what's drawn. Call whenever the blueprint changes. */
   setBlueprint(blueprint: ComponentBlueprint): void;
-  setNodes(roots: W3DNodeData[]): void;
+  setNodes(roots: W3DNodeData[], ctx?: BuildContext): void;
   dispose(): void;
 }
 
@@ -128,13 +128,13 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       scene.add(mounted);
       resize();
     },
-    setNodes(roots) {
+    setNodes(roots, ctx) {
       if (mountedNodes) {
         scene.remove(mountedNodes);
         disposeGroup(mountedNodes);
         mountedNodes = null;
       }
-      mountedNodes = buildNodeTree(roots);
+      mountedNodes = buildNodeTree(roots, ctx);
       scene.add(mountedNodes);
     },
     dispose() {

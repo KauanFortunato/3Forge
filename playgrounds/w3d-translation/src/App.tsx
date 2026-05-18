@@ -6,12 +6,18 @@ import { dumpNodes, type DumpRow } from "./nodes/diagnostics";
 import type { W3DNodeData } from "./nodes/data";
 import { translateBlueprint } from "./translate";
 import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
+import type { BuildContext } from "./nodes/builder";
+import type { W3DResourceRegistry } from "./nodes/resources";
+import type { Texture } from "three";
 
 interface LoadedScene {
   sceneFileName: string;
   xml: string;
   blueprint: ComponentBlueprint;
   nodes: W3DNodeData[];
+  resources: W3DResourceRegistry;
+  textureUrlsByFilename: Map<string, string>;
+  textureCache: Map<string, Texture>;
   warnings: string[];
   stats: DocumentStats;
   movFiles: number;
@@ -39,13 +45,34 @@ export function App() {
 
   useEffect(() => {
     if (loaded && viewportRef.current) {
+      const builderWarnings: string[] = [];
+      const ctx: BuildContext = {
+        registry: loaded.resources,
+        textureUrlsByFilename: loaded.textureUrlsByFilename,
+        textureCache: loaded.textureCache,
+        warnings: builderWarnings,
+      };
       viewportRef.current.setBlueprint(loaded.blueprint);
-      viewportRef.current.setNodes(loaded.nodes);
+      viewportRef.current.setNodes(loaded.nodes, ctx);
     }
+  }, [loaded]);
+
+  useEffect(() => {
+    return () => {
+      if (loaded) {
+        for (const url of loaded.textureUrlsByFilename.values()) URL.revokeObjectURL(url);
+        for (const tex of loaded.textureCache.values()) tex.dispose();
+      }
+    };
   }, [loaded]);
 
   const handleFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
+    // Revoke previous blob URLs and dispose textures to avoid memory leaks
+    if (loaded) {
+      for (const url of loaded.textureUrlsByFilename.values()) URL.revokeObjectURL(url);
+      for (const tex of loaded.textureCache.values()) tex.dispose();
+    }
     setError(null);
     try {
       const folder = await parseW3DFromFolder(files);
@@ -53,11 +80,19 @@ export function App() {
       const xml = sceneFile ? await sceneFile.text() : "";
       const stats = analyzeW3dXml(xml);
       const translated = translateBlueprint(xml);
+      // Build blob URL map from the raster texture files provided by the folder picker
+      const textureUrlsByFilename = new Map<string, string>();
+      for (const f of folder.rasterTextureFiles) {
+        textureUrlsByFilename.set(f.name, URL.createObjectURL(f));
+      }
       setLoaded({
         sceneFileName: folder.sceneFileName,
         xml,
         blueprint: translated.blueprint,
         nodes: translated.nodes,
+        resources: translated.resources,
+        textureUrlsByFilename,
+        textureCache: new Map(),
         warnings: [...folder.warnings, ...translated.warnings],
         stats,
         movFiles: folder.movFiles.length,
@@ -66,13 +101,20 @@ export function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [loaded]);
 
   const reTranslate = useCallback(() => {
     if (!loaded) return;
     try {
       const translated = translateBlueprint(loaded.xml);
-      setLoaded({ ...loaded, blueprint: translated.blueprint, nodes: translated.nodes, warnings: translated.warnings });
+      setLoaded({
+        ...loaded,
+        blueprint: translated.blueprint,
+        nodes: translated.nodes,
+        resources: translated.resources,
+        warnings: translated.warnings,
+        // Preserve existing textureUrlsByFilename and textureCache — do not revoke/recreate
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -207,7 +249,7 @@ function relPath(file: File): string {
 }
 
 function QuadsView({ loaded }: { loaded: LoadedScene }) {
-  const rows: DumpRow[] = dumpNodes(loaded.nodes);
+  const rows: DumpRow[] = dumpNodes(loaded.nodes, loaded.resources);
   const quadRows = rows.filter((r) => r.kind === "Quad");
   const summary = {
     quads: quadRows.length,
@@ -220,6 +262,8 @@ function QuadsView({ loaded }: { loaded: LoadedScene }) {
     <div className="playground__quads">
       <div className="playground__quads-summary">
         {summary.quads} quads · {summary.masks} masks · {summary.disabled} disabled · {summary.alphaZero} alpha-zero · {summary.groups} groups
+        {" · "}{rows.filter(r => r.kind === "Quad" && r.hasMaterialResolved).length} mat-resolved
+        {" · "}{rows.filter(r => r.kind === "Quad" && r.hasTextureLayerResolved).length} tex-resolved
       </div>
       <table className="playground__quads-table">
         <thead>
