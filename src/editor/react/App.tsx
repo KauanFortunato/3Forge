@@ -1975,7 +1975,32 @@ export function App() {
         const asset = await runTask(`Importing ${file.name}...`, () => modelFileToAsset(file), { blocking: true });
         const modelId = store.addModelAsset(asset);
         const insertionIndex = target.index === undefined ? undefined : target.index + importedCount;
-        lastNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
+
+        // USDZ: parse once at import time so we can expose every USD prim as
+        // an editable blueprint node (Xform → group, Mesh → model+primPath).
+        // The same buffer is re-parsed by scene.ts when first rendering;
+        // that's fine — OpenUSD WASM is already warm.
+        let insertedNodeId: string | null = null;
+        if (asset.format === "usdz") {
+          try {
+            const buffer = await file.arrayBuffer();
+            const { parseUsdz, buildUsdImportPlanFromGroup } = await import("../../lib/openusd/openusdParser");
+            const group = await runTask(`Reading ${file.name} hierarchy...`, () => parseUsdz(buffer, asset.name ?? "asset.usdz"), { blocking: true });
+            const plan = buildUsdImportPlanFromGroup(group);
+            if (plan.length > 0) {
+              insertedNodeId = store.insertModelImportPlan(modelId, plan, target.parentId, insertionIndex);
+            }
+          } catch (err) {
+            console.warn("USDZ hierarchy parse failed; falling back to single ModelNode:", err);
+          }
+        }
+
+        // Non-USDZ formats (or USDZ that failed hierarchical parse) get the
+        // legacy single-ModelNode treatment.
+        if (!insertedNodeId) {
+          insertedNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
+        }
+        lastNodeId = insertedNodeId;
         importedCount += 1;
 
         // For USDZ (a ZIP archive), surface its embedded images as standalone

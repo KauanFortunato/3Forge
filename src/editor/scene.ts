@@ -77,7 +77,7 @@ import {
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { tryDecodeDataUrl } from "./modelBuffer";
-import { buildStructureFromGroup, findObjectByIndexPath } from "./modelStructure";
+import { buildStructureFromGroup, findObjectByIndexPath, findObjectByUsdPath } from "./modelStructure";
 import { runTask } from "./react/hooks/useAsyncTask";
 import { EditorStore } from "./state";
 import type {
@@ -1158,6 +1158,34 @@ export class SceneEditor {
 
     parsePromise
       .then((cached) => {
+        // primPath path: this ModelNode renders ONLY the meshes attached to
+        // the specific USD prim in the cached group (its sibling prims are
+        // rendered by other ModelNodes that share the same modelId). The
+        // prim's own transform was already baked into the blueprint node's
+        // `transform` at import time, so we render the meshes at identity.
+        if (node.primPath) {
+          const prim = findObjectByUsdPath(cached, node.primPath);
+          if (!prim) {
+            wrapper.clear();
+            return;
+          }
+          const meshContainer = new Group();
+          meshContainer.userData.nodeId = node.id;
+          meshContainer.userData.nodeType = node.type;
+          for (const child of prim.children) {
+            if (!(child instanceof Mesh)) continue;
+            const clonedMesh = child.clone();
+            clonedMesh.userData.nodeId = node.id;
+            clonedMesh.userData.nodeType = node.type;
+            clonedMesh.castShadow = true;
+            clonedMesh.receiveShadow = true;
+            meshContainer.add(clonedMesh);
+          }
+          wrapper.clear();
+          wrapper.add(meshContainer);
+          return;
+        }
+
         const clone = cached.clone(true);
         tagForNode(clone);
 

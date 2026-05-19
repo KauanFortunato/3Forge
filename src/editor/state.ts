@@ -60,6 +60,7 @@ import type {
   MaterialType,
   ModelAsset,
   ModelAssetStructure,
+  ModelImportPlanNode,
   ModelNode,
   NodeOriginDepth,
   NodeOriginHorizontal,
@@ -1301,8 +1302,24 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
     }
   }
 
-  if (node.type === "model" && typeof source.modelId === "string" && source.modelId.trim()) {
-    node.modelId = source.modelId.trim();
+  if (node.type === "model") {
+    if (typeof source.modelId === "string" && source.modelId.trim()) {
+      node.modelId = source.modelId.trim();
+    }
+    if (typeof source.primPath === "string" && source.primPath.trim()) {
+      node.primPath = source.primPath.trim();
+    }
+    if (source.partVisibility && typeof source.partVisibility === "object") {
+      const overrides: Record<string, boolean> = {};
+      for (const [partId, visible] of Object.entries(source.partVisibility as Record<string, unknown>)) {
+        if (typeof visible === "boolean" && typeof partId === "string") {
+          overrides[partId] = visible;
+        }
+      }
+      if (Object.keys(overrides).length > 0) {
+        node.partVisibility = overrides;
+      }
+    }
   }
 
   node.editable = normalizeEditableBindings(node, source.editable);
@@ -2681,6 +2698,93 @@ export class EditorStore extends EventTarget {
     this._selectedNodeIds = [node.id];
     this.notify({ reason: "structure", source, nodeId: node.id });
     return node.id;
+  }
+
+  /**
+   * Explode a parsed USDZ (or similar hierarchical model) into a tree of
+   * editable blueprint nodes. Each plan entry becomes a `group` node
+   * (xform-only container) or a `model` node bound to `modelAssetId` and
+   * pinned to a specific USD prim via `primPath`. Returns the root
+   * node ID of the freshly inserted subtree (or `null` if the asset is
+   * unknown or the plan is empty).
+   */
+  insertModelImportPlan(
+    modelAssetId: string,
+    plan: ModelImportPlanNode[],
+    parentId: string | null = ROOT_NODE_ID,
+    siblingIndex?: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): string | null {
+    const asset = this.getModelAsset(modelAssetId);
+    if (!asset || plan.length === 0) {
+      return null;
+    }
+
+    const targetParentId = this.resolveInsertParentId(parentId);
+    const flatNodes: EditorNode[] = [];
+
+    const buildNode = (planNode: ModelImportPlanNode, blueprintParentId: string | null): EditorNode => {
+      const baseName = planNode.name.trim() || (planNode.kind === "mesh" ? "Part" : "Group");
+      if (planNode.kind === "mesh") {
+        const node = createNode("model", blueprintParentId);
+        node.modelId = modelAssetId;
+        node.name = baseName;
+        node.transform = {
+          position: { x: planNode.position.x, y: planNode.position.y, z: planNode.position.z },
+          rotation: { x: planNode.rotation.x, y: planNode.rotation.y, z: planNode.rotation.z },
+          scale: { x: planNode.scale.x, y: planNode.scale.y, z: planNode.scale.z },
+        };
+        if (planNode.primPath) {
+          node.primPath = planNode.primPath;
+        }
+        return node;
+      }
+      const node = createNode("group", blueprintParentId);
+      node.name = baseName;
+      node.transform = {
+        position: { x: planNode.position.x, y: planNode.position.y, z: planNode.position.z },
+        rotation: { x: planNode.rotation.x, y: planNode.rotation.y, z: planNode.rotation.z },
+        scale: { x: planNode.scale.x, y: planNode.scale.y, z: planNode.scale.z },
+      };
+      return node;
+    };
+
+    const walk = (planNodes: ModelImportPlanNode[], blueprintParentId: string | null): void => {
+      for (const planNode of planNodes) {
+        const node = buildNode(planNode, blueprintParentId);
+        flatNodes.push(node);
+        if (planNode.children.length > 0) {
+          walk(planNode.children, node.id);
+        }
+      }
+    };
+
+    // If the plan has multiple roots, wrap them in a synthetic group so the
+    // user has a single selectable "imported asset" handle in the hierarchy.
+    // Single-root plans are inserted as-is.
+    let rootNodeId: string;
+    if (plan.length === 1) {
+      walk(plan, targetParentId);
+      rootNodeId = flatNodes[0].id;
+    } else {
+      const wrapper = createNode("group", targetParentId);
+      wrapper.name = stripExtension(asset.name) || wrapper.name;
+      flatNodes.push(wrapper);
+      walk(plan, wrapper.id);
+      rootNodeId = wrapper.id;
+    }
+
+    this.recordHistorySnapshot();
+    this._blueprint.nodes = insertSubtreeIntoBlueprint(
+      this._blueprint.nodes,
+      flatNodes,
+      targetParentId,
+      siblingIndex,
+    );
+    this._selectedNodeId = rootNodeId;
+    this._selectedNodeIds = [rootNodeId];
+    this.notify({ reason: "structure", source, nodeId: rootNodeId });
+    return rootNodeId;
   }
 
   pasteNodes(nodes: EditorNode[], parentId: string | null, source: EditorStoreChange["source"] = "ui"): string | null {

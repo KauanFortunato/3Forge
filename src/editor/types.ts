@@ -180,6 +180,24 @@ export interface ModelAssetStructure {
   roots: ModelAssetStructureNode[];
 }
 
+/**
+ * Hierarchical plan handed to {@link EditorStore.insertModelImportPlan} to
+ * "explode" an imported model (typically a USDZ) into a tree of editable
+ * blueprint nodes. Each plan entry becomes either a `group` node (for
+ * `xform` kind — pure transform container) or a `model` node (for `mesh`
+ * kind — references the parent ModelAsset and renders only the prim at
+ * `primPath`). Transforms are local (relative to the plan parent).
+ */
+export interface ModelImportPlanNode {
+  name: string;
+  kind: "xform" | "mesh";
+  position: Vec3Like;
+  rotation: Vec3Like;
+  scale: Vec3Like;
+  primPath?: string;
+  children: ModelImportPlanNode[];
+}
+
 export interface HdrAsset {
   id: string;
   name: string;
@@ -445,6 +463,17 @@ export interface ModelNode extends BaseEditorNode {
    * `false` are meaningful; missing entries mean the part is visible.
    */
   partVisibility?: Record<string, boolean>;
+  /**
+   * When set, this node renders only the subtree of the referenced model
+   * located at the given USD prim path (tagged via `userData.usdPath` by
+   * the OpenUSD parser). The rest of the model is rendered by sibling
+   * ModelNodes that share the same `modelId`. Used to expose each prim of
+   * an imported USDZ as an independently editable blueprint node.
+   *
+   * Only meaningful for ModelNodes whose ModelAsset is a USDZ parsed by
+   * the OpenUSD pipeline; ignored otherwise.
+   */
+  primPath?: string;
 }
 
 export type EditorNode =
