@@ -71,6 +71,7 @@ function makeReg(
     baseMaterials: new Map(mats.map(m => [m.id, m])),
     textureLayers: new Map(layers.map(l => [l.id, l])),
     textures: new Map(textures.map(t => [t.id, t])),
+    dynamicTextureFilenameByLayerId: new Map(),
   };
 }
 
@@ -151,5 +152,60 @@ describe("dumpNodes — with registry", () => {
     expect(row.textureLayerName).toBe("PHOTO_01");
     expect(row.textureFilename).toBe("—");
     expect(row.hasTextureLayerResolved).toBe(false);
+  });
+});
+
+describe("dumpNodes — dynamic texture fields (Phase H)", () => {
+  const dynLayer: W3DTextureLayerData = {
+    kind: "TextureLayer", id: "photo-01-id", name: "PHOTO_01",
+    textureBlending: "Multiply",
+    mapping: { isEmissive: false, useMipMapping: false },
+  };
+  const ffLayer: W3DTextureLayerData = {
+    kind: "TextureLayer", id: "ff-photo-id", name: "FF_PHOTO",
+    textureBlending: "Multiply",
+    mapping: { isEmissive: false, useMipMapping: false },
+  };
+
+  function makeRegWithDyn(): W3DResourceRegistry {
+    return {
+      baseMaterials: new Map(),
+      textures: new Map(),
+      textureLayers: new Map([["photo-01-id", dynLayer], ["ff-photo-id", ffLayer]]),
+      dynamicTextureFilenameByLayerId: new Map([["photo-01-id", "Player 1.png"]]),
+    };
+  }
+
+  test("dynamicTextureSlot=true and filename populated when binding exists", () => {
+    const node = quad({
+      faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "photo-01-id", baseMaterialInherited: false, textureInherited: false },
+    });
+    const [row] = dumpNodes([node], makeRegWithDyn());
+    expect(row.dynamicTextureSlot).toBe(true);
+    expect(row.dynamicTextureFilename).toBe("Player 1.png");
+    // Without textureUrlsByFilename, resolved must be false
+    expect(row.dynamicTextureResolved).toBe(false);
+  });
+
+  test("dynamicTextureResolved=true when textureUrlsByFilename has the filename", () => {
+    const node = quad({
+      faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "photo-01-id", baseMaterialInherited: false, textureInherited: false },
+    });
+    const urls = new Map([["Player 1.png", "blob:player1"]]);
+    const [row] = dumpNodes([node], makeRegWithDyn(), urls);
+    expect(row.dynamicTextureSlot).toBe(true);
+    expect(row.dynamicTextureResolved).toBe(true);
+    expect(row.dynamicTextureFilename).toBe("Player 1.png");
+  });
+
+  test("FF_PHOTO (no binding) → slot=false, resolved=false, filename='—'", () => {
+    const node = quad({
+      faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "ff-photo-id", baseMaterialInherited: false, textureInherited: false },
+    });
+    const urls = new Map([["Player 1.png", "blob:player1"]]);
+    const [row] = dumpNodes([node], makeRegWithDyn(), urls);
+    expect(row.dynamicTextureSlot).toBe(false);
+    expect(row.dynamicTextureResolved).toBe(false);
+    expect(row.dynamicTextureFilename).toBe("—");
   });
 });

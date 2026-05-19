@@ -249,7 +249,7 @@ function relPath(file: File): string {
 }
 
 function QuadsView({ loaded }: { loaded: LoadedScene }) {
-  const rows: DumpRow[] = dumpNodes(loaded.nodes, loaded.resources);
+  const rows: DumpRow[] = dumpNodes(loaded.nodes, loaded.resources, loaded.textureUrlsByFilename);
   const quadRows = rows.filter((r) => r.kind === "Quad");
   const summary = {
     quads: quadRows.length,

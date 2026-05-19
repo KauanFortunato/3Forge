@@ -104,6 +104,21 @@ export function resolveMaterial(
             warnings.push(`Texture file "${tex.filename}" not loaded; no mapUrl for TextureLayer "${tl.name}".`);
           }
         }
+      } else {
+        // Phase H: no static textureGuid — check ExportProperty dynamic binding
+        const dynFilename = ctx.registry.dynamicTextureFilenameByLayerId?.get(textureLayerId);
+        if (dynFilename) {
+          const url = ctx.textureUrlsByFilename.get(dynFilename);
+          if (url) {
+            mapUrl = url;
+            textureFilename = dynFilename;
+            hasTextureLayerResolved = true;
+            transparent = true;
+          } else {
+            warnings.push(`Dynamic texture "${dynFilename}" for TextureLayer "${tl.name}" not loaded.`);
+          }
+        }
+        // No dynFilename → unbound dynamic slot (e.g. FF_PHOTO) → no warning, no mapUrl
       }
 
       // alphaMapUrl — ONLY when a separate Key texture GUID exists (never auto-assigned from mapUrl)

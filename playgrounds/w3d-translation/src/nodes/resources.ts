@@ -52,6 +52,7 @@ export type W3DResourceRegistry = {
   baseMaterials: Map<string, W3DBaseMaterialData>;
   textures: Map<string, W3DTextureData>;
   textureLayers: Map<string, W3DTextureLayerData>;
+  dynamicTextureFilenameByLayerId: Map<string, string>;
 };
 
 export interface ParseResourcesResult {
@@ -64,6 +65,7 @@ export function parseResources(xml: string): ParseResourcesResult {
     baseMaterials: new Map(),
     textures: new Map(),
     textureLayers: new Map(),
+    dynamicTextureFilenameByLayerId: new Map(),
   };
   const warnings: string[] = [];
   const parser = new DOMParser();
@@ -158,6 +160,24 @@ export function parseResources(xml: string): ParseResourcesResult {
         rotationKeyDeg: rotKeyEl ? parseNum(rotKeyEl.getAttribute("Z") ?? undefined, 0) : undefined,
         raw: attrs,
       });
+    }
+  }
+
+  // Phase H: parse dynamic texture bindings from ExportManagerProperties
+  const empEl = doc.querySelector("ExportManagerProperties");
+  if (empEl) {
+    for (const listEl of Array.from(empEl.children)) {
+      if (listEl.tagName !== "ExportList") continue;
+      for (const propEl of Array.from(listEl.children)) {
+        if (propEl.tagName !== "ExportProperty") continue;
+        if (propEl.getAttribute("Type") !== "Texture") continue;
+        if (propEl.getAttribute("PropertyName") !== "TextureMappingOption.Texture") continue;
+        const controllableId = propEl.getAttribute("ControllableId");
+        const value = propEl.getAttribute("Value");
+        if (controllableId && value) {
+          registry.dynamicTextureFilenameByLayerId.set(controllableId, value);
+        }
+      }
     }
   }
 

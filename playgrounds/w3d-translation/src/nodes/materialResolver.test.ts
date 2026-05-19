@@ -7,6 +7,7 @@ function makeRegistry(mats: W3DBaseMaterialData[] = []): W3DResourceRegistry {
     baseMaterials: new Map(mats.map(m => [m.id, m])),
     textures: new Map(),
     textureLayers: new Map(),
+    dynamicTextureFilenameByLayerId: new Map(),
   };
 }
 
@@ -92,6 +93,7 @@ function makeFullRegistry(
     baseMaterials: new Map(mats.map(m => [m.id, m])),
     textures: new Map(textures.map(t => [t.id, t])),
     textureLayers: new Map(layers.map(l => [l.id, l])),
+    dynamicTextureFilenameByLayerId: new Map(),
   };
 }
 
@@ -238,5 +240,83 @@ describe("resolveMaterial — DE1A3E3C project-default-transparent", () => {
     // opacity NOT forced to 0 because mapUrl is present
     expect(r.opacity).toBeGreaterThan(0);
     expect(r.transparent).toBe(true); // true because PNG has alpha
+  });
+});
+
+describe("resolveMaterial — dynamic texture binding (Phase H)", () => {
+  const PHOTO_LAYER_NO_GUID: W3DTextureLayerData = {
+    kind: "TextureLayer", id: "photo-01-layer-id", name: "PHOTO_01",
+    textureBlending: "Multiply",
+    mapping: { isEmissive: false, useMipMapping: false }, // no textureGuid
+  };
+
+  function makeRegistryWithDynamic(
+    layers: W3DTextureLayerData[],
+    dynMap: [string, string][],
+  ): W3DResourceRegistry {
+    return {
+      baseMaterials: new Map(),
+      textures: new Map(),
+      textureLayers: new Map(layers.map(l => [l.id, l])),
+      dynamicTextureFilenameByLayerId: new Map(dynMap),
+    };
+  }
+
+  test("dynamic binding resolves mapUrl when filename in ctx.textureUrlsByFilename", () => {
+    const reg = makeRegistryWithDynamic(
+      [PHOTO_LAYER_NO_GUID],
+      [["photo-01-layer-id", "Player 1.png"]],
+    );
+    const urls = new Map([["Player 1.png", "blob:player1-url"]]);
+    const ctx = { registry: reg, textureUrlsByFilename: urls };
+    const r = resolveMaterial(undefined, "photo-01-layer-id", undefined, 1, ctx, []);
+    expect(r.mapUrl).toBe("blob:player1-url");
+    expect(r.hasTextureLayerResolved).toBe(true);
+    expect(r.textureFilename).toBe("Player 1.png");
+    expect(r.transparent).toBe(true);
+  });
+
+  test("dynamic binding with filename not in ctx → warning, no mapUrl", () => {
+    const reg = makeRegistryWithDynamic(
+      [PHOTO_LAYER_NO_GUID],
+      [["photo-01-layer-id", "Player 1.png"]],
+    );
+    const ctx = { registry: reg, textureUrlsByFilename: new Map() };
+    const warnings: string[] = [];
+    const r = resolveMaterial(undefined, "photo-01-layer-id", undefined, 1, ctx, warnings);
+    expect(r.mapUrl).toBeUndefined();
+    expect(r.hasTextureLayerResolved).toBe(false);
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  test("dynamic slot without binding (FF_PHOTO) → no warning, no mapUrl", () => {
+    const FF_PHOTO: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "ff-photo-id", name: "FF_PHOTO",
+      textureBlending: "Multiply",
+      mapping: { isEmissive: false, useMipMapping: false },
+    };
+    const reg = makeRegistryWithDynamic([FF_PHOTO], []);
+    const ctx = { registry: reg, textureUrlsByFilename: new Map() };
+    const warnings: string[] = [];
+    const r = resolveMaterial(undefined, "ff-photo-id", undefined, 1, ctx, warnings);
+    expect(r.mapUrl).toBeUndefined();
+    expect(warnings).toEqual([]);
+  });
+
+  test("DE1A3E3C + PHOTO_01 dynamic binding resolvido → mapUrl existe, opacity não é 0", () => {
+    // Critical: order must be: static texGuid → dynamic map → DE1A3E3C opacity guard
+    // The DE1A3E3C guard checks !mapUrl AFTER both texture attempts, so with mapUrl=resolved → opacity>0
+    const DE1A3E3C = "DE1A3E3C-AE85-4B7B-BA86-056463611630";
+    const reg = makeRegistryWithDynamic(
+      [PHOTO_LAYER_NO_GUID],
+      [["photo-01-layer-id", "Player 1.png"]],
+    );
+    const urls = new Map([["Player 1.png", "blob:player1-url"]]);
+    const ctx = { registry: reg, textureUrlsByFilename: urls };
+    const r = resolveMaterial(DE1A3E3C, "photo-01-layer-id", undefined, 1, ctx, []);
+    expect(r.mapUrl).toBe("blob:player1-url");
+    // DE1A3E3C transparent rule must NOT apply because mapUrl was resolved
+    expect(r.opacity).toBeGreaterThan(0);
+    expect(r.transparent).toBe(true); // true because PNG has alpha, not because of DE1A3E3C rule
   });
 });

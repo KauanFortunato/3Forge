@@ -26,20 +26,37 @@ export type DumpRow = {
   materialName: string;
   textureLayerName: string;
   textureFilename: string;
+  dynamicTextureSlot: boolean;
+  dynamicTextureResolved: boolean;
+  dynamicTextureFilename: string;
   maskProperties: string;
   childrenCount: number;
 };
 
-export function dumpNodes(roots: W3DNodeData[], registry?: W3DResourceRegistry): DumpRow[] {
+export function dumpNodes(
+  roots: W3DNodeData[],
+  registry?: W3DResourceRegistry,
+  textureUrlsByFilename?: Map<string, string>,
+): DumpRow[] {
   const rows: DumpRow[] = [];
-  for (const r of roots) walk(r, 0, [], rows, registry);
+  for (const r of roots) walk(r, 0, [], rows, registry, textureUrlsByFilename);
   return rows;
 }
 
-function walk(node: W3DNodeData, depth: number, ancestors: string[], rows: DumpRow[], registry?: W3DResourceRegistry): void {
+function walk(
+  node: W3DNodeData,
+  depth: number,
+  ancestors: string[],
+  rows: DumpRow[],
+  registry?: W3DResourceRegistry,
+  textureUrlsByFilename?: Map<string, string>,
+): void {
   const path = [...ancestors, node.name].join(" > ");
-  rows.push(node.kind === "Quad" ? quadRow(node, depth, path, registry) : groupRow(node, depth, path));
-  for (const c of node.children) walk(c, depth + 1, [...ancestors, node.name], rows, registry);
+  rows.push(node.kind === "Quad"
+    ? quadRow(node, depth, path, registry, textureUrlsByFilename)
+    : groupRow(node, depth, path));
+  for (const c of node.children)
+    walk(c, depth + 1, [...ancestors, node.name], rows, registry, textureUrlsByFilename);
 }
 
 function groupRow(node: Extract<W3DNodeData, { kind: "Group" }>, depth: number, path: string): DumpRow {
@@ -68,12 +85,21 @@ function groupRow(node: Extract<W3DNodeData, { kind: "Group" }>, depth: number, 
     materialName: "—",
     textureLayerName: "—",
     textureFilename: "—",
+    dynamicTextureSlot: false,
+    dynamicTextureResolved: false,
+    dynamicTextureFilename: "—",
     maskProperties: "—",
     childrenCount: node.children.length,
   };
 }
 
-function quadRow(node: W3DQuadData, depth: number, path: string, registry?: W3DResourceRegistry): DumpRow {
+function quadRow(
+  node: W3DQuadData,
+  depth: number,
+  path: string,
+  registry?: W3DResourceRegistry,
+  textureUrlsByFilename?: Map<string, string>,
+): DumpRow {
   const t = node.transform;
   const transparentByAlpha0 = node.alpha === 0;
 
@@ -91,6 +117,13 @@ function quadRow(node: W3DQuadData, depth: number, path: string, registry?: W3DR
 
   // textureLayerName: use layer name if found, "Standard" if explicitly Standard, "—" otherwise
   const textureLayerName = tl ? tl.name : (tlId === "Standard" ? "Standard" : "—");
+
+  // Phase H: dynamic texture slot fields
+  const dynFilename = tlId ? registry?.dynamicTextureFilenameByLayerId?.get(tlId) : undefined;
+  const dynamicTextureSlot = !!dynFilename;
+  const dynamicTextureResolved = dynamicTextureSlot
+    ? !!textureUrlsByFilename?.get(dynFilename!)
+    : false;
 
   return {
     depth,
@@ -124,6 +157,10 @@ function quadRow(node: W3DQuadData, depth: number, path: string, registry?: W3DR
     materialName: mat?.name ?? "—",
     textureLayerName,
     textureFilename: tex?.filename ?? "—",
+    // Phase H fields
+    dynamicTextureSlot,
+    dynamicTextureResolved,
+    dynamicTextureFilename: dynFilename ?? "—",
   };
 }
 

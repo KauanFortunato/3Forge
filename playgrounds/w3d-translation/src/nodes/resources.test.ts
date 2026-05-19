@@ -262,3 +262,72 @@ describe("parseResources — TextureLayer", () => {
 });
 
 export { wrapResources };
+
+function wrapWithExport(resourcesInner: string, exportInner: string): string {
+  return `<?xml version="1.0"?><Scene>
+    <Resources>${resourcesInner}</Resources>
+    <ExportManagerProperties>${exportInner}</ExportManagerProperties>
+  </Scene>`;
+}
+
+describe("parseResources — ExportManagerProperties", () => {
+  test("dynamicTextureFilenameByLayerId maps textureLayerId→filename for Texture type", () => {
+    const { registry } = parseResources(wrapWithExport("", `
+      <ExportList Name="lgPhoto01">
+        <ExportProperty Id="ep-1" Enable="True"
+          PropertyName="TextureMappingOption.Texture" Type="Texture"
+          Value="Player 1.png" ControllableId="photo-01-layer-id"
+          UpdateMode="Instantly"/>
+      </ExportList>
+    `));
+    expect(registry.dynamicTextureFilenameByLayerId.get("photo-01-layer-id")).toBe("Player 1.png");
+  });
+
+  test("ignores ExportProperty with Type!=Texture silently", () => {
+    const { registry, warnings } = parseResources(wrapWithExport("", `
+      <ExportList Name="tPlayerName01">
+        <ExportProperty Id="ep-2" Enable="True"
+          PropertyName="Text" Type="String"
+          Value="DARIUS STEPHENS" ControllableId="text-node-id"
+          UpdateMode="Instantly"/>
+      </ExportList>
+    `));
+    expect(registry.dynamicTextureFilenameByLayerId.size).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
+  test("ignores ExportProperty with PropertyName!=TextureMappingOption.Texture", () => {
+    const { registry } = parseResources(wrapWithExport("", `
+      <ExportList Name="vColorPrimary">
+        <ExportProperty Id="ep-3" Enable="True"
+          PropertyName="Emissive.RGB" Type="ColorInt"
+          Value="-10080121" ControllableId="primary-mat-id"
+          UpdateMode="Instantly"/>
+      </ExportList>
+    `));
+    expect(registry.dynamicTextureFilenameByLayerId.size).toBe(0);
+  });
+
+  test("multiple Texture ExportProperties all indexed", () => {
+    const { registry } = parseResources(wrapWithExport("", `
+      <ExportList Name="lgPhoto01">
+        <ExportProperty Id="ep-a" Enable="True"
+          PropertyName="TextureMappingOption.Texture" Type="Texture"
+          Value="Player 1.png" ControllableId="layer-a-id" UpdateMode="Instantly"/>
+      </ExportList>
+      <ExportList Name="lgPhoto02">
+        <ExportProperty Id="ep-b" Enable="True"
+          PropertyName="TextureMappingOption.Texture" Type="Texture"
+          Value="Player 9.png" ControllableId="layer-b-id" UpdateMode="Instantly"/>
+      </ExportList>
+    `));
+    expect(registry.dynamicTextureFilenameByLayerId.size).toBe(2);
+    expect(registry.dynamicTextureFilenameByLayerId.get("layer-b-id")).toBe("Player 9.png");
+  });
+
+  test("no ExportManagerProperties → empty map, no crash", () => {
+    const { registry } = parseResources(wrapResources(""));
+    expect(registry.dynamicTextureFilenameByLayerId).toBeInstanceOf(Map);
+    expect(registry.dynamicTextureFilenameByLayerId.size).toBe(0);
+  });
+});

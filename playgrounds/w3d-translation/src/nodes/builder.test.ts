@@ -156,6 +156,7 @@ function makeCtx(overrides: Partial<BuildContext> = {}): BuildContext {
     baseMaterials: new Map(),
     textures: new Map(),
     textureLayers: new Map(),
+    dynamicTextureFilenameByLayerId: new Map(),
   };
   return {
     registry,
@@ -187,6 +188,7 @@ describe("builder — BuildContext", () => {
       baseMaterials: new Map([["primary-id", makePrimaryMat()]]),
       textures: new Map(),
       textureLayers: new Map(),
+      dynamicTextureFilenameByLayerId: new Map(),
     };
     const ctx = makeCtx({ registry });
     const node = quadData({
@@ -224,6 +226,7 @@ describe("builder — BuildContext", () => {
       baseMaterials: new Map(),
       textures: new Map([["bg-id", bgTex]]),
       textureLayers: new Map([["bg-layer", bgLayer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
     };
     const urls = new Map([["BG.png", "blob:fake-bg"]]);
     const ctx = makeCtx({ registry, textureUrlsByFilename: urls });
@@ -258,6 +261,7 @@ describe("builder — BuildContext", () => {
       baseMaterials: new Map(),
       textures: new Map([["bg-id", bgTex]]),
       textureLayers: new Map([["bg-layer", bgLayer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
     };
     const urls = new Map([["BG.png", "blob:fake-bg"]]);
     const ctx = makeCtx({ registry, textureUrlsByFilename: urls });
@@ -282,6 +286,7 @@ describe("builder — BuildContext", () => {
       baseMaterials: new Map(),
       textures: new Map([["bg-id", bgTex]]),
       textureLayers: new Map([["bg-layer", bgLayer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["BG.png", "blob:fake-bg"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "bg-layer", baseMaterialInherited: false, textureInherited: false } });
@@ -302,6 +307,7 @@ describe("builder — BuildContext", () => {
       baseMaterials: new Map(),
       textures: new Map([["bg-id", bgTex]]),
       textureLayers: new Map([["bg-layer", bgLayer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["BG.png", "blob:fake-bg"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "bg-layer", baseMaterialInherited: false, textureInherited: false } });
