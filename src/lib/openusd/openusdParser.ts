@@ -22,9 +22,13 @@ import { loadOpenUSD } from "./loadOpenUsd";
  * model) and attach children recursively. The `position`/`rotation`/`scale`
  * fields are the decomposed *local* transform (relative to the kept parent),
  * so when applied to a blueprint node they reproduce the authored world pose.
+ *
+ * The `primPath` field is the USD prim path that becomes the ModelNode's
+ * `primPath` — chosen to match the editor type so state.ts can spread the
+ * plan node directly into a blueprint node without renaming fields.
  */
 export interface UsdImportPlanNode {
-  usdPath: string;
+  primPath: string;
   name: string;
   kind: "xform" | "mesh";
   position: { x: number; y: number; z: number };
@@ -617,7 +621,7 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
     }
 
     return {
-      usdPath,
+      primPath: usdPath,
       name: object.name || primShortName(usdPath),
       kind: usdKind,
       position: { x: object.position.x, y: object.position.y, z: object.position.z },
