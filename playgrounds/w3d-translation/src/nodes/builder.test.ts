@@ -352,7 +352,7 @@ describe("builder — BuildContext", () => {
     expect(tex?.colorSpace).toBe(SRGBColorSpace);
   });
 
-  test("Phase 1a: PHOTO_MASK_01 writes stencil (Always, Replace, colorWrite=false)", async () => {
+  test("Phase 1a: PHOTO_MASK_01 writes stencil (Always, Replace, bit 0, colorWrite=false)", async () => {
     const { AlwaysStencilFunc, ReplaceStencilOp } = await import("three");
     const mask = quadData({
       id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
@@ -367,8 +367,48 @@ describe("builder — BuildContext", () => {
     expect(mat.stencilZPass).toBe(ReplaceStencilOp);
     expect(mat.stencilFail).toBe(ReplaceStencilOp);
     expect(mat.stencilZFail).toBe(ReplaceStencilOp);
+    expect(mat.stencilRef).toBe(1);       // PHOTO_MASK uses bit 0
+    expect(mat.stencilWriteMask).toBe(1); // only writes bit 0
     expect(mat.colorWrite).toBe(false);
     expect(m.visible).toBe(true); // overrides the "hide isMask" default
+  });
+
+  test("Patch A: PHOTO_DUMMY_01 writes stencil (Always, Replace, bit 1, colorWrite=false)", async () => {
+    const { AlwaysStencilFunc, ReplaceStencilOp } = await import("three");
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([dummy], ctx);
+    const m = root.children[0] as Mesh;
+    const mat = m.material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(true);
+    expect(mat.stencilFunc).toBe(AlwaysStencilFunc);
+    expect(mat.stencilZPass).toBe(ReplaceStencilOp);
+    expect(mat.stencilRef).toBe(2);       // PHOTO_DUMMY uses bit 1
+    expect(mat.stencilWriteMask).toBe(2); // only writes bit 1
+    expect(mat.colorWrite).toBe(false);
+    expect(m.visible).toBe(true);
+  });
+
+  test("Patch A: PHOTO_MASK and PHOTO_DUMMY use distinct bits, coexist on same pixel", () => {
+    const mask = quadData({
+      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([mask, dummy], ctx);
+    const maskMat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    const dummyMat = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    expect(maskMat.stencilRef).toBe(1);
+    expect(dummyMat.stencilRef).toBe(2);
+    // Bitmasks ensure each writes only its own bit — they cannot overwrite each other
+    expect(maskMat.stencilWriteMask & dummyMat.stencilWriteMask).toBe(0);
   });
 
   test("Phase 1a: PHOTO_01 client reads stencil with KeepStencilOp", async () => {
@@ -390,7 +430,7 @@ describe("builder — BuildContext", () => {
     expect(mat.depthTest).toBe(false);
   });
 
-  test("Phase 1a: IsInvertedMask=True on PHOTO_MASK → client uses EqualStencilFunc", async () => {
+  test("Phase 1a: IsInvertedMask=True on PHOTO_MASK → client uses EqualStencilFunc with bit 0", async () => {
     const { EqualStencilFunc } = await import("three");
     const mask = quadData({
       id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
@@ -402,6 +442,7 @@ describe("builder — BuildContext", () => {
     const mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
     expect(mat.stencilFunc).toBe(EqualStencilFunc);
     expect(mat.stencilRef).toBe(1);
+    expect(mat.stencilFuncMask).toBe(1); // only tests bit 0
   });
 
   test("Phase 1a: IsInvertedMask=False on PHOTO_MASK → client uses NotEqualStencilFunc", async () => {
@@ -445,9 +486,12 @@ describe("builder — BuildContext", () => {
     expect(m.visible).toBe(false); // still hidden by the old "isMask = hide" default
   });
 
-  test("Phase 1a scope: multi-mask client (maskIds[0]=DUMMY) is NOT stenciled", () => {
-    // Simulates PHOTO_FILL_02 which has [PHOTO_DUMMY_02; PHOTO_MASK_02] —
-    // maskIds[0] is the DUMMY (not in info map) → must skip.
+  test("Patch A: PHOTO_FILL-like client (maskIds[0]=DUMMY) reads stencil via bit 1", async () => {
+    // Simulates PHOTO_FILL_02 with [PHOTO_DUMMY_02; PHOTO_MASK_02]. With
+    // Patch A, PHOTO_DUMMY_0X is now a stencil writer (bit 1), so the client
+    // picks up the DUMMY's bit. The second maskId (MASK_02) is ignored until
+    // multi-mask intersection is implemented in a later phase.
+    const { EqualStencilFunc } = await import("three");
     const photoMask = quadData({
       id: "mask-2", name: "PHOTO_MASK_02", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
@@ -460,7 +504,71 @@ describe("builder — BuildContext", () => {
     const ctx = makeCtx();
     const root = buildNodeTree([photoMask, photoDummy, fillClient], ctx);
     const fillMat = (root.children[2] as Mesh).material as MeshBasicMaterial;
-    expect(fillMat.stencilWrite).toBe(false); // intentionally untouched until Phase 1b
+    expect(fillMat.stencilWrite).toBe(true);
+    expect(fillMat.stencilFunc).toBe(EqualStencilFunc);
+    expect(fillMat.stencilRef).toBe(2);       // bit 1 (DUMMY)
+    expect(fillMat.stencilFuncMask).toBe(2);  // only tests bit 1
+  });
+
+  test("Patch A: PHOTO_FILL Group with maskIds=[DUMMY] propagates stencil to child quads", async () => {
+    // PHOTO_FILL_01 (Group) has maskIds=[PHOTO_DUMMY_01]. Its children
+    // PHOTO_COLOR_01 and TEXTURE_PHOTO_01 have no maskIds of their own — they
+    // must inherit the parent Group's maskIds for clipping.
+    const { EqualStencilFunc, KeepStencilOp } = await import("three");
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const color = quadData({ id: "color-1", name: "PHOTO_COLOR_01" });
+    const texture = quadData({ id: "tex-1", name: "TEXTURE_PHOTO_01" });
+    const fill = groupData({
+      id: "fill-1", name: "PHOTO_FILL_01",
+      maskIds: ["dummy-1"],
+      children: [color, texture],
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([dummy, fill], ctx);
+    const fillGroup = root.children[1] as Group;
+    const colorMesh = fillGroup.children[0] as Mesh;
+    const textureMesh = fillGroup.children[1] as Mesh;
+
+    for (const mesh of [colorMesh, textureMesh]) {
+      const mat = mesh.material as MeshBasicMaterial;
+      expect(mat.stencilWrite).toBe(true);
+      expect(mat.stencilFunc).toBe(EqualStencilFunc);
+      expect(mat.stencilRef).toBe(2);       // bit 1 (DUMMY)
+      expect(mat.stencilFuncMask).toBe(2);
+      expect(mat.stencilFail).toBe(KeepStencilOp);
+      expect(mat.stencilZFail).toBe(KeepStencilOp);
+      expect(mat.stencilZPass).toBe(KeepStencilOp);
+      expect(mat.depthWrite).toBe(false);
+      expect(mat.depthTest).toBe(false);
+      expect(mesh.renderOrder).toBe(20);
+    }
+  });
+
+  test("Patch A: own maskIds on a Quad override inherited from parent Group", () => {
+    // A child with explicit maskIds should NOT inherit from the parent Group.
+    const photoMask = quadData({
+      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ownChild = quadData({ id: "own", name: "OWN_CLIENT", maskIds: ["mask-1"] }); // explicit
+    const fill = groupData({
+      id: "fill-1", name: "PHOTO_FILL_01",
+      maskIds: ["dummy-1"],
+      children: [ownChild],
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([photoMask, dummy, fill], ctx);
+    const fillGroup = root.children[2] as Group;
+    const ownMesh = fillGroup.children[0] as Mesh;
+    const mat = ownMesh.material as MeshBasicMaterial;
+    expect(mat.stencilRef).toBe(1); // bit 0 (own MASK), not bit 1 (inherited DUMMY)
   });
 
   test("material.needsUpdate = true when map is applied (version incremented)", () => {

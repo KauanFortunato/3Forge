@@ -9,15 +9,27 @@ import { resolveMaterial, displayColorToHex } from "./materialResolver";
 import type { W3DResourceRegistry } from "./resources";
 
 /**
- * Phase 1a — stencil clipping for the PHOTO_MASK_0X / PHOTO_0X subset of W3D.
- * Scope intentionally narrow until BASE_MAIN/BASE_TEAM (layout-dependent) and
- * PHOTO_DUMMY/PHOTO_FILL (multi-mask intersection) are addressed in later phases.
+ * Phase 1a + Patch A — stencil clipping for the photo card subtree.
  *
- * Semantics (validated empirically against R3 on 2026-05-19):
- *   IsInvertedMask=True  → client uses EqualStencilFunc    (visible inside mask shape)
- *   IsInvertedMask=False → client uses NotEqualStencilFunc (visible outside mask shape)
+ * Writers:
+ *   PHOTO_MASK_0X  → bit 0 (stencilRef = stencilWriteMask = 1)
+ *   PHOTO_DUMMY_0X → bit 1 (stencilRef = stencilWriteMask = 2)
+ * Both use ReplaceStencilOp masked to their own bit, so they coexist at the
+ * same pixel without overwriting each other.
+ *
+ * Readers (quads with maskIds — own or inherited from a parent Group):
+ *   stencilWrite=true with KeepStencilOp on all branches (buffer read-only).
+ *   stencilFuncMask masks the comparison to the writer's bit.
+ *   IsInvertedMask=True  → EqualStencilFunc    (visible inside mask shape)
+ *   IsInvertedMask=False → NotEqualStencilFunc (visible outside mask shape)
+ *
+ * Out of scope (untouched): BASE_*, multi-mask intersection PHOTO_FILL_02..05
+ * (uses only maskIds[0]; combining with a second mask is a later phase).
  */
-type PhotoMaskInfo = { ref: number; isInverted: boolean };
+type PhotoMaskInfo = { bit: number; isInverted: boolean };
+
+const PHOTO_MASK_BIT = 1;
+const PHOTO_DUMMY_BIT = 2;
 
 export type BuildContext = {
   registry: W3DResourceRegistry;
@@ -41,13 +53,18 @@ export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
 }
 
 const PHOTO_MASK_NAME_RE = /^PHOTO_MASK_\d+$/;
+const PHOTO_DUMMY_NAME_RE = /^PHOTO_DUMMY_\d+$/;
 
 function collectPhotoMaskInfo(roots: W3DNodeData[]): Map<string, PhotoMaskInfo> {
   const out = new Map<string, PhotoMaskInfo>();
-  let next = 1;
   const walk = (n: W3DNodeData): void => {
-    if (n.kind === "Quad" && n.isMask && PHOTO_MASK_NAME_RE.test(n.name)) {
-      out.set(n.id, { ref: next++, isInverted: !!n.maskProperties?.isInvertedMask });
+    if (n.kind === "Quad" && n.isMask) {
+      const isInverted = !!n.maskProperties?.isInvertedMask;
+      if (PHOTO_MASK_NAME_RE.test(n.name)) {
+        out.set(n.id, { bit: PHOTO_MASK_BIT, isInverted });
+      } else if (PHOTO_DUMMY_NAME_RE.test(n.name)) {
+        out.set(n.id, { bit: PHOTO_DUMMY_BIT, isInverted });
+      }
     }
     for (const c of n.children) walk(c);
   };
@@ -55,12 +72,12 @@ function collectPhotoMaskInfo(roots: W3DNodeData[]): Map<string, PhotoMaskInfo> 
   return out;
 }
 
-export function buildNode(node: W3DNodeData, ctx?: BuildContext): Object3D {
-  if (node.kind === "Group") return buildGroup(node, ctx);
-  return buildQuad(node, ctx);
+export function buildNode(node: W3DNodeData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {
+  if (node.kind === "Group") return buildGroup(node, ctx, inheritedMaskIds);
+  return buildQuad(node, ctx, inheritedMaskIds);
 }
 
-function buildGroup(node: W3DGroupData, ctx?: BuildContext): Group {
+function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: string[]): Group {
   const g = new Group();
   g.name = node.name;
   applyTransform(g, node.transform);
@@ -71,17 +88,20 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext): Group {
     maskIds: node.maskIds,
     transform: node.transform,
   };
-  for (const c of node.children) g.add(buildNode(c, ctx));
+  // Own maskIds override inherited (R3 semantics). Children with no maskIds of
+  // their own pick up this group's maskIds as their effective stencil source.
+  const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
+  for (const c of node.children) g.add(buildNode(c, ctx, passToChildren));
   return g;
 }
 
-function buildQuad(node: W3DQuadData, ctx?: BuildContext): Object3D {
+function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {
   if (node.children.length === 0) {
     const mesh = makeQuadMesh(node, ctx);
     applyTransform(mesh, node.transform);
     // isMask quads are stencil planes — hide the plane itself until Phase H
     mesh.visible = node.enable && !node.isMask;
-    applyPhotoMaskStencil(mesh, node, ctx);
+    applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
     return mesh;
   }
   const wrapper = new Group();
@@ -96,7 +116,8 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext): Object3D {
   // Hide the mask plane itself even when wrapper is visible
   if (node.isMask) mesh.visible = false;
   wrapper.add(mesh);
-  for (const c of node.children) wrapper.add(buildNode(c, ctx));
+  const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
+  for (const c of node.children) wrapper.add(buildNode(c, ctx, passToChildren));
   return wrapper;
 }
 
@@ -204,34 +225,38 @@ function applyAlignment(geometry: PlaneGeometry, geo: W3DQuadData["geometry"]): 
 }
 
 /**
- * Apply Phase 1a stencil clipping to a quad mesh.
+ * Apply Phase 1a + Patch A stencil clipping to a quad mesh.
  *
- * - PHOTO_MASK_0X (isMask=true, name matches /^PHOTO_MASK_\d+$/):
- *   stencilWrite=true, Always, ReplaceStencilOp, colorWrite=false.
+ * Writers (PHOTO_MASK_0X / PHOTO_DUMMY_0X):
+ *   - isMask=true and name matches /^PHOTO_(MASK|DUMMY)_\d+$/
+ *   - writes only its own bit via stencilWriteMask (so PHOTO_MASK and
+ *     PHOTO_DUMMY don't overwrite each other at the same pixel)
  *
- * - Quads with maskIds[0] pointing to a PHOTO_MASK_0X:
- *   stencilWrite=true (required by three.js to participate), KeepStencilOp on
- *   all ops (buffer read-only), stencilFunc derived from IsInvertedMask:
- *     Inverted=True  → EqualStencilFunc
- *     Inverted=False → NotEqualStencilFunc
- *
- * Quads outside this scope (BASE_*, PHOTO_DUMMY_0X, multi-mask PHOTO_FILL_0X)
- * pass through untouched and continue to render with their existing materials.
+ * Readers:
+ *   - quads with maskIds (own or inherited from a parent Group)
+ *   - reads only the writer's bit via stencilFuncMask
+ *   - stencilFunc derived from the writer's IsInvertedMask
  */
-function applyPhotoMaskStencil(mesh: Mesh, node: W3DQuadData, ctx?: BuildContext): void {
+function applyPhotoMaskStencil(
+  mesh: Mesh,
+  node: W3DQuadData,
+  ctx?: BuildContext,
+  inheritedMaskIds?: string[],
+): void {
   if (!ctx) return;
   const info = ctx.photoMaskInfoByMaskId;
   if (!info) return;
   const mat = mesh.material as MeshBasicMaterial;
 
-  // PHOTO_MASK_0X — stencil writer
+  // Writer: PHOTO_MASK_0X or PHOTO_DUMMY_0X
   if (node.isMask && info.has(node.id)) {
-    const { ref } = info.get(node.id)!;
+    const { bit } = info.get(node.id)!;
     mat.depthWrite = false;
     mat.depthTest = false;
     mat.stencilWrite = true;
+    mat.stencilWriteMask = bit;
     mat.stencilFunc = AlwaysStencilFunc;
-    mat.stencilRef = ref;
+    mat.stencilRef = bit;
     mat.stencilZPass = ReplaceStencilOp;
     mat.stencilFail = ReplaceStencilOp;
     mat.stencilZFail = ReplaceStencilOp;
@@ -253,15 +278,19 @@ function applyPhotoMaskStencil(mesh: Mesh, node: W3DQuadData, ctx?: BuildContext
     return;
   }
 
-  // Client — stencil reader, only when maskIds[0] points to a PHOTO_MASK_0X.
-  // Multi-mask cases (PHOTO_FILL_02..05 with [DUMMY; MASK]) are intentionally
-  // skipped here because their maskIds[0] is a PHOTO_DUMMY (not in info).
-  if (node.maskIds.length > 0) {
-    const target = info.get(node.maskIds[0]);
+  // Reader: own maskIds take precedence; otherwise inherit from parent Group.
+  // Phase 1a + Patch A single-mask only — uses maskIds[0]. Multi-mask
+  // intersection (PHOTO_FILL_02..05 with two entries) deferred to a later phase.
+  const effectiveMaskId = node.maskIds.length > 0
+    ? node.maskIds[0]
+    : (inheritedMaskIds && inheritedMaskIds.length > 0 ? inheritedMaskIds[0] : undefined);
+  if (effectiveMaskId) {
+    const target = info.get(effectiveMaskId);
     if (!target) return;
     mat.stencilWrite = true;
     mat.stencilFunc = target.isInverted ? EqualStencilFunc : NotEqualStencilFunc;
-    mat.stencilRef = target.ref;
+    mat.stencilRef = target.bit;
+    mat.stencilFuncMask = target.bit;
     mat.stencilFail = KeepStencilOp;
     mat.stencilZFail = KeepStencilOp;
     mat.stencilZPass = KeepStencilOp;
