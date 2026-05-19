@@ -296,8 +296,47 @@ function applyPhotoMaskStencil(
     mat.stencilZPass = KeepStencilOp;
     mat.depthWrite = false;
     mat.depthTest = false;
-    mesh.renderOrder = 20;
+    mesh.renderOrder = photoCardRenderOrder(node.name);
+    // Patch D2 — force photo-card readers (PHOTO_0X, PHOTO_COLOR_0X,
+    // TEXTURE_PHOTO_0X) into the transparent pass so Three.js sorts them
+    // strictly by renderOrder. Without this, an opaque reader (PHOTO_COLOR_0X
+    // with no texture and opacity=1) would land in the opaque pass and render
+    // BEFORE transparent peers (TEXTURE_PHOTO_0X with PATTERN.png, PHOTO_0X
+    // with Player N.png), inverting the intended back-to-front layering and
+    // letting the diagonal PATTERN.png stripes appear on top of the yellow
+    // PHOTO_COLOR block. Scoped to photo-card names only so future readers
+    // (e.g. someone reusing PHOTO_MASK_0X stencil from outside the card)
+    // keep their authored transparency.
+    if (isPhotoCardClient(node.name)) {
+      mat.transparent = true;
+    }
   }
+}
+
+/**
+ * Patch D2 — granular renderOrder for photo-card stencil readers.
+ *
+ * With depthTest=false on all clients (required for stencil to draw without
+ * being culled by the masks' depth values) Three.js can't z-sort by depth.
+ * The opaque vs transparent pass split would then place TEXTURE_PHOTO (PNG,
+ * transparent pass) ON TOP of PHOTO_COLOR (no map, opaque pass), inverting
+ * the R3 visual order. Forcing renderOrder per node-name role restores the
+ * intended back-to-front: TEXTURE (pattern) → COLOR (yellow) → PHOTO (player).
+ */
+const RENDER_ORDER_TEXTURE_PHOTO = 18;
+const RENDER_ORDER_PHOTO_COLOR = 19;
+const RENDER_ORDER_DEFAULT_CLIENT = 20;
+
+const PHOTO_CARD_CLIENT_RE = /^(TEXTURE_PHOTO_\d+|PHOTO_COLOR_\d+|PHOTO_\d+)$/;
+
+function photoCardRenderOrder(name: string): number {
+  if (/^TEXTURE_PHOTO_\d+$/.test(name)) return RENDER_ORDER_TEXTURE_PHOTO;
+  if (/^PHOTO_COLOR_\d+$/.test(name)) return RENDER_ORDER_PHOTO_COLOR;
+  return RENDER_ORDER_DEFAULT_CLIENT;
+}
+
+function isPhotoCardClient(name: string): boolean {
+  return PHOTO_CARD_CLIENT_RE.test(name);
 }
 
 function loadCachedTexture(url: string, cache: Map<string, Texture>): Texture {

@@ -543,8 +543,10 @@ describe("builder — BuildContext", () => {
       expect(mat.stencilZPass).toBe(KeepStencilOp);
       expect(mat.depthWrite).toBe(false);
       expect(mat.depthTest).toBe(false);
-      expect(mesh.renderOrder).toBe(20);
     }
+    // Patch D2: renderOrder is granular by node name (TEXTURE behind COLOR).
+    expect(colorMesh.renderOrder).toBe(19);
+    expect(textureMesh.renderOrder).toBe(18);
   });
 
   test("Patch A: own maskIds on a Quad override inherited from parent Group", () => {
@@ -569,6 +571,110 @@ describe("builder — BuildContext", () => {
     const ownMesh = fillGroup.children[0] as Mesh;
     const mat = ownMesh.material as MeshBasicMaterial;
     expect(mat.stencilRef).toBe(1); // bit 0 (own MASK), not bit 1 (inherited DUMMY)
+  });
+
+  test("Patch D2: TEXTURE_PHOTO_0X gets lower renderOrder than PHOTO_COLOR_0X (TEXTURE behind COLOR)", () => {
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const color = quadData({ id: "color-1", name: "PHOTO_COLOR_01" });
+    const texture = quadData({ id: "tex-1", name: "TEXTURE_PHOTO_01" });
+    const fill = groupData({
+      id: "fill-1", name: "PHOTO_FILL_01",
+      maskIds: ["dummy-1"],
+      children: [color, texture],
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([dummy, fill], ctx);
+    const fillGroup = root.children[1] as Group;
+    const colorMesh = fillGroup.children[0] as Mesh;
+    const textureMesh = fillGroup.children[1] as Mesh;
+    expect(textureMesh.renderOrder).toBeLessThan(colorMesh.renderOrder);
+    expect(textureMesh.renderOrder).toBe(18);
+    expect(colorMesh.renderOrder).toBe(19);
+  });
+
+  test("Patch D2: PHOTO_COLOR_0X gets lower renderOrder than PHOTO_0X (COLOR behind PHOTO)", () => {
+    const mask = quadData({
+      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const photo = quadData({ id: "p1", name: "PHOTO_01", maskIds: ["mask-1"], alpha: 0.5 });
+    const color = quadData({ id: "color-1", name: "PHOTO_COLOR_01" });
+    const fill = groupData({
+      id: "fill-1", name: "PHOTO_FILL_01",
+      maskIds: ["dummy-1"],
+      children: [color],
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([mask, dummy, photo, fill], ctx);
+    const photoMesh = root.children[2] as Mesh;
+    const colorMesh = (root.children[3] as Group).children[0] as Mesh;
+    expect(colorMesh.renderOrder).toBeLessThan(photoMesh.renderOrder);
+    expect(colorMesh.renderOrder).toBe(19);
+    expect(photoMesh.renderOrder).toBe(20);
+  });
+
+  test("Patch D2: non-photo-card stencil reader keeps authored transparency (scope guard)", () => {
+    // A hypothetical future client that reads PHOTO_MASK/PHOTO_DUMMY but is
+    // not a photo-card node (PHOTO/PHOTO_COLOR/TEXTURE_PHOTO) must retain its
+    // material's authored transparent flag. The transparent override is
+    // scoped to photo-card names only.
+    const mask = quadData({
+      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const otherClient = quadData({
+      id: "other", name: "OTHER_CLIENT", maskIds: ["mask-1"], alpha: 1, // alpha=1, no texture → opaque
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([mask, otherClient], ctx);
+    const mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(true);  // still stenciled
+    expect(mat.transparent).toBe(false);  // NOT forced — opaque preserved
+  });
+
+  test("Patch D2: photo-card stencil readers forced to transparent (so renderOrder sorts across pass)", () => {
+    // PHOTO_COLOR_0X has no texture and opacity=1, so by default the material
+    // is opaque. With opaque + transparent meshes split into separate passes,
+    // renderOrder alone cannot put a transparent TEXTURE_PHOTO behind an
+    // opaque PHOTO_COLOR. Forcing transparent=true on the reader unifies them
+    // into the transparent pass where renderOrder sorting is respected.
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const color = quadData({ id: "color-1", name: "PHOTO_COLOR_01" }); // alpha=1 default
+    const fill = groupData({
+      id: "fill-1", name: "PHOTO_FILL_01",
+      maskIds: ["dummy-1"],
+      children: [color],
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([dummy, fill], ctx);
+    const colorMesh = (root.children[1] as Group).children[0] as Mesh;
+    const mat = colorMesh.material as MeshBasicMaterial;
+    expect(mat.transparent).toBe(true); // overridden by Patch D2 even though source is opaque
+  });
+
+  test("Patch D2: stencil writers (PHOTO_MASK / PHOTO_DUMMY) keep renderOrder 10 (unchanged)", () => {
+    const mask = quadData({
+      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([mask, dummy], ctx);
+    expect((root.children[0] as Mesh).renderOrder).toBe(10);
+    expect((root.children[1] as Mesh).renderOrder).toBe(10);
   });
 
   test("material.needsUpdate = true when map is applied (version incremented)", () => {
