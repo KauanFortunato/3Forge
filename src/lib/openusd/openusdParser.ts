@@ -26,6 +26,10 @@ import { loadOpenUSD } from "./loadOpenUsd";
  * The `primPath` field is the USD prim path that becomes the ModelNode's
  * `primPath` — chosen to match the editor type so state.ts can spread the
  * plan node directly into a blueprint node without renaming fields.
+ *
+ * `materialPath` (mesh-kind only) is the USD material path bound to the
+ * prim. Consumers can use this as a dedup key to share a single project
+ * MaterialAsset across multiple prims that authored the same material.
  */
 export interface UsdImportPlanNode {
   primPath: string;
@@ -34,7 +38,27 @@ export interface UsdImportPlanNode {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number };
+  materialPath?: string;
   children: UsdImportPlanNode[];
+}
+
+/**
+ * PBR property snapshot of a UsdPreviewSurface material, distilled to the
+ * scalar/color fields the editor's MaterialSpec carries. Returned alongside
+ * the import plan so the App layer can register each unique material as a
+ * MaterialAsset and link mesh prims to it via `materialId`. Texture maps
+ * are intentionally omitted for now — the cached parsed material still
+ * provides them at render time; the editable Inspector handles only the
+ * scalar/color overrides.
+ */
+export interface UsdMaterialSnapshot {
+  path: string;
+  name: string;
+  color: string;
+  roughness: number;
+  metalness: number;
+  opacity: number;
+  emissive: string;
 }
 
 interface PrimInfo {
@@ -547,6 +571,12 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
         const meshData = usd.getMeshData(stageId, prim.path);
         if (meshData && meshData.points.length > 0 && meshData.faceVertexIndices.length > 0) {
           const expanded = expandPerCorner(meshData);
+          // Track the prim's "primary" material binding so the editor can
+          // link this mesh to a shared MaterialAsset. Prims with subsets
+          // use the first subset's material as a representative; per-subset
+          // material overrides (when the user splits subsets into separate
+          // editable nodes) are a follow-up.
+          let primaryMaterialPath: string | null = null;
           if (meshData.subsets.length > 0) {
             for (const subset of meshData.subsets) {
               const geom = buildSubsetGeometry(expanded, subset.indices);
@@ -556,7 +586,10 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
               const mesh = new Mesh(geom, mat);
               mesh.name = subset.name;
               mesh.userData.usdSubsetName = subset.name;
-              if (subset.materialPath) mesh.userData.usdMaterialPath = subset.materialPath;
+              if (subset.materialPath) {
+                mesh.userData.usdMaterialPath = subset.materialPath;
+                if (!primaryMaterialPath) primaryMaterialPath = subset.materialPath;
+              }
               obj.add(mesh);
             }
           } else {
@@ -567,8 +600,14 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
               : new MeshPhysicalMaterial({ side: DoubleSide });
             const mesh = new Mesh(geom, mat);
             mesh.name = primShortName(prim.path) || prim.path;
-            if (matPath) mesh.userData.usdMaterialPath = matPath;
+            if (matPath) {
+              mesh.userData.usdMaterialPath = matPath;
+              primaryMaterialPath = matPath;
+            }
             obj.add(mesh);
+          }
+          if (primaryMaterialPath) {
+            obj.userData.usdMaterialPath = primaryMaterialPath;
           }
         }
       }
@@ -601,6 +640,10 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
       if (childPlan) childPlans.push(childPlan);
     }
 
+    const materialPath = usdKind === "mesh"
+      ? (object.userData?.usdMaterialPath as string | undefined)
+      : undefined;
+
     return {
       primPath: usdPath,
       name: object.name || primShortName(usdPath),
@@ -608,6 +651,7 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
       position: { x: object.position.x, y: object.position.y, z: object.position.z },
       rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
       scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
+      ...(materialPath ? { materialPath } : {}),
       children: childPlans,
     };
   };
@@ -620,6 +664,41 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
     if (plan) plans.push(plan);
   }
   return plans;
+}
+
+function colorToHex(color: { r: number; g: number; b: number }): string {
+  const toHex = (channel: number): string => {
+    const clamped = Math.round(Math.max(0, Math.min(1, channel)) * 255);
+    return clamped.toString(16).padStart(2, "0");
+  };
+  return `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
+}
+
+/**
+ * Walk a tagged Group produced by {@link parseUsdz} and snapshot each unique
+ * UsdPreviewSurface material it references. Used during USDZ import to
+ * register one MaterialAsset per authored material, then link mesh prims
+ * sharing the same material path to the same MaterialAsset id.
+ */
+export function extractUsdMaterialSnapshotsFromGroup(group: Group): UsdMaterialSnapshot[] {
+  const snapshots = new Map<string, UsdMaterialSnapshot>();
+  group.traverse((obj) => {
+    if (!(obj instanceof Mesh)) return;
+    const matPath = obj.userData?.usdMaterialPath as string | undefined;
+    if (!matPath || snapshots.has(matPath)) return;
+    const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+    if (!(mat instanceof MeshPhysicalMaterial)) return;
+    snapshots.set(matPath, {
+      path: matPath,
+      name: primShortName(matPath) || "Material",
+      color: colorToHex(mat.color),
+      roughness: mat.roughness,
+      metalness: mat.metalness,
+      opacity: mat.opacity,
+      emissive: colorToHex(mat.emissive),
+    });
+  });
+  return Array.from(snapshots.values());
 }
 
 // Test/dev: clear the registered-plugins flag so plugins re-register on next call.

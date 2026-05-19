@@ -187,6 +187,11 @@ export interface ModelAssetStructure {
  * `xform` kind — pure transform container) or a `model` node (for `mesh`
  * kind — references the parent ModelAsset and renders only the prim at
  * `primPath`). Transforms are local (relative to the plan parent).
+ *
+ * `materialId` (mesh-kind only) is the id of a MaterialAsset already
+ * registered on the blueprint (typically by the same import pass); the
+ * resulting ModelNode is linked to that asset so edits in the Materials
+ * panel propagate to every part sharing it.
  */
 export interface ModelImportPlanNode {
   name: string;
@@ -195,6 +200,7 @@ export interface ModelImportPlanNode {
   rotation: Vec3Like;
   scale: Vec3Like;
   primPath?: string;
+  materialId?: string;
   children: ModelImportPlanNode[];
 }
 

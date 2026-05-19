@@ -108,6 +108,41 @@ interface AnimationPreviewOverride {
   value: number;
 }
 
+/**
+ * Apply the *scalar/color* fields of a MaterialSpec onto an already-built
+ * Material instance (typically a clone of a USD-parsed `MeshPhysicalMaterial`).
+ * Used by primPath ModelNodes so the user can edit color/roughness/metalness/
+ * etc. via Inspector while keeping the textures the OpenUSD parser baked onto
+ * the source material. Properties not exposed in the spec are left untouched.
+ */
+function applyMaterialSpecOverrides(material: Material, spec: MaterialSpec): void {
+  const mat = material as unknown as Record<string, unknown> & {
+    color?: Color;
+    emissive?: Color;
+  };
+  if (mat.color && typeof mat.color.set === "function") {
+    mat.color.set(spec.color);
+  }
+  if (mat.emissive && typeof mat.emissive.set === "function") {
+    mat.emissive.set(spec.emissive);
+  }
+  if ("emissiveIntensity" in mat) mat.emissiveIntensity = spec.emissiveIntensity;
+  if ("roughness" in mat) mat.roughness = spec.roughness;
+  if ("metalness" in mat) mat.metalness = spec.metalness;
+  mat.opacity = spec.opacity;
+  mat.transparent = spec.transparent;
+  mat.alphaTest = spec.alphaTest;
+  mat.visible = spec.visible;
+  mat.depthTest = spec.depthTest;
+  mat.depthWrite = spec.depthWrite;
+  mat.colorWrite = spec.colorWrite;
+  mat.dithering = spec.dithering;
+  mat.toneMapped = spec.toneMapped;
+  if ("wireframe" in mat) mat.wireframe = spec.wireframe;
+  material.side = resolveMaterialSide(spec.side);
+  material.needsUpdate = true;
+}
+
 function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialSpec): Material {
   switch (spec.type) {
     case "basic":
@@ -1175,6 +1210,23 @@ export class SceneEditor {
           for (const child of prim.children) {
             if (!(child instanceof Mesh)) continue;
             const clonedMesh = child.clone();
+            // Clone the material too so Inspector edits applied below don't
+            // bleed across other prims that share the same parsed material
+            // reference. The MaterialSpec on the node carries the editable
+            // overrides; textures parsed from the USDZ are preserved on the
+            // cloned material instance.
+            const sourceMaterial = clonedMesh.material;
+            if (Array.isArray(sourceMaterial)) {
+              clonedMesh.material = sourceMaterial.map((m) => {
+                const c = m.clone();
+                applyMaterialSpecOverrides(c, node.material);
+                return c;
+              });
+            } else if (sourceMaterial) {
+              const c = sourceMaterial.clone();
+              applyMaterialSpecOverrides(c, node.material);
+              clonedMesh.material = c;
+            }
             clonedMesh.userData.nodeId = node.id;
             clonedMesh.userData.nodeType = node.type;
             clonedMesh.castShadow = true;

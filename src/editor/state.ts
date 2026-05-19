@@ -524,8 +524,17 @@ export function createNode<T extends EditorNodeType>(type: T, parentId: string |
 }
 
 export function getPropertyDefinitions(node: EditorNode): NodePropertyDefinition[] {
-  if (node.type === "group" || node.type === "model") {
+  if (node.type === "group") {
     return [...OBJECT_PROPERTY_DEFINITIONS, ...BASE_PROPERTY_DEFINITIONS];
+  }
+
+  if (node.type === "model") {
+    return [
+      ...OBJECT_PROPERTY_DEFINITIONS,
+      ...BASE_PROPERTY_DEFINITIONS,
+      ...getMaterialPropertyDefinitions(node.material.type),
+      ...MATERIAL_SHADOW_PROPERTY_DEFINITIONS,
+    ];
   }
 
   return [
@@ -2737,6 +2746,13 @@ export class EditorStore extends EventTarget {
         if (planNode.primPath) {
           node.primPath = planNode.primPath;
         }
+        if (planNode.materialId) {
+          const linked = this.getMaterial(planNode.materialId);
+          if (linked) {
+            node.materialId = linked.id;
+            node.material = cloneMaterialSpec(linked.spec);
+          }
+        }
         return node;
       }
       const node = createNode("group", blueprintParentId);
@@ -3933,7 +3949,7 @@ export class EditorStore extends EventTarget {
     this.recordHistorySnapshot();
     specRecord[subPath] = parsedValue;
     for (const node of this.getNodesUsingMaterial(materialId)) {
-      if (node.type === "group" || node.type === "model") {
+      if (node.type === "group") {
         continue;
       }
       (node.material as unknown as Record<string, unknown>)[subPath] = parsedValue;
@@ -3951,10 +3967,10 @@ export class EditorStore extends EventTarget {
     if (!asset) {
       return 0;
     }
-    const targets: Exclude<EditorNode, { type: "group" | "model" }>[] = [];
+    const targets: Exclude<EditorNode, { type: "group" }>[] = [];
     for (const nodeId of [...new Set(nodeIds)]) {
       const node = this.getNode(nodeId);
-      if (!node || node.type === "group" || node.type === "model") {
+      if (!node || node.type === "group") {
         continue;
       }
       targets.push(node);
@@ -3979,7 +3995,7 @@ export class EditorStore extends EventTarget {
     const targets: EditorNode[] = [];
     for (const nodeId of [...new Set(nodeIds)]) {
       const node = this.getNode(nodeId);
-      if (!node || node.type === "group" || node.type === "model") {
+      if (!node || node.type === "group") {
         continue;
       }
       if ((node as { materialId?: string }).materialId === undefined) {

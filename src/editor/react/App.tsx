@@ -31,7 +31,9 @@ import {
   getPropertyValue,
   parseInputValue,
 } from "../state";
-import type { AnimationEasePreset, AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset } from "../types";
+import type { UsdImportPlanNode } from "../../lib/openusd/openusdParser";
+import { createMaterialSpec } from "../materials";
+import type { AnimationEasePreset, AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset, ModelImportPlanNode } from "../types";
 import type { ComponentBlueprint } from "../types";
 import type { PropertyApplyReport, PropertyClipboardScope } from "../propertyClipboard";
 import {
@@ -381,6 +383,40 @@ function downloadBlobFile(blob: Blob, fileName: string): void {
   anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function stripFileExtension(fileName: string): string {
+  return fileName.replace(/\.[a-z0-9]+$/i, "").trim();
+}
+
+/**
+ * Translate the parser's USDZ import plan into the editor's ModelImportPlanNode
+ * shape, resolving each mesh-kind entry's USD material path into the freshly
+ * minted MaterialAsset id from the provided lookup so the resulting blueprint
+ * model nodes share materials with the project's Materials panel.
+ */
+function attachMaterialIdsToPlan(
+  plan: UsdImportPlanNode[],
+  materialIdByUsdPath: Map<string, string>,
+): ModelImportPlanNode[] {
+  return plan.map((entry) => {
+    const materialId = entry.kind === "mesh" && entry.materialPath
+      ? materialIdByUsdPath.get(entry.materialPath)
+      : undefined;
+    const result: ModelImportPlanNode = {
+      name: entry.name,
+      kind: entry.kind,
+      position: entry.position,
+      rotation: entry.rotation,
+      scale: entry.scale,
+      primPath: entry.primPath,
+      children: attachMaterialIdsToPlan(entry.children, materialIdByUsdPath),
+    };
+    if (materialId) {
+      result.materialId = materialId;
+    }
+    return result;
+  });
 }
 
 function formatRecentProjectTime(timestamp: number): string {
@@ -1978,17 +2014,39 @@ export function App() {
 
         // USDZ: parse once at import time so we can expose every USD prim as
         // an editable blueprint node (Xform → group, Mesh → model+primPath).
-        // The same buffer is re-parsed by scene.ts when first rendering;
-        // that's fine — OpenUSD WASM is already warm.
+        // Materials are extracted in the same pass and registered as shared
+        // MaterialAssets; multiple prims that author the same UsdPreviewSurface
+        // resolve to a single MaterialAsset id, so editing it in the Materials
+        // panel propagates to every part referencing it.
         let insertedNodeId: string | null = null;
         if (asset.format === "usdz") {
           try {
             const buffer = await file.arrayBuffer();
-            const { parseUsdz, buildUsdImportPlanFromGroup } = await import("../../lib/openusd/openusdParser");
+            const { parseUsdz, buildUsdImportPlanFromGroup, extractUsdMaterialSnapshotsFromGroup } = await import("../../lib/openusd/openusdParser");
             const group = await runTask(`Reading ${file.name} hierarchy...`, () => parseUsdz(buffer, asset.name ?? "asset.usdz"), { blocking: true });
+            const snapshots = extractUsdMaterialSnapshotsFromGroup(group);
+            const materialIdByUsdPath = new Map<string, string>();
+            const assetStem = stripFileExtension(asset.name ?? "asset");
+            for (const snapshot of snapshots) {
+              const spec = {
+                ...createMaterialSpec(),
+                color: snapshot.color,
+                emissive: snapshot.emissive,
+                roughness: snapshot.roughness,
+                metalness: snapshot.metalness,
+                opacity: snapshot.opacity,
+                transparent: snapshot.opacity < 1,
+              };
+              const materialId = store.createMaterial({
+                name: `${assetStem} · ${snapshot.name}`,
+                spec,
+              });
+              materialIdByUsdPath.set(snapshot.path, materialId);
+            }
             const plan = buildUsdImportPlanFromGroup(group);
-            if (plan.length > 0) {
-              insertedNodeId = store.insertModelImportPlan(modelId, plan, target.parentId, insertionIndex);
+            const enrichedPlan = attachMaterialIdsToPlan(plan, materialIdByUsdPath);
+            if (enrichedPlan.length > 0) {
+              insertedNodeId = store.insertModelImportPlan(modelId, enrichedPlan, target.parentId, insertionIndex);
             }
           } catch (err) {
             console.warn("USDZ hierarchy parse failed; falling back to single ModelNode:", err);
