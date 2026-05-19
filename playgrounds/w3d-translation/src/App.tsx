@@ -28,6 +28,7 @@ export function App() {
   const [loaded, setLoaded] = useState<LoadedScene | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<"stats" | "xml" | "blueprint" | "quads">("stats");
+  const [stencilDebugShowMask, setStencilDebugShowMask] = useState(false);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const viewportHostRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<PlaygroundViewport | null>(null);
@@ -51,11 +52,12 @@ export function App() {
         textureUrlsByFilename: loaded.textureUrlsByFilename,
         textureCache: loaded.textureCache,
         warnings: builderWarnings,
+        stencilDebugShowMask,
       };
       viewportRef.current.setBlueprint(loaded.blueprint);
       viewportRef.current.setNodes(loaded.nodes, ctx);
     }
-  }, [loaded]);
+  }, [loaded, stencilDebugShowMask]);
 
   useEffect(() => {
     return () => {
@@ -138,6 +140,14 @@ export function App() {
               Re-translate
             </button>
           ) : null}
+          <label style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }} title="Debug: paint PHOTO_MASK_0X red 50% so the mask shape is visible">
+            <input
+              type="checkbox"
+              checked={stencilDebugShowMask}
+              onChange={(e) => setStencilDebugShowMask(e.target.checked)}
+            />
+            show mask (red)
+          </label>
         </div>
       </header>
 

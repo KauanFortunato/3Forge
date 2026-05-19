@@ -35,7 +35,8 @@ export interface PlaygroundViewport {
 }
 
 export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport {
-  const renderer = new WebGLRenderer({ antialias: true });
+  // stencil:true is required by Phase 1a photo mask clipping.
+  const renderer = new WebGLRenderer({ antialias: true, stencil: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.domElement.style.display = "block";
   renderer.domElement.style.width = "100%";
