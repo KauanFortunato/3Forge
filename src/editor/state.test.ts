@@ -607,20 +607,26 @@ describe("EditorStore", () => {
     ], ROOT_NODE_ID);
 
     expect(rootId).toBeTruthy();
-    const root = store.getNode(rootId!);
-    if (!root || root.type !== "group") throw new Error("Expected root group node");
-    expect(root.name).toBe("Body");
-    expect(root.transform.position).toEqual({ x: 0, y: 1, z: 0 });
+    const wrapper = store.getNode(rootId!);
+    if (!wrapper || wrapper.type !== "group") throw new Error("Expected wrapper group");
+    expect(wrapper.name).toBe("Drone");
 
-    const children = store.blueprint.nodes.filter((n) => n.parentId === rootId);
-    expect(children).toHaveLength(2);
+    const wrapperChildren = store.blueprint.nodes.filter((n) => n.parentId === rootId);
+    expect(wrapperChildren).toHaveLength(1);
+    const body = wrapperChildren[0];
+    if (body.type !== "group") throw new Error("Expected Body group");
+    expect(body.name).toBe("Body");
+    expect(body.transform.position).toEqual({ x: 0, y: 1, z: 0 });
 
-    const hull = children.find((n) => n.name === "Hull");
+    const bodyChildren = store.blueprint.nodes.filter((n) => n.parentId === body.id);
+    expect(bodyChildren).toHaveLength(2);
+
+    const hull = bodyChildren.find((n) => n.name === "Hull");
     if (!hull || hull.type !== "model") throw new Error("Expected Hull model node");
     expect(hull.modelId).toBe(modelId);
     expect(hull.primPath).toBe("/Drone/Body/Hull");
 
-    const prop = children.find((n) => n.name === "PropellerFL");
+    const prop = bodyChildren.find((n) => n.name === "PropellerFL");
     if (!prop || prop.type !== "model") throw new Error("Expected PropellerFL model node");
     expect(prop.modelId).toBe(modelId);
     expect(prop.primPath).toBe("/Drone/Body/PropellerFL");

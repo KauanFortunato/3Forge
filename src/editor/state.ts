@@ -2759,20 +2759,15 @@ export class EditorStore extends EventTarget {
       }
     };
 
-    // If the plan has multiple roots, wrap them in a synthetic group so the
-    // user has a single selectable "imported asset" handle in the hierarchy.
-    // Single-root plans are inserted as-is.
-    let rootNodeId: string;
-    if (plan.length === 1) {
-      walk(plan, targetParentId);
-      rootNodeId = flatNodes[0].id;
-    } else {
-      const wrapper = createNode("group", targetParentId);
-      wrapper.name = stripExtension(asset.name) || wrapper.name;
-      flatNodes.push(wrapper);
-      walk(plan, wrapper.id);
-      rootNodeId = wrapper.id;
-    }
+    // Always wrap the imported plan in a synthetic group named after the
+    // asset. This gives the user a single, stable "the whole import" handle
+    // in the hierarchy panel — useful for moving/animating the model as a
+    // unit, or for visually distinguishing imports in a complex scene.
+    const wrapper = createNode("group", targetParentId);
+    wrapper.name = stripExtension(asset.name) || wrapper.name;
+    flatNodes.push(wrapper);
+    walk(plan, wrapper.id);
+    const rootNodeId: string = wrapper.id;
 
     this.recordHistorySnapshot();
     this._blueprint.nodes = insertSubtreeIntoBlueprint(

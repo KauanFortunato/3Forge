@@ -473,48 +473,63 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
       return cached;
     };
 
-    const isKept = (prim: PrimInfo): boolean => prim.isMesh || prim.isXformable;
+    // Material / Shader / GeomSubset etc. are bound to mesh prims separately
+    // and have no place in the scene hierarchy — skip them outright to keep
+    // the exploded blueprint tree from being polluted by shader-network prims.
+    const NON_HIERARCHY_TYPES = new Set([
+      "Material",
+      "Shader",
+      "NodeGraph",
+      "GeomSubset",
+      "Camera",
+    ]);
+    const isKept = (prim: PrimInfo): boolean => {
+      if (NON_HIERARCHY_TYPES.has(prim.type)) return false;
+      return prim.isMesh || prim.isXformable;
+    };
     const kept = prims.filter(isKept);
     // Stable parent-before-child: ascending depth, then path for tiebreak.
     kept.sort((a, b) => depthOfPath(a.path) - depthOfPath(b.path) || a.path.localeCompare(b.path));
 
+    // We rely on getWorldTransform (the same API the editor has been using
+    // for the legacy flat-import path) rather than getLocalTransform, which
+    // has historically been untested in our WASM build. Local-frame matrices
+    // are derived from `inverse(parentWorld) * primWorld`, so each Object3D
+    // ends up with the correct transform relative to its kept ancestor.
+    const worldMatrices = new Map<string, Matrix4>();
+    const getWorldMatrix = (path: string): Matrix4 => {
+      let cached = worldMatrices.get(path);
+      if (cached) return cached;
+      const wm = usd.getWorldTransform(stageId, path, NaN);
+      cached = wm && wm.length === 16 ? new Matrix4().fromArray(wm) : new Matrix4();
+      worldMatrices.set(path, cached);
+      return cached;
+    };
+
     const objectsByPath = new Map<string, Group>();
+    const tmpInverse = new Matrix4();
 
     for (const prim of kept) {
       // Walk up to find the nearest already-processed (kept) ancestor.
-      // Absorb local transforms of non-kept intermediates so the rendered
-      // world pose matches the authored USD exactly.
-      const intermediateLocals: Matrix4[] = [];
       let parentPath = prim.parent;
       let parentObj: Group = root;
+      let parentWorld: Matrix4 | null = null;
       while (parentPath && parentPath !== "/" && parentPath !== "") {
         const existing = objectsByPath.get(parentPath);
         if (existing) {
           parentObj = existing;
+          parentWorld = getWorldMatrix(parentPath);
           break;
         }
         const parentPrim = primsByPath.get(parentPath);
         if (!parentPrim) break;
-        // Non-kept intermediate — accumulate its local transform.
-        const lm = usd.getLocalTransform(stageId, parentPath);
-        if (lm && lm.length === 16) {
-          intermediateLocals.unshift(new Matrix4().fromArray(lm));
-        }
         parentPath = parentPrim.parent;
       }
 
-      // accMatrix = topmost intermediate * ... * bottommost intermediate
-      const accMatrix = new Matrix4();
-      for (const m of intermediateLocals) {
-        accMatrix.multiply(m);
-      }
-
-      // Prim's own local transform.
-      const lmSelf = usd.getLocalTransform(stageId, prim.path);
-      const selfMatrix = lmSelf && lmSelf.length === 16
-        ? new Matrix4().fromArray(lmSelf)
-        : new Matrix4();
-      const finalMatrix = new Matrix4().multiplyMatrices(accMatrix, selfMatrix);
+      const primWorld = getWorldMatrix(prim.path);
+      const localMatrix = parentWorld
+        ? new Matrix4().multiplyMatrices(tmpInverse.copy(parentWorld).invert(), primWorld)
+        : primWorld.clone();
 
       const obj = new Group();
       obj.name = primShortName(prim.path) || prim.path;
@@ -522,7 +537,7 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
       obj.userData.usdKind = prim.isMesh ? "mesh" : "xform";
       // applyMatrix4 premultiplies onto the current (identity) matrix and
       // decomposes back into position/quaternion/scale automatically.
-      obj.applyMatrix4(finalMatrix);
+      obj.applyMatrix4(localMatrix);
 
       if (prim.isMesh) {
         const meshData = usd.getMeshData(stageId, prim.path);
