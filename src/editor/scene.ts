@@ -977,6 +977,14 @@ export class SceneEditor {
         // For model nodes, also resolve the nearest part (sub-mesh) and stash
         // it as the selected part so the selection box wraps only that piece.
         const partId = this.findPartId(hit.object);
+        const node = this.store.getNode(nodeId);
+        console.log("[USDZ-DEBUG] pick", {
+          nodeId,
+          name: node?.name,
+          type: node?.type,
+          primPath: node && node.type === "model" ? node.primPath : undefined,
+          hitObjectName: hit.object.name,
+        });
         this.store.selectNode(nodeId, "scene", additive);
         if (!additive) {
           this.store.setSelectedPartId(partId, "scene");

@@ -509,6 +509,16 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
     const objectsByPath = new Map<string, Group>();
     const tmpInverse = new Matrix4();
 
+    // [USDZ-DEBUG] Trace what the WASM is giving us so import problems can be
+    // diagnosed from the browser console. Safe to remove once the explosion
+    // path is verified stable on real-world assets.
+    console.log("[USDZ-DEBUG] parseUsdz", {
+      filename,
+      totalPrims: prims.length,
+      keptPrims: kept.length,
+      keptTypes: Array.from(new Set(kept.map((p) => p.type))),
+    });
+
     for (const prim of kept) {
       // Walk up to find the nearest already-processed (kept) ancestor.
       let parentPath = prim.parent;
@@ -538,6 +548,15 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
       // applyMatrix4 premultiplies onto the current (identity) matrix and
       // decomposes back into position/quaternion/scale automatically.
       obj.applyMatrix4(localMatrix);
+      console.log(
+        "[USDZ-DEBUG] prim",
+        prim.path,
+        "type=", prim.type,
+        "kind=", obj.userData.usdKind,
+        "pos=", obj.position.toArray().map((v: number) => v.toFixed(3)),
+        "rot=", [obj.rotation.x, obj.rotation.y, obj.rotation.z].map((v: number) => v.toFixed(3)),
+        "scale=", obj.scale.toArray().map((v: number) => v.toFixed(3)),
+      );
 
       if (prim.isMesh) {
         const meshData = usd.getMeshData(stageId, prim.path);
