@@ -1394,7 +1394,7 @@ code {
 
 .sg-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   align-items: center;
   gap: var(--sp-3);
   height: var(--h-row);
@@ -1492,8 +1492,45 @@ code {
   flex: 0 0 auto;
 }
 
+/* Group rows get a soft brand tint on their icon so containers read as
+   distinct from primitives at a glance, without dominating the panel. */
+.sg-row.is-group .sg-row__icon {
+  color: color-mix(in srgb, var(--c-accent) 78%, var(--c-text-med));
+}
+
+.sg-row.is-model .sg-row__icon {
+  color: color-mix(in srgb, var(--c-accent) 55%, var(--c-text-med));
+}
+
 .sg-row.is-selected .sg-row__icon {
   color: var(--c-select);
+}
+
+/* Hidden nodes: telegraph the visibility-off state with a faint, low-contrast
+   row. The eye button itself keeps its own .is-off tone (already styled). */
+.sg-row.is-hidden-node {
+  color: var(--c-text-faint);
+}
+
+.sg-row.is-hidden-node .sg-row__icon,
+.sg-row.is-hidden-node .sg-row__badge {
+  color: var(--c-text-faint);
+  opacity: 0.7;
+}
+
+.sg-row.is-hidden-node.is-group .sg-row__icon,
+.sg-row.is-hidden-node.is-model .sg-row__icon {
+  color: var(--c-text-faint);
+}
+
+.sg-row--part.is-hidden-part {
+  color: var(--c-text-faint);
+}
+
+.sg-row--part.is-hidden-part .sg-row__icon,
+.sg-row--part.is-hidden-part .sg-row__badge {
+  color: var(--c-text-faint);
+  opacity: 0.7;
 }
 
 .sg-row__name {
@@ -1543,6 +1580,17 @@ code {
 
 .sg-row__ibtn.is-off {
   color: var(--c-text-faint);
+}
+
+/* Visibility toggle is pinned visible on every row (not only hover/selected)
+   so the user can scan and toggle hidden state without hovering each item. */
+.sg-row__ibtn--vis {
+  opacity: 1;
+}
+
+.sg-row__ibtn--vis.is-off {
+  color: var(--c-text-dim);
+  opacity: 0.85;
 }
 
 .sg-row__ibtn:disabled {

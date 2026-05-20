@@ -5,20 +5,27 @@ import { ROOT_NODE_ID } from "../../state";
 import type { TreeBranch, TreeDropTarget } from "../ui-types";
 import {
   BoxIcon,
+  CapsuleIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   CircleIcon,
   ClosedEyeIcon,
+  ConeIcon,
   CopyIcon,
   CylinderIcon,
   EyeIcon,
   GroupIcon,
   ImageIcon,
   MeshIcon,
+  ModelIcon,
   PlaneIcon,
+  PolyhedronIcon,
+  RingIcon,
   SearchIcon,
   SphereIcon,
   TextPropertyIcon,
+  TorusIcon,
+  TorusKnotIcon,
   TrashIcon,
 } from "./icons";
 
@@ -442,7 +449,8 @@ function SceneGraphRow(props: SceneGraphRowProps) {
         isPrimary ? "is-primary" : "",
         isAncestor ? "is-ancestor" : "",
         isSceneRootNode ? "is-root" : "",
-        isGroup ? "is-group" : "is-mesh",
+        isGroup ? "is-group" : isModel ? "is-model" : "is-mesh",
+        !branch.node.visible ? "is-hidden-node" : "",
         rowDropState ? `is-drop-${rowDropState}` : "",
         draggedNodeId === branch.node.id ? "is-dragging" : "",
       ].filter(Boolean).join(" ")}
@@ -532,19 +540,20 @@ function SceneGraphRow(props: SceneGraphRowProps) {
         {hasAnimation ? "anim" : isGroup ? `${branch.children.length}` : ""}
       </span>
 
+      <button
+        type="button"
+        className={`sg-row__ibtn sg-row__ibtn--vis${!branch.node.visible ? " is-off" : ""}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleVisibility(branch.node.id);
+        }}
+        title={branch.node.visible ? "Hide item" : "Show item"}
+        tabIndex={-1}
+      >
+        {branch.node.visible ? <EyeIcon width={12} height={12} /> : <ClosedEyeIcon width={12} height={12} />}
+      </button>
+
       <div className="sg-row__actions">
-        <button
-          type="button"
-          className={`sg-row__ibtn${!branch.node.visible ? " is-off" : ""}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleVisibility(branch.node.id);
-          }}
-          title={branch.node.visible ? "Hide item" : "Show item"}
-          tabIndex={-1}
-        >
-          {branch.node.visible ? <EyeIcon width={12} height={12} /> : <ClosedEyeIcon width={12} height={12} />}
-        </button>
         <button
           type="button"
           className="sg-row__ibtn"
@@ -643,20 +652,19 @@ function SceneGraphPartRow(props: SceneGraphPartRowProps) {
       <span className="sg-row__badge">
         {row.hasChildren ? `${row.meshCount}` : ""}
       </span>
-      <div className="sg-row__actions">
-        <button
-          type="button"
-          className={`sg-row__ibtn${isHidden ? " is-off" : ""}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleVisibility();
-          }}
-          title={isHidden ? "Show part" : "Hide part"}
-          tabIndex={-1}
-        >
-          {isHidden ? <ClosedEyeIcon width={12} height={12} /> : <EyeIcon width={12} height={12} />}
-        </button>
-      </div>
+      <button
+        type="button"
+        className={`sg-row__ibtn sg-row__ibtn--vis${isHidden ? " is-off" : ""}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleVisibility();
+        }}
+        title={isHidden ? "Show part" : "Hide part"}
+        tabIndex={-1}
+      >
+        {isHidden ? <ClosedEyeIcon width={12} height={12} /> : <EyeIcon width={12} height={12} />}
+      </button>
+      <div className="sg-row__actions" />
     </div>
   );
 }
@@ -675,12 +683,29 @@ function getNodeTypeIcon(node: EditorNode) {
       return <SphereIcon {...iconProps} />;
     case "cylinder":
       return <CylinderIcon {...iconProps} />;
+    case "cone":
+      return <ConeIcon {...iconProps} />;
+    case "capsule":
+      return <CapsuleIcon {...iconProps} />;
+    case "ring":
+      return <RingIcon {...iconProps} />;
+    case "torus":
+      return <TorusIcon {...iconProps} />;
+    case "torusKnot":
+      return <TorusKnotIcon {...iconProps} />;
+    case "dodecahedron":
+    case "icosahedron":
+    case "octahedron":
+    case "tetrahedron":
+      return <PolyhedronIcon {...iconProps} />;
     case "plane":
       return <PlaneIcon {...iconProps} />;
     case "text":
       return <TextPropertyIcon {...iconProps} />;
     case "image":
       return <ImageIcon {...iconProps} />;
+    case "model":
+      return <ModelIcon {...iconProps} />;
     default:
       return <MeshIcon {...iconProps} />;
   }
