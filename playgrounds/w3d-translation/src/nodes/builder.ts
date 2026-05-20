@@ -26,10 +26,52 @@ import type { W3DResourceRegistry } from "./resources";
  * Out of scope (untouched): BASE_*, multi-mask intersection PHOTO_FILL_02..05
  * (uses only maskIds[0]; combining with a second mask is a later phase).
  */
-type PhotoMaskInfo = { bit: number; isInverted: boolean };
+/**
+ * Phase 2J — owner-tagged stencil bitfields.
+ *
+ * Phase 2I (shared type bits + last-writer-wins player bits) still leaked
+ * across players in MASK_M ∩ DUMMY_N overlap zones: a pixel ended up with
+ * bit 0 set by MASK_M but player bits overwritten to N by DUMMY_N, making
+ * PHOTO_N / PHOTO_FILL_N pass on what is physically MASK_M's slit.
+ *
+ * Phase 2J splits the stencil byte into two disjoint 3-bit owner fields,
+ * one per writer class. Each writer touches ONLY its own field, so neither
+ * writer can contaminate the other's owner identity:
+ *
+ *   bits 0-2:   PHOTO_MASK owner player (0 = no MASK wrote, 1..7 = which player's MASK)
+ *   bits 3-5:   PHOTO_DUMMY owner player (0 = no DUMMY wrote, 1..7 = which player's DUMMY)
+ *   bits 6-7:   reserved
+ *
+ * Readers test the involved field(s) for owner == N. At pixel MASK_M ∩
+ * DUMMY_N (M ≠ N), bits 0-2 = M and bits 3-5 = N — PHOTO_N (mask field == N)
+ * and FILL_N (both fields == N) both fail correctly.
+ */
+type PhotoMaskClass = "mask" | "dummy";
 
-const PHOTO_MASK_BIT = 1;
-const PHOTO_DUMMY_BIT = 2;
+type PhotoMaskInfo = {
+  /** Writer class — selects which owner field this writer occupies. */
+  klass: PhotoMaskClass;
+  /** Player index extracted from the mask writer name (1..7). */
+  playerIndex: number;
+  isInverted: boolean;
+  name: string;
+};
+
+const STENCIL_MASK_OWNER_FIELD = 0b00000111;   // bits 0-2: PHOTO_MASK owner
+const STENCIL_DUMMY_OWNER_FIELD = 0b00111000;  // bits 3-5: PHOTO_DUMMY owner
+const STENCIL_DUMMY_SHIFT = 3;
+const STENCIL_PLAYER_INDEX_MAX = 7;
+
+/**
+ * Phase 2F — alphaTest threshold for textured mask writers (e.g. PHOTO_DUMMY_0X
+ * which uses the player photo + VERTICAL_RAMP alphaMap as the mask shape).
+ * Fragments with combined alpha (map.a × alphaMap.r) below this threshold are
+ * discarded before stencil write, so the stencil contour follows the texture's
+ * alpha silhouette instead of writing a solid Size.X × Size.Y rectangle.
+ * Tune empirically: 0.5 = sharp silhouette; lower values include more of the
+ * VERTICAL_RAMP feathered edge.
+ */
+const TEXTURED_MASK_ALPHA_TEST = 0.5;
 
 export type BuildContext = {
   registry: W3DResourceRegistry;
@@ -44,7 +86,7 @@ export type BuildContext = {
 
 export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
   if (ctx && !ctx.photoMaskInfoByMaskId) {
-    ctx.photoMaskInfoByMaskId = collectPhotoMaskInfo(roots);
+    ctx.photoMaskInfoByMaskId = collectPhotoMaskInfo(roots, ctx.warnings);
   }
   const top = new Group();
   top.name = "w3d-nodes-root";
@@ -52,24 +94,84 @@ export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
   return top;
 }
 
-const PHOTO_MASK_NAME_RE = /^PHOTO_MASK_\d+$/;
-const PHOTO_DUMMY_NAME_RE = /^PHOTO_DUMMY_\d+$/;
+const PHOTO_MASK_NAME_RE = /^PHOTO_MASK_(\d+)$/;
+const PHOTO_DUMMY_NAME_RE = /^PHOTO_DUMMY_(\d+)$/;
 
-function collectPhotoMaskInfo(roots: W3DNodeData[]): Map<string, PhotoMaskInfo> {
+function collectPhotoMaskInfo(
+  roots: W3DNodeData[],
+  warnings?: string[],
+): Map<string, PhotoMaskInfo> {
   const out = new Map<string, PhotoMaskInfo>();
   const walk = (n: W3DNodeData): void => {
     if (n.kind === "Quad" && n.isMask) {
       const isInverted = !!n.maskProperties?.isInvertedMask;
-      if (PHOTO_MASK_NAME_RE.test(n.name)) {
-        out.set(n.id, { bit: PHOTO_MASK_BIT, isInverted });
-      } else if (PHOTO_DUMMY_NAME_RE.test(n.name)) {
-        out.set(n.id, { bit: PHOTO_DUMMY_BIT, isInverted });
+      let m = PHOTO_MASK_NAME_RE.exec(n.name);
+      let klass: PhotoMaskClass = "mask";
+      if (!m) {
+        m = PHOTO_DUMMY_NAME_RE.exec(n.name);
+        klass = "dummy";
+      }
+      if (m) {
+        const playerIndex = parseInt(m[1], 10);
+        if (playerIndex < 1 || playerIndex > STENCIL_PLAYER_INDEX_MAX) {
+          warnings?.push(`Mask "${n.name}" has player index ${playerIndex} outside the 1..${STENCIL_PLAYER_INDEX_MAX} stencil scope; skipping.`);
+        } else {
+          out.set(n.id, { klass, playerIndex, isInverted, name: n.name });
+        }
       }
     }
     for (const c of n.children) walk(c);
   };
   for (const r of roots) walk(r);
   return out;
+}
+
+const PHOTO_FILL_NAME_RE = /^PHOTO_FILL_(\d+)$/;
+
+/**
+ * Phase 2H — R3 photo-fill paired-mask fallback.
+ *
+ * Convention observed in LINEUP_LEFT and similar R3 scenes: a PHOTO_FILL_XX
+ * group is supposed to be clipped by BOTH the photo dummy AND the photo mask
+ * slit for that player, so the FILL is visible only inside the intersection.
+ * Most scenes author the maskIds explicitly as [PHOTO_DUMMY_XX, PHOTO_MASK_XX]
+ * (PLAYER_02..05 in LINEUP_LEFT), but PHOTO_FILL_01 in LINEUP_LEFT was
+ * authored with only [PHOTO_DUMMY_01], which leaves the yellow PHOTO_COLOR
+ * leaking around the player silhouette in the playground.
+ *
+ * Fallback: when a group's name matches PHOTO_FILL_XX and its maskIds is a
+ * single entry resolving to PHOTO_DUMMY_XX, append PHOTO_MASK_XX (when one
+ * exists in the registry) to the effective list passed to children. The
+ * parsed XML is NOT mutated.
+ *
+ * Skip cases (return input unchanged):
+ *  - group has 0 or 2+ maskIds (author already paired them)
+ *  - single maskId is not a DUMMY for this index
+ *  - matching PHOTO_MASK_XX does not exist in the registry
+ *  - group name does not match PHOTO_FILL_XX
+ */
+function augmentPhotoFillMaskIds(
+  groupName: string,
+  ownMaskIds: string[],
+  info: Map<string, PhotoMaskInfo>,
+): string[] {
+  const m = PHOTO_FILL_NAME_RE.exec(groupName);
+  if (!m) return ownMaskIds;
+  if (ownMaskIds.length !== 1) return ownMaskIds;
+  const index = m[1];
+  const expectedDummyName = `PHOTO_DUMMY_${index}`;
+  const expectedMaskName = `PHOTO_MASK_${index}`;
+  const dummyEntry = info.get(ownMaskIds[0]);
+  if (!dummyEntry || dummyEntry.name !== expectedDummyName) return ownMaskIds;
+  let maskGuid: string | undefined;
+  for (const [guid, mi] of info) {
+    if (mi.name === expectedMaskName) {
+      maskGuid = guid;
+      break;
+    }
+  }
+  if (!maskGuid) return ownMaskIds;
+  return [ownMaskIds[0], maskGuid];
 }
 
 export function buildNode(node: W3DNodeData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {
@@ -90,7 +192,14 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: s
   };
   // Own maskIds override inherited (R3 semantics). Children with no maskIds of
   // their own pick up this group's maskIds as their effective stencil source.
-  const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
+  // Phase 2H — PHOTO_FILL_XX with only PHOTO_DUMMY_XX gets PHOTO_MASK_XX
+  // inferred when available, so the FILL clips to the intersection like its
+  // multi-mask siblings.
+  let effectiveOwnMaskIds = node.maskIds;
+  if (effectiveOwnMaskIds.length > 0 && ctx?.photoMaskInfoByMaskId) {
+    effectiveOwnMaskIds = augmentPhotoFillMaskIds(node.name, effectiveOwnMaskIds, ctx.photoMaskInfoByMaskId);
+  }
+  const passToChildren = effectiveOwnMaskIds.length > 0 ? effectiveOwnMaskIds : inheritedMaskIds;
   for (const c of node.children) g.add(buildNode(c, ctx, passToChildren));
   applyFlowLayout(g, node);
   return g;
@@ -279,18 +388,40 @@ function applyPhotoMaskStencil(
 
   // Writer: PHOTO_MASK_0X or PHOTO_DUMMY_0X
   if (node.isMask && info.has(node.id)) {
-    const { bit } = info.get(node.id)!;
+    const { klass, playerIndex } = info.get(node.id)!;
+    // Phase 2J — write owner player index into this writer's own 3-bit field
+    // only. MASK writers occupy bits 0-2, DUMMY writers occupy bits 3-5. The
+    // two fields are disjoint, so a MASK writer can never overwrite a DUMMY
+    // owner and vice-versa — cross-player leakage from MASK_M ∩ DUMMY_N is
+    // structurally impossible.
+    const writeMask = klass === "mask" ? STENCIL_MASK_OWNER_FIELD : STENCIL_DUMMY_OWNER_FIELD;
+    const ref = klass === "mask" ? playerIndex : (playerIndex << STENCIL_DUMMY_SHIFT);
     mat.depthWrite = false;
     mat.depthTest = false;
     mat.stencilWrite = true;
-    mat.stencilWriteMask = bit;
+    mat.stencilWriteMask = writeMask;
     mat.stencilFunc = AlwaysStencilFunc;
-    mat.stencilRef = bit;
+    mat.stencilRef = ref;
     mat.stencilZPass = ReplaceStencilOp;
     mat.stencilFail = ReplaceStencilOp;
     mat.stencilZFail = ReplaceStencilOp;
     mesh.renderOrder = 10;
     mesh.visible = node.enable; // override the "hide isMask" default in buildQuad
+
+    // Phase 2F — textured mask writers (e.g. PHOTO_DUMMY_0X with the player
+    // layer carrying Player N.png + VERTICAL_RAMP) must use the texture alpha
+    // as the stencil contour, not the geometric rectangle. The MaskProperties
+    // attribute DisableBinaryAlpha="True" indicates this in the W3D source;
+    // we translate it to a Three.js alphaTest threshold so fragments with
+    // (map.a × alphaMap.r) below the cutoff are discarded before the stencil
+    // write happens.
+    //
+    // Untextured masks (PHOTO_MASK_0X uses TextureLayer="Standard" — no map,
+    // no alphaMap) fall through: there's nothing to alphaTest against, so the
+    // stencil follows the full geometric quad.
+    if (node.maskProperties?.disableBinaryAlpha === true && (mat.map || mat.alphaMap)) {
+      mat.alphaTest = TEXTURED_MASK_ALPHA_TEST;
+    }
 
     if (ctx.stencilDebugShowMask) {
       // Debug aid: paint the mask red 50% so its shape is visible
@@ -300,6 +431,7 @@ function applyPhotoMaskStencil(
       mat.colorWrite = true;
       mat.map = null;
       mat.alphaMap = null;
+      mat.alphaTest = 0; // drop the alpha cutoff so the debug rectangle is fully visible
       mat.needsUpdate = true;
     } else {
       mat.colorWrite = false;
@@ -308,18 +440,61 @@ function applyPhotoMaskStencil(
   }
 
   // Reader: own maskIds take precedence; otherwise inherit from parent Group.
-  // Phase 1a + Patch A single-mask only — uses maskIds[0]. Multi-mask
-  // intersection (PHOTO_FILL_02..05 with two entries) deferred to a later phase.
-  const effectiveMaskId = node.maskIds.length > 0
-    ? node.maskIds[0]
-    : (inheritedMaskIds && inheritedMaskIds.length > 0 ? inheritedMaskIds[0] : undefined);
-  if (effectiveMaskId) {
-    const target = info.get(effectiveMaskId);
-    if (!target) return;
+  // Phase 2E + 2J — collect MASK and DUMMY owner player indices separately.
+  // Each field is tested independently for owner == N:
+  //   - PHOTO_N with [MASK_N]:                ref = N,                funcMask = 0b00000111
+  //   - PHOTO_FILL_N with [DUMMY_N, MASK_N]:  ref = N | (N << 3),     funcMask = 0b00111111
+  //   - PHOTO_FILL with only [DUMMY_N]:       ref = N << 3,           funcMask = 0b00111000
+  //
+  // Disjoint MASK / DUMMY fields make cross-player MASK_M ∩ DUMMY_N pixels
+  // fail both PHOTO_N and FILL_N reads: bits 0-2 = M ≠ N for the mask field.
+  //
+  // If maskIds resolve to multiple distinct owner indices on the same class,
+  // or MASK and DUMMY owners disagree, that's an authoring error — skip
+  // stencil setup and record a warning.
+  const effectiveMaskIds: string[] = node.maskIds.length > 0
+    ? node.maskIds
+    : (inheritedMaskIds ?? []);
+  if (effectiveMaskIds.length > 0) {
+    let maskOwner: number | undefined;
+    let dummyOwner: number | undefined;
+    let isInverted = false;
+    let mixedOwner = false;
+    for (const id of effectiveMaskIds) {
+      const target = info.get(id);
+      if (!target) continue;
+      isInverted = target.isInverted;
+      if (target.klass === "mask") {
+        if (maskOwner === undefined) maskOwner = target.playerIndex;
+        else if (maskOwner !== target.playerIndex) mixedOwner = true;
+      } else {
+        if (dummyOwner === undefined) dummyOwner = target.playerIndex;
+        else if (dummyOwner !== target.playerIndex) mixedOwner = true;
+      }
+    }
+    if (maskOwner === undefined && dummyOwner === undefined) return;
+    if (mixedOwner) {
+      ctx.warnings.push(`Quad "${node.name}": effective maskIds reference multiple owner player indices within the same class; skipping stencil setup to avoid cross-player leakage.`);
+      return;
+    }
+    if (maskOwner !== undefined && dummyOwner !== undefined && maskOwner !== dummyOwner) {
+      ctx.warnings.push(`Quad "${node.name}": effective MASK owner (${maskOwner}) disagrees with DUMMY owner (${dummyOwner}); skipping stencil setup to avoid cross-player leakage.`);
+      return;
+    }
+    let ref = 0;
+    let funcMask = 0;
+    if (maskOwner !== undefined) {
+      ref |= maskOwner;
+      funcMask |= STENCIL_MASK_OWNER_FIELD;
+    }
+    if (dummyOwner !== undefined) {
+      ref |= (dummyOwner << STENCIL_DUMMY_SHIFT);
+      funcMask |= STENCIL_DUMMY_OWNER_FIELD;
+    }
     mat.stencilWrite = true;
-    mat.stencilFunc = target.isInverted ? EqualStencilFunc : NotEqualStencilFunc;
-    mat.stencilRef = target.bit;
-    mat.stencilFuncMask = target.bit;
+    mat.stencilFunc = isInverted ? EqualStencilFunc : NotEqualStencilFunc;
+    mat.stencilRef = ref;
+    mat.stencilFuncMask = funcMask;
     mat.stencilFail = KeepStencilOp;
     mat.stencilZFail = KeepStencilOp;
     mat.stencilZPass = KeepStencilOp;
