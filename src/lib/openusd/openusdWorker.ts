@@ -3,8 +3,9 @@ import type {
   OpenUsdWorkerRequest,
   OpenUsdWorkerResponse,
   ParsedUsdMaterialData,
-  ParsedUsdMeshData,
   ParsedUsdModelData,
+  ParsedUsdPrim,
+  ParsedUsdSubsetData,
   ParsedUsdTextureData,
 } from "./openusdWorkerTypes";
 
@@ -279,7 +280,7 @@ function expandPerCorner(mesh: MeshData): ExpandedAttributes {
 function createGeometryData(
   expanded: ExpandedAttributes,
   faceIndices: Int32Array | null,
-): Pick<ParsedUsdMeshData, "positions" | "normals" | "uvs"> {
+): Pick<ParsedUsdSubsetData, "positions" | "normals" | "uvs"> {
   const { positions, normals, uvs, triCount, triToFace } = expanded;
   if (!faceIndices) {
     return { positions, normals, uvs };
@@ -319,9 +320,10 @@ function createGeometryData(
 }
 
 function collectTransferables(model: ParsedUsdModelData): Transferable[] {
-  // Textures and materials are cached and shared across meshes, so the same
-  // ArrayBuffer can be referenced by multiple meshes. postMessage rejects a
-  // transfer list that contains the same buffer twice — deduplicate here.
+  // Textures and material data are cached and shared across prims/subsets, so
+  // the same ArrayBuffer can be referenced by multiple subsets/materials.
+  // postMessage rejects a transfer list that contains the same buffer twice —
+  // deduplicate here.
   const seen = new Set<ArrayBuffer>();
   const transfer: Transferable[] = [];
   const add = (buffer: ArrayBufferLike) => {
@@ -330,15 +332,31 @@ function collectTransferables(model: ParsedUsdModelData): Transferable[] {
       transfer.push(buffer);
     }
   };
-  for (const mesh of model.meshes) {
-    add(mesh.positions.buffer);
-    if (mesh.normals) add(mesh.normals.buffer);
-    if (mesh.uvs) add(mesh.uvs.buffer);
-    for (const texture of Object.values(mesh.material.textures)) {
+  for (const prim of model.prims) {
+    for (const subset of prim.subsets) {
+      add(subset.positions.buffer);
+      if (subset.normals) add(subset.normals.buffer);
+      if (subset.uvs) add(subset.uvs.buffer);
+    }
+  }
+  for (const material of Object.values(model.materials)) {
+    for (const texture of Object.values(material.textures)) {
       if (texture) add(texture.bytes.buffer);
     }
   }
   return transfer;
+}
+
+const NON_HIERARCHY_TYPES = new Set([
+  "Material",
+  "Shader",
+  "NodeGraph",
+  "GeomSubset",
+  "Camera",
+]);
+
+function depthOfPath(path: string): number {
+  return path.match(/\//g)?.length ?? 0;
 }
 
 async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdModelData> {
@@ -356,66 +374,120 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
 
   try {
     const prims = usd.listPrims(stageId);
-    const meshPrims = prims.filter((prim) => prim.isMesh);
+    const primsByPath = new Map<string, PrimInfo>();
+    for (const prim of prims) primsByPath.set(prim.path, prim);
+
+    // Filter the same way parseUsdzDirect does: keep Mesh + Xformable prims,
+    // drop Material/Shader/NodeGraph/GeomSubset/Camera. Sort parent-before-
+    // child so the main-thread reconstructor can resolve `parent` references
+    // against an already-built map.
+    const isKept = (prim: PrimInfo): boolean => {
+      if (NON_HIERARCHY_TYPES.has(prim.type)) return false;
+      return prim.isMesh || prim.isXformable;
+    };
+    const kept = prims.filter(isKept);
+    kept.sort((a, b) => depthOfPath(a.path) - depthOfPath(b.path) || a.path.localeCompare(b.path));
+    const keptPaths = new Set(kept.map((p) => p.path));
+
     const materialCache = new Map<string, ParsedUsdMaterialData>();
     const textureCache = new Map<string, ParsedUsdTextureData | null>();
-    const meshes: ParsedUsdMeshData[] = [];
+    const meshPrims = kept.filter((prim) => prim.isMesh);
+    const outPrims: ParsedUsdPrim[] = [];
+    let meshIndex = 0;
 
-    for (let index = 0; index < meshPrims.length; index += 1) {
-      const prim = meshPrims[index];
-      report({
-        type: "progress",
-        update: {
-          label: "Parsing USDZ in worker",
-          detail: `${index + 1}/${meshPrims.length}: ${prim.path}`,
-          progress: 0.1 + (index / Math.max(meshPrims.length, 1)) * 0.8,
-        },
-      });
+    const ensureMaterial = (matPath: string): ParsedUsdMaterialData => {
+      let cached = materialCache.get(matPath);
+      if (!cached) {
+        cached = resolveMaterialData(usd, stageId, usd.getMaterialParams(stageId, matPath), textureCache);
+        materialCache.set(matPath, cached);
+      }
+      return cached;
+    };
 
-      const meshData = usd.getMeshData(stageId, prim.path);
-      if (!meshData || meshData.points.length === 0 || meshData.faceVertexIndices.length === 0) {
-        continue;
+    for (const prim of kept) {
+      // Walk up to find the nearest already-kept ancestor; that becomes the
+      // reconstructor's parent reference. "" means "parents directly to the
+      // model root" — used by the reconstructor to attach to the Group.
+      let parentPath = "";
+      let cursor = prim.parent;
+      while (cursor && cursor !== "/" && cursor !== "") {
+        if (keptPaths.has(cursor)) {
+          parentPath = cursor;
+          break;
+        }
+        const parentPrim = primsByPath.get(cursor);
+        if (!parentPrim) break;
+        cursor = parentPrim.parent;
       }
 
-      const expanded = expandPerCorner(meshData);
-      const matrix = usd.getWorldTransform(stageId, prim.path, NaN);
-      const matrixArray = matrix && matrix.length === 16 ? Array.from(matrix) : null;
+      const worldMatrix = usd.getWorldTransform(stageId, prim.path, NaN);
+      const worldMatrixArray = worldMatrix && worldMatrix.length === 16 ? Array.from(worldMatrix) : null;
 
-      if (meshData.subsets.length > 0) {
-        for (const subset of meshData.subsets) {
-          const geometry = createGeometryData(expanded, subset.indices);
-          let material = subset.materialPath ? materialCache.get(subset.materialPath) : undefined;
-          if (!material && subset.materialPath) {
-            material = resolveMaterialData(usd, stageId, usd.getMaterialParams(stageId, subset.materialPath), textureCache);
-            materialCache.set(subset.materialPath, material);
-          }
-          meshes.push({
-            groupName: prim.path,
-            name: `${prim.path}/${subset.name}`,
-            matrix: matrixArray,
-            ...geometry,
-            material: material ?? { textures: {} },
-          });
-        }
-      } else {
-        const geometry = createGeometryData(expanded, null);
-        const matPath = usd.getMaterialBinding(stageId, prim.path);
-        let material = matPath ? materialCache.get(matPath) : undefined;
-        if (!material && matPath) {
-          material = resolveMaterialData(usd, stageId, usd.getMaterialParams(stageId, matPath), textureCache);
-          materialCache.set(matPath, material);
-        }
-        meshes.push({
-          groupName: prim.path,
-          name: prim.path,
-          matrix: matrixArray,
-          ...geometry,
-          material: material ?? { textures: {} },
+      const subsetsOut: ParsedUsdSubsetData[] = [];
+      let primaryMaterialPath: string | undefined;
+
+      if (prim.isMesh) {
+        report({
+          type: "progress",
+          update: {
+            label: "Parsing USDZ in worker",
+            detail: `${meshIndex + 1}/${meshPrims.length}: ${prim.path}`,
+            progress: 0.1 + (meshIndex / Math.max(meshPrims.length, 1)) * 0.8,
+          },
         });
+        const meshData = usd.getMeshData(stageId, prim.path);
+        if (meshData && meshData.points.length > 0 && meshData.faceVertexIndices.length > 0) {
+          const expanded = expandPerCorner(meshData);
+          if (meshData.subsets.length > 0) {
+            for (const subset of meshData.subsets) {
+              const geometry = createGeometryData(expanded, subset.indices);
+              if (subset.materialPath) {
+                ensureMaterial(subset.materialPath);
+                if (!primaryMaterialPath) primaryMaterialPath = subset.materialPath;
+              }
+              subsetsOut.push({
+                name: subset.name,
+                materialPath: subset.materialPath || undefined,
+                ...geometry,
+              });
+            }
+          } else {
+            const geometry = createGeometryData(expanded, null);
+            const matPath = usd.getMaterialBinding(stageId, prim.path);
+            if (matPath) {
+              ensureMaterial(matPath);
+              primaryMaterialPath = matPath;
+            }
+            // Fall back to the prim's leaf name so the reconstructor has
+            // something to put on the Mesh's .name field.
+            const slashIndex = prim.path.lastIndexOf("/");
+            const leaf = slashIndex >= 0 ? prim.path.slice(slashIndex + 1) : prim.path;
+            subsetsOut.push({
+              name: leaf || prim.path,
+              materialPath: matPath || undefined,
+              ...geometry,
+            });
+          }
+        }
+        meshIndex += 1;
       }
+
+      outPrims.push({
+        path: prim.path,
+        parent: parentPath,
+        kind: prim.isMesh ? "mesh" : "xform",
+        worldMatrix: worldMatrixArray,
+        primaryMaterialPath,
+        subsets: subsetsOut,
+      });
     }
 
-    return { name: filename, meshes };
+    const materials: Record<string, ParsedUsdMaterialData> = {};
+    for (const [path, data] of materialCache) {
+      materials[path] = data;
+    }
+
+    return { name: filename, prims: outPrims, materials };
   } finally {
     usd.closeStage(stageId);
     pluginsRegistered = false;

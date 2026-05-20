@@ -651,36 +651,96 @@ async function parseUsdzInWorker(
   });
 }
 
+/**
+ * Reconstruct a hierarchical three.js Group from the worker's serialised
+ * prim tree, mirroring exactly the layout produced by `parseUsdzDirect`:
+ *
+ *   - One Object3D per kept prim, parented to the nearest kept ancestor.
+ *   - `userData.usdPath` + `usdKind` tags so {@link buildUsdImportPlanFromGroup}
+ *     and {@link findObjectByUsdPath} can navigate by USD path.
+ *   - Local matrix derived from `inverse(parentWorld) * primWorld` so the
+ *     authored world pose is preserved relative to the kept ancestor.
+ *   - For mesh prims: one Three.js Mesh child per subset, each carrying
+ *     `userData.usdSubsetName` + `usdMaterialPath` plus the parent prim's
+ *     `userData.usdMaterialPath` set to the primary subset's material so
+ *     single-material prims still bind via the same lookup path.
+ *
+ * Materials are resolved once per material path via the shared `model.materials`
+ * dictionary and cached so multiple prims/subsets referencing the same USD
+ * material share a single MeshPhysicalMaterial instance.
+ */
 async function buildGroupFromWorkerModel(model: ParsedUsdModelData): Promise<Group> {
   const root = new Group();
   root.name = model.name;
-  const groups = new Map<string, Group>();
+  root.userData.usdPath = "/";
+  root.userData.usdKind = "xform";
 
-  for (const meshData of model.meshes) {
-    const geometry = new BufferGeometry();
-    geometry.setAttribute("position", new BufferAttribute(meshData.positions, 3));
-    if (meshData.normals) geometry.setAttribute("normal", new BufferAttribute(meshData.normals, 3));
-    if (meshData.uvs) {
-      geometry.setAttribute("uv", new BufferAttribute(meshData.uvs, 2));
-      geometry.setAttribute("uv1", new BufferAttribute(meshData.uvs, 2));
-    }
-    if (!meshData.normals) geometry.computeVertexNormals();
+  const materialCache = new Map<string, MeshPhysicalMaterial>();
+  const resolveMaterial = async (path: string | undefined): Promise<MeshPhysicalMaterial> => {
+    if (!path) return new MeshPhysicalMaterial({ side: DoubleSide });
+    let cached = materialCache.get(path);
+    if (cached) return cached;
+    const data = model.materials[path];
+    cached = data
+      ? await materialDataToMaterial(data)
+      : new MeshPhysicalMaterial({ side: DoubleSide });
+    materialCache.set(path, cached);
+    return cached;
+  };
 
-    const material = await materialDataToMaterial(meshData.material);
-    const mesh = new Mesh(geometry, material);
-    mesh.name = meshData.name;
+  // World matrices keyed by prim path so each prim can compute its local
+  // matrix as `inverse(parentWorld) * primWorld` (same math as parseUsdzDirect).
+  // Prims arrive parent-before-child, so by the time we hit a child its
+  // parent's worldMatrix is already in the map.
+  const worldMatrices = new Map<string, Matrix4>();
+  const objectsByPath = new Map<string, Group>();
+  const tmpInverse = new Matrix4();
 
-    let meshGroup = groups.get(meshData.groupName);
-    if (!meshGroup) {
-      meshGroup = new Group();
-      meshGroup.name = meshData.groupName;
-      if (meshData.matrix && meshData.matrix.length === 16) {
-        meshGroup.applyMatrix4(new Matrix4().fromArray(meshData.matrix));
+  for (const prim of model.prims) {
+    const primWorld = prim.worldMatrix && prim.worldMatrix.length === 16
+      ? new Matrix4().fromArray(prim.worldMatrix)
+      : new Matrix4();
+    worldMatrices.set(prim.path, primWorld);
+
+    const parentObj = prim.parent ? objectsByPath.get(prim.parent) ?? root : root;
+    const parentWorld = prim.parent ? worldMatrices.get(prim.parent) ?? null : null;
+    const localMatrix = parentWorld
+      ? new Matrix4().multiplyMatrices(tmpInverse.copy(parentWorld).invert(), primWorld)
+      : primWorld.clone();
+
+    const obj = new Group();
+    obj.name = primShortName(prim.path) || prim.path;
+    obj.userData.usdPath = prim.path;
+    obj.userData.usdKind = prim.kind;
+    obj.applyMatrix4(localMatrix);
+
+    if (prim.kind === "mesh") {
+      for (const subset of prim.subsets) {
+        const geometry = new BufferGeometry();
+        geometry.setAttribute("position", new BufferAttribute(subset.positions, 3));
+        if (subset.normals) geometry.setAttribute("normal", new BufferAttribute(subset.normals, 3));
+        if (subset.uvs) {
+          geometry.setAttribute("uv", new BufferAttribute(subset.uvs, 2));
+          geometry.setAttribute("uv1", new BufferAttribute(subset.uvs, 2));
+        }
+        if (!subset.normals) geometry.computeVertexNormals();
+
+        const material = await resolveMaterial(subset.materialPath);
+        const mesh = new Mesh(geometry, material);
+        mesh.name = subset.name;
+        mesh.userData.usdSubsetName = subset.name;
+        if (subset.materialPath) {
+          mesh.userData.usdMaterialPath = subset.materialPath;
+        }
+        obj.add(mesh);
       }
-      groups.set(meshData.groupName, meshGroup);
-      root.add(meshGroup);
+      if (prim.primaryMaterialPath) {
+        obj.userData.usdMaterialPath = prim.primaryMaterialPath;
+      }
     }
-    meshGroup.add(mesh);
+
+    parentObj.add(obj);
+    objectsByPath.set(prim.path, obj);
   }
 
   return root;
