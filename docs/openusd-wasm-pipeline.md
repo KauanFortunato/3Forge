@@ -111,7 +111,7 @@ em++ wrapper.cpp \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=64MB \
   -s MAXIMUM_MEMORY=2GB \
-  -s ENVIRONMENT=web \
+  -s ENVIRONMENT=web,worker \
   -s FORCE_FILESYSTEM=1 \
   -s ASSERTIONS=1 \
   -s EXIT_RUNTIME=0 \
@@ -235,7 +235,7 @@ The artifacts live in `public/wasm/openusd/`. They are deployed verbatim by Vite
 The USDZ branch of `applyModelSceneNode`:
 
 1. Checks `modelGroupCache` (`Map<assetId, Promise<Group>>`)
-2. **Cache miss**: wraps the parse in `runTask({ blocking: true, estimatedDurationMs })`. The OpenUSD path is primary; on failure, falls back to Three.js's `USDLoader`.
+2. **Cache miss**: wraps the parse in `runTask({ blocking: true })`. The OpenUSD path is primary and reports phase-based progress; on failure, it falls back to Three.js's `USDLoader`.
 3. **Cache hit**: skips the parse entirely
 4. Clones the cached Group (`group.clone(true)`) so each scene instance can be tagged and lit independently without touching the cached template
 5. Tags userData for picking and enables shadows
@@ -248,16 +248,20 @@ The same cache also serves GLB/GLTF loaded via `gltfLoader`.
 
 - Spinner
 - Task label (`Loading model.usdz`)
-- Progress bar (**determinate** when `estimatedDurationMs` is provided, **indeterminate sliding** otherwise)
-- Remaining time text (`Faltam ~8.3s`) capped at 95% / "Quase lá..." past the estimate
+- Progress bar (**determinate** when the task reports explicit progress or `estimatedDurationMs` is provided, **indeterminate sliding** otherwise)
+- Detail text for task-specific phases, such as USDZ prim/material processing
+- Elapsed time text; remaining time is shown only for tasks that still opt into `estimatedDurationMs`
 
 The system is driven by a tiny task registry in `src/editor/react/hooks/useAsyncTask.ts`:
 
 ```ts
-runTask("Loading X", () => doWork(), { blocking: true, estimatedDurationMs: 12000 });
+runTask("Loading X", (task) => {
+  task.update({ label: "Building meshes", detail: "12/40", progress: 0.4 });
+  return doWork();
+}, { blocking: true });
 ```
 
-`blocking: true` triggers the overlay; without it the task only shows in the small footer chip (`StatusBarProgress`). The USDZ heuristic is `~1s per MB` (with a 2s minimum).
+`blocking: true` triggers the overlay; without it the task only shows in the small footer chip (`StatusBarProgress`). USDZ imports no longer use the old `~1s per MB` heuristic; `parseUsdz` reports real parser phases from TypeScript-side milestones. Opaque synchronous OpenUSD calls (`openStageFromBinary`, `listPrims`, per-mesh extraction) deliberately clear explicit progress so the overlay stays indeterminate instead of freezing on a misleading percentage.
 
 ---
 

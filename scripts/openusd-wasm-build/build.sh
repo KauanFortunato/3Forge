@@ -41,7 +41,7 @@ em++ wrapper.cpp \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s INITIAL_MEMORY=64MB \
   -s MAXIMUM_MEMORY=2GB \
-  -s ENVIRONMENT=web \
+  -s ENVIRONMENT=web,worker \
   -s FORCE_FILESYSTEM=1 \
   -s ASSERTIONS=1 \
   -s EXIT_RUNTIME=0 \

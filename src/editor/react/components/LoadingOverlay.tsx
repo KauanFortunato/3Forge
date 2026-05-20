@@ -26,11 +26,17 @@ export function LoadingOverlay() {
     ? blocking.estimatedDurationMs / 1000
     : null;
 
-  // Cap progress at 95% so the bar doesn't claim "done" before the parse
-  // actually finishes — once the task ends, the overlay disappears anyway.
-  const progress = estimatedSec !== null
-    ? Math.min(0.95, elapsed / estimatedSec)
+  const explicitProgress = blocking.progress !== undefined
+    ? Math.min(0.98, blocking.progress)
     : null;
+
+  // Cap estimated progress so the bar doesn't claim "done" before the task
+  // actually finishes. Prefer explicit task progress when a task can report it.
+  const progress = explicitProgress !== null
+    ? explicitProgress
+    : estimatedSec !== null
+      ? Math.min(0.95, elapsed / estimatedSec)
+      : null;
 
   const remaining = estimatedSec !== null
     ? Math.max(0, estimatedSec - elapsed)
@@ -55,9 +61,14 @@ export function LoadingOverlay() {
             style={progress !== null ? { width: `${(progress * 100).toFixed(1)}%` } : undefined}
           />
         </div>
+        {blocking.detail && (
+          <p className="loading-overlay__detail">{blocking.detail}</p>
+        )}
         <p className="loading-overlay__elapsed">
-          {remaining === null
-            ? `${elapsed.toFixed(1)}s elapsed`
+          {explicitProgress !== null
+            ? `${Math.round(explicitProgress * 100)}% - ${elapsed.toFixed(1)}s elapsed`
+            : remaining === null
+              ? `${elapsed.toFixed(1)}s elapsed`
             : isOverEstimate
               ? `Almost there... (${elapsed.toFixed(1)}s)`
               : `~${remaining.toFixed(1)}s remaining`}

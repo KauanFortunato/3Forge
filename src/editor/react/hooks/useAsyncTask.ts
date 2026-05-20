@@ -6,11 +6,24 @@ export interface ActiveTask {
   blocking: boolean;
   startedAt: number;
   estimatedDurationMs?: number;
+  progress?: number;
+  detail?: string;
 }
 
 interface TaskOptions {
   blocking?: boolean;
   estimatedDurationMs?: number;
+}
+
+export interface TaskProgressUpdate {
+  label?: string;
+  progress?: number | null;
+  detail?: string;
+  estimatedDurationMs?: number;
+}
+
+export interface TaskProgressReporter {
+  update: (update: TaskProgressUpdate) => void;
 }
 
 let nextId = 0;
@@ -56,10 +69,36 @@ export function endTask(id: string): void {
   emit();
 }
 
-export async function runTask<T>(label: string, fn: () => Promise<T> | T, options: TaskOptions = {}): Promise<T> {
+export function updateTask(id: string, update: TaskProgressUpdate): void {
+  const next = active.map((task) => {
+    if (task.id !== id) {
+      return task;
+    }
+    return {
+      ...task,
+      ...update,
+      progress: update.progress === undefined
+        ? task.progress
+        : update.progress === null
+          ? undefined
+        : Math.max(0, Math.min(1, update.progress)),
+    };
+  });
+  active = next;
+  emit();
+}
+
+export async function runTask<T>(
+  label: string,
+  fn: (task: TaskProgressReporter) => Promise<T> | T,
+  options: TaskOptions = {},
+): Promise<T> {
   const id = startTask(label, options);
+  const reporter: TaskProgressReporter = {
+    update: (update) => updateTask(id, update),
+  };
   try {
-    return await fn();
+    return await fn(reporter);
   } finally {
     endTask(id);
   }
@@ -69,6 +108,10 @@ export function useActiveTasks(): ActiveTask[] {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-export function useAsyncTask(): <T>(label: string, fn: () => Promise<T> | T, options?: TaskOptions) => Promise<T> {
+export function useAsyncTask(): <T>(
+  label: string,
+  fn: (task: TaskProgressReporter) => Promise<T> | T,
+  options?: TaskOptions,
+) => Promise<T> {
   return useCallback((label, fn, options) => runTask(label, fn, options), []);
 }

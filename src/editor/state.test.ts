@@ -259,6 +259,7 @@ describe("EditorStore", () => {
     });
 
     expect(store.sceneSettings.backgroundColor).toBe("#25272c");
+    expect(store.sceneSettings.environment.type).toBe("none");
     expect(store.sceneSettings.lighting.ambientColor).toBe("#aabbcc");
     expect(store.sceneSettings.lighting.ambientIntensity).toBe(0);
     expect(store.sceneSettings.lighting.directionalIntensity).toBe(20);
@@ -267,12 +268,14 @@ describe("EditorStore", () => {
 
     store.updateSceneSettings({
       backgroundColor: "#111111",
+      environment: { type: "default", hdrAssetId: "ignored" },
       lighting: { ambientIntensity: 0.8 },
       toneMapping: { type: "acesFilmic" },
       shadows: { enabled: true, type: "pcfSoft" },
     });
 
     expect(store.sceneSettings.backgroundColor).toBe("#111111");
+    expect(store.sceneSettings.environment).toMatchObject({ type: "default", hdrAssetId: null });
     expect(store.sceneSettings.lighting.ambientIntensity).toBe(0.8);
     expect(store.sceneSettings.toneMapping.type).toBe("acesFilmic");
     expect(store.sceneSettings.shadows).toEqual({ enabled: true, type: "pcfSoft" });

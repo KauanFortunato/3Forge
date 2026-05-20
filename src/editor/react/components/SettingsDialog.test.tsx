@@ -29,11 +29,13 @@ describe("SettingsDialog", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "studio" } });
+    fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "default" } });
+    fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "hdr:studio" } });
     fireEvent.change(screen.getByLabelText("Background"), { target: { value: "#111111" } });
     fireEvent.click(screen.getByRole("button", { name: "Linear" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Shadows" }));
 
+    expect(handleChangeSceneSettings).toHaveBeenCalledWith({ environment: { type: "default", hdrAssetId: null } });
     expect(handleChangeSceneSettings).toHaveBeenCalledWith({ environment: { type: "hdr", hdrAssetId: "studio" } });
     expect(handleChangeSceneSettings).toHaveBeenCalledWith({ backgroundColor: "#111111" });
     expect(handleChangeSceneSettings).toHaveBeenCalledWith({ toneMapping: { type: "linear" } });

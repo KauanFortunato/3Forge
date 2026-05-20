@@ -88,6 +88,7 @@ import type {
   EditorStoreChange,
   ImageNode,
   MaterialSpec,
+  ModelAsset,
   ModelNode,
   NodeOriginSpec,
   TextNode,
@@ -106,6 +107,82 @@ interface AnimationPreviewOverride {
   property: AnimationPropertyPath;
   frame: number;
   value: number;
+}
+
+interface ModelCacheEntry {
+  src: string;
+  format: ModelAsset["format"];
+  promise: Promise<Group>;
+}
+
+const MATERIAL_TEXTURE_PROPERTIES = [
+  "map",
+  "alphaMap",
+  "aoMap",
+  "bumpMap",
+  "clearcoatMap",
+  "clearcoatNormalMap",
+  "clearcoatRoughnessMap",
+  "displacementMap",
+  "emissiveMap",
+  "envMap",
+  "iridescenceMap",
+  "iridescenceThicknessMap",
+  "lightMap",
+  "metalnessMap",
+  "normalMap",
+  "roughnessMap",
+  "sheenColorMap",
+  "sheenRoughnessMap",
+  "specularColorMap",
+  "specularIntensityMap",
+  "transmissionMap",
+] as const;
+
+function disposeMaterialTextures(material: Material, disposedTextures: Set<Texture>): void {
+  const record = material as unknown as Record<string, unknown>;
+  for (const property of MATERIAL_TEXTURE_PROPERTIES) {
+    const texture = record[property];
+    if (texture instanceof Texture && !disposedTextures.has(texture)) {
+      texture.dispose();
+      disposedTextures.add(texture);
+    }
+  }
+}
+
+function disposeObjectResources(
+  root: Object3D,
+  options: { disposeTextures?: boolean; skipModelResources?: boolean } = {},
+): void {
+  const disposedGeometries = new Set<{ dispose: () => void }>();
+  const disposedMaterials = new Set<Material>();
+  const disposedTextures = new Set<Texture>();
+
+  root.traverse((object) => {
+    if (!(object instanceof Mesh)) {
+      return;
+    }
+    if (options.skipModelResources && object.userData.nodeType === "model") {
+      return;
+    }
+
+    if (object.geometry && !disposedGeometries.has(object.geometry)) {
+      object.geometry.dispose();
+      disposedGeometries.add(object.geometry);
+    }
+
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material || disposedMaterials.has(material)) {
+        continue;
+      }
+      if (options.disposeTextures) {
+        disposeMaterialTextures(material, disposedTextures);
+      }
+      material.dispose();
+      disposedMaterials.add(material);
+    }
+  });
 }
 
 function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialSpec): Material {
@@ -255,7 +332,7 @@ export class SceneEditor {
   private readonly rgbeLoader = new RGBELoader();
   // Parsed-model cache: maps asset.id → Promise<Group> so each model is parsed
   // once. Subsequent scene rebuilds clone the cached Group instead of re-parsing.
-  private readonly modelGroupCache = new Map<string, Promise<Group>>();
+  private readonly modelGroupCache = new Map<string, ModelCacheEntry>();
   private readonly selectionBounds = new Box3();
   private readonly selectionSize = new Vector3();
   private readonly selectionCenter = new Vector3();
@@ -384,11 +461,12 @@ export class SceneEditor {
       if (!wasHandled) {
         this.store.setNodeTransformFromObject(nodeId, object);
       }
-      this.updateSelectionHelper(
-        this.store.selectedNodeIds
-          .map((selectedNodeId) => this.objectMap.get(selectedNodeId))
-          .filter((selectedObject): selectedObject is Object3D => Boolean(selectedObject)),
-      );
+      // objectChange fires per pointer move (can exceed 60Hz on high-rate mice).
+      // computeSelectionBounds runs updateMatrixWorld(true) on the viewport and
+      // Box3.setFromObject across every selected object's descendants — for a
+      // complex USDZ this can traverse thousands of meshes per event. Defer to
+      // the rAF cache so it runs at most once per frame.
+      this.selectionHelperDirty = true;
     });
 
     this.infiniteGrid = this.createInfiniteGrid();
@@ -581,18 +659,24 @@ export class SceneEditor {
     window.removeEventListener("keydown", this.handleWindowKeyDown);
     window.removeEventListener("keyup", this.handleWindowKeyUp);
     window.removeEventListener("blur", this.handleWindowBlur);
+    this.renderer.domElement.removeEventListener("pointerdown", this.handleCanvasPointerDown);
+    this.renderer.domElement.removeEventListener("pointerup", this.handleCanvasPointerUp);
     this.transformControls.detach();
     this.transformControls.dispose();
     this.cameraControls.dispose();
     this.clearViewportRoot();
+    this.clearModelGroupCache();
+    this.clearTextureCache();
     this.clearHdrEnvironmentCache();
     this.selectionHelper?.removeFromParent();
     this.infiniteGrid.geometry.dispose();
     this.infiniteGrid.material.dispose();
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
     this.neutralEnvironmentTarget.dispose();
     this.pmremGenerator.dispose();
     this.orientationRenderer.dispose();
+    this.orientationRenderer.forceContextLoss();
     this.orientationRenderer.domElement.removeEventListener("pointerdown", this.handleOrientationPointerDown);
     this.renderer.domElement.remove();
     this.orientationRenderer.domElement.remove();
@@ -614,6 +698,33 @@ export class SceneEditor {
     this.isSnapModifierPressed = false;
   };
 
+  private readonly handleCanvasPointerDown = (event: PointerEvent): void => {
+    this.pointerDownX = event.clientX;
+    this.pointerDownY = event.clientY;
+  };
+
+  private readonly handleCanvasPointerUp = (event: PointerEvent): void => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    if (this.skipNextSelectionPick) {
+      this.skipNextSelectionPick = false;
+      return;
+    }
+
+    if (this.isTransformDragging) {
+      return;
+    }
+
+    const delta = Math.abs(event.clientX - this.pointerDownX) + Math.abs(event.clientY - this.pointerDownY);
+    if (delta > 6) {
+      return;
+    }
+
+    this.pick(event.clientX, event.clientY, event.shiftKey);
+  };
+
   private readonly handleOrientationPointerDown = (event: PointerEvent): void => {
     const rect = this.orientationRenderer.domElement.getBoundingClientRect();
     this.orientationPointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -632,6 +743,17 @@ export class SceneEditor {
   };
 
   private handleStoreChange(change: EditorStoreChange): void {
+    if (
+      change.reason === "image" ||
+      change.reason === "model" ||
+      change.reason === "hdr" ||
+      change.reason === "sceneSettings" ||
+      change.reason === "structure" ||
+      change.reason === "import"
+    ) {
+      this.reconcileAssetCaches();
+    }
+
     if (change.reason === "selection") {
       this.refreshSelection();
       return;
@@ -766,16 +888,28 @@ export class SceneEditor {
     const environmentScene = this.scene as Scene & { environmentIntensity?: number };
     environmentScene.environmentIntensity = settings.environment.intensity;
 
-    if (settings.environment.type !== "hdr" || !settings.environment.hdrAssetId) {
+    if (settings.environment.type === "none") {
+      this.scene.environment = null;
+      environmentScene.environmentIntensity = 0;
+      return;
+    }
+
+    if (settings.environment.type === "default") {
       this.scene.environment = this.neutralEnvironmentTarget.texture;
-      environmentScene.environmentIntensity = 1;
+      environmentScene.environmentIntensity = settings.environment.intensity;
+      return;
+    }
+
+    if (!settings.environment.hdrAssetId) {
+      this.scene.environment = null;
+      environmentScene.environmentIntensity = 0;
       return;
     }
 
     const asset = this.store.getHdrAsset(settings.environment.hdrAssetId);
     if (!asset || !asset.src) {
-      this.scene.environment = this.neutralEnvironmentTarget.texture;
-      environmentScene.environmentIntensity = 1;
+      this.scene.environment = null;
+      environmentScene.environmentIntensity = 0;
       return;
     }
 
@@ -789,8 +923,8 @@ export class SceneEditor {
       environmentScene.environmentIntensity = this.store.sceneSettings.environment.intensity;
     } catch {
       if (token === this.environmentLoadToken) {
-        this.scene.environment = this.neutralEnvironmentTarget.texture;
-        environmentScene.environmentIntensity = 1;
+        this.scene.environment = null;
+        environmentScene.environmentIntensity = 0;
       }
     }
   }
@@ -940,33 +1074,8 @@ export class SceneEditor {
 
   private bindPointerSelection(): void {
     const canvas = this.renderer.domElement;
-
-    canvas.addEventListener("pointerdown", (event) => {
-      this.pointerDownX = event.clientX;
-      this.pointerDownY = event.clientY;
-    });
-
-    canvas.addEventListener("pointerup", (event) => {
-      if (event.button !== 0) {
-        return;
-      }
-
-      if (this.skipNextSelectionPick) {
-        this.skipNextSelectionPick = false;
-        return;
-      }
-
-      if (this.isTransformDragging) {
-        return;
-      }
-
-      const delta = Math.abs(event.clientX - this.pointerDownX) + Math.abs(event.clientY - this.pointerDownY);
-      if (delta > 6) {
-        return;
-      }
-
-      this.pick(event.clientX, event.clientY, event.shiftKey);
-    });
+    canvas.addEventListener("pointerdown", this.handleCanvasPointerDown);
+    canvas.addEventListener("pointerup", this.handleCanvasPointerUp);
   }
 
   private pick(clientX: number, clientY: number, additive = false): void {
@@ -1105,9 +1214,16 @@ export class SceneEditor {
     // Cache the parsed Group per-asset so subsequent scene rebuilds clone the
     // cached result instead of re-parsing. Without this, ANY scene update
     // (move, select, property change) would re-run the WASM parser.
-    let parsePromise = this.modelGroupCache.get(asset.id);
-    if (!parsePromise) {
+    let cacheEntry = this.modelGroupCache.get(asset.id);
+    if (cacheEntry && (cacheEntry.src !== asset.src || cacheEntry.format !== asset.format)) {
+      this.modelGroupCache.delete(asset.id);
+      this.disposeModelCacheEntry(cacheEntry);
+      cacheEntry = undefined;
+    }
+
+    if (!cacheEntry) {
       const taskLabel = `Loading ${asset.name ?? asset.format.toUpperCase()}`;
+      let parsePromise: Promise<Group>;
       if (asset.format === "usdz") {
         const bytes = tryDecodeDataUrl(asset.src);
         if (bytes) {
@@ -1115,23 +1231,25 @@ export class SceneEditor {
             bytes.byteOffset,
             bytes.byteOffset + bytes.byteLength,
           ) as ArrayBuffer;
-          // ~1s per MB heuristic from measured parses (13MB ≈ 12-15s on Chrome).
-          // Used purely to drive the progress bar / ETA — actual time may vary.
-          const estimatedDurationMs = Math.max(2000, (buffer.byteLength / (1024 * 1024)) * 1000);
           // Primary path: OpenUSD WASM. Falls back to three.js USDLoader if
           // OpenUSD throws (covers ASCII USDA where OpenUSD plugin coverage may
           // be incomplete in our build).
-          parsePromise = runTask(taskLabel, async () => {
+          parsePromise = runTask(taskLabel, async (task) => {
             try {
               const { parseUsdz } = await import("../lib/openusd/openusdParser");
-              return await parseUsdz(buffer, asset.name ?? "asset.usdz");
+              return await parseUsdz(buffer, asset.name ?? "asset.usdz", task.update);
             } catch (openUsdError) {
               console.warn("OpenUSD parse failed, falling back to three.js USDLoader:", openUsdError);
+              task.update({
+                label: "Loading USDZ with fallback parser",
+                detail: "OpenUSD failed; trying Three.js USDLoader",
+                progress: null,
+              });
               return await new Promise<Group>((resolve, reject) => {
                 this.usdLoader.load(asset.src, resolve, undefined, reject);
               });
             }
-          }, { blocking: true, estimatedDurationMs });
+          }, { blocking: true });
         } else {
           parsePromise = runTask(taskLabel, () => new Promise<Group>((resolve, reject) => {
             this.usdLoader.load(asset.src, resolve, undefined, reject);
@@ -1143,21 +1261,39 @@ export class SceneEditor {
         }), { blocking: true });
       }
 
-      this.modelGroupCache.set(asset.id, parsePromise);
+      cacheEntry = { src: asset.src, format: asset.format, promise: parsePromise };
+      this.modelGroupCache.set(asset.id, cacheEntry);
       // Drop the cache entry on failure so the next attempt re-tries the parse
       // instead of replaying the cached rejection.
-      parsePromise.catch(() => this.modelGroupCache.delete(asset.id));
+      parsePromise.catch(() => {
+        if (this.modelGroupCache.get(asset.id)?.promise === parsePromise) {
+          this.modelGroupCache.delete(asset.id);
+        }
+      });
       // Once the parse succeeds, derive the structure from the actual rendered
       // tree (with index-path IDs that survive clone()) and publish it on the
       // ModelAsset so the hierarchy panel can render it.
       parsePromise.then((cached) => {
+        const currentEntry = this.modelGroupCache.get(asset.id);
+        const currentAsset = this.store.getModelAsset(asset.id);
+        if (
+          currentEntry?.promise !== parsePromise ||
+          !currentAsset ||
+          currentAsset.src !== asset.src ||
+          currentAsset.format !== asset.format
+        ) {
+          return;
+        }
         const structure = buildStructureFromGroup(cached, asset.format);
         this.store.updateModelAssetStructure(asset.id, structure);
       }).catch(() => {/* already logged below */});
     }
 
-    parsePromise
+    cacheEntry.promise
       .then((cached) => {
+        if (this.modelGroupCache.get(asset.id)?.promise !== cacheEntry.promise) {
+          return;
+        }
         const clone = cached.clone(true);
         tagForNode(clone);
 
@@ -1641,20 +1777,83 @@ export class SceneEditor {
   }
 
   private clearViewportRoot(): void {
-    this.viewportRoot.traverse((object) => {
-      if (object instanceof Mesh) {
-        object.geometry.dispose();
-        if (Array.isArray(object.material)) {
-          for (const material of object.material) {
-            material.dispose();
-          }
-        } else {
-          object.material.dispose();
-        }
-      }
-    });
-
+    disposeObjectResources(this.viewportRoot, { skipModelResources: true });
     this.viewportRoot.clear();
+  }
+
+  private reconcileAssetCaches(): void {
+    this.reconcileModelGroupCache();
+    this.reconcileTextureCache();
+    this.reconcileHdrEnvironmentCache();
+  }
+
+  private reconcileModelGroupCache(): void {
+    const modelsById = new Map(this.store.models.map((asset) => [asset.id, asset] as const));
+    for (const [assetId, entry] of this.modelGroupCache) {
+      const asset = modelsById.get(assetId);
+      if (asset && asset.src === entry.src && asset.format === entry.format) {
+        continue;
+      }
+      this.modelGroupCache.delete(assetId);
+      this.disposeModelCacheEntry(entry);
+    }
+  }
+
+  private reconcileTextureCache(): void {
+    const activeSources = new Set<string>();
+    for (const image of this.store.images) {
+      activeSources.add(image.src);
+    }
+    for (const node of this.store.blueprint.nodes) {
+      if (node.type === "image") {
+        activeSources.add(node.image.src);
+      }
+    }
+
+    for (const [src, texture] of this.textureCache) {
+      if (activeSources.has(src)) {
+        continue;
+      }
+      texture.dispose();
+      this.textureCache.delete(src);
+    }
+  }
+
+  private reconcileHdrEnvironmentCache(): void {
+    const settings = this.store.sceneSettings;
+    const activeHdr = settings.environment.type === "hdr" && settings.environment.hdrAssetId
+      ? this.store.getHdrAsset(settings.environment.hdrAssetId)
+      : null;
+    const activeSrc = activeHdr?.src ?? null;
+
+    for (const [src, environment] of this.hdrEnvironmentCache) {
+      if (src === activeSrc) {
+        continue;
+      }
+      environment.target.dispose();
+      environment.source.dispose();
+      this.hdrEnvironmentCache.delete(src);
+    }
+  }
+
+  private clearModelGroupCache(): void {
+    for (const entry of this.modelGroupCache.values()) {
+      this.disposeModelCacheEntry(entry);
+    }
+    this.modelGroupCache.clear();
+  }
+
+  private disposeModelCacheEntry(entry: ModelCacheEntry): void {
+    entry.promise
+      .then((group) => disposeObjectResources(group, { disposeTextures: true }))
+      .catch(() => undefined);
+  }
+
+  private clearTextureCache(): void {
+    for (const texture of this.textureCache.values()) {
+      texture.dispose();
+    }
+    this.textureCache.clear();
   }
 
   private clearHdrEnvironmentCache(): void {
