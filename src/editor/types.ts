@@ -200,6 +200,13 @@ export interface ModelImportPlanNode {
   rotation: Vec3Like;
   scale: Vec3Like;
   primPath?: string;
+  /**
+   * When the plan node represents a single GeomSubset of a multi-material
+   * mesh prim, this is the subset's name (matches `userData.usdSubsetName`
+   * set by the parser on the corresponding child Mesh). Renderer filters
+   * the prim's mesh children by this to clone just that subset.
+   */
+  subsetName?: string;
   materialId?: string;
   children: ModelImportPlanNode[];
 }
@@ -480,6 +487,14 @@ export interface ModelNode extends BaseEditorNode {
    * the OpenUSD pipeline; ignored otherwise.
    */
   primPath?: string;
+  /**
+   * When set together with {@link primPath}, restricts rendering to the
+   * specific GeomSubset child mesh whose `userData.usdSubsetName` matches.
+   * Used to split a multi-material USD mesh prim into one editable node
+   * per subset so each subset can be selected, moved, and bound to its
+   * own MaterialAsset without bleeding into siblings.
+   */
+  subsetName?: string;
 }
 
 export type EditorNode =

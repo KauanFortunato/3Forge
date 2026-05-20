@@ -1318,6 +1318,9 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
     if (typeof source.primPath === "string" && source.primPath.trim()) {
       node.primPath = source.primPath.trim();
     }
+    if (typeof source.subsetName === "string" && source.subsetName.trim()) {
+      node.subsetName = source.subsetName.trim();
+    }
     if (source.partVisibility && typeof source.partVisibility === "object") {
       const overrides: Record<string, boolean> = {};
       for (const [partId, visible] of Object.entries(source.partVisibility as Record<string, unknown>)) {
@@ -2745,6 +2748,9 @@ export class EditorStore extends EventTarget {
         };
         if (planNode.primPath) {
           node.primPath = planNode.primPath;
+        }
+        if (planNode.subsetName) {
+          node.subsetName = planNode.subsetName;
         }
         if (planNode.materialId) {
           const linked = this.getMaterial(planNode.materialId);

@@ -39,6 +39,14 @@ export interface UsdImportPlanNode {
   rotation: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number };
   materialPath?: string;
+  /**
+   * GeomSubset name when this plan node represents one subset of a
+   * multi-material mesh prim. The parent plan node (`xform` kind) shares
+   * the same {@link primPath}; sibling subset nodes carry their own
+   * {@link materialPath}. Renderer filters mesh children by
+   * `userData.usdSubsetName` to clone just this subset.
+   */
+  subsetName?: string;
   children: UsdImportPlanNode[];
 }
 
@@ -638,6 +646,50 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
     for (const child of object.children) {
       const childPlan = visit(child);
       if (childPlan) childPlans.push(childPlan);
+    }
+
+    // For mesh prims with multiple GeomSubsets bound to *different* materials,
+    // split each subset into its own synthetic child plan node so it becomes
+    // an independently editable blueprint node (selectable, movable, linkable
+    // to its own MaterialAsset). The prim itself degrades to an xform-only
+    // container — it carries the prim's local transform and nests the subset
+    // children. Single-material meshes keep the legacy single-node layout.
+    if (usdKind === "mesh") {
+      const directMeshes = object.children.filter(
+        (c): c is Mesh => c instanceof Mesh,
+      );
+      const subsetEntries = directMeshes
+        .map((m) => ({
+          subsetName: m.userData?.usdSubsetName as string | undefined,
+          materialPath: m.userData?.usdMaterialPath as string | undefined,
+          name: m.name,
+        }))
+        .filter((e) => e.subsetName && e.materialPath);
+      const distinctMaterials = new Set(subsetEntries.map((e) => e.materialPath));
+      if (subsetEntries.length > 1 && distinctMaterials.size > 1) {
+        for (const entry of subsetEntries) {
+          childPlans.push({
+            primPath: usdPath,
+            name: entry.name || entry.subsetName || "subset",
+            kind: "mesh",
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            materialPath: entry.materialPath,
+            subsetName: entry.subsetName,
+            children: [],
+          });
+        }
+        return {
+          primPath: usdPath,
+          name: object.name || primShortName(usdPath),
+          kind: "xform",
+          position: { x: object.position.x, y: object.position.y, z: object.position.z },
+          rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
+          scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
+          children: childPlans,
+        };
+      }
     }
 
     const materialPath = usdKind === "mesh"

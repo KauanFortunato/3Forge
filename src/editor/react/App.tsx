@@ -412,6 +412,9 @@ function attachMaterialIdsToPlan(
       primPath: entry.primPath,
       children: attachMaterialIdsToPlan(entry.children, materialIdByUsdPath),
     };
+    if (entry.subsetName) {
+      result.subsetName = entry.subsetName;
+    }
     if (materialId) {
       result.materialId = materialId;
     }

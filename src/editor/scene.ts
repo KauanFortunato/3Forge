@@ -1207,8 +1207,17 @@ export class SceneEditor {
           const meshContainer = new Group();
           meshContainer.userData.nodeId = node.id;
           meshContainer.userData.nodeType = node.type;
+          const targetSubset = node.subsetName;
           for (const child of prim.children) {
             if (!(child instanceof Mesh)) continue;
+            // When this node is pinned to a specific GeomSubset, skip mesh
+            // children that aren't part of that subset. Sibling subsets are
+            // rendered by their own ModelNodes (one per subset), so each
+            // subset is independently selectable, movable, and bindable to
+            // its own MaterialAsset.
+            if (targetSubset && child.userData?.usdSubsetName !== targetSubset) {
+              continue;
+            }
             const clonedMesh = child.clone();
             // Clone the material too so Inspector edits applied below don't
             // bleed across other prims that share the same parsed material
