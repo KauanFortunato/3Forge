@@ -1502,6 +1502,12 @@ code {
   color: color-mix(in srgb, var(--c-accent) 55%, var(--c-text-med));
 }
 
+/* Mesh parts of imported models render in the axis-Y green so the user can
+   visually separate mesh leaves from container nodes when expanding a model. */
+.sg-row--part.is-mesh .sg-row__icon {
+  color: color-mix(in srgb, var(--c-y) 75%, var(--c-text-med));
+}
+
 .sg-row.is-selected .sg-row__icon {
   color: var(--c-select);
 }

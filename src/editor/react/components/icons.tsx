@@ -262,11 +262,17 @@ export function GroupIcon(props: IconProps) {
 }
 
 export function MeshIcon(props: IconProps) {
+  // Hexagonal mesh triangulated to center — reads as polygon geometry,
+  // visually distinct from the BoxIcon cube.
   return (
     <Ico {...props}>
-      <path d="M12.2 9.4V4.6a1.2 1.2 0 0 0-.6-1.04l-4.2-2.4a1.2 1.2 0 0 0-1.2 0l-4.2 2.4A1.2 1.2 0 0 0 1.4 4.6v4.8a1.2 1.2 0 0 0 .6 1.04l4.2 2.4a1.2 1.2 0 0 0 1.2 0l4.2-2.4a1.2 1.2 0 0 0 .6-1.04z" />
-      <path d="m1.56 4.18 5.44 3.16 5.44-3.16" />
-      <path d="M7 13.24V7.34" />
+      <path d="M7 1.4 12 4.2v5.6L7 12.6 2 9.8V4.2z" />
+      <path d="M7 1.4 7 7" />
+      <path d="M12 4.2 7 7" />
+      <path d="M12 9.8 7 7" />
+      <path d="M7 12.6 7 7" />
+      <path d="M2 9.8 7 7" />
+      <path d="M2 4.2 7 7" />
     </Ico>
   );
 }
