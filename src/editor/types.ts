@@ -180,6 +180,37 @@ export interface ModelAssetStructure {
   roots: ModelAssetStructureNode[];
 }
 
+/**
+ * Hierarchical plan handed to {@link EditorStore.insertModelImportPlan} to
+ * "explode" an imported model (typically a USDZ) into a tree of editable
+ * blueprint nodes. Each plan entry becomes either a `group` node (for
+ * `xform` kind — pure transform container) or a `model` node (for `mesh`
+ * kind — references the parent ModelAsset and renders only the prim at
+ * `primPath`). Transforms are local (relative to the plan parent).
+ *
+ * `materialId` (mesh-kind only) is the id of a MaterialAsset already
+ * registered on the blueprint (typically by the same import pass); the
+ * resulting ModelNode is linked to that asset so edits in the Materials
+ * panel propagate to every part sharing it.
+ */
+export interface ModelImportPlanNode {
+  name: string;
+  kind: "xform" | "mesh";
+  position: Vec3Like;
+  rotation: Vec3Like;
+  scale: Vec3Like;
+  primPath?: string;
+  /**
+   * When the plan node represents a single GeomSubset of a multi-material
+   * mesh prim, this is the subset's name (matches `userData.usdSubsetName`
+   * set by the parser on the corresponding child Mesh). Renderer filters
+   * the prim's mesh children by this to clone just that subset.
+   */
+  subsetName?: string;
+  materialId?: string;
+  children: ModelImportPlanNode[];
+}
+
 export interface HdrAsset {
   id: string;
   name: string;
@@ -445,6 +476,25 @@ export interface ModelNode extends BaseEditorNode {
    * `false` are meaningful; missing entries mean the part is visible.
    */
   partVisibility?: Record<string, boolean>;
+  /**
+   * When set, this node renders only the subtree of the referenced model
+   * located at the given USD prim path (tagged via `userData.usdPath` by
+   * the OpenUSD parser). The rest of the model is rendered by sibling
+   * ModelNodes that share the same `modelId`. Used to expose each prim of
+   * an imported USDZ as an independently editable blueprint node.
+   *
+   * Only meaningful for ModelNodes whose ModelAsset is a USDZ parsed by
+   * the OpenUSD pipeline; ignored otherwise.
+   */
+  primPath?: string;
+  /**
+   * When set together with {@link primPath}, restricts rendering to the
+   * specific GeomSubset child mesh whose `userData.usdSubsetName` matches.
+   * Used to split a multi-material USD mesh prim into one editable node
+   * per subset so each subset can be selected, moved, and bound to its
+   * own MaterialAsset without bleeding into siblings.
+   */
+  subsetName?: string;
 }
 
 export type EditorNode =

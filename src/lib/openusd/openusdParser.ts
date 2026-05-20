@@ -8,6 +8,7 @@ import {
   Matrix4,
   Mesh,
   MeshPhysicalMaterial,
+  Object3D,
   RepeatWrapping,
   SRGBColorSpace,
   Texture,
@@ -21,6 +22,59 @@ import type {
   ParsedUsdModelData,
   ParsedUsdTextureData,
 } from "./openusdWorkerTypes";
+
+/**
+ * A node in the import plan derived from a USDZ stage, mirroring the prim
+ * hierarchy. Editor consumers turn each entry into a blueprint node (group or
+ * model) and attach children recursively. The `position`/`rotation`/`scale`
+ * fields are the decomposed *local* transform (relative to the kept parent),
+ * so when applied to a blueprint node they reproduce the authored world pose.
+ *
+ * The `primPath` field is the USD prim path that becomes the ModelNode's
+ * `primPath` — chosen to match the editor type so state.ts can spread the
+ * plan node directly into a blueprint node without renaming fields.
+ *
+ * `materialPath` (mesh-kind only) is the USD material path bound to the
+ * prim. Consumers can use this as a dedup key to share a single project
+ * MaterialAsset across multiple prims that authored the same material.
+ */
+export interface UsdImportPlanNode {
+  primPath: string;
+  name: string;
+  kind: "xform" | "mesh";
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number };
+  scale: { x: number; y: number; z: number };
+  materialPath?: string;
+  /**
+   * GeomSubset name when this plan node represents one subset of a
+   * multi-material mesh prim. The parent plan node (`xform` kind) shares
+   * the same {@link primPath}; sibling subset nodes carry their own
+   * {@link materialPath}. Renderer filters mesh children by
+   * `userData.usdSubsetName` to clone just this subset.
+   */
+  subsetName?: string;
+  children: UsdImportPlanNode[];
+}
+
+/**
+ * PBR property snapshot of a UsdPreviewSurface material, distilled to the
+ * scalar/color fields the editor's MaterialSpec carries. Returned alongside
+ * the import plan so the App layer can register each unique material as a
+ * MaterialAsset and link mesh prims to it via `materialId`. Texture maps
+ * are intentionally omitted for now — the cached parsed material still
+ * provides them at render time; the editable Inspector handles only the
+ * scalar/color overrides.
+ */
+export interface UsdMaterialSnapshot {
+  path: string;
+  name: string;
+  color: string;
+  roughness: number;
+  metalness: number;
+  opacity: number;
+  emissive: string;
+}
 
 interface PrimInfo {
   path: string;
@@ -516,15 +570,37 @@ async function buildSubsetGeometry(
   return geometry;
 }
 
+function primShortName(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx >= 0 ? path.slice(idx + 1) : path;
+}
+
+function depthOfPath(path: string): number {
+  return (path.match(/\//g)?.length ?? 0);
+}
+
 /**
- * Parse a USDZ (or USDC) buffer using OpenUSD WASM and return a Three.js Group.
+ * Parse a USDZ (or USDC) buffer using OpenUSD WASM and return a hierarchical
+ * Three.js Group whose tree mirrors the USD prim hierarchy.
+ *
+ * Each kept prim (Xformable or Mesh) becomes an `Object3D` carrying its
+ * *local* transform (decomposed onto `position`/`quaternion`/`scale`). Each
+ * such Object3D is tagged with `userData.usdPath` and `userData.usdKind`
+ * (`"mesh"` | `"xform"`) so downstream code can derive a blueprint import
+ * plan via `buildUsdImportPlanFromGroup` and locate specific prims at render
+ * time by their USD path.
+ *
+ * Non-kept intermediate prims (Material, Shader, Scope without xform, etc.)
+ * are skipped, but their local transforms are folded into their kept
+ * descendants so the world pose is preserved exactly.
  *
  * Pipeline:
- *   1. Open stage from binary buffer (OpenUSD handles USDZ unzip + USDC parse internally).
- *   2. Walk all prims; for each Mesh, extract geometry + bound material.
- *   3. For each material, extract UsdPreviewSurface params + texture references.
- *   4. For each texture, fetch raw bytes via ArResolver (handles USDZ archive paths).
- *   5. Apply world transforms so the scene graph matches authored layout.
+ *   1. Open stage from binary buffer.
+ *   2. List all prims; keep only Mesh and Xformable ones.
+ *   3. Process kept prims parent-before-child; reparent each to its nearest
+ *      kept ancestor with the accumulated transform applied.
+ *   4. For Mesh prims, build geometries + materials (per GeomSubset or whole
+ *      mesh) and attach as children of the kept Object3D.
  */
 export async function parseUsdz(
   buffer: ArrayBuffer,
@@ -647,6 +723,8 @@ async function parseUsdzDirect(
   try {
     const root = new Group();
     root.name = filename;
+    root.userData.usdPath = "/";
+    root.userData.usdKind = "xform";
 
     report({
       label: "Scanning USD hierarchy",
@@ -655,12 +733,15 @@ async function parseUsdzDirect(
     });
     await waitForPaint();
     const prims = usd.listPrims(stageId);
+    const primsByPath = new Map<string, PrimInfo>();
+    for (const p of prims) primsByPath.set(p.path, p);
     const meshPrims = prims.filter((prim) => prim.isMesh);
     report({
       label: "Scanning USD hierarchy",
       detail: `${meshPrims.length} mesh prim${meshPrims.length === 1 ? "" : "s"} found`,
       progress: 0.24,
     });
+
     const textureCache = new Map<string, Promise<Texture | null>>();
     const materialCache = new Map<string, Promise<MeshPhysicalMaterial>>();
     let resolvedMaterials = 0;
@@ -690,80 +771,150 @@ async function parseUsdzDirect(
       return cached;
     };
 
-    const meshGroups: { prim: PrimInfo; group: Group }[] = [];
+    // Material / Shader / GeomSubset etc. are bound to mesh prims separately
+    // and have no place in the scene hierarchy — skip them outright to keep
+    // the exploded blueprint tree from being polluted by shader-network prims.
+    const NON_HIERARCHY_TYPES = new Set([
+      "Material",
+      "Shader",
+      "NodeGraph",
+      "GeomSubset",
+      "Camera",
+    ]);
+    const isKept = (prim: PrimInfo): boolean => {
+      if (NON_HIERARCHY_TYPES.has(prim.type)) return false;
+      return prim.isMesh || prim.isXformable;
+    };
+    const kept = prims.filter(isKept);
+    // Stable parent-before-child: ascending depth, then path for tiebreak.
+    kept.sort((a, b) => depthOfPath(a.path) - depthOfPath(b.path) || a.path.localeCompare(b.path));
 
-    for (let index = 0; index < meshPrims.length; index += 1) {
-      const prim = meshPrims[index];
-      currentMeshProgress = 0.28 + (meshPrims.length > 0 ? (index / meshPrims.length) * 0.48 : 0);
-      report({
-        label: "Building USDZ meshes",
-        detail: `${index + 1}/${meshPrims.length}: ${prim.path}`,
-        progress: null,
-      });
-      await waitForPaint();
-      const meshData = usd.getMeshData(stageId, prim.path);
-      if (!meshData) continue;
-      if (meshData.points.length === 0 || meshData.faceVertexIndices.length === 0) continue;
+    // We rely on getWorldTransform (the same API the editor has been using
+    // for the legacy flat-import path) rather than getLocalTransform, which
+    // has historically been untested in our WASM build. Local-frame matrices
+    // are derived from `inverse(parentWorld) * primWorld`, so each Object3D
+    // ends up with the correct transform relative to its kept ancestor.
+    const worldMatrices = new Map<string, Matrix4>();
+    const getWorldMatrix = (path: string): Matrix4 => {
+      let cached = worldMatrices.get(path);
+      if (cached) return cached;
+      const wm = usd.getWorldTransform(stageId, path, NaN);
+      cached = wm && wm.length === 16 ? new Matrix4().fromArray(wm) : new Matrix4();
+      worldMatrices.set(path, cached);
+      return cached;
+    };
 
-      const expanded = await expandPerCorner(meshData, (processedFaces, totalFaces) => {
-        report({
-          label: "Triangulating USDZ meshes",
-          detail: `${index + 1}/${meshPrims.length}: ${processedFaces}/${totalFaces} faces`,
-          progress: currentMeshProgress,
-        });
-      });
-      const meshGroup = new Group();
-      meshGroup.name = prim.path;
+    const objectsByPath = new Map<string, Group>();
+    const tmpInverse = new Matrix4();
+    let meshIndex = 0;
 
-      // World transform — bake it into the mesh's matrix
-      const worldM = usd.getWorldTransform(stageId, prim.path, NaN);
-      if (worldM && worldM.length === 16) {
-        const matrix = new Matrix4().fromArray(worldM);
-        meshGroup.applyMatrix4(matrix);
+    for (const prim of kept) {
+      // Walk up to find the nearest already-processed (kept) ancestor.
+      let parentPath = prim.parent;
+      let parentObj: Group = root;
+      let parentWorld: Matrix4 | null = null;
+      while (parentPath && parentPath !== "/" && parentPath !== "") {
+        const existing = objectsByPath.get(parentPath);
+        if (existing) {
+          parentObj = existing;
+          parentWorld = getWorldMatrix(parentPath);
+          break;
+        }
+        const parentPrim = primsByPath.get(parentPath);
+        if (!parentPrim) break;
+        parentPath = parentPrim.parent;
       }
 
-      if (meshData.subsets.length > 0) {
-        // One sub-mesh per GeomSubset
-        for (const subset of meshData.subsets) {
-          const geom = await buildSubsetGeometry(expanded, subset.indices, (processedTriangles, totalTriangles) => {
+      const primWorld = getWorldMatrix(prim.path);
+      const localMatrix = parentWorld
+        ? new Matrix4().multiplyMatrices(tmpInverse.copy(parentWorld).invert(), primWorld)
+        : primWorld.clone();
+
+      const obj = new Group();
+      obj.name = primShortName(prim.path) || prim.path;
+      obj.userData.usdPath = prim.path;
+      obj.userData.usdKind = prim.isMesh ? "mesh" : "xform";
+      // applyMatrix4 premultiplies onto the current (identity) matrix and
+      // decomposes back into position/quaternion/scale automatically.
+      obj.applyMatrix4(localMatrix);
+
+      if (prim.isMesh) {
+        currentMeshProgress = 0.28 + (meshPrims.length > 0 ? (meshIndex / meshPrims.length) * 0.48 : 0);
+        report({
+          label: "Building USDZ meshes",
+          detail: `${meshIndex + 1}/${meshPrims.length}: ${prim.path}`,
+          progress: null,
+        });
+        await waitForPaint();
+        const meshData = usd.getMeshData(stageId, prim.path);
+        if (meshData && meshData.points.length > 0 && meshData.faceVertexIndices.length > 0) {
+          const expanded = await expandPerCorner(meshData, (processedFaces, totalFaces) => {
             report({
-              label: "Building USDZ mesh subsets",
-              detail: `${subset.name}: ${processedTriangles}/${totalTriangles} triangles`,
+              label: "Triangulating USDZ meshes",
+              detail: `${meshIndex + 1}/${meshPrims.length}: ${processedFaces}/${totalFaces} faces`,
               progress: currentMeshProgress,
             });
           });
-          const mat = subset.materialPath
-            ? await resolveMaterial(subset.materialPath)
-            : new MeshPhysicalMaterial({ side: DoubleSide });
-          const mesh = new Mesh(geom, mat);
-          mesh.name = `${prim.path}/${subset.name}`;
-          meshGroup.add(mesh);
+
+          // Track the prim's "primary" material binding so the editor can
+          // link this mesh to a shared MaterialAsset. Prims with subsets
+          // use the first subset's material as a representative; per-subset
+          // material overrides are exposed via `userData.usdMaterialPath`
+          // on each child mesh so the editor's plan builder can split
+          // multi-material prims into per-subset blueprint nodes.
+          let primaryMaterialPath: string | null = null;
+          if (meshData.subsets.length > 0) {
+            for (const subset of meshData.subsets) {
+              const geom = await buildSubsetGeometry(expanded, subset.indices, (processedTriangles, totalTriangles) => {
+                report({
+                  label: "Building USDZ mesh subsets",
+                  detail: `${subset.name}: ${processedTriangles}/${totalTriangles} triangles`,
+                  progress: currentMeshProgress,
+                });
+              });
+              const mat = subset.materialPath
+                ? await resolveMaterial(subset.materialPath)
+                : new MeshPhysicalMaterial({ side: DoubleSide });
+              const mesh = new Mesh(geom, mat);
+              mesh.name = subset.name;
+              mesh.userData.usdSubsetName = subset.name;
+              if (subset.materialPath) {
+                mesh.userData.usdMaterialPath = subset.materialPath;
+                if (!primaryMaterialPath) primaryMaterialPath = subset.materialPath;
+              }
+              obj.add(mesh);
+            }
+          } else {
+            const geom = await buildSubsetGeometry(expanded, null);
+            const matPath = usd.getMaterialBinding(stageId, prim.path);
+            const mat = matPath
+              ? await resolveMaterial(matPath)
+              : new MeshPhysicalMaterial({ side: DoubleSide });
+            const mesh = new Mesh(geom, mat);
+            mesh.name = primShortName(prim.path) || prim.path;
+            if (matPath) {
+              mesh.userData.usdMaterialPath = matPath;
+              primaryMaterialPath = matPath;
+            }
+            obj.add(mesh);
+          }
+          if (primaryMaterialPath) {
+            obj.userData.usdMaterialPath = primaryMaterialPath;
+          }
         }
-      } else {
-        const geom = await buildSubsetGeometry(expanded, null);
-        const matPath = usd.getMaterialBinding(stageId, prim.path);
-        const mat = matPath
-          ? await resolveMaterial(matPath)
-          : new MeshPhysicalMaterial({ side: DoubleSide });
-        const mesh = new Mesh(geom, mat);
-        mesh.name = prim.path;
-        meshGroup.add(mesh);
+
+        report({
+          label: "Building USDZ meshes",
+          detail: `${meshIndex + 1}/${meshPrims.length} mesh${meshPrims.length === 1 ? "" : "es"} built`,
+          progress: 0.28 + (((meshIndex + 1) / meshPrims.length) * 0.48),
+        });
+        meshIndex += 1;
       }
 
-      meshGroups.push({ prim, group: meshGroup });
-      report({
-        label: "Building USDZ meshes",
-        detail: `${index + 1}/${meshPrims.length} mesh${meshPrims.length === 1 ? "" : "es"} built`,
-        progress: 0.28 + (((index + 1) / meshPrims.length) * 0.48),
-      });
+      parentObj.add(obj);
+      objectsByPath.set(prim.path, obj);
     }
 
-    report({
-      label: "Finalizing USDZ model",
-      detail: `${meshGroups.length} mesh group${meshGroups.length === 1 ? "" : "s"} ready`,
-      progress: 0.94,
-    });
-    for (const { group } of meshGroups) root.add(group);
     report({
       label: "Finalizing USDZ model",
       detail: "Preparing model for the editor",
@@ -775,6 +926,129 @@ async function parseUsdzDirect(
     pluginsRegistered = false;
     releaseOpenUSD();
   }
+}
+
+/**
+ * Walk a tagged Group produced by {@link parseUsdz} and derive a flat-tree
+ * plan of nodes to create in the editor blueprint. Skips meshes / subsets
+ * attached as children of kept Object3Ds (those become the rendered mesh
+ * children of a single blueprint model node, not separate blueprint nodes).
+ */
+export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
+  const visit = (object: Object3D): UsdImportPlanNode | null => {
+    const usdPath = object.userData?.usdPath as string | undefined;
+    const usdKind = object.userData?.usdKind as UsdImportPlanNode["kind"] | undefined;
+    if (!usdPath || !usdKind) return null;
+
+    const childPlans: UsdImportPlanNode[] = [];
+    for (const child of object.children) {
+      const childPlan = visit(child);
+      if (childPlan) childPlans.push(childPlan);
+    }
+
+    // For mesh prims with multiple GeomSubsets bound to *different* materials,
+    // split each subset into its own synthetic child plan node so it becomes
+    // an independently editable blueprint node (selectable, movable, linkable
+    // to its own MaterialAsset). The prim itself degrades to an xform-only
+    // container — it carries the prim's local transform and nests the subset
+    // children. Single-material meshes keep the legacy single-node layout.
+    if (usdKind === "mesh") {
+      const directMeshes = object.children.filter(
+        (c): c is Mesh => c instanceof Mesh,
+      );
+      const subsetEntries = directMeshes
+        .map((m) => ({
+          subsetName: m.userData?.usdSubsetName as string | undefined,
+          materialPath: m.userData?.usdMaterialPath as string | undefined,
+          name: m.name,
+        }))
+        .filter((e) => e.subsetName && e.materialPath);
+      const distinctMaterials = new Set(subsetEntries.map((e) => e.materialPath));
+      if (subsetEntries.length > 1 && distinctMaterials.size > 1) {
+        for (const entry of subsetEntries) {
+          childPlans.push({
+            primPath: usdPath,
+            name: entry.name || entry.subsetName || "subset",
+            kind: "mesh",
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            materialPath: entry.materialPath,
+            subsetName: entry.subsetName,
+            children: [],
+          });
+        }
+        return {
+          primPath: usdPath,
+          name: object.name || primShortName(usdPath),
+          kind: "xform",
+          position: { x: object.position.x, y: object.position.y, z: object.position.z },
+          rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
+          scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
+          children: childPlans,
+        };
+      }
+    }
+
+    const materialPath = usdKind === "mesh"
+      ? (object.userData?.usdMaterialPath as string | undefined)
+      : undefined;
+
+    return {
+      primPath: usdPath,
+      name: object.name || primShortName(usdPath),
+      kind: usdKind,
+      position: { x: object.position.x, y: object.position.y, z: object.position.z },
+      rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
+      scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
+      ...(materialPath ? { materialPath } : {}),
+      children: childPlans,
+    };
+  };
+
+  // Skip the root group itself (it represents the whole file, not a USD prim
+  // in the user's hierarchy). Emit its direct kept descendants as roots.
+  const plans: UsdImportPlanNode[] = [];
+  for (const child of group.children) {
+    const plan = visit(child);
+    if (plan) plans.push(plan);
+  }
+  return plans;
+}
+
+function colorToHex(color: { r: number; g: number; b: number }): string {
+  const toHex = (channel: number): string => {
+    const clamped = Math.round(Math.max(0, Math.min(1, channel)) * 255);
+    return clamped.toString(16).padStart(2, "0");
+  };
+  return `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
+}
+
+/**
+ * Walk a tagged Group produced by {@link parseUsdz} and snapshot each unique
+ * UsdPreviewSurface material it references. Used during USDZ import to
+ * register one MaterialAsset per authored material, then link mesh prims
+ * sharing the same material path to the same MaterialAsset id.
+ */
+export function extractUsdMaterialSnapshotsFromGroup(group: Group): UsdMaterialSnapshot[] {
+  const snapshots = new Map<string, UsdMaterialSnapshot>();
+  group.traverse((obj) => {
+    if (!(obj instanceof Mesh)) return;
+    const matPath = obj.userData?.usdMaterialPath as string | undefined;
+    if (!matPath || snapshots.has(matPath)) return;
+    const mat = Array.isArray(obj.material) ? obj.material[0] : obj.material;
+    if (!(mat instanceof MeshPhysicalMaterial)) return;
+    snapshots.set(matPath, {
+      path: matPath,
+      name: primShortName(matPath) || "Material",
+      color: colorToHex(mat.color),
+      roughness: mat.roughness,
+      metalness: mat.metalness,
+      opacity: mat.opacity,
+      emissive: colorToHex(mat.emissive),
+    });
+  });
+  return Array.from(snapshots.values());
 }
 
 // Test/dev: clear the registered-plugins flag so plugins re-register on next call.

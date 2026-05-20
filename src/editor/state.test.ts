@@ -568,6 +568,131 @@ describe("EditorStore", () => {
     expect(store.getNodesUsingModelAsset(firstId).map((entry) => entry.id)).toEqual([nodeId]);
   });
 
+  it("explodes a USDZ import plan into a tree of editable blueprint nodes", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const modelId = store.addModelAsset({
+      id: "drone-model",
+      name: "Drone.usdz",
+      mimeType: "model/vnd.usdz+zip",
+      src: "data:model/vnd.usdz+zip;base64,ZHJvbmU=",
+      format: "usdz",
+      source: "imported",
+    });
+
+    const rootId = store.insertModelImportPlan(modelId, [
+      {
+        name: "Body",
+        kind: "xform",
+        position: { x: 0, y: 1, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        children: [
+          {
+            name: "Hull",
+            kind: "mesh",
+            primPath: "/Drone/Body/Hull",
+            position: { x: 0, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            children: [],
+          },
+          {
+            name: "PropellerFL",
+            kind: "mesh",
+            primPath: "/Drone/Body/PropellerFL",
+            position: { x: 0.3, y: 0, z: 0.3 },
+            rotation: { x: 0, y: 0.5, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            children: [],
+          },
+        ],
+      },
+    ], ROOT_NODE_ID);
+
+    expect(rootId).toBeTruthy();
+    const wrapper = store.getNode(rootId!);
+    if (!wrapper || wrapper.type !== "group") throw new Error("Expected wrapper group");
+    expect(wrapper.name).toBe("Drone");
+
+    const wrapperChildren = store.blueprint.nodes.filter((n) => n.parentId === rootId);
+    expect(wrapperChildren).toHaveLength(1);
+    const body = wrapperChildren[0];
+    if (body.type !== "group") throw new Error("Expected Body group");
+    expect(body.name).toBe("Body");
+    expect(body.transform.position).toEqual({ x: 0, y: 1, z: 0 });
+
+    const bodyChildren = store.blueprint.nodes.filter((n) => n.parentId === body.id);
+    expect(bodyChildren).toHaveLength(2);
+
+    const hull = bodyChildren.find((n) => n.name === "Hull");
+    if (!hull || hull.type !== "model") throw new Error("Expected Hull model node");
+    expect(hull.modelId).toBe(modelId);
+    expect(hull.primPath).toBe("/Drone/Body/Hull");
+
+    const prop = bodyChildren.find((n) => n.name === "PropellerFL");
+    if (!prop || prop.type !== "model") throw new Error("Expected PropellerFL model node");
+    expect(prop.modelId).toBe(modelId);
+    expect(prop.primPath).toBe("/Drone/Body/PropellerFL");
+    expect(prop.transform.position).toEqual({ x: 0.3, y: 0, z: 0.3 });
+    expect(prop.transform.rotation).toEqual({ x: 0, y: 0.5, z: 0 });
+  });
+
+  it("wraps multi-root USDZ import plans in a synthetic group named after the asset", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const modelId = store.addModelAsset({
+      id: "scene-model",
+      name: "City Scene.usdz",
+      mimeType: "model/vnd.usdz+zip",
+      src: "data:model/vnd.usdz+zip;base64,Y2l0eQ==",
+      format: "usdz",
+      source: "imported",
+    });
+
+    const rootId = store.insertModelImportPlan(modelId, [
+      {
+        name: "Tower",
+        kind: "mesh",
+        primPath: "/Tower",
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        children: [],
+      },
+      {
+        name: "Ground",
+        kind: "mesh",
+        primPath: "/Ground",
+        position: { x: 0, y: -1, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        children: [],
+      },
+    ], ROOT_NODE_ID);
+
+    expect(rootId).toBeTruthy();
+    const wrapper = store.getNode(rootId!);
+    if (!wrapper || wrapper.type !== "group") throw new Error("Expected wrapper group");
+    expect(wrapper.name).toBe("City Scene");
+    const children = store.blueprint.nodes.filter((n) => n.parentId === rootId);
+    expect(children.map((n) => n.name)).toEqual(["Tower", "Ground"]);
+  });
+
+  it("returns null when insertModelImportPlan targets an unknown asset or receives an empty plan", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    expect(store.insertModelImportPlan("missing-asset", [
+      { name: "X", kind: "mesh", primPath: "/X", position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, children: [] },
+    ], ROOT_NODE_ID)).toBeNull();
+
+    const modelId = store.addModelAsset({
+      id: "empty-model",
+      name: "Empty.usdz",
+      mimeType: "model/vnd.usdz+zip",
+      src: "data:model/vnd.usdz+zip;base64,ZW1wdHk=",
+      format: "usdz",
+    });
+    expect(store.insertModelImportPlan(modelId, [], ROOT_NODE_ID)).toBeNull();
+  });
+
   it("removes imported model assets when their last model node is deleted", () => {
     const store = new EditorStore(createDefaultBlueprint());
     const modelId = store.addModelAsset({

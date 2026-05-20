@@ -164,6 +164,24 @@ function buildStructureNodeByIndex(object: Object3D, indexPath: string): ModelAs
 }
 
 /**
+ * Walk a tagged Group produced by the OpenUSD parser and return the
+ * Object3D representing the given USD prim path (matched against
+ * `userData.usdPath`). Returns `null` when no descendant carries the
+ * requested tag — typically because the model was re-parsed with a
+ * different tree shape or it isn't an OpenUSD-parsed model.
+ */
+export function findObjectByUsdPath(root: Object3D, usdPath: string): Object3D | null {
+  if (root.userData?.usdPath === usdPath) {
+    return root;
+  }
+  for (const child of root.children) {
+    const found = findObjectByUsdPath(child, usdPath);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
  * Walk a cloned Group by index path (the canonical part ID format)
  * and return the matching Object3D, or undefined if the path doesn't
  * resolve (e.g. the model's tree shape changed since the structure

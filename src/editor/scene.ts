@@ -7,7 +7,7 @@ import {
   BasicDepthPacking,
   Box3,
   BoxGeometry,
-  Box3Helper,
+  BufferGeometry,
   CapsuleGeometry,
   Color,
   ConeGeometry,
@@ -15,10 +15,13 @@ import {
   DirectionalLight,
   DoubleSide,
   DodecahedronGeometry,
+  EdgesGeometry,
   FrontSide,
   Group,
   HemisphereLight,
   IcosahedronGeometry,
+  LineBasicMaterial,
+  LineSegments,
   LinearToneMapping,
   Mesh,
   Material,
@@ -77,7 +80,7 @@ import {
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { tryDecodeDataUrl } from "./modelBuffer";
-import { buildStructureFromGroup, findObjectByIndexPath } from "./modelStructure";
+import { buildStructureFromGroup, findObjectByIndexPath, findObjectByUsdPath } from "./modelStructure";
 import { runTask } from "./react/hooks/useAsyncTask";
 import { EditorStore } from "./state";
 import type {
@@ -183,6 +186,166 @@ function disposeObjectResources(
       disposedMaterials.add(material);
     }
   });
+}
+
+/**
+ * Apply the *scalar/color* fields of a MaterialSpec onto an already-built
+ * Material instance (typically a clone of a USD-parsed `MeshPhysicalMaterial`).
+ * Used by primPath ModelNodes so the user can edit color/roughness/metalness/
+ * etc. via Inspector while keeping the textures the OpenUSD parser baked onto
+ * the source material. Properties not exposed in the spec are left untouched.
+ */
+function applyMaterialSpecOverrides(material: Material, spec: MaterialSpec): void {
+  const mat = material as unknown as Record<string, unknown> & {
+    color?: Color;
+    emissive?: Color;
+  };
+  if (mat.color && typeof mat.color.set === "function") {
+    mat.color.set(spec.color);
+  }
+  if (mat.emissive && typeof mat.emissive.set === "function") {
+    mat.emissive.set(spec.emissive);
+  }
+  if ("emissiveIntensity" in mat) mat.emissiveIntensity = spec.emissiveIntensity;
+  if ("roughness" in mat) mat.roughness = spec.roughness;
+  if ("metalness" in mat) mat.metalness = spec.metalness;
+  mat.opacity = spec.opacity;
+  mat.transparent = spec.transparent;
+  mat.alphaTest = spec.alphaTest;
+  mat.visible = spec.visible;
+  mat.depthTest = spec.depthTest;
+  mat.depthWrite = spec.depthWrite;
+  mat.colorWrite = spec.colorWrite;
+  mat.dithering = spec.dithering;
+  mat.toneMapped = spec.toneMapped;
+  if ("wireframe" in mat) mat.wireframe = spec.wireframe;
+  material.side = resolveMaterialSide(spec.side);
+  material.needsUpdate = true;
+}
+
+/**
+ * Texture slots stripped while the editor is in "solid" view. Covers
+ * MeshStandardMaterial + every extension on MeshPhysicalMaterial. Listed
+ * explicitly rather than enumerated via `for…in` so we never accidentally
+ * walk past Material.userData / Material.uuid and so the round-trip is
+ * deterministic.
+ */
+const SOLID_STRIPPED_TEXTURE_KEYS = [
+  "map",
+  "normalMap",
+  "roughnessMap",
+  "metalnessMap",
+  "aoMap",
+  "emissiveMap",
+  "alphaMap",
+  "bumpMap",
+  "displacementMap",
+  "lightMap",
+  "envMap",
+  "specularColorMap",
+  "specularIntensityMap",
+  "clearcoatMap",
+  "clearcoatNormalMap",
+  "clearcoatRoughnessMap",
+  "sheenColorMap",
+  "sheenRoughnessMap",
+  "transmissionMap",
+  "thicknessMap",
+  "iridescenceMap",
+  "iridescenceThicknessMap",
+  "anisotropyMap",
+] as const;
+
+const SOLID_STASH_KEY = "__solidStash";
+
+interface SolidStash {
+  textures: Partial<Record<typeof SOLID_STRIPPED_TEXTURE_KEYS[number], Texture | null>>;
+}
+
+function isLiveTexture(value: unknown): value is Texture {
+  return !!value && typeof value === "object" && (value as { isTexture?: boolean }).isTexture === true;
+}
+
+/**
+ * Blender-like solid mode: while in solid view, every Material instance has
+ * its texture map slots nulled (so the GPU never uploads them) and the live
+ * Texture refs stashed on userData. Switching back to rendered/wireframe
+ * restores them.
+ *
+ * Important: do NOT rely on the presence of `userData[SOLID_STASH_KEY]` as
+ * a "this material is already in solid" flag. When Three.js's `Material.copy`
+ * clones a material (via `.clone()`), it deep-clones userData with
+ * `JSON.parse(JSON.stringify(source.userData))` — which calls each Texture's
+ * `.toJSON()` and replaces the live Texture refs in our stash with serialised
+ * metadata. The cloned material then carries a `__solidStash` key whose
+ * contents are useless plain objects, yet the live map slots are also copied
+ * over (Material.copy copies them by reference). So a "stash present" clone
+ * may still have live textures we need to strip. Always inspect the actual
+ * map slots and only treat values with `.isTexture === true` as restorable.
+ */
+function applySolidShading(materialOrList: Material | Material[] | null | undefined, solid: boolean): void {
+  if (!materialOrList) return;
+  if (Array.isArray(materialOrList)) {
+    for (const m of materialOrList) applySolidShading(m, solid);
+    return;
+  }
+  const material = materialOrList;
+  const indexed = material as unknown as Record<string, Texture | null | undefined>;
+  const userData = material.userData as Record<string, unknown>;
+  const existing = userData[SOLID_STASH_KEY] as SolidStash | undefined;
+
+  if (solid) {
+    const captured: SolidStash["textures"] = {};
+    let stripped = false;
+    for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
+      const value = indexed[key];
+      if (isLiveTexture(value)) {
+        captured[key] = value;
+        indexed[key] = null;
+        stripped = true;
+      } else if (value !== null && value !== undefined) {
+        // Non-Texture leftover in a map slot (e.g. JSON-cloned metadata
+        // from a previous round trip). Null it so it doesn't render.
+        indexed[key] = null;
+        stripped = true;
+      }
+    }
+    if (stripped) {
+      // Merge in any still-valid Texture entries from a prior stash that we
+      // didn't re-capture this round, so successive solid passes accumulate
+      // instead of overwriting (e.g. when only some slots had been wired up
+      // at the previous pass and more textures arrived since).
+      if (existing) {
+        for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
+          if (key in captured) continue;
+          const prior = existing.textures[key];
+          if (isLiveTexture(prior)) {
+            captured[key] = prior;
+          }
+        }
+      }
+      userData[SOLID_STASH_KEY] = { textures: captured } satisfies SolidStash;
+      material.needsUpdate = true;
+    }
+    // If we stripped nothing this round, do NOT touch any existing stash:
+    // that's almost always the legitimate "already-stripped" state from a
+    // previous pass (maps null + stash carrying the real Texture refs) which
+    // we need to keep intact so a later switch to rendered/wireframe can
+    // restore the textures. Deleting it here was the regression that left
+    // certain meshes stuck in solid mode until the model rebuilt.
+    return;
+  }
+
+  if (!existing) return;
+  for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
+    if (!(key in existing.textures)) continue;
+    const stashed = existing.textures[key];
+    // Only restore real Texture instances. Anything else is JSON-serialised
+    // metadata from a Material.copy round-trip and can't be used as a map.
+    indexed[key] = isLiveTexture(stashed) ? stashed : null;
+  }
+  delete userData[SOLID_STASH_KEY];
+  material.needsUpdate = true;
 }
 
 function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialSpec): Material {
@@ -364,7 +527,24 @@ export class SceneEditor {
   private mainLight: DirectionalLight | null = null;
   private hemisphereLight: HemisphereLight | null = null;
   private ambientLight: AmbientLight | null = null;
-  private selectionHelper: Box3Helper | null = null;
+  // Light-weight Blender-like selection outline: per-mesh EdgesGeometry drawn
+  // as LineSegments in light purple. Lives at the scene root (not inside
+  // viewportRoot) so picking and view-mode passes ignore it. Edge geometries
+  // are cached per source BufferGeometry — only the LineSegments wrappers are
+  // recreated when selection changes; geometry is reused.
+  private readonly selectionOutlineRoot = new Group();
+  private readonly selectionOutlineMaterial = new LineBasicMaterial({
+    color: 0xc4b5fd,
+    transparent: true,
+    opacity: 0.95,
+    depthTest: false,
+    toneMapped: false,
+  });
+  private readonly edgesGeometryCache = new WeakMap<BufferGeometry, EdgesGeometry>();
+  // Each entry pairs the rendered outline line with the source Mesh it traces
+  // so we can sync matrices on every frame after the mesh's world transform
+  // changes (animation playback, gizmo drag, parent re-rebuild).
+  private selectionOutlines: Array<{ line: LineSegments; source: Mesh }> = [];
   private selectionVisualsSuppressed = false;
   private currentMode: ToolMode = "select";
   private currentGizmoMode: GizmoMode = "translate";
@@ -473,6 +653,10 @@ export class SceneEditor {
     this.scene.add(this.infiniteGrid);
     this.scene.add(this.viewportRoot);
     this.scene.add(this.transformHelper);
+    // Render selection outlines AFTER everything else so they sit on top
+    // of any mesh they trace, regardless of depth ordering quirks.
+    this.selectionOutlineRoot.renderOrder = 999;
+    this.scene.add(this.selectionOutlineRoot);
     this.addHelpers();
     this.bindPointerSelection();
     window.addEventListener("keydown", this.handleWindowKeyDown);
@@ -668,7 +852,8 @@ export class SceneEditor {
     this.clearModelGroupCache();
     this.clearTextureCache();
     this.clearHdrEnvironmentCache();
-    this.selectionHelper?.removeFromParent();
+    this.clearSelectionOutlines();
+    this.selectionOutlineMaterial.dispose();
     this.infiniteGrid.geometry.dispose();
     this.infiniteGrid.material.dispose();
     this.renderer.dispose();
@@ -761,6 +946,10 @@ export class SceneEditor {
 
     if (change.reason === "view") {
       this.updateViewMode();
+      // Solid mode also suppresses any user-loaded HDR env back to the
+      // neutral fallback; rendered/wireframe restore it. Re-apply env here
+      // so toggling the view mode re-evaluates which env to bind.
+      void this.applyEnvironmentSettings();
       return;
     }
 
@@ -790,6 +979,7 @@ export class SceneEditor {
     const viewMode = this.store.viewMode;
     const isRendered = viewMode === "rendered";
     const isWireframe = viewMode === "wireframe";
+    const isSolid = viewMode === "solid";
 
     if (this.mainLight) {
       this.mainLight.castShadow = isRendered && this.store.sceneSettings.shadows.enabled;
@@ -806,8 +996,61 @@ export class SceneEditor {
         if (meshMaterial && !Array.isArray(meshMaterial) && "wireframe" in meshMaterial) {
           (meshMaterial as { wireframe: boolean }).wireframe = isWireframe || Boolean(material?.wireframe);
         }
+        applySolidShading(meshMaterial as Material | Material[] | null | undefined, isSolid);
       }
     });
+
+    if (isSolid) {
+      this.warnAboutUnstrippedMaterials();
+    }
+  }
+
+  /**
+   * Diagnostic: after a solid-mode pass, walk viewportRoot once more looking
+   * for any Mesh whose material still carries a live Texture in a known map
+   * slot. Logs a single console group per offending mesh so we can tell which
+   * materials are escaping `applySolidShading`. Kept opt-in via a dev flag on
+   * window so the warn doesn't fire in production once we've identified and
+   * patched the offending code path.
+   */
+  private warnAboutUnstrippedMaterials(): void {
+    const globalAny = globalThis as { __forgeDebugSolid?: boolean };
+    if (!globalAny.__forgeDebugSolid) return;
+    const offenders: Array<{ nodeId: string | null; subsetName?: string; primPath?: string; liveSlots: string[]; material: Material }> = [];
+    this.viewportRoot.traverse((object) => {
+      if (!(object instanceof Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const mat of materials) {
+        if (!mat) continue;
+        const indexed = mat as unknown as Record<string, unknown>;
+        const live: string[] = [];
+        for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
+          if (isLiveTexture(indexed[key])) live.push(key);
+        }
+        if (live.length === 0) continue;
+        const nodeId = this.findNodeId(object);
+        const node = nodeId ? this.store.getNode(nodeId) : undefined;
+        offenders.push({
+          nodeId,
+          subsetName: (node && node.type === "model" ? (node as { subsetName?: string }).subsetName : undefined),
+          primPath: (node && node.type === "model" ? (node as { primPath?: string }).primPath : undefined),
+          liveSlots: live,
+          material: mat,
+        });
+      }
+    });
+    if (offenders.length === 0) {
+      console.info("[forge-debug] solid pass clean — no live textures remaining.");
+      return;
+    }
+    console.group(`[forge-debug] ${offenders.length} mesh(es) still carrying live textures after solid pass:`);
+    for (const o of offenders) {
+      console.warn(
+        `node=${o.nodeId ?? "?"}, prim=${o.primPath ?? "-"}, subset=${o.subsetName ?? "-"}, slots=[${o.liveSlots.join(", ")}], material=`,
+        o.material,
+      );
+    }
+    console.groupEnd();
   }
 
   private addHelpers(): void {
@@ -887,6 +1130,15 @@ export class SceneEditor {
     const settings = this.store.sceneSettings;
     const environmentScene = this.scene as Scene & { environmentIntensity?: number };
     environmentScene.environmentIntensity = settings.environment.intensity;
+
+    // Solid mode falls back to the neutral env regardless of the user's HDR
+    // choice, keeping ambient light cheap and consistent while working flat.
+    // The HDR is re-bound when the user switches back to rendered/wireframe.
+    if (this.store.viewMode === "solid") {
+      this.scene.environment = this.neutralEnvironmentTarget.texture;
+      environmentScene.environmentIntensity = 1;
+      return;
+    }
 
     if (settings.environment.type === "none") {
       this.scene.environment = null;
@@ -1291,9 +1543,70 @@ export class SceneEditor {
 
     cacheEntry.promise
       .then((cached) => {
+        // Bail if a later cache replacement has supplanted this promise
+        // (asset re-imported, source bytes changed) — the stale cached Group
+        // would render the wrong asset for the same node.
         if (this.modelGroupCache.get(asset.id)?.promise !== cacheEntry.promise) {
           return;
         }
+        // primPath path: this ModelNode renders ONLY the meshes attached to
+        // the specific USD prim in the cached group (its sibling prims are
+        // rendered by other ModelNodes that share the same modelId). The
+        // prim's own transform was already baked into the blueprint node's
+        // `transform` at import time, so we render the meshes at identity.
+        if (node.primPath) {
+          const prim = findObjectByUsdPath(cached, node.primPath);
+          if (!prim) {
+            wrapper.clear();
+            return;
+          }
+          const meshContainer = new Group();
+          meshContainer.userData.nodeId = node.id;
+          meshContainer.userData.nodeType = node.type;
+          const targetSubset = node.subsetName;
+          for (const child of prim.children) {
+            if (!(child instanceof Mesh)) continue;
+            // When this node is pinned to a specific GeomSubset, skip mesh
+            // children that aren't part of that subset. Sibling subsets are
+            // rendered by their own ModelNodes (one per subset), so each
+            // subset is independently selectable, movable, and bindable to
+            // its own MaterialAsset.
+            if (targetSubset && child.userData?.usdSubsetName !== targetSubset) {
+              continue;
+            }
+            const clonedMesh = child.clone();
+            // Clone the material too so Inspector edits applied below don't
+            // bleed across other prims that share the same parsed material
+            // reference. The MaterialSpec on the node carries the editable
+            // overrides; textures parsed from the USDZ are preserved on the
+            // cloned material instance.
+            const sourceMaterial = clonedMesh.material;
+            if (Array.isArray(sourceMaterial)) {
+              clonedMesh.material = sourceMaterial.map((m) => {
+                const c = m.clone();
+                applyMaterialSpecOverrides(c, node.material);
+                return c;
+              });
+            } else if (sourceMaterial) {
+              const c = sourceMaterial.clone();
+              applyMaterialSpecOverrides(c, node.material);
+              clonedMesh.material = c;
+            }
+            clonedMesh.userData.nodeId = node.id;
+            clonedMesh.userData.nodeType = node.type;
+            clonedMesh.castShadow = true;
+            clonedMesh.receiveShadow = true;
+            meshContainer.add(clonedMesh);
+          }
+          wrapper.clear();
+          wrapper.add(meshContainer);
+          // Async model loads finish AFTER rebuildScene's updateViewMode pass,
+          // so the freshly-attached materials still carry textures. Re-run
+          // updateViewMode so solid mode strips them immediately.
+          this.updateViewMode();
+          return;
+        }
+
         const clone = cached.clone(true);
         tagForNode(clone);
 
@@ -1311,6 +1624,7 @@ export class SceneEditor {
 
         wrapper.clear();
         wrapper.add(clone);
+        this.updateViewMode();
       })
       .catch((error) => {
         console.error("Failed to load model:", error);
@@ -1562,8 +1876,7 @@ export class SceneEditor {
     if (this.selectionVisualsSuppressed) {
       this.transformControls.detach();
       this.transformHelper.visible = false;
-      this.selectionHelper?.removeFromParent();
-      this.selectionHelper = null;
+      this.clearSelectionOutlines();
       this.selectionHelperDirty = false;
       return;
     }
@@ -1693,34 +2006,79 @@ export class SceneEditor {
     return part ? [part] : null;
   }
 
+  private clearSelectionOutlines(): void {
+    if (this.selectionOutlines.length === 0) return;
+    for (const entry of this.selectionOutlines) {
+      this.selectionOutlineRoot.remove(entry.line);
+      // Do NOT dispose the edge geometry — it lives in edgesGeometryCache and
+      // may be reused by a future selection of the same mesh. The shared
+      // material is also retained for the editor lifetime.
+    }
+    this.selectionOutlines.length = 0;
+  }
+
+  private getEdgesGeometry(geometry: BufferGeometry): EdgesGeometry {
+    let cached = this.edgesGeometryCache.get(geometry);
+    if (!cached) {
+      // 15° threshold matches Blender's default "auto smooth" edge angle
+      // closely enough for a wire-style outline that traces silhouettes and
+      // hard creases without dragging in coplanar faces.
+      cached = new EdgesGeometry(geometry, 15);
+      this.edgesGeometryCache.set(geometry, cached);
+    }
+    return cached;
+  }
+
   private updateSelectionHelper(objects: Object3D[]): void {
-    if (!this.computeSelectionBounds(objects)) {
-      this.selectionHelper?.removeFromParent();
-      this.selectionHelper = null;
+    this.clearSelectionOutlines();
+    if (objects.length === 0) {
       this.lastSelectionHelperUpdateAt = performance.now();
       return;
     }
 
-    if (!this.selectionHelper) {
-      this.selectionHelper = new Box3Helper(this.selectionBounds.clone(), 0x6b2ecf);
-      this.scene.add(this.selectionHelper);
-      return;
+    for (const root of objects) {
+      root.updateMatrixWorld(true);
+      root.traverse((child) => {
+        if (!(child instanceof Mesh)) return;
+        if (child.userData?.isShadowReceiver) return;
+        const geometry = child.geometry as BufferGeometry | undefined;
+        if (!geometry) return;
+        const line = new LineSegments(this.getEdgesGeometry(geometry), this.selectionOutlineMaterial);
+        line.matrixAutoUpdate = false;
+        line.matrix.copy(child.matrixWorld);
+        line.renderOrder = 999;
+        // Selection outlines never participate in picking. They live outside
+        // viewportRoot so the raycaster doesn't see them anyway, but make
+        // the intent explicit in case future code walks the scene tree.
+        line.raycast = () => {};
+        this.selectionOutlineRoot.add(line);
+        this.selectionOutlines.push({ line, source: child });
+      });
     }
-
-    this.selectionHelper.box.copy(this.selectionBounds);
     this.lastSelectionHelperUpdateAt = performance.now();
+  }
+
+  private syncSelectionOutlines(): void {
+    for (const entry of this.selectionOutlines) {
+      entry.source.updateMatrixWorld();
+      entry.line.matrix.copy(entry.source.matrixWorld);
+    }
   }
 
   private updateSelectionHelperFromCache(): void {
     if (this.selectedObjects.length === 0) {
-      if (this.selectionHelper) {
-        this.updateSelectionHelper([]);
+      if (this.selectionOutlines.length > 0) {
+        this.clearSelectionOutlines();
       }
       this.selectionHelperDirty = false;
       return;
     }
 
+    // The selection set itself didn't change; just keep outline transforms in
+    // sync with their source meshes (handles gizmo drags, animation playback,
+    // parent rebuilds that re-parent the same Mesh instance).
     if (!this.selectionHelperDirty) {
+      this.syncSelectionOutlines();
       return;
     }
 
@@ -1729,6 +2087,7 @@ export class SceneEditor {
       this.isAnimationPlaying &&
       now - this.lastSelectionHelperUpdateAt < SELECTION_HELPER_PLAYBACK_UPDATE_INTERVAL_MS
     ) {
+      this.syncSelectionOutlines();
       return;
     }
 

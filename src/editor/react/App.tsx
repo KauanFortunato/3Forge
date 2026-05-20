@@ -31,7 +31,9 @@ import {
   getPropertyValue,
   parseInputValue,
 } from "../state";
-import type { AnimationEasePreset, AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset } from "../types";
+import type { UsdImportPlanNode } from "../../lib/openusd/openusdParser";
+import { createMaterialSpec } from "../materials";
+import type { AnimationEasePreset, AnimationKeyframe, AnimationPropertyPath, EditorNode, EditorNodeType, GroupPivotPreset, ImageAsset, ModelImportPlanNode } from "../types";
 import type { ComponentBlueprint } from "../types";
 import type { PropertyApplyReport, PropertyClipboardScope } from "../propertyClipboard";
 import {
@@ -381,6 +383,43 @@ function downloadBlobFile(blob: Blob, fileName: string): void {
   anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function stripFileExtension(fileName: string): string {
+  return fileName.replace(/\.[a-z0-9]+$/i, "").trim();
+}
+
+/**
+ * Translate the parser's USDZ import plan into the editor's ModelImportPlanNode
+ * shape, resolving each mesh-kind entry's USD material path into the freshly
+ * minted MaterialAsset id from the provided lookup so the resulting blueprint
+ * model nodes share materials with the project's Materials panel.
+ */
+function attachMaterialIdsToPlan(
+  plan: UsdImportPlanNode[],
+  materialIdByUsdPath: Map<string, string>,
+): ModelImportPlanNode[] {
+  return plan.map((entry) => {
+    const materialId = entry.kind === "mesh" && entry.materialPath
+      ? materialIdByUsdPath.get(entry.materialPath)
+      : undefined;
+    const result: ModelImportPlanNode = {
+      name: entry.name,
+      kind: entry.kind,
+      position: entry.position,
+      rotation: entry.rotation,
+      scale: entry.scale,
+      primPath: entry.primPath,
+      children: attachMaterialIdsToPlan(entry.children, materialIdByUsdPath),
+    };
+    if (entry.subsetName) {
+      result.subsetName = entry.subsetName;
+    }
+    if (materialId) {
+      result.materialId = materialId;
+    }
+    return result;
+  });
 }
 
 function formatRecentProjectTime(timestamp: number): string {
@@ -1941,6 +1980,7 @@ export function App() {
     setRuntimePanelTab("images");
     setIsAssetsPanelCollapsed(false);
 
+    store.beginHistoryTransaction();
     try {
       let lastImageId: string | null = null;
       for (const file of imageFiles) {
@@ -1957,6 +1997,8 @@ export function App() {
         : `Imported ${imageFiles.length} image assets.`);
     } catch {
       setTransientStatus("Unable to import image.");
+    } finally {
+      store.commitHistoryTransaction("ui");
     }
   }, [setTransientStatus, store]);
 
@@ -1967,6 +2009,13 @@ export function App() {
       return;
     }
 
+    // Wrap the entire multi-file import in a single history transaction. A
+    // USDZ import can call addModelAsset + createMaterial × N + insert...Plan
+    // + addImageAsset × M — without batching, each call clones the whole
+    // blueprint into the undo stack, and the data URL of the just-imported
+    // USDZ is part of every snapshot. One transaction = one Ctrl+Z step
+    // and one snapshot total.
+    store.beginHistoryTransaction();
     try {
       let importedCount = 0;
       let lastNodeId: string | null = null;
@@ -1975,7 +2024,54 @@ export function App() {
         const asset = await runTask(`Importing ${file.name}...`, () => modelFileToAsset(file), { blocking: true });
         const modelId = store.addModelAsset(asset);
         const insertionIndex = target.index === undefined ? undefined : target.index + importedCount;
-        lastNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
+
+        // USDZ: parse once at import time so we can expose every USD prim as
+        // an editable blueprint node (Xform → group, Mesh → model+primPath).
+        // Materials are extracted in the same pass and registered as shared
+        // MaterialAssets; multiple prims that author the same UsdPreviewSurface
+        // resolve to a single MaterialAsset id, so editing it in the Materials
+        // panel propagates to every part referencing it.
+        let insertedNodeId: string | null = null;
+        if (asset.format === "usdz") {
+          try {
+            const buffer = await file.arrayBuffer();
+            const { parseUsdz, buildUsdImportPlanFromGroup, extractUsdMaterialSnapshotsFromGroup } = await import("../../lib/openusd/openusdParser");
+            const group = await runTask(`Reading ${file.name} hierarchy...`, () => parseUsdz(buffer, asset.name ?? "asset.usdz"), { blocking: true });
+            const snapshots = extractUsdMaterialSnapshotsFromGroup(group);
+            const materialIdByUsdPath = new Map<string, string>();
+            const assetStem = stripFileExtension(asset.name ?? "asset");
+            for (const snapshot of snapshots) {
+              const spec = {
+                ...createMaterialSpec(),
+                color: snapshot.color,
+                emissive: snapshot.emissive,
+                roughness: snapshot.roughness,
+                metalness: snapshot.metalness,
+                opacity: snapshot.opacity,
+                transparent: snapshot.opacity < 1,
+              };
+              const materialId = store.createMaterial({
+                name: `${assetStem} · ${snapshot.name}`,
+                spec,
+              });
+              materialIdByUsdPath.set(snapshot.path, materialId);
+            }
+            const plan = buildUsdImportPlanFromGroup(group);
+            const enrichedPlan = attachMaterialIdsToPlan(plan, materialIdByUsdPath);
+            if (enrichedPlan.length > 0) {
+              insertedNodeId = store.insertModelImportPlan(modelId, enrichedPlan, target.parentId, insertionIndex);
+            }
+          } catch (err) {
+            console.warn("USDZ hierarchy parse failed; falling back to single ModelNode:", err);
+          }
+        }
+
+        // Non-USDZ formats (or USDZ that failed hierarchical parse) get the
+        // legacy single-ModelNode treatment.
+        if (!insertedNodeId) {
+          insertedNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
+        }
+        lastNodeId = insertedNodeId;
         importedCount += 1;
 
         // For USDZ (a ZIP archive), surface its embedded images as standalone
@@ -2012,6 +2108,11 @@ export function App() {
         : `Imported ${importedCount} models.`);
     } catch (error) {
       setTransientStatus(error instanceof Error ? error.message : "Unable to import model. Use a valid .glb or embedded .gltf file.");
+    } finally {
+      // Commit even on failure — partial state changes still happened, and
+      // the single pre-transaction snapshot is what we want to restore on
+      // Ctrl+Z. If nothing was recorded, commit is a no-op.
+      store.commitHistoryTransaction("ui");
     }
   }, [resolveSelectionInsertTarget, setTransientStatus, store]);
 
@@ -2022,6 +2123,7 @@ export function App() {
       return;
     }
 
+    store.beginHistoryTransaction();
     try {
       let importedCount = 0;
       for (const file of hdrFiles) {
@@ -2035,6 +2137,8 @@ export function App() {
         : `Imported ${importedCount} HDR environments.`);
     } catch (error) {
       setTransientStatus(error instanceof Error ? error.message : "Unable to import HDR. Use a valid .hdr file.");
+    } finally {
+      store.commitHistoryTransaction("ui");
     }
   }, [setTransientStatus, store]);
 

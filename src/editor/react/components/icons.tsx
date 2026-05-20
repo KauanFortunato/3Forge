@@ -262,11 +262,17 @@ export function GroupIcon(props: IconProps) {
 }
 
 export function MeshIcon(props: IconProps) {
+  // Hexagonal mesh triangulated to center — reads as polygon geometry,
+  // visually distinct from the BoxIcon cube.
   return (
     <Ico {...props}>
-      <path d="M12.2 9.4V4.6a1.2 1.2 0 0 0-.6-1.04l-4.2-2.4a1.2 1.2 0 0 0-1.2 0l-4.2 2.4A1.2 1.2 0 0 0 1.4 4.6v4.8a1.2 1.2 0 0 0 .6 1.04l4.2 2.4a1.2 1.2 0 0 0 1.2 0l4.2-2.4a1.2 1.2 0 0 0 .6-1.04z" />
-      <path d="m1.56 4.18 5.44 3.16 5.44-3.16" />
-      <path d="M7 13.24V7.34" />
+      <path d="M7 1.4 12 4.2v5.6L7 12.6 2 9.8V4.2z" />
+      <path d="M7 1.4 7 7" />
+      <path d="M12 4.2 7 7" />
+      <path d="M12 9.8 7 7" />
+      <path d="M7 12.6 7 7" />
+      <path d="M2 9.8 7 7" />
+      <path d="M2 4.2 7 7" />
     </Ico>
   );
 }
@@ -386,6 +392,72 @@ export function PlaneIcon(props: IconProps) {
     <Ico {...props}>
       <path d="M1.6 10.6h10.8" />
       <path d="m2.8 10.6 1.8-5.2h4.8l1.8 5.2" />
+    </Ico>
+  );
+}
+
+export function ConeIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <ellipse cx="7" cy="11.2" rx="4.6" ry="1.4" />
+      <path d="M2.4 11.2 7 1.8l4.6 9.4" />
+    </Ico>
+  );
+}
+
+export function CapsuleIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <rect x="3" y="1.6" width="8" height="10.8" rx="4" />
+      <path d="M3 7h8" />
+    </Ico>
+  );
+}
+
+export function RingIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="5.3" />
+      <circle cx="7" cy="7" r="2.4" />
+    </Ico>
+  );
+}
+
+export function TorusIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <ellipse cx="7" cy="7" rx="5.4" ry="3.2" />
+      <ellipse cx="7" cy="7" rx="2.2" ry="1.2" />
+    </Ico>
+  );
+}
+
+export function TorusKnotIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M3.4 4.2c1.8-2.4 5.4-2.4 7.2 0s-1.8 5.6 0 8" />
+      <path d="M10.6 4.2c-1.8-2.4-5.4-2.4-7.2 0s1.8 5.6 0 8" />
+    </Ico>
+  );
+}
+
+export function PolyhedronIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="m7 1.4 5 3v5l-5 3-5-3v-5z" />
+      <path d="m2 4.4 5 3 5-3" />
+      <path d="M7 7.4v5" />
+    </Ico>
+  );
+}
+
+export function ModelIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M2.4 4.6v4.8a1.2 1.2 0 0 0 .6 1.04l3.4 1.96a1.2 1.2 0 0 0 1.2 0l3.4-1.96a1.2 1.2 0 0 0 .6-1.04V4.6a1.2 1.2 0 0 0-.6-1.04L7.6 1.6a1.2 1.2 0 0 0-1.2 0L3 3.56A1.2 1.2 0 0 0 2.4 4.6Z" />
+      <path d="m2.5 4.3 4.5 2.6 4.5-2.6" />
+      <path d="M7 6.9v5.5" />
+      <path d="m4.8 2.7 4.4 2.6" />
     </Ico>
   );
 }
