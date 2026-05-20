@@ -1980,6 +1980,7 @@ export function App() {
     setRuntimePanelTab("images");
     setIsAssetsPanelCollapsed(false);
 
+    store.beginHistoryTransaction();
     try {
       let lastImageId: string | null = null;
       for (const file of imageFiles) {
@@ -1996,6 +1997,8 @@ export function App() {
         : `Imported ${imageFiles.length} image assets.`);
     } catch {
       setTransientStatus("Unable to import image.");
+    } finally {
+      store.commitHistoryTransaction("ui");
     }
   }, [setTransientStatus, store]);
 
@@ -2006,6 +2009,13 @@ export function App() {
       return;
     }
 
+    // Wrap the entire multi-file import in a single history transaction. A
+    // USDZ import can call addModelAsset + createMaterial × N + insert...Plan
+    // + addImageAsset × M — without batching, each call clones the whole
+    // blueprint into the undo stack, and the data URL of the just-imported
+    // USDZ is part of every snapshot. One transaction = one Ctrl+Z step
+    // and one snapshot total.
+    store.beginHistoryTransaction();
     try {
       let importedCount = 0;
       let lastNodeId: string | null = null;
@@ -2098,6 +2108,11 @@ export function App() {
         : `Imported ${importedCount} models.`);
     } catch (error) {
       setTransientStatus(error instanceof Error ? error.message : "Unable to import model. Use a valid .glb or embedded .gltf file.");
+    } finally {
+      // Commit even on failure — partial state changes still happened, and
+      // the single pre-transaction snapshot is what we want to restore on
+      // Ctrl+Z. If nothing was recorded, commit is a no-op.
+      store.commitHistoryTransaction("ui");
     }
   }, [resolveSelectionInsertTarget, setTransientStatus, store]);
 
@@ -2108,6 +2123,7 @@ export function App() {
       return;
     }
 
+    store.beginHistoryTransaction();
     try {
       let importedCount = 0;
       for (const file of hdrFiles) {
@@ -2121,6 +2137,8 @@ export function App() {
         : `Imported ${importedCount} HDR environments.`);
     } catch (error) {
       setTransientStatus(error instanceof Error ? error.message : "Unable to import HDR. Use a valid .hdr file.");
+    } finally {
+      store.commitHistoryTransaction("ui");
     }
   }, [setTransientStatus, store]);
 
