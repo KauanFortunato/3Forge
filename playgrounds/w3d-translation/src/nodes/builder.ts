@@ -92,7 +92,36 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: s
   // their own pick up this group's maskIds as their effective stencil source.
   const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
   for (const c of node.children) g.add(buildNode(c, ctx, passToChildren));
+  applyFlowLayout(g, node);
   return g;
+}
+
+/**
+ * Phase 2A — R3 FlowChildren horizontal distribution for the PLAYERS group.
+ *
+ * Rollout guard: this is intentionally scoped by node name to PLAYERS only.
+ * The W3D <GeometryOptions FlowChildren/LeadingSpace/Direction> is parsed
+ * generically on every Group, but the runtime layout below is restricted to
+ * PLAYERS until other axes (Direction="YMinus" used by BENCH_LIST) are
+ * validated. Phase 2F removes this gate.
+ *
+ * Formula: child.position.x += (n - 1 - i) * leadingSpace, where i is the
+ * child's index in document order. With negative LeadingSpace (-1.26 for
+ * PLAYERS), the first child gets the most negative offset and the last child
+ * sits at the group origin (offset 0) — matching the R3 visual order
+ * left → right of PLAYER_01..PLAYER_05.
+ *
+ * Additive: any X already authored on the child is preserved.
+ */
+function applyFlowLayout(group: Group, node: W3DGroupData): void {
+  if (node.name !== "PLAYERS") return; // TEMP gate — see Phase 2F
+  if (!node.flow?.children) return;
+  const spacing = node.flow.leadingSpace ?? 0;
+  if (spacing === 0) return;
+  const n = group.children.length;
+  group.children.forEach((child, i) => {
+    child.position.x += (n - 1 - i) * spacing;
+  });
 }
 
 function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {

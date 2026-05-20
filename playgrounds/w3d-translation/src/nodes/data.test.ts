@@ -276,4 +276,42 @@ describe("parseGroup and recursion", () => {
     const { roots } = parseNodes(wrapInScene(`<Group Id="g" Name="x" MaskId="m1;"/>`));
     expect((roots[0] as W3DGroupData).maskIds).toEqual(["m1"]);
   });
+
+  test("Phase 2A: Group GeometryOptions FlowChildren=True LeadingSpace=-1.26 → flow set", () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <Group Id="g" Name="PLAYERS">
+        <GeometryOptions LeadingSpace="-1.26" FlowChildren="True"/>
+      </Group>
+    `));
+    const g = roots[0] as W3DGroupData;
+    expect(g.flow).toBeDefined();
+    expect(g.flow?.children).toBe(true);
+    expect(g.flow?.leadingSpace).toBeCloseTo(-1.26, 5);
+    expect(g.flow?.direction).toBeUndefined();
+  });
+
+  test("Phase 2A: Direction attribute is preserved generically (e.g. YMinus)", () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <Group Id="g" Name="BENCH_LIST">
+        <GeometryOptions FlowChildren="True" LeadingSpace="-0.084" Direction="YMinus"/>
+      </Group>
+    `));
+    const g = roots[0] as W3DGroupData;
+    expect(g.flow?.direction).toBe("YMinus");
+    expect(g.flow?.leadingSpace).toBeCloseTo(-0.084, 5);
+  });
+
+  test("Phase 2A: Group without GeometryOptions → flow undefined", () => {
+    const { roots } = parseNodes(wrapInScene(`<Group Id="g" Name="x"/>`));
+    expect((roots[0] as W3DGroupData).flow).toBeUndefined();
+  });
+
+  test("Phase 2A: Group with GeometryOptions but no flow attrs → flow undefined", () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <Group Id="g" Name="x">
+        <GeometryOptions/>
+      </Group>
+    `));
+    expect((roots[0] as W3DGroupData).flow).toBeUndefined();
+  });
 });

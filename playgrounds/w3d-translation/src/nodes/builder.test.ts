@@ -677,6 +677,94 @@ describe("builder — BuildContext", () => {
     expect((root.children[1] as Mesh).renderOrder).toBe(10);
   });
 
+  test("Phase 2A: PLAYERS with 5 children + leadingSpace=-1.26 → reverse-index distribution", () => {
+    // Expected per R3: PLAYER_01 leftmost (most negative X), PLAYER_05 at origin.
+    const p1 = groupData({ id: "p1", name: "PLAYER_01" });
+    const p2 = groupData({ id: "p2", name: "PLAYER_02" });
+    const p3 = groupData({ id: "p3", name: "PLAYER_03" });
+    const p4 = groupData({ id: "p4", name: "PLAYER_04" });
+    const p5 = groupData({ id: "p5", name: "PLAYER_05" });
+    const players = groupData({
+      id: "players", name: "PLAYERS",
+      flow: { children: true, leadingSpace: -1.26 },
+      children: [p1, p2, p3, p4, p5],
+    });
+    const root = buildNodeTree([players]);
+    const playersGroup = root.children[0] as Group;
+    expect(playersGroup.children[0].position.x).toBeCloseTo(-5.04, 5); // PLAYER_01
+    expect(playersGroup.children[1].position.x).toBeCloseTo(-3.78, 5); // PLAYER_02
+    expect(playersGroup.children[2].position.x).toBeCloseTo(-2.52, 5); // PLAYER_03
+    expect(playersGroup.children[3].position.x).toBeCloseTo(-1.26, 5); // PLAYER_04
+    expect(playersGroup.children[4].position.x).toBeCloseTo(0, 5);      // PLAYER_05
+  });
+
+  test("Phase 2A: PLAYERS flow is additive — preserves authored child position.x", () => {
+    const transform = {
+      position: { x: 0.5, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    };
+    const p1 = groupData({ id: "p1", name: "PLAYER_01", transform });
+    const p2 = groupData({ id: "p2", name: "PLAYER_02", transform });
+    const players = groupData({
+      id: "players", name: "PLAYERS",
+      flow: { children: true, leadingSpace: -1.26 },
+      children: [p1, p2],
+    });
+    const root = buildNodeTree([players]);
+    const g = root.children[0] as Group;
+    // n=2 → child[0].x += (2-1-0)*-1.26 = -1.26 → 0.5-1.26 = -0.76
+    // child[1].x += (2-1-1)*-1.26 = 0 → 0.5
+    expect(g.children[0].position.x).toBeCloseTo(0.5 - 1.26, 5);
+    expect(g.children[1].position.x).toBeCloseTo(0.5, 5);
+  });
+
+  test("Phase 2A gate: non-PLAYERS group with flow.children=true is NOT distributed", () => {
+    // BENCH_LIST has the same flow attrs in the scene, but Phase 2A scope is
+    // intentionally limited to the PLAYERS group. Other named groups stay at
+    // their authored child positions until Phase 2F.
+    const c1 = groupData({ id: "c1", name: "CHILD_01" });
+    const c2 = groupData({ id: "c2", name: "CHILD_02" });
+    const bench = groupData({
+      id: "bench", name: "BENCH_LIST",
+      flow: { children: true, leadingSpace: -0.084, direction: "YMinus" },
+      children: [c1, c2],
+    });
+    const root = buildNodeTree([bench]);
+    const g = root.children[0] as Group;
+    expect(g.children[0].position.x).toBe(0);
+    expect(g.children[1].position.x).toBe(0);
+    expect(g.children[0].position.y).toBe(0);
+    expect(g.children[1].position.y).toBe(0);
+  });
+
+  test("Phase 2A: PLAYERS group without flow set is unchanged", () => {
+    const c1 = groupData({ id: "c1", name: "PLAYER_01" });
+    const c2 = groupData({ id: "c2", name: "PLAYER_02" });
+    const players = groupData({
+      id: "players", name: "PLAYERS",
+      children: [c1, c2], // no flow
+    });
+    const root = buildNodeTree([players]);
+    const g = root.children[0] as Group;
+    expect(g.children[0].position.x).toBe(0);
+    expect(g.children[1].position.x).toBe(0);
+  });
+
+  test("Phase 2A regression: PHOTO_MASK_05 keeps authored Size.X=1.55 (not normalized)", () => {
+    const mask = quadData({
+      id: "mask-5", name: "PHOTO_MASK_05", isMask: true,
+      geometry: { alignmentX: "Left", size: { x: 1.55, y: 3 } },
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([mask], ctx);
+    const m = root.children[0] as Mesh;
+    const params = (m.geometry as InstanceType<typeof import("three").PlaneGeometry>).parameters;
+    expect(params.width).toBeCloseTo(1.55, 5);
+    expect(params.height).toBeCloseTo(3, 5);
+  });
+
   test("material.needsUpdate = true when map is applied (version incremented)", () => {
     const bgTex: W3DTextureData = {
       kind: "Texture", id: "bg-id", name: "BG.png", filename: "BG.png", folderPath: "",

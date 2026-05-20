@@ -22,6 +22,15 @@ export type W3DMaskProperties = {
   isInvertedMask: boolean;
 };
 
+export type W3DGroupFlow = {
+  /** R3 GeometryOptions.FlowChildren — when true, R3 distributes the children along the flow axis. */
+  children: boolean;
+  /** R3 GeometryOptions.LeadingSpace — signed step between consecutive children. */
+  leadingSpace?: number;
+  /** R3 GeometryOptions.Direction (e.g. "YMinus") — flow axis hint when present. */
+  direction?: string;
+};
+
 export type W3DGroupData = {
   kind: "Group";
   id: string;
@@ -30,6 +39,12 @@ export type W3DGroupData = {
   displayColor?: string;
   maskIds: string[];
   transform: W3DTransform;
+  /**
+   * Parsed generically for any Group with <GeometryOptions FlowChildren/LeadingSpace/Direction>.
+   * The builder currently applies it only to the PLAYERS group (Phase 2A staging gate);
+   * Phase 2F removes that gate and generalises to all groups.
+   */
+  flow?: W3DGroupFlow;
   children: W3DNodeData[];
   raw?: {
     attributes: Record<string, string>;
@@ -112,9 +127,10 @@ function walkChildren(parent: Element, warnings: string[]): W3DNodeData[] {
 function parseGroup(el: Element, warnings: string[]): W3DGroupData {
   const attrs = readAllAttrs(el);
   const transform = readTransform(el);
+  const flow = readGroupFlow(el);
   const childrenEl = findDirectChild(el, "Children");
   const children = childrenEl ? walkChildren(childrenEl, warnings) : [];
-  return {
+  const group: W3DGroupData = {
     kind: "Group",
     id: attrs.Id ?? "",
     name: attrs.Name ?? "",
@@ -124,6 +140,28 @@ function parseGroup(el: Element, warnings: string[]): W3DGroupData {
     transform,
     children,
   };
+  if (flow) group.flow = flow;
+  return group;
+}
+
+/**
+ * Reads <GeometryOptions FlowChildren/LeadingSpace/Direction> from a Group element.
+ * Generic — does not assume any particular group name. Returns undefined when none
+ * of the flow-related attributes are present.
+ */
+function readGroupFlow(el: Element): W3DGroupFlow | undefined {
+  const go = findDirectChild(el, "GeometryOptions");
+  if (!go) return undefined;
+  const flowAttr = go.getAttribute("FlowChildren");
+  const leadingSpaceAttr = go.getAttribute("LeadingSpace");
+  const directionAttr = go.getAttribute("Direction");
+  if (flowAttr === null && leadingSpaceAttr === null && directionAttr === null) return undefined;
+  const flow: W3DGroupFlow = {
+    children: parseBoolAttr(flowAttr ?? undefined, false),
+  };
+  if (leadingSpaceAttr !== null) flow.leadingSpace = parseNumberAttr(leadingSpaceAttr, 0);
+  if (directionAttr !== null) flow.direction = directionAttr;
+  return flow;
 }
 
 function readFaceMapping(el: Element): {
