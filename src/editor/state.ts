@@ -1459,7 +1459,7 @@ export class EditorStore extends EventTarget {
   private _blueprint: ComponentBlueprint;
   private _selectedNodeId: string;
   private _selectedNodeIds: string[];
-  private _viewMode: ViewMode = "rendered";
+  private _viewMode: ViewMode = "solid";
   private _undoStack: EditorStoreSnapshot[] = [];
   private _redoStack: EditorStoreSnapshot[] = [];
   private _activeHistorySnapshot: EditorStoreSnapshot | null = null;

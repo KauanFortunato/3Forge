@@ -143,6 +143,92 @@ function applyMaterialSpecOverrides(material: Material, spec: MaterialSpec): voi
   material.needsUpdate = true;
 }
 
+/**
+ * Texture slots stripped while the editor is in "solid" view. Covers
+ * MeshStandardMaterial + every extension on MeshPhysicalMaterial. Listed
+ * explicitly rather than enumerated via `for…in` so we never accidentally
+ * walk past Material.userData / Material.uuid and so the round-trip is
+ * deterministic.
+ */
+const SOLID_STRIPPED_TEXTURE_KEYS = [
+  "map",
+  "normalMap",
+  "roughnessMap",
+  "metalnessMap",
+  "aoMap",
+  "emissiveMap",
+  "alphaMap",
+  "bumpMap",
+  "displacementMap",
+  "lightMap",
+  "envMap",
+  "specularColorMap",
+  "specularIntensityMap",
+  "clearcoatMap",
+  "clearcoatNormalMap",
+  "clearcoatRoughnessMap",
+  "sheenColorMap",
+  "sheenRoughnessMap",
+  "transmissionMap",
+  "thicknessMap",
+  "iridescenceMap",
+  "iridescenceThicknessMap",
+  "anisotropyMap",
+] as const;
+
+const SOLID_STASH_KEY = "__solidStash";
+
+interface SolidStash {
+  textures: Partial<Record<typeof SOLID_STRIPPED_TEXTURE_KEYS[number], Texture | null>>;
+}
+
+/**
+ * Blender-like solid mode: while in solid view, every Material instance has
+ * its texture map slots nulled (so the GPU never uploads them) and the
+ * originals stashed on userData. Switching back to rendered/wireframe
+ * restores the maps from the stash. Idempotent — calling this twice with
+ * the same `solid` value is a no-op for a given material.
+ */
+function applySolidShading(materialOrList: Material | Material[] | null | undefined, solid: boolean): void {
+  if (!materialOrList) return;
+  if (Array.isArray(materialOrList)) {
+    for (const m of materialOrList) applySolidShading(m, solid);
+    return;
+  }
+  const material = materialOrList;
+  const indexed = material as unknown as Record<string, Texture | null | undefined>;
+  const userData = material.userData as Record<string, unknown>;
+  const existing = userData[SOLID_STASH_KEY] as SolidStash | undefined;
+
+  if (solid) {
+    if (existing) return;
+    const captured: SolidStash["textures"] = {};
+    let any = false;
+    for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
+      const value = indexed[key];
+      if (value) {
+        captured[key] = value;
+        indexed[key] = null;
+        any = true;
+      }
+    }
+    if (any) {
+      userData[SOLID_STASH_KEY] = { textures: captured } satisfies SolidStash;
+      material.needsUpdate = true;
+    }
+    return;
+  }
+
+  if (!existing) return;
+  for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
+    if (key in existing.textures) {
+      indexed[key] = existing.textures[key] ?? null;
+    }
+  }
+  delete userData[SOLID_STASH_KEY];
+  material.needsUpdate = true;
+}
+
 function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialSpec): Material {
   switch (spec.type) {
     case "basic":
@@ -674,6 +760,10 @@ export class SceneEditor {
 
     if (change.reason === "view") {
       this.updateViewMode();
+      // Solid mode also suppresses any user-loaded HDR env back to the
+      // neutral fallback; rendered/wireframe restore it. Re-apply env here
+      // so toggling the view mode re-evaluates which env to bind.
+      void this.applyEnvironmentSettings();
       return;
     }
 
@@ -703,6 +793,7 @@ export class SceneEditor {
     const viewMode = this.store.viewMode;
     const isRendered = viewMode === "rendered";
     const isWireframe = viewMode === "wireframe";
+    const isSolid = viewMode === "solid";
 
     if (this.mainLight) {
       this.mainLight.castShadow = isRendered && this.store.sceneSettings.shadows.enabled;
@@ -719,6 +810,7 @@ export class SceneEditor {
         if (meshMaterial && !Array.isArray(meshMaterial) && "wireframe" in meshMaterial) {
           (meshMaterial as { wireframe: boolean }).wireframe = isWireframe || Boolean(material?.wireframe);
         }
+        applySolidShading(meshMaterial as Material | Material[] | null | undefined, isSolid);
       }
     });
   }
@@ -800,6 +892,15 @@ export class SceneEditor {
     const settings = this.store.sceneSettings;
     const environmentScene = this.scene as Scene & { environmentIntensity?: number };
     environmentScene.environmentIntensity = settings.environment.intensity;
+
+    // Solid mode falls back to the neutral env regardless of the user's HDR
+    // choice, keeping ambient light cheap and consistent while working flat.
+    // The HDR is re-bound when the user switches back to rendered/wireframe.
+    if (this.store.viewMode === "solid") {
+      this.scene.environment = this.neutralEnvironmentTarget.texture;
+      environmentScene.environmentIntensity = 1;
+      return;
+    }
 
     if (settings.environment.type !== "hdr" || !settings.environment.hdrAssetId) {
       this.scene.environment = this.neutralEnvironmentTarget.texture;
@@ -1244,6 +1345,10 @@ export class SceneEditor {
           }
           wrapper.clear();
           wrapper.add(meshContainer);
+          // Async model loads finish AFTER rebuildScene's updateViewMode pass,
+          // so the freshly-attached materials still carry textures. Re-run
+          // updateViewMode so solid mode strips them immediately.
+          this.updateViewMode();
           return;
         }
 
@@ -1264,6 +1369,7 @@ export class SceneEditor {
 
         wrapper.clear();
         wrapper.add(clone);
+        this.updateViewMode();
       })
       .catch((error) => {
         console.error("Failed to load model:", error);
