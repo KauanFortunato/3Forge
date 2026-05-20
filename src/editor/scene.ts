@@ -234,14 +234,28 @@ function applySolidShading(materialOrList: Material | Material[] | null | undefi
       }
     }
     if (stripped) {
+      // Merge in any still-valid Texture entries from a prior stash that we
+      // didn't re-capture this round, so successive solid passes accumulate
+      // instead of overwriting (e.g. when only some slots had been wired up
+      // at the previous pass and more textures arrived since).
+      if (existing) {
+        for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
+          if (key in captured) continue;
+          const prior = existing.textures[key];
+          if (isLiveTexture(prior)) {
+            captured[key] = prior;
+          }
+        }
+      }
       userData[SOLID_STASH_KEY] = { textures: captured } satisfies SolidStash;
       material.needsUpdate = true;
-    } else if (existing) {
-      // Nothing live to stash AND a stale stash sits there from a previous
-      // clone round-trip — drop it so future restores don't re-bind junk.
-      delete userData[SOLID_STASH_KEY];
-      material.needsUpdate = true;
     }
+    // If we stripped nothing this round, do NOT touch any existing stash:
+    // that's almost always the legitimate "already-stripped" state from a
+    // previous pass (maps null + stash carrying the real Texture refs) which
+    // we need to keep intact so a later switch to rendered/wireframe can
+    // restore the textures. Deleting it here was the regression that left
+    // certain meshes stuck in solid mode until the model rebuilt.
     return;
   }
 
@@ -863,6 +877,58 @@ export class SceneEditor {
         applySolidShading(meshMaterial as Material | Material[] | null | undefined, isSolid);
       }
     });
+
+    if (isSolid) {
+      this.warnAboutUnstrippedMaterials();
+    }
+  }
+
+  /**
+   * Diagnostic: after a solid-mode pass, walk viewportRoot once more looking
+   * for any Mesh whose material still carries a live Texture in a known map
+   * slot. Logs a single console group per offending mesh so we can tell which
+   * materials are escaping `applySolidShading`. Kept opt-in via a dev flag on
+   * window so the warn doesn't fire in production once we've identified and
+   * patched the offending code path.
+   */
+  private warnAboutUnstrippedMaterials(): void {
+    const globalAny = globalThis as { __forgeDebugSolid?: boolean };
+    if (!globalAny.__forgeDebugSolid) return;
+    const offenders: Array<{ nodeId: string | null; subsetName?: string; primPath?: string; liveSlots: string[]; material: Material }> = [];
+    this.viewportRoot.traverse((object) => {
+      if (!(object instanceof Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const mat of materials) {
+        if (!mat) continue;
+        const indexed = mat as unknown as Record<string, unknown>;
+        const live: string[] = [];
+        for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
+          if (isLiveTexture(indexed[key])) live.push(key);
+        }
+        if (live.length === 0) continue;
+        const nodeId = this.findNodeId(object);
+        const node = nodeId ? this.store.getNode(nodeId) : undefined;
+        offenders.push({
+          nodeId,
+          subsetName: (node && node.type === "model" ? (node as { subsetName?: string }).subsetName : undefined),
+          primPath: (node && node.type === "model" ? (node as { primPath?: string }).primPath : undefined),
+          liveSlots: live,
+          material: mat,
+        });
+      }
+    });
+    if (offenders.length === 0) {
+      console.info("[forge-debug] solid pass clean — no live textures remaining.");
+      return;
+    }
+    console.group(`[forge-debug] ${offenders.length} mesh(es) still carrying live textures after solid pass:`);
+    for (const o of offenders) {
+      console.warn(
+        `node=${o.nodeId ?? "?"}, prim=${o.primPath ?? "-"}, subset=${o.subsetName ?? "-"}, slots=[${o.liveSlots.join(", ")}], material=`,
+        o.material,
+      );
+    }
+    console.groupEnd();
   }
 
   private addHelpers(): void {
