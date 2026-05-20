@@ -12,6 +12,7 @@ import { parseW3DSceneMetadata } from "../../../src/editor/import/w3d";
 import type { ComponentBlueprint } from "../../../src/editor/types";
 import { parseNodes, type W3DNodeData } from "./nodes/data";
 import { parseResources, type W3DResourceRegistry } from "./nodes/resources";
+import { parseTimelinePreviewSnapshot } from "./nodes/timelines";
 
 export interface TranslateOptions {
   onWarn?: (msg: string) => void;
@@ -37,6 +38,13 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
   const nodesResult = parseNodes(xml);
   for (const w of nodesResult.warnings) warn(w);
 
+  // Phase 2G — evaluate animated properties at the selected timeline's
+  // PreviewMarker and override the corresponding static <Quad> attributes on
+  // the parsed tree. Only Alpha is evaluated for now; other animated
+  // properties stay at their authored static value until needed.
+  const previewSnapshot = parseTimelinePreviewSnapshot(xml);
+  applyAlphaSnapshot(nodesResult.roots, previewSnapshot.alphaByControllableId);
+
   const resourcesResult = parseResources(xml);
   for (const w of resourcesResult.warnings) warn(w);
 
@@ -46,4 +54,20 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
     resources: resourcesResult.registry,
     warnings,
   };
+}
+
+/**
+ * Walk the parsed Quad tree and replace each Quad.alpha with the timeline-
+ * evaluated value, when one exists for that node's GUID. Operates in place.
+ */
+function applyAlphaSnapshot(roots: W3DNodeData[], alphaMap: Map<string, number>): void {
+  if (alphaMap.size === 0) return;
+  const walk = (n: W3DNodeData): void => {
+    if (n.kind === "Quad") {
+      const a = alphaMap.get(n.id);
+      if (a !== undefined) n.alpha = a;
+    }
+    for (const c of n.children) walk(c);
+  };
+  for (const r of roots) walk(r);
 }
