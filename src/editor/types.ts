@@ -230,7 +230,7 @@ export type SceneShadowType = "basic" | "pcf" | "pcfSoft";
 export interface SceneSettings {
   backgroundColor: string;
   environment: {
-    type: "none" | "hdr";
+    type: "none" | "default" | "hdr";
     hdrAssetId: string | null;
     intensity: number;
   };

@@ -29,3 +29,7 @@ export function loadOpenUSD() {
 
   return openUsdPromise;
 }
+
+export function releaseOpenUSD(): void {
+  openUsdPromise = null;
+}

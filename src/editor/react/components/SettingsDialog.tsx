@@ -289,7 +289,7 @@ function SceneSettingsPanel({
       <div className="settings-summary" aria-label="Scene settings summary">
         <span className="settings-summary__item">
           <span className="settings-summary__label">ENV</span>
-          <span className="settings-summary__value">{sceneSettings.environment.type === "hdr" ? "HDR" : "None"}</span>
+          <span className="settings-summary__value">{formatEnvironmentType(sceneSettings.environment.type)}</span>
         </span>
         <span className="settings-summary__item">
           <span className="settings-summary__label">EXPOSURE</span>
@@ -319,20 +319,15 @@ function SceneSettingsPanel({
           <span className="settings-field__label">Environment</span>
           <select
             className="settings-field__input"
-            value={sceneSettings.environment.type === "hdr" ? sceneSettings.environment.hdrAssetId ?? "" : ""}
+            value={getEnvironmentSelectValue(sceneSettings)}
             onChange={(event) => {
-              const hdrAssetId = event.currentTarget.value || null;
-              onChangeSceneSettings({
-                environment: {
-                  type: hdrAssetId ? "hdr" : "none",
-                  hdrAssetId,
-                },
-              });
+              onChangeSceneSettings({ environment: parseEnvironmentSelectValue(event.currentTarget.value) });
             }}
           >
-            <option value="">None</option>
+            <option value="none">None</option>
+            <option value="default">Default</option>
             {hdrAssets.map((asset) => (
-              <option key={asset.id} value={asset.id}>{asset.name}</option>
+              <option key={asset.id} value={`hdr:${asset.id}`}>{asset.name}</option>
             ))}
           </select>
         </label>
@@ -520,6 +515,42 @@ function formatToneMapping(type: SceneSettings["toneMapping"]["type"]): string {
     default:
       return "None";
   }
+}
+
+function formatEnvironmentType(type: SceneSettings["environment"]["type"]): string {
+  switch (type) {
+    case "default":
+      return "Default";
+    case "hdr":
+      return "HDR";
+    case "none":
+    default:
+      return "None";
+  }
+}
+
+function getEnvironmentSelectValue(sceneSettings: SceneSettings): string {
+  if (sceneSettings.environment.type === "default") {
+    return "default";
+  }
+  if (sceneSettings.environment.type === "hdr" && sceneSettings.environment.hdrAssetId) {
+    return `hdr:${sceneSettings.environment.hdrAssetId}`;
+  }
+  return "none";
+}
+
+function parseEnvironmentSelectValue(value: string): Partial<SceneSettings["environment"]> {
+  if (value === "default") {
+    return { type: "default", hdrAssetId: null };
+  }
+  if (value.startsWith("hdr:")) {
+    const hdrAssetId = value.slice(4) || null;
+    return {
+      type: hdrAssetId ? "hdr" : "none",
+      hdrAssetId,
+    };
+  }
+  return { type: "none", hdrAssetId: null };
 }
 
 function ToneMappingControl({

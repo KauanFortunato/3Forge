@@ -15,7 +15,7 @@ import {
   normalizeAnimation,
   sortTrackKeyframes,
 } from "./animation";
-import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset } from "./fonts";
+import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset, pruneParsedFontCache } from "./fonts";
 import { normalizeHdrAsset, normalizeHdrLibrary } from "./hdr";
 import { createTransparentImageAsset, fitImageToMaxSize, normalizeImageAsset, normalizeImageLibrary } from "./images";
 import {
@@ -281,17 +281,17 @@ export function createDefaultSceneSettings(): SceneSettings {
     environment: {
       type: "none",
       hdrAssetId: null,
-      intensity: 1,
+      intensity: 0.45,
     },
     lighting: {
       ambientColor: "#ffffff",
-      ambientIntensity: 0.3,
+      ambientIntensity: 0.18,
       directionalColor: "#ffffff",
-      directionalIntensity: 1.4,
+      directionalIntensity: 0.85,
     },
     toneMapping: {
       type: "acesFilmic",
-      exposure: 1,
+      exposure: 0.85,
     },
     shadows: {
       enabled: true,
@@ -717,7 +717,11 @@ function normalizeSceneSettings(rawSettings: unknown, fallback = createDefaultSc
     ? source.shadows as Record<string, unknown>
     : {};
 
-  const environmentType = environment.type === "hdr" ? "hdr" : "none";
+  const environmentType = environment.type === "hdr"
+    ? "hdr"
+    : environment.type === "default"
+      ? "default"
+      : "none";
   const hdrAssetId = typeof environment.hdrAssetId === "string" && environment.hdrAssetId.trim()
     ? environment.hdrAssetId.trim()
     : null;
@@ -725,8 +729,8 @@ function normalizeSceneSettings(rawSettings: unknown, fallback = createDefaultSc
   return {
     backgroundColor: normalizeOptionalColor(source.backgroundColor, fallback.backgroundColor),
     environment: {
-      type: environmentType === "hdr" && hdrAssetId ? "hdr" : "none",
-      hdrAssetId,
+      type: environmentType === "hdr" && hdrAssetId ? "hdr" : environmentType === "default" ? "default" : "none",
+      hdrAssetId: environmentType === "hdr" ? hdrAssetId : null,
       intensity: clampNumber(normalizeNumber(environment.intensity, fallback.environment.intensity), 0, 10),
     },
     lighting: {
@@ -1444,6 +1448,7 @@ export class EditorStore extends EventTarget {
   constructor(initialBlueprint?: unknown) {
     super();
     this._blueprint = normalizeBlueprint(initialBlueprint ?? createDefaultBlueprint());
+    pruneParsedFontCache(this.fonts);
     this._selectedNodeId = this._blueprint.nodes[0]?.id ?? ROOT_NODE_ID;
     this._selectedNodeIds = this.sanitizeSelectionIds([this._selectedNodeId], this._selectedNodeId);
   }
@@ -2426,6 +2431,7 @@ export class EditorStore extends EventTarget {
   loadBlueprint(rawBlueprint: unknown, source: EditorStoreChange["source"] = "import"): void {
     this.recordHistorySnapshot();
     this._blueprint = normalizeBlueprint(rawBlueprint);
+    pruneParsedFontCache(this.fonts);
     this._selectedNodeId = this._blueprint.nodes[0]?.id ?? ROOT_NODE_ID;
     this._selectedNodeIds = this.sanitizeSelectionIds([this._selectedNodeId], this._selectedNodeId);
     this.ensureUniqueBindingKeys();
@@ -4059,21 +4065,19 @@ export class EditorStore extends EventTarget {
     }
 
     this.recordHistorySnapshot();
-    node.transform.position = {
-      x: object.position.x,
-      y: object.position.y,
-      z: object.position.z,
-    };
-    node.transform.rotation = {
-      x: object.rotation.x,
-      y: object.rotation.y,
-      z: object.rotation.z,
-    };
-    node.transform.scale = {
-      x: object.scale.x,
-      y: object.scale.y,
-      z: object.scale.z,
-    };
+    // Mutate the vec3s in place. objectChange fires per pointer event during
+    // drag (can exceed 60Hz); allocating three fresh transform records per
+    // call drives GC pressure that compounds with the React commit storm and
+    // can tip the renderer toward OOM on already-loaded scenes.
+    node.transform.position.x = object.position.x;
+    node.transform.position.y = object.position.y;
+    node.transform.position.z = object.position.z;
+    node.transform.rotation.x = object.rotation.x;
+    node.transform.rotation.y = object.rotation.y;
+    node.transform.rotation.z = object.rotation.z;
+    node.transform.scale.x = object.scale.x;
+    node.transform.scale.y = object.scale.y;
+    node.transform.scale.z = object.scale.z;
 
     this.notify({ reason: "node", source, nodeId });
   }
@@ -4246,8 +4250,28 @@ export class EditorStore extends EventTarget {
   }
 
   private snapshotState(): EditorStoreSnapshot {
+    // ImageAsset/ModelAsset/HdrAsset.src and FontAsset.data hold base64
+    // dataURLs that can be 100MB+. structuredClone copies strings byte-by-byte,
+    // so the default deep-clone would duplicate every payload per history slot
+    // — at HISTORY_LIMIT=100, a single 100MB image becomes ~10GB across the
+    // undo stack and crashes the renderer with OOM. Treat each asset entry as
+    // immutable: shallow-clone the entry object so future in-place mutations
+    // (updateImageAsset/renameImageAsset) don't leak into older snapshots,
+    // but share the heavy string payload across all snapshots.
+    const source = this._blueprint;
+    const blueprint = structuredClone({
+      ...source,
+      fonts: [],
+      images: [],
+      models: [],
+      hdrs: [],
+    }) as typeof source;
+    blueprint.fonts = source.fonts.map((font) => ({ ...font }));
+    blueprint.images = source.images.map((image) => ({ ...image }));
+    blueprint.models = source.models?.map((model) => ({ ...model }));
+    blueprint.hdrs = source.hdrs?.map((hdr) => ({ ...hdr }));
     return {
-      blueprint: structuredClone(this._blueprint),
+      blueprint,
       selectedNodeId: this._selectedNodeId,
       selectedNodeIds: [...this._selectedNodeIds],
     };
@@ -4255,6 +4279,7 @@ export class EditorStore extends EventTarget {
 
   private restoreSnapshot(snapshot: EditorStoreSnapshot): void {
     this._blueprint = structuredClone(snapshot.blueprint);
+    pruneParsedFontCache(this.fonts);
     this._selectedNodeIds = this.sanitizeSelectionIds(snapshot.selectedNodeIds, snapshot.selectedNodeId);
     this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, snapshot.selectedNodeId);
   }

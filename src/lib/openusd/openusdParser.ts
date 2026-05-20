@@ -13,7 +13,14 @@ import {
   Texture,
 } from "three";
 
-import { loadOpenUSD } from "./loadOpenUsd";
+import { loadOpenUSD, releaseOpenUSD } from "./loadOpenUsd";
+import type {
+  OpenUsdWorkerRequest,
+  OpenUsdWorkerResponse,
+  ParsedUsdMaterialData,
+  ParsedUsdModelData,
+  ParsedUsdTextureData,
+} from "./openusdWorkerTypes";
 
 interface PrimInfo {
   path: string;
@@ -58,6 +65,14 @@ interface MaterialTextureInput {
 
 type MaterialInput = MaterialValueInput | MaterialTextureInput;
 
+export interface ParseUsdzProgressUpdate {
+  label?: string;
+  progress?: number | null;
+  detail?: string;
+}
+
+export type ParseUsdzProgressHandler = (update: ParseUsdzProgressUpdate) => void;
+
 interface UsdModule {
   registerPlugins(path: string): string;
   openStageFromBinary(bytes: Uint8Array, filename: string): number;
@@ -73,6 +88,25 @@ interface UsdModule {
 }
 
 let pluginsRegistered = false;
+
+function formatByteSize(byteLength: number): string {
+  const mb = byteLength / (1024 * 1024);
+  return mb >= 10 ? `${mb.toFixed(0)} MB` : `${mb.toFixed(1)} MB`;
+}
+
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
+
+function shouldYield(startedAt: number, budgetMs = 16): boolean {
+  return performance.now() - startedAt >= budgetMs;
+}
 
 async function getModule(): Promise<UsdModule> {
   const usd = (await loadOpenUSD()) as unknown as UsdModule;
@@ -108,6 +142,12 @@ async function bytesToTexture(bytes: Uint8Array): Promise<Texture | null> {
     tex.needsUpdate = true;
     tex.wrapS = RepeatWrapping;
     tex.wrapT = RepeatWrapping;
+    // texture.dispose() releases the WebGL handle but does NOT release the
+    // ImageBitmap — the decoded GPU image stays alive until close() is called.
+    // Across many imports this is the root of the renderer OOM crash.
+    tex.addEventListener("dispose", () => {
+      bitmap.close();
+    });
     return tex;
   } catch (err) {
     console.warn("openusd: failed to decode texture bytes:", err);
@@ -120,6 +160,73 @@ function applyWrapMode(tex: Texture, wrap?: string): void {
     tex.wrapS = ClampToEdgeWrapping;
     tex.wrapT = ClampToEdgeWrapping;
   }
+}
+
+async function textureDataToTexture(textureData: ParsedUsdTextureData): Promise<Texture | null> {
+  const texture = await bytesToTexture(textureData.bytes);
+  if (!texture) {
+    return null;
+  }
+  if (textureData.wrapS === "clamp" || textureData.wrapT === "clamp") {
+    applyWrapMode(texture, "clamp");
+  }
+  return texture;
+}
+
+async function materialDataToMaterial(data: ParsedUsdMaterialData): Promise<MeshPhysicalMaterial> {
+  const material = new MeshPhysicalMaterial({ side: DoubleSide });
+  if (data.color) material.color = new Color(data.color[0], data.color[1], data.color[2]);
+  if (data.emissive) material.emissive = new Color(data.emissive[0], data.emissive[1], data.emissive[2]);
+  if (typeof data.metalness === "number") material.metalness = data.metalness;
+  if (typeof data.roughness === "number") material.roughness = data.roughness;
+  if (typeof data.opacity === "number") {
+    material.opacity = data.opacity;
+    material.transparent = data.opacity < 1;
+  }
+  if (typeof data.ior === "number") material.ior = data.ior;
+  if (typeof data.clearcoat === "number") material.clearcoat = data.clearcoat;
+  if (typeof data.clearcoatRoughness === "number") material.clearcoatRoughness = data.clearcoatRoughness;
+  if (data.specularColor) material.specularColor = new Color(data.specularColor[0], data.specularColor[1], data.specularColor[2]);
+
+  const entries = Object.entries(data.textures) as Array<[keyof ParsedUsdMaterialData["textures"], ParsedUsdTextureData | undefined]>;
+  await Promise.all(entries.map(async ([slot, textureData]) => {
+    if (!textureData) return;
+    const texture = await textureDataToTexture(textureData);
+    if (!texture) return;
+    switch (slot) {
+      case "map":
+        texture.colorSpace = SRGBColorSpace;
+        material.map = texture;
+        break;
+      case "metalnessMap":
+        material.metalnessMap = texture;
+        material.metalness = 1;
+        break;
+      case "roughnessMap":
+        material.roughnessMap = texture;
+        material.roughness = 1;
+        break;
+      case "normalMap":
+        material.normalMap = texture;
+        break;
+      case "aoMap":
+        material.aoMap = texture;
+        break;
+      case "emissiveMap":
+        texture.colorSpace = SRGBColorSpace;
+        material.emissiveMap = texture;
+        if (material.emissive.r === 0 && material.emissive.g === 0 && material.emissive.b === 0) {
+          material.emissive = new Color(1, 1, 1);
+        }
+        break;
+      case "alphaMap":
+        material.alphaMap = texture;
+        material.transparent = true;
+        break;
+    }
+  }));
+
+  return material;
 }
 
 async function loadAssetTexture(
@@ -241,7 +348,10 @@ interface ExpandedAttributes {
   triToFace: Uint32Array;
 }
 
-function expandPerCorner(mesh: MeshData): ExpandedAttributes {
+async function expandPerCorner(
+  mesh: MeshData,
+  onYield?: (processedFaces: number, totalFaces: number) => void,
+): Promise<ExpandedAttributes> {
   const { points, normals, uvs, faceVertexCounts, faceVertexIndices, normalsInterpolation, uvsInterpolation } = mesh;
 
   let triCount = 0;
@@ -297,6 +407,7 @@ function expandPerCorner(mesh: MeshData): ExpandedAttributes {
 
   let triCursor = 0;
   let fvCursor = 0;
+  let yieldStartedAt = performance.now();
   for (let f = 0; f < faceVertexCounts.length; f++) {
     const n = faceVertexCounts[f];
     for (let k = 1; k < n - 1; k++) {
@@ -330,15 +441,22 @@ function expandPerCorner(mesh: MeshData): ExpandedAttributes {
       triCursor++;
     }
     fvCursor += n;
+
+    if (f % 250 === 0 && shouldYield(yieldStartedAt)) {
+      onYield?.(f + 1, faceVertexCounts.length);
+      await waitForPaint();
+      yieldStartedAt = performance.now();
+    }
   }
 
   return { positions, normals: outNormals, uvs: outUvs, triCount, triToFace };
 }
 
-function buildSubsetGeometry(
+async function buildSubsetGeometry(
   expanded: ExpandedAttributes,
   faceIndices: Int32Array | null,
-): BufferGeometry {
+  onYield?: (processedTriangles: number, totalTriangles: number) => void,
+): Promise<BufferGeometry> {
   const geometry = new BufferGeometry();
   const { positions, normals, uvs, triCount, triToFace } = expanded;
 
@@ -361,6 +479,7 @@ function buildSubsetGeometry(
   const subNorm = normals ? new Float32Array(cornerCount * 3) : null;
   const subUv = uvs ? new Float32Array(cornerCount * 2) : null;
   let dst = 0;
+  let yieldStartedAt = performance.now();
   for (let t = 0; t < triCount; t++) {
     if (!allowed.has(triToFace[t])) continue;
     for (let j = 0; j < 3; j++) {
@@ -380,6 +499,12 @@ function buildSubsetGeometry(
       }
     }
     dst++;
+
+    if (t % 2000 === 0 && shouldYield(yieldStartedAt)) {
+      onYield?.(t + 1, triCount);
+      await waitForPaint();
+      yieldStartedAt = performance.now();
+    }
   }
   geometry.setAttribute("position", new BufferAttribute(subPos, 3));
   if (subNorm) geometry.setAttribute("normal", new BufferAttribute(subNorm, 3));
@@ -401,8 +526,120 @@ function buildSubsetGeometry(
  *   4. For each texture, fetch raw bytes via ArResolver (handles USDZ archive paths).
  *   5. Apply world transforms so the scene graph matches authored layout.
  */
-export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): Promise<Group> {
+export async function parseUsdz(
+  buffer: ArrayBuffer,
+  filename = "asset.usdz",
+  onProgress?: ParseUsdzProgressHandler,
+): Promise<Group> {
+  if (typeof Worker !== "undefined") {
+    const model = await parseUsdzInWorker(buffer, filename, onProgress);
+    return await buildGroupFromWorkerModel(model);
+  }
+
+  return parseUsdzDirect(buffer, filename, onProgress);
+}
+
+async function parseUsdzInWorker(
+  buffer: ArrayBuffer,
+  filename: string,
+  onProgress?: ParseUsdzProgressHandler,
+): Promise<ParsedUsdModelData> {
+  return await new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./openusdWorker.ts", import.meta.url), { type: "module" });
+    const cleanup = () => worker.terminate();
+
+    worker.addEventListener("message", (event: MessageEvent<OpenUsdWorkerResponse>) => {
+      const response = event.data;
+      switch (response.type) {
+        case "progress":
+          onProgress?.(response.update);
+          break;
+        case "result":
+          cleanup();
+          resolve(response.model);
+          break;
+        case "error":
+          cleanup();
+          reject(new Error(response.message));
+          break;
+      }
+    });
+    worker.addEventListener("error", (event) => {
+      cleanup();
+      reject(event.error instanceof Error ? event.error : new Error(event.message));
+    });
+
+    const workerBuffer = buffer.slice(0);
+    const request: OpenUsdWorkerRequest = { type: "parse", buffer: workerBuffer, filename };
+    worker.postMessage(request, [workerBuffer]);
+  });
+}
+
+async function buildGroupFromWorkerModel(model: ParsedUsdModelData): Promise<Group> {
+  const root = new Group();
+  root.name = model.name;
+  const groups = new Map<string, Group>();
+
+  for (const meshData of model.meshes) {
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new BufferAttribute(meshData.positions, 3));
+    if (meshData.normals) geometry.setAttribute("normal", new BufferAttribute(meshData.normals, 3));
+    if (meshData.uvs) {
+      geometry.setAttribute("uv", new BufferAttribute(meshData.uvs, 2));
+      geometry.setAttribute("uv1", new BufferAttribute(meshData.uvs, 2));
+    }
+    if (!meshData.normals) geometry.computeVertexNormals();
+
+    const material = await materialDataToMaterial(meshData.material);
+    const mesh = new Mesh(geometry, material);
+    mesh.name = meshData.name;
+
+    let meshGroup = groups.get(meshData.groupName);
+    if (!meshGroup) {
+      meshGroup = new Group();
+      meshGroup.name = meshData.groupName;
+      if (meshData.matrix && meshData.matrix.length === 16) {
+        meshGroup.applyMatrix4(new Matrix4().fromArray(meshData.matrix));
+      }
+      groups.set(meshData.groupName, meshGroup);
+      root.add(meshGroup);
+    }
+    meshGroup.add(mesh);
+  }
+
+  return root;
+}
+
+async function parseUsdzDirect(
+  buffer: ArrayBuffer,
+  filename = "asset.usdz",
+  onProgress?: ParseUsdzProgressHandler,
+): Promise<Group> {
+  const report = (update: ParseUsdzProgressUpdate): void => {
+    onProgress?.({
+      ...update,
+      progress: update.progress === undefined
+        ? undefined
+        : update.progress === null
+          ? null
+        : Math.max(0, Math.min(1, update.progress)),
+    });
+  };
+
+  report({
+    label: "Loading OpenUSD runtime",
+    detail: `${filename} - ${formatByteSize(buffer.byteLength)}`,
+    progress: null,
+  });
+  await waitForPaint();
   const usd = await getModule();
+
+  report({
+    label: "Opening USD stage",
+    detail: "Reading archive and stage metadata",
+    progress: null,
+  });
+  await waitForPaint();
   const bytes = new Uint8Array(buffer);
   const stageId = usd.openStageFromBinary(bytes, filename);
   if (stageId < 0) throw new Error("OpenUSD: failed to open stage from binary");
@@ -411,17 +648,42 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
     const root = new Group();
     root.name = filename;
 
+    report({
+      label: "Scanning USD hierarchy",
+      detail: "Listing prims and model structure",
+      progress: null,
+    });
+    await waitForPaint();
     const prims = usd.listPrims(stageId);
+    const meshPrims = prims.filter((prim) => prim.isMesh);
+    report({
+      label: "Scanning USD hierarchy",
+      detail: `${meshPrims.length} mesh prim${meshPrims.length === 1 ? "" : "s"} found`,
+      progress: 0.24,
+    });
     const textureCache = new Map<string, Promise<Texture | null>>();
     const materialCache = new Map<string, Promise<MeshPhysicalMaterial>>();
+    let resolvedMaterials = 0;
+    let currentMeshProgress = 0.28;
 
     const resolveMaterial = (matPath: string): Promise<MeshPhysicalMaterial> => {
       let cached = materialCache.get(matPath);
       if (cached) return cached;
       cached = (async () => {
+        report({
+          label: "Resolving USD materials",
+          detail: matPath,
+          progress: currentMeshProgress,
+        });
         const params = usd.getMaterialParams(stageId, matPath);
         const mat = new MeshPhysicalMaterial({ side: DoubleSide });
         if (params) await applyMaterialParams(usd, stageId, params, mat, textureCache);
+        resolvedMaterials += 1;
+        report({
+          label: "Resolving USD materials",
+          detail: `${resolvedMaterials} material${resolvedMaterials === 1 ? "" : "s"} resolved`,
+          progress: Math.min(0.76, currentMeshProgress + 0.01),
+        });
         return mat;
       })();
       materialCache.set(matPath, cached);
@@ -430,13 +692,26 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
 
     const meshGroups: { prim: PrimInfo; group: Group }[] = [];
 
-    for (const prim of prims) {
-      if (!prim.isMesh) continue;
+    for (let index = 0; index < meshPrims.length; index += 1) {
+      const prim = meshPrims[index];
+      currentMeshProgress = 0.28 + (meshPrims.length > 0 ? (index / meshPrims.length) * 0.48 : 0);
+      report({
+        label: "Building USDZ meshes",
+        detail: `${index + 1}/${meshPrims.length}: ${prim.path}`,
+        progress: null,
+      });
+      await waitForPaint();
       const meshData = usd.getMeshData(stageId, prim.path);
       if (!meshData) continue;
       if (meshData.points.length === 0 || meshData.faceVertexIndices.length === 0) continue;
 
-      const expanded = expandPerCorner(meshData);
+      const expanded = await expandPerCorner(meshData, (processedFaces, totalFaces) => {
+        report({
+          label: "Triangulating USDZ meshes",
+          detail: `${index + 1}/${meshPrims.length}: ${processedFaces}/${totalFaces} faces`,
+          progress: currentMeshProgress,
+        });
+      });
       const meshGroup = new Group();
       meshGroup.name = prim.path;
 
@@ -450,7 +725,13 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
       if (meshData.subsets.length > 0) {
         // One sub-mesh per GeomSubset
         for (const subset of meshData.subsets) {
-          const geom = buildSubsetGeometry(expanded, subset.indices);
+          const geom = await buildSubsetGeometry(expanded, subset.indices, (processedTriangles, totalTriangles) => {
+            report({
+              label: "Building USDZ mesh subsets",
+              detail: `${subset.name}: ${processedTriangles}/${totalTriangles} triangles`,
+              progress: currentMeshProgress,
+            });
+          });
           const mat = subset.materialPath
             ? await resolveMaterial(subset.materialPath)
             : new MeshPhysicalMaterial({ side: DoubleSide });
@@ -459,7 +740,7 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
           meshGroup.add(mesh);
         }
       } else {
-        const geom = buildSubsetGeometry(expanded, null);
+        const geom = await buildSubsetGeometry(expanded, null);
         const matPath = usd.getMaterialBinding(stageId, prim.path);
         const mat = matPath
           ? await resolveMaterial(matPath)
@@ -470,12 +751,29 @@ export async function parseUsdz(buffer: ArrayBuffer, filename = "asset.usdz"): P
       }
 
       meshGroups.push({ prim, group: meshGroup });
+      report({
+        label: "Building USDZ meshes",
+        detail: `${index + 1}/${meshPrims.length} mesh${meshPrims.length === 1 ? "" : "es"} built`,
+        progress: 0.28 + (((index + 1) / meshPrims.length) * 0.48),
+      });
     }
 
+    report({
+      label: "Finalizing USDZ model",
+      detail: `${meshGroups.length} mesh group${meshGroups.length === 1 ? "" : "s"} ready`,
+      progress: 0.94,
+    });
     for (const { group } of meshGroups) root.add(group);
+    report({
+      label: "Finalizing USDZ model",
+      detail: "Preparing model for the editor",
+      progress: 0.98,
+    });
     return root;
   } finally {
     usd.closeStage(stageId);
+    pluginsRegistered = false;
+    releaseOpenUSD();
   }
 }
 

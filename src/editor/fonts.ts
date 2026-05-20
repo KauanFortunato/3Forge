@@ -59,6 +59,15 @@ export function parseFontAsset(font: FontAsset): Font {
   return parsed;
 }
 
+export function pruneParsedFontCache(availableFonts: FontAsset[]): void {
+  const availableIds = new Set(availableFonts.map((font) => font.id));
+  for (const fontId of parsedFontCache.keys()) {
+    if (!availableIds.has(fontId)) {
+      parsedFontCache.delete(fontId);
+    }
+  }
+}
+
 export function normalizeFontLibrary(rawFonts: unknown): FontAsset[] {
   const fonts: FontAsset[] = [];
   const usedIds = new Set<string>(builtinFontCatalog.map((font) => font.id));
