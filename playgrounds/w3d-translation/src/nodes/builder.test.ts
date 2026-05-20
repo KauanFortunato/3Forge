@@ -861,7 +861,7 @@ describe("builder — BuildContext", () => {
     expect((outer.children[0] as Group).name).toBe("CHILD");
   });
 
-  test("Phase 2B: Group with non-zero Pivot inserts an inner anchor at -pivot", () => {
+  test("Phase 2B: Group with non-zero Pivot wraps via outer.position += pivot + inner at -pivot", () => {
     const g = groupData({
       id: "with-pivot", name: "PLAYER_01",
       transform: {
@@ -874,24 +874,27 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([g]);
     const outer = root.children[0] as Group;
-    expect(outer.position.toArray()).toEqual([0, -3.5, 0]);
-    // outer should hold a single inner pivot wrapper, NOT the authored child directly.
+    // Formula B: outer.position = position + pivot = (0, -4.9, 0).
+    expect(outer.position.x).toBeCloseTo(0, 5);
+    expect(outer.position.y).toBeCloseTo(-4.9, 5);
+    expect(outer.position.z).toBeCloseTo(0, 5);
     expect(outer.children).toHaveLength(1);
     const inner = outer.children[0] as Group;
     expect(inner.name).toBe("PLAYER_01 (pivot)");
-    // inner.position carries -pivot so children authored at local origin
-    // appear shifted by -pivot in the outer's pre-scale local space.
+    // inner.position = -pivot. With R=I and S=I the outer's +pivot cancels
+    // exactly with inner's -pivot, so pivot has zero net visual effect.
     expect(inner.position.x).toBeCloseTo(0, 5);
     expect(inner.position.y).toBeCloseTo(1.4, 5);
     expect(inner.position.z).toBeCloseTo(0, 5);
-    // Real child sits inside the inner anchor.
     expect(inner.children).toHaveLength(1);
     expect((inner.children[0] as Group).name).toBe("CHILD");
   });
 
-  test("Phase 2B: PLAYER_01-like fixture — pivot Y=-1.4, position Y=-3.5, scale 0.95 → child world Y ≈ -2.17", async () => {
-    // World-space sanity: a child authored at local origin in PLAYER_01
-    // should land at position.y + S.y × (-pivot.y) = -3.5 + 0.95 × 1.4 = -2.17.
+  test("Phase 2B: PLAYER_01-like fixture — pivot Y=-1.4, position Y=-3.5, scale 0.95 → child world Y = position + (1−S)×pivot = -3.57", async () => {
+    // Formula B world-space: a child authored at local origin in PLAYER_01
+    // lands at position.y + (1 − S.y) × pivot.y = -3.5 + 0.05 × (-1.4) = -3.57.
+    // The visual shift relative to no-pivot is (1−S) × pivot — TINY for
+    // S≈1, which is exactly what "rotate/scale around the pivot" means.
     const child = groupData({ id: "c", name: "CHILD" });
     const player = groupData({
       id: "p1", name: "PLAYER_01",
@@ -911,13 +914,14 @@ describe("builder — BuildContext", () => {
     outer.updateMatrixWorld(true);
     const world = c.getWorldPosition(new Vector3());
     expect(world.x).toBeCloseTo(0, 5);
-    expect(world.y).toBeCloseTo(-2.17, 5);
+    expect(world.y).toBeCloseTo(-3.57, 5);
     expect(world.z).toBeCloseTo(0, 5);
   });
 
-  test("Phase 2B: PLAYER_01-like fixture — the pivot point itself lands at outer.position", async () => {
-    // A child authored exactly AT the pivot should appear at the outer's
-    // position in world space (the anchor convention).
+  test("Phase 2B: PLAYER_01-like fixture — the pivot point lands at position + pivot in world", async () => {
+    // Formula B: pivot in local space maps to position + pivot in parent
+    // (PLAYERS is at root here, so parent == world). For PLAYER_01 with
+    // position Y=-3.5 and pivot Y=-1.4, the pivot lands at world Y=-4.9.
     const childAtPivot = groupData({
       id: "ap", name: "ANCHOR",
       transform: {
@@ -944,11 +948,11 @@ describe("builder — BuildContext", () => {
     outer.updateMatrixWorld(true);
     const world = anchor.getWorldPosition(new Vector3());
     expect(world.x).toBeCloseTo(0, 5);
-    expect(world.y).toBeCloseTo(-3.5, 5); // pivot lands at outer.position
+    expect(world.y).toBeCloseTo(-4.9, 5); // position + pivot
     expect(world.z).toBeCloseTo(0, 5);
   });
 
-  test("Phase 2B: PLAYER_02-like Pivot X=1.29 Y=-1.4 — inner anchor offset on both axes", () => {
+  test("Phase 2B: PLAYER_02-like Pivot X=1.29 Y=-1.4 — outer.position += pivot, inner at -pivot", () => {
     const player = groupData({
       id: "p2", name: "PLAYER_02",
       transform: {
@@ -966,8 +970,9 @@ describe("builder — BuildContext", () => {
     expect(inner.position.x).toBeCloseTo(-1.29, 5);
     expect(inner.position.y).toBeCloseTo(1.4, 5);
     expect(inner.position.z).toBeCloseTo(0, 5);
-    expect(outer.position.x).toBeCloseTo(0, 5);
-    expect(outer.position.y).toBeCloseTo(-3.5, 5);
+    // Formula B: outer.position = position + pivot = (1.29, -4.9, -5).
+    expect(outer.position.x).toBeCloseTo(1.29, 5);
+    expect(outer.position.y).toBeCloseTo(-4.9, 5);
     expect(outer.position.z).toBeCloseTo(-5, 5);
   });
 
@@ -1026,6 +1031,111 @@ describe("builder — BuildContext", () => {
     }
   });
 
+  test("Phase 2B: pivot with scale near 1 does NOT shift visual content by full -pivot (Formula B guarantee)", async () => {
+    // Regression guard against Formula A. The Pivot must NOT be applied as a
+    // direct -pivot translation when rotation=identity and scale≈1. With
+    // Formula B the shift is (1 - S) × pivot, which is tiny for S=0.95.
+    // For a 3D Pivot (1.29, -1.4, 0): visual shift must be ≤ 0.1 per axis.
+    const child = groupData({ id: "c", name: "CHILD" });
+    const player = groupData({
+      id: "p2", name: "PLAYER_02",
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.85 },
+        pivot: { x: 1.29, y: -1.4, z: 0 },
+      },
+      children: [child],
+    });
+    const { Vector3 } = await import("three");
+    const root = buildNodeTree([player]);
+    const outer = root.children[0] as Group;
+    const inner = outer.children[0] as Group;
+    const c = inner.children[0] as Group;
+    outer.updateMatrixWorld(true);
+    const world = c.getWorldPosition(new Vector3());
+    // (1 - S) × pivot, axis by axis.
+    expect(world.x).toBeCloseTo(0.05 * 1.29, 5); // ≈ +0.0645, NOT -0.95×1.29 = -1.22
+    expect(world.y).toBeCloseTo(0.05 * -1.4, 5); // ≈ -0.07, NOT +0.95×1.4 = +1.33
+    expect(world.z).toBeCloseTo(0, 5);
+    // Smaller-than-tenth guard: visual content must stay within 0.1 per axis
+    // of the (no-pivot) position when scale≈1. This is the property the user
+    // asked to enforce.
+    expect(Math.abs(world.x)).toBeLessThan(0.1);
+    expect(Math.abs(world.y)).toBeLessThan(0.1);
+  });
+
+  test("Phase 2B: PLAYER_02-like pivot X=1.29 does NOT overlap PLAYER_01's FlowChildren slot", async () => {
+    // FlowChildren places PLAYER_01 at outer.x = (5-1-0) × -1.26 = -5.04
+    // and PLAYER_02 at outer.x = (5-1-1) × -1.26 = -3.78. Formula A would
+    // shift PLAYER_02 content by -0.95×1.29 ≈ -1.22, landing it at -5.005 —
+    // about 0.04 away from PLAYER_01's content X. Formula B shifts by only
+    // (1-0.95)×1.29 ≈ +0.0645, leaving the slot delta near the FlowChildren
+    // spacing.
+    const mk = (i: number, pivotX: number) => groupData({
+      id: `p${i}`, name: `PLAYER_0${i}`,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.85 },
+        pivot: { x: pivotX, y: -1.4, z: 0 },
+      },
+      children: [groupData({ id: `c${i}`, name: `CHILD_${i}` })],
+    });
+    const players = groupData({
+      id: "PLAYERS", name: "PLAYERS",
+      flow: { children: true, leadingSpace: -1.26 },
+      children: [mk(1, 0), mk(2, 1.29), mk(3, 0), mk(4, 0), mk(5, 0)],
+    });
+    const { Vector3 } = await import("three");
+    const root = buildNodeTree([players]);
+    root.updateMatrixWorld(true);
+    const p1Inner = ((root.children[0] as Group).children[0] as Group).children[0] as Group;
+    const p2Inner = ((root.children[0] as Group).children[1] as Group).children[0] as Group;
+    const p1Child = p1Inner.children[0] as Group;
+    const p2Child = p2Inner.children[0] as Group;
+    const w1 = p1Child.getWorldPosition(new Vector3());
+    const w2 = p2Child.getWorldPosition(new Vector3());
+    const dx = w2.x - w1.x;
+    // Player 01..05 share an X-anchor inside their own slot up to the
+    // FlowChildren spacing (1.26). Player 02 must not land on top of Player 01.
+    expect(dx).toBeGreaterThan(1.0); // safely > 0.5 of a slot
+    expect(dx).toBeCloseTo(1.26 + 0.05 * 1.29, 5); // FlowChildren + Formula B X shift
+  });
+
+  test("Phase 2B: FlowChildren + Pivot composition — each PLAYER stays in its own FlowChildren slot", async () => {
+    // Tighter version of the previous test: all 5 players, each must remain
+    // close (within 0.1) to the X position FlowChildren assigned them when
+    // pivot.x = 0, and PLAYER_02 (pivot.x = 1.29) must only deviate by the
+    // (1-S) × pivot.x = 0.0645 amount predicted by Formula B.
+    const mk = (i: number, pivotX: number) => groupData({
+      id: `p${i}`, name: `PLAYER_0${i}`,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.85 },
+        pivot: { x: pivotX, y: -1.4, z: 0 },
+      },
+      children: [groupData({ id: `c${i}`, name: `CHILD_${i}` })],
+    });
+    const players = groupData({
+      id: "PLAYERS", name: "PLAYERS",
+      flow: { children: true, leadingSpace: -1.26 },
+      children: [mk(1, 0), mk(2, 1.29), mk(3, 0), mk(4, 0), mk(5, 0)],
+    });
+    const { Vector3 } = await import("three");
+    const root = buildNodeTree([players]);
+    root.updateMatrixWorld(true);
+    const slotX = (i: number) => (5 - 1 - i) * -1.26;
+    const expectedShift = [0, 0.05 * 1.29, 0, 0, 0]; // (1-S)×pivot.x for each
+    for (let i = 0; i < 5; i++) {
+      const inner = ((root.children[0] as Group).children[i] as Group).children[0] as Group;
+      const child = inner.children[0] as Group;
+      const w = child.getWorldPosition(new Vector3());
+      expect(w.x).toBeCloseTo(slotX(i) + expectedShift[i], 5);
+    }
+  });
+
   test("Phase 2B: maskIds inheritance propagates through the pivot inner anchor", () => {
     // A child with no own maskIds should still inherit the parent Group's
     // effective maskIds, even though it now sits inside a pivot inner.
@@ -1070,8 +1180,9 @@ describe("builder — BuildContext", () => {
     expect(obj).toBeInstanceOf(Group);
     const outer = obj as Group;
     expect(outer.name).toBe("LEAF_PIVOT (pivot wrapper)");
+    // Formula B: outer.position = position + pivot = (5+0, 0+(-0.7), 0+0).
     expect(outer.position.x).toBeCloseTo(5, 5);
-    expect(outer.position.y).toBeCloseTo(0, 5);
+    expect(outer.position.y).toBeCloseTo(-0.7, 5);
     expect(outer.position.z).toBeCloseTo(0, 5);
     expect(outer.children).toHaveLength(1);
     const mesh = outer.children[0] as Mesh;

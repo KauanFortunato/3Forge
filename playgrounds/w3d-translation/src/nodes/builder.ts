@@ -191,10 +191,14 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: s
     transform: node.transform,
   };
   // Phase 2B — pivot anchor. When NodeTransform/Pivot is non-zero, route
-  // children through an inner Group offset by -pivot. The outer carries
-  // T(position) × R × S; the inner carries T(-pivot). Net effect:
-  // M = T(position) × R × S × T(-pivot), so the pivot point lands at
-  // `position` and rotation/scale apply around the pivot (Maya-style).
+  // children through an inner Group offset by -pivot AND shift outer.position
+  // by +pivot. Net effect: M = T(position) × T(pivot) × R × S × T(-pivot),
+  // which is the Maya-style rotate/scale-around-pivot transform.
+  // Critically, T(pivot) × T(-pivot) collapses when R=I and S=I, so pivot
+  // has ZERO visual effect at identity rotation+scale. With S close to 1
+  // (e.g. PLAYER_0X has scale 0.95), the residual shift is (1-S) × pivot,
+  // which is small — so PLAYER_02's Pivot X=1.29 does NOT translate content
+  // by -1.22 (which would push it into PLAYER_01's FlowChildren slot).
   const host = applyPivotAnchor(g, node.transform);
   // Own maskIds override inherited (R3 semantics). Children with no maskIds of
   // their own pick up this group's maskIds as their effective stencil source.
@@ -212,15 +216,25 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: s
 }
 
 /**
- * Phase 2B — create an inner pivot-anchor Group when the transform has a
- * non-zero Pivot. Returns the host that should receive children:
- * `outer` when pivot is absent/zero, otherwise a freshly added inner Group
- * with `position = -pivot`. The inner is named "<outer.name> (pivot)" so the
- * Object3D tree stays readable.
+ * Phase 2B — create a pivot anchor for non-zero Pivot transforms.
+ * Implements M = T(position) × T(pivot) × R × S × T(-pivot) using two
+ * Object3D layers:
+ *
+ *   - outer.position is shifted by +pivot (in addition to the W3D Position
+ *     already set by applyTransform). outer also carries R and S.
+ *   - inner.position = -pivot. Children of the host (the returned inner)
+ *     get translated by -pivot before outer's R × S applies.
+ *
+ * Returns `outer` unchanged when pivot is absent/zero so the no-pivot path
+ * stays a single-Object3D layer. When R=I and S=I, the +pivot on outer
+ * cancels the -pivot on inner — pivot has zero visual effect.
  */
 function applyPivotAnchor(outer: Group, t: W3DTransform): Group {
   if (!hasNonZeroPivot(t.pivot)) return outer;
   const p = t.pivot!;
+  outer.position.x += p.x;
+  outer.position.y += p.y;
+  outer.position.z += p.z;
   const inner = new Group();
   inner.name = `${outer.name} (pivot)`;
   inner.position.set(-p.x, -p.y, -p.z);
@@ -298,16 +312,22 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
 
 /**
  * Phase 2B — wrap a leaf Quad mesh in an outer Group so the Quad's pivot
- * anchor applies. The outer takes over the mesh's position/rotation/scale;
- * the mesh becomes a child at -pivot with identity local transform. The
- * mesh's visibility (set by buildQuad / applyPhotoMaskStencil) is preserved
- * so stencil + enable semantics still work.
+ * anchor applies. Implements the same M = T(position) × T(pivot) × R × S
+ * × T(-pivot) decomposition as applyPivotAnchor: outer takes over the
+ * mesh's position (shifted by +pivot), rotation and scale; the mesh
+ * becomes a child at -pivot with identity local transform. The mesh's
+ * visibility (set by buildQuad / applyPhotoMaskStencil) is preserved so
+ * stencil + enable semantics still work.
  */
 function wrapMeshWithPivot(mesh: Mesh, node: W3DQuadData): Group {
   const p = node.transform.pivot!;
   const outer = new Group();
   outer.name = `${node.name} (pivot wrapper)`;
-  outer.position.copy(mesh.position);
+  outer.position.set(
+    mesh.position.x + p.x,
+    mesh.position.y + p.y,
+    mesh.position.z + p.z,
+  );
   outer.rotation.copy(mesh.rotation);
   outer.scale.copy(mesh.scale);
   mesh.position.set(-p.x, -p.y, -p.z);
