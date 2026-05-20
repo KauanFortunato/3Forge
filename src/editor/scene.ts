@@ -182,12 +182,26 @@ interface SolidStash {
   textures: Partial<Record<typeof SOLID_STRIPPED_TEXTURE_KEYS[number], Texture | null>>;
 }
 
+function isLiveTexture(value: unknown): value is Texture {
+  return !!value && typeof value === "object" && (value as { isTexture?: boolean }).isTexture === true;
+}
+
 /**
  * Blender-like solid mode: while in solid view, every Material instance has
- * its texture map slots nulled (so the GPU never uploads them) and the
- * originals stashed on userData. Switching back to rendered/wireframe
- * restores the maps from the stash. Idempotent — calling this twice with
- * the same `solid` value is a no-op for a given material.
+ * its texture map slots nulled (so the GPU never uploads them) and the live
+ * Texture refs stashed on userData. Switching back to rendered/wireframe
+ * restores them.
+ *
+ * Important: do NOT rely on the presence of `userData[SOLID_STASH_KEY]` as
+ * a "this material is already in solid" flag. When Three.js's `Material.copy`
+ * clones a material (via `.clone()`), it deep-clones userData with
+ * `JSON.parse(JSON.stringify(source.userData))` — which calls each Texture's
+ * `.toJSON()` and replaces the live Texture refs in our stash with serialised
+ * metadata. The cloned material then carries a `__solidStash` key whose
+ * contents are useless plain objects, yet the live map slots are also copied
+ * over (Material.copy copies them by reference). So a "stash present" clone
+ * may still have live textures we need to strip. Always inspect the actual
+ * map slots and only treat values with `.isTexture === true` as restorable.
  */
 function applySolidShading(materialOrList: Material | Material[] | null | undefined, solid: boolean): void {
   if (!materialOrList) return;
@@ -201,19 +215,28 @@ function applySolidShading(materialOrList: Material | Material[] | null | undefi
   const existing = userData[SOLID_STASH_KEY] as SolidStash | undefined;
 
   if (solid) {
-    if (existing) return;
     const captured: SolidStash["textures"] = {};
-    let any = false;
+    let stripped = false;
     for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
       const value = indexed[key];
-      if (value) {
+      if (isLiveTexture(value)) {
         captured[key] = value;
         indexed[key] = null;
-        any = true;
+        stripped = true;
+      } else if (value !== null && value !== undefined) {
+        // Non-Texture leftover in a map slot (e.g. JSON-cloned metadata
+        // from a previous round trip). Null it so it doesn't render.
+        indexed[key] = null;
+        stripped = true;
       }
     }
-    if (any) {
+    if (stripped) {
       userData[SOLID_STASH_KEY] = { textures: captured } satisfies SolidStash;
+      material.needsUpdate = true;
+    } else if (existing) {
+      // Nothing live to stash AND a stale stash sits there from a previous
+      // clone round-trip — drop it so future restores don't re-bind junk.
+      delete userData[SOLID_STASH_KEY];
       material.needsUpdate = true;
     }
     return;
@@ -221,9 +244,11 @@ function applySolidShading(materialOrList: Material | Material[] | null | undefi
 
   if (!existing) return;
   for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
-    if (key in existing.textures) {
-      indexed[key] = existing.textures[key] ?? null;
-    }
+    if (!(key in existing.textures)) continue;
+    const stashed = existing.textures[key];
+    // Only restore real Texture instances. Anything else is JSON-serialised
+    // metadata from a Material.copy round-trip and can't be used as a map.
+    indexed[key] = isLiveTexture(stashed) ? stashed : null;
   }
   delete userData[SOLID_STASH_KEY];
   material.needsUpdate = true;
