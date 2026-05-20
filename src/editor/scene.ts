@@ -7,7 +7,7 @@ import {
   BasicDepthPacking,
   Box3,
   BoxGeometry,
-  Box3Helper,
+  BufferGeometry,
   CapsuleGeometry,
   Color,
   ConeGeometry,
@@ -15,10 +15,13 @@ import {
   DirectionalLight,
   DoubleSide,
   DodecahedronGeometry,
+  EdgesGeometry,
   FrontSide,
   Group,
   HemisphereLight,
   IcosahedronGeometry,
+  LineBasicMaterial,
+  LineSegments,
   LinearToneMapping,
   Mesh,
   Material,
@@ -433,7 +436,24 @@ export class SceneEditor {
   private mainLight: DirectionalLight | null = null;
   private hemisphereLight: HemisphereLight | null = null;
   private ambientLight: AmbientLight | null = null;
-  private selectionHelper: Box3Helper | null = null;
+  // Light-weight Blender-like selection outline: per-mesh EdgesGeometry drawn
+  // as LineSegments in light purple. Lives at the scene root (not inside
+  // viewportRoot) so picking and view-mode passes ignore it. Edge geometries
+  // are cached per source BufferGeometry — only the LineSegments wrappers are
+  // recreated when selection changes; geometry is reused.
+  private readonly selectionOutlineRoot = new Group();
+  private readonly selectionOutlineMaterial = new LineBasicMaterial({
+    color: 0xc4b5fd,
+    transparent: true,
+    opacity: 0.95,
+    depthTest: false,
+    toneMapped: false,
+  });
+  private readonly edgesGeometryCache = new WeakMap<BufferGeometry, EdgesGeometry>();
+  // Each entry pairs the rendered outline line with the source Mesh it traces
+  // so we can sync matrices on every frame after the mesh's world transform
+  // changes (animation playback, gizmo drag, parent re-rebuild).
+  private selectionOutlines: Array<{ line: LineSegments; source: Mesh }> = [];
   private selectionVisualsSuppressed = false;
   private currentMode: ToolMode = "select";
   private currentGizmoMode: GizmoMode = "translate";
@@ -541,6 +561,10 @@ export class SceneEditor {
     this.scene.add(this.infiniteGrid);
     this.scene.add(this.viewportRoot);
     this.scene.add(this.transformHelper);
+    // Render selection outlines AFTER everything else so they sit on top
+    // of any mesh they trace, regardless of depth ordering quirks.
+    this.selectionOutlineRoot.renderOrder = 999;
+    this.scene.add(this.selectionOutlineRoot);
     this.addHelpers();
     this.bindPointerSelection();
     window.addEventListener("keydown", this.handleWindowKeyDown);
@@ -732,7 +756,8 @@ export class SceneEditor {
     this.cameraControls.dispose();
     this.clearViewportRoot();
     this.clearHdrEnvironmentCache();
-    this.selectionHelper?.removeFromParent();
+    this.clearSelectionOutlines();
+    this.selectionOutlineMaterial.dispose();
     this.infiniteGrid.geometry.dispose();
     this.infiniteGrid.material.dispose();
     this.renderer.dispose();
@@ -1646,8 +1671,7 @@ export class SceneEditor {
     if (this.selectionVisualsSuppressed) {
       this.transformControls.detach();
       this.transformHelper.visible = false;
-      this.selectionHelper?.removeFromParent();
-      this.selectionHelper = null;
+      this.clearSelectionOutlines();
       this.selectionHelperDirty = false;
       return;
     }
@@ -1777,34 +1801,79 @@ export class SceneEditor {
     return part ? [part] : null;
   }
 
+  private clearSelectionOutlines(): void {
+    if (this.selectionOutlines.length === 0) return;
+    for (const entry of this.selectionOutlines) {
+      this.selectionOutlineRoot.remove(entry.line);
+      // Do NOT dispose the edge geometry — it lives in edgesGeometryCache and
+      // may be reused by a future selection of the same mesh. The shared
+      // material is also retained for the editor lifetime.
+    }
+    this.selectionOutlines.length = 0;
+  }
+
+  private getEdgesGeometry(geometry: BufferGeometry): EdgesGeometry {
+    let cached = this.edgesGeometryCache.get(geometry);
+    if (!cached) {
+      // 15° threshold matches Blender's default "auto smooth" edge angle
+      // closely enough for a wire-style outline that traces silhouettes and
+      // hard creases without dragging in coplanar faces.
+      cached = new EdgesGeometry(geometry, 15);
+      this.edgesGeometryCache.set(geometry, cached);
+    }
+    return cached;
+  }
+
   private updateSelectionHelper(objects: Object3D[]): void {
-    if (!this.computeSelectionBounds(objects)) {
-      this.selectionHelper?.removeFromParent();
-      this.selectionHelper = null;
+    this.clearSelectionOutlines();
+    if (objects.length === 0) {
       this.lastSelectionHelperUpdateAt = performance.now();
       return;
     }
 
-    if (!this.selectionHelper) {
-      this.selectionHelper = new Box3Helper(this.selectionBounds.clone(), 0x6b2ecf);
-      this.scene.add(this.selectionHelper);
-      return;
+    for (const root of objects) {
+      root.updateMatrixWorld(true);
+      root.traverse((child) => {
+        if (!(child instanceof Mesh)) return;
+        if (child.userData?.isShadowReceiver) return;
+        const geometry = child.geometry as BufferGeometry | undefined;
+        if (!geometry) return;
+        const line = new LineSegments(this.getEdgesGeometry(geometry), this.selectionOutlineMaterial);
+        line.matrixAutoUpdate = false;
+        line.matrix.copy(child.matrixWorld);
+        line.renderOrder = 999;
+        // Selection outlines never participate in picking. They live outside
+        // viewportRoot so the raycaster doesn't see them anyway, but make
+        // the intent explicit in case future code walks the scene tree.
+        line.raycast = () => {};
+        this.selectionOutlineRoot.add(line);
+        this.selectionOutlines.push({ line, source: child });
+      });
     }
-
-    this.selectionHelper.box.copy(this.selectionBounds);
     this.lastSelectionHelperUpdateAt = performance.now();
+  }
+
+  private syncSelectionOutlines(): void {
+    for (const entry of this.selectionOutlines) {
+      entry.source.updateMatrixWorld();
+      entry.line.matrix.copy(entry.source.matrixWorld);
+    }
   }
 
   private updateSelectionHelperFromCache(): void {
     if (this.selectedObjects.length === 0) {
-      if (this.selectionHelper) {
-        this.updateSelectionHelper([]);
+      if (this.selectionOutlines.length > 0) {
+        this.clearSelectionOutlines();
       }
       this.selectionHelperDirty = false;
       return;
     }
 
+    // The selection set itself didn't change; just keep outline transforms in
+    // sync with their source meshes (handles gizmo drags, animation playback,
+    // parent rebuilds that re-parent the same Mesh instance).
     if (!this.selectionHelperDirty) {
+      this.syncSelectionOutlines();
       return;
     }
 
@@ -1813,6 +1882,7 @@ export class SceneEditor {
       this.isAnimationPlaying &&
       now - this.lastSelectionHelperUpdateAt < SELECTION_HELPER_PLAYBACK_UPDATE_INTERVAL_MS
     ) {
+      this.syncSelectionOutlines();
       return;
     }
 
