@@ -838,6 +838,316 @@ describe("builder — BuildContext", () => {
     expect(params.height).toBeCloseTo(3, 5);
   });
 
+  // -----------------------------------------------------------------------
+  // Phase 2B — NodeTransform Pivot (R3 "Absolute" anchor semantics).
+  //
+  // Builder applies M = T(position) × R × S × T(-pivot): the outer Group
+  // carries position/rotation/scale; an inner Group at -pivot is inserted
+  // when pivot is non-zero so the pivot point lands at `position` and
+  // rotation/scale apply around it (Maya-style anchor). All tests below use
+  // pivot via groupData/quadData transform overrides — fixtures without
+  // pivot must continue to skip the wrapper entirely.
+  // -----------------------------------------------------------------------
+
+  test("Phase 2B: Group without pivot has no inner anchor wrapper (regression)", () => {
+    const g = groupData({ id: "no-pivot", name: "G_NO_PIVOT", children: [
+      groupData({ id: "child", name: "CHILD" }),
+    ] });
+    const root = buildNodeTree([g]);
+    const outer = root.children[0] as Group;
+    // outer.children should be the actual child Group, NOT a synthetic
+    // "(pivot)" wrapper — confirms the no-pivot path is unchanged.
+    expect(outer.children).toHaveLength(1);
+    expect((outer.children[0] as Group).name).toBe("CHILD");
+  });
+
+  test("Phase 2B: Group with non-zero Pivot inserts an inner anchor at -pivot", () => {
+    const g = groupData({
+      id: "with-pivot", name: "PLAYER_01",
+      transform: {
+        position: { x: 0, y: -3.5, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: -1.4, z: 0 },
+      },
+      children: [groupData({ id: "child", name: "CHILD" })],
+    });
+    const root = buildNodeTree([g]);
+    const outer = root.children[0] as Group;
+    expect(outer.position.toArray()).toEqual([0, -3.5, 0]);
+    // outer should hold a single inner pivot wrapper, NOT the authored child directly.
+    expect(outer.children).toHaveLength(1);
+    const inner = outer.children[0] as Group;
+    expect(inner.name).toBe("PLAYER_01 (pivot)");
+    // inner.position carries -pivot so children authored at local origin
+    // appear shifted by -pivot in the outer's pre-scale local space.
+    expect(inner.position.x).toBeCloseTo(0, 5);
+    expect(inner.position.y).toBeCloseTo(1.4, 5);
+    expect(inner.position.z).toBeCloseTo(0, 5);
+    // Real child sits inside the inner anchor.
+    expect(inner.children).toHaveLength(1);
+    expect((inner.children[0] as Group).name).toBe("CHILD");
+  });
+
+  test("Phase 2B: PLAYER_01-like fixture — pivot Y=-1.4, position Y=-3.5, scale 0.95 → child world Y ≈ -2.17", async () => {
+    // World-space sanity: a child authored at local origin in PLAYER_01
+    // should land at position.y + S.y × (-pivot.y) = -3.5 + 0.95 × 1.4 = -2.17.
+    const child = groupData({ id: "c", name: "CHILD" });
+    const player = groupData({
+      id: "p1", name: "PLAYER_01",
+      transform: {
+        position: { x: 0, y: -3.5, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.85 },
+        pivot: { x: 0, y: -1.4, z: 0 },
+      },
+      children: [child],
+    });
+    const { Vector3 } = await import("three");
+    const root = buildNodeTree([player]);
+    const outer = root.children[0] as Group;
+    const inner = outer.children[0] as Group;
+    const c = inner.children[0] as Group;
+    outer.updateMatrixWorld(true);
+    const world = c.getWorldPosition(new Vector3());
+    expect(world.x).toBeCloseTo(0, 5);
+    expect(world.y).toBeCloseTo(-2.17, 5);
+    expect(world.z).toBeCloseTo(0, 5);
+  });
+
+  test("Phase 2B: PLAYER_01-like fixture — the pivot point itself lands at outer.position", async () => {
+    // A child authored exactly AT the pivot should appear at the outer's
+    // position in world space (the anchor convention).
+    const childAtPivot = groupData({
+      id: "ap", name: "ANCHOR",
+      transform: {
+        position: { x: 0, y: -1.4, z: 0 }, // = pivot
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    });
+    const player = groupData({
+      id: "p1", name: "PLAYER_01",
+      transform: {
+        position: { x: 0, y: -3.5, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.85 },
+        pivot: { x: 0, y: -1.4, z: 0 },
+      },
+      children: [childAtPivot],
+    });
+    const { Vector3 } = await import("three");
+    const root = buildNodeTree([player]);
+    const outer = root.children[0] as Group;
+    const inner = outer.children[0] as Group;
+    const anchor = inner.children[0] as Group;
+    outer.updateMatrixWorld(true);
+    const world = anchor.getWorldPosition(new Vector3());
+    expect(world.x).toBeCloseTo(0, 5);
+    expect(world.y).toBeCloseTo(-3.5, 5); // pivot lands at outer.position
+    expect(world.z).toBeCloseTo(0, 5);
+  });
+
+  test("Phase 2B: PLAYER_02-like Pivot X=1.29 Y=-1.4 — inner anchor offset on both axes", () => {
+    const player = groupData({
+      id: "p2", name: "PLAYER_02",
+      transform: {
+        position: { x: 0, y: -3.5, z: -5 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.85 },
+        pivot: { x: 1.29, y: -1.4, z: 0 },
+      },
+      children: [groupData({ id: "c", name: "CHILD" })],
+    });
+    const root = buildNodeTree([player]);
+    const outer = root.children[0] as Group;
+    const inner = outer.children[0] as Group;
+    expect(inner.name).toBe("PLAYER_02 (pivot)");
+    expect(inner.position.x).toBeCloseTo(-1.29, 5);
+    expect(inner.position.y).toBeCloseTo(1.4, 5);
+    expect(inner.position.z).toBeCloseTo(0, 5);
+    expect(outer.position.x).toBeCloseTo(0, 5);
+    expect(outer.position.y).toBeCloseTo(-3.5, 5);
+    expect(outer.position.z).toBeCloseTo(-5, 5);
+  });
+
+  test("Phase 2B: pivot with all-zero values does NOT insert an inner wrapper", () => {
+    const g = groupData({
+      id: "zp", name: "ZERO_PIVOT",
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: 0, z: 0 }, // explicit zero pivot
+      },
+      children: [groupData({ id: "c", name: "CHILD" })],
+    });
+    const root = buildNodeTree([g]);
+    const outer = root.children[0] as Group;
+    expect(outer.children).toHaveLength(1);
+    expect((outer.children[0] as Group).name).toBe("CHILD"); // direct child, no wrapper
+  });
+
+  test("Phase 2B: PLAYERS FlowChildren + PLAYER_0X Pivot compose — order remains and per-player anchor applies", () => {
+    // PLAYERS has no pivot and FlowChildren=true (leadingSpace=-1.26). Each
+    // PLAYER_0X has Pivot Y=-1.4. PLAYERS FlowChildren must still distribute
+    // PLAYER_0X.position.x via the existing reverse-index formula, and each
+    // PLAYER_0X must independently get its own inner pivot anchor.
+    const mk = (i: number) => groupData({
+      id: `p${i}`, name: `PLAYER_0${i}`,
+      transform: {
+        position: { x: 0, y: -3.5, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: -1.4, z: 0 },
+      },
+      children: [],
+    });
+    const players = groupData({
+      id: "PLAYERS", name: "PLAYERS",
+      flow: { children: true, leadingSpace: -1.26 },
+      children: [mk(1), mk(2), mk(3), mk(4), mk(5)],
+    });
+    const root = buildNodeTree([players]);
+    const playersGroup = root.children[0] as Group;
+    expect(playersGroup.children).toHaveLength(5);
+    // FlowChildren reverse-index: first child at most negative offset,
+    // last at offset 0.
+    const xs = playersGroup.children.map(c => c.position.x);
+    expect(xs[0]).toBeCloseTo(-1.26 * 4, 5);
+    expect(xs[4]).toBeCloseTo(0, 5);
+    // Each PLAYER outer must contain its own pivot inner.
+    for (const playerOuter of playersGroup.children) {
+      const inner = (playerOuter as Group).children[0] as Group;
+      expect(inner.name).toBe(`${playerOuter.name} (pivot)`);
+      expect(inner.position.x).toBeCloseTo(0, 5);
+      expect(inner.position.y).toBeCloseTo(1.4, 5);
+      expect(inner.position.z).toBeCloseTo(0, 5);
+    }
+  });
+
+  test("Phase 2B: maskIds inheritance propagates through the pivot inner anchor", () => {
+    // A child with no own maskIds should still inherit the parent Group's
+    // effective maskIds, even though it now sits inside a pivot inner.
+    const dummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const color = quadData({ id: "c1", name: "PHOTO_COLOR_01" });
+    const fill = groupData({
+      id: "fill-1", name: "PHOTO_FILL_01",
+      maskIds: ["dummy-1"],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: -0.5, z: 0 }, // hypothetical pivot on FILL group
+      },
+      children: [color],
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([dummy, fill], ctx);
+    const fillOuter = root.children[1] as Group;
+    const fillInner = fillOuter.children[0] as Group;
+    expect(fillInner.name).toBe("PHOTO_FILL_01 (pivot)");
+    const colorMesh = fillInner.children[0] as Mesh;
+    const mat = colorMesh.material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(true); // stencil setup still ran via inheritance
+    expect(mat.stencilRef).toBe(8); // DUMMY owner=1 << 3
+  });
+
+  test("Phase 2B: leaf Quad with pivot is wrapped in an outer Group, mesh sits at -pivot", () => {
+    const q = quadData({
+      id: "lq", name: "LEAF_PIVOT",
+      transform: {
+        position: { x: 5, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: -0.7, z: 0 },
+      },
+    });
+    const obj = buildNode(q);
+    expect(obj).toBeInstanceOf(Group);
+    const outer = obj as Group;
+    expect(outer.name).toBe("LEAF_PIVOT (pivot wrapper)");
+    expect(outer.position.x).toBeCloseTo(5, 5);
+    expect(outer.position.y).toBeCloseTo(0, 5);
+    expect(outer.position.z).toBeCloseTo(0, 5);
+    expect(outer.children).toHaveLength(1);
+    const mesh = outer.children[0] as Mesh;
+    expect(mesh).toBeInstanceOf(Mesh);
+    expect(mesh.position.x).toBeCloseTo(0, 5);
+    expect(mesh.position.y).toBeCloseTo(0.7, 5); // -pivot
+    expect(mesh.position.z).toBeCloseTo(0, 5);
+    expect(mesh.scale.toArray()).toEqual([1, 1, 1]);
+  });
+
+  test("Phase 2B: leaf Quad without pivot returns the Mesh directly (no extra wrapper)", () => {
+    const q = quadData({ id: "lq", name: "LEAF_NO_PIVOT" });
+    const obj = buildNode(q);
+    expect(obj).toBeInstanceOf(Mesh); // no Group wrapper
+    expect((obj as Mesh).name).toBe("LEAF_NO_PIVOT");
+  });
+
+  test("Phase 2B: Quad-with-children with pivot — mesh + children share the pivot inner anchor", () => {
+    const child = quadData({ id: "cq", name: "CHILD_QUAD" });
+    const parent = quadData({
+      id: "pq", name: "PARENT_QUAD",
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: -0.5, z: 0 },
+      },
+      children: [child],
+    });
+    const obj = buildNode(parent);
+    expect(obj).toBeInstanceOf(Group);
+    const wrapper = obj as Group;
+    expect(wrapper.name).toBe("PARENT_QUAD (wrapper)");
+    expect(wrapper.children).toHaveLength(1);
+    const inner = wrapper.children[0] as Group;
+    // Inner name is derived from the wrapper's name (which carries "(wrapper)"
+    // for Quad-with-children) — accept the composed name.
+    expect(inner.name).toBe("PARENT_QUAD (wrapper) (pivot)");
+    expect(inner.position.x).toBeCloseTo(0, 5);
+    expect(inner.position.y).toBeCloseTo(0.5, 5);
+    expect(inner.position.z).toBeCloseTo(0, 5);
+    // Inner holds the parent's own mesh AND the child quad.
+    expect(inner.children).toHaveLength(2);
+    expect((inner.children[0] as Mesh).name).toBe("PARENT_QUAD");
+    expect((inner.children[1] as Mesh).name).toBe("CHILD_QUAD");
+  });
+
+  test("Phase 2B: leaf isMask Quad with pivot preserves mesh.visible=false default", () => {
+    const q = quadData({
+      id: "mq", name: "SOME_MASK", isMask: true,
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: -1, z: 0 },
+      },
+    });
+    const obj = buildNode(q);
+    const outer = obj as Group;
+    const mesh = outer.children[0] as Mesh;
+    expect(mesh.visible).toBe(false); // isMask hide default preserved through the wrapper
+  });
+
+  test("Phase 2B regression: PHOTO_MASK_05 with no pivot still produces a plain Mesh (no wrapper)", () => {
+    // Anti-regression for Phase 2A: PHOTO_MASK_05 must remain a leaf Mesh
+    // at root.children[0] so any code that locates it by index keeps working.
+    const mask = quadData({
+      id: "mask-5", name: "PHOTO_MASK_05", isMask: true,
+      geometry: { alignmentX: "Left", size: { x: 1.55, y: 3 } },
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([mask], ctx);
+    expect(root.children[0]).toBeInstanceOf(Mesh); // no Group wrapper inserted
+  });
+
   test("Phase 2H+2I: PHOTO_FILL_01 with only PHOTO_DUMMY_01 → infers PHOTO_MASK_01 → children read (MASK|DUMMY) + player 1", async () => {
     // PHOTO_FILL_01 in LINEUP_LEFT is authored with a single maskId
     // [PHOTO_DUMMY_01]. The paired-mask fallback adds PHOTO_MASK_01 when it

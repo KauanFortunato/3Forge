@@ -190,6 +190,12 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: s
     maskIds: node.maskIds,
     transform: node.transform,
   };
+  // Phase 2B — pivot anchor. When NodeTransform/Pivot is non-zero, route
+  // children through an inner Group offset by -pivot. The outer carries
+  // T(position) × R × S; the inner carries T(-pivot). Net effect:
+  // M = T(position) × R × S × T(-pivot), so the pivot point lands at
+  // `position` and rotation/scale apply around the pivot (Maya-style).
+  const host = applyPivotAnchor(g, node.transform);
   // Own maskIds override inherited (R3 semantics). Children with no maskIds of
   // their own pick up this group's maskIds as their effective stencil source.
   // Phase 2H — PHOTO_FILL_XX with only PHOTO_DUMMY_XX gets PHOTO_MASK_XX
@@ -200,9 +206,30 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: s
     effectiveOwnMaskIds = augmentPhotoFillMaskIds(node.name, effectiveOwnMaskIds, ctx.photoMaskInfoByMaskId);
   }
   const passToChildren = effectiveOwnMaskIds.length > 0 ? effectiveOwnMaskIds : inheritedMaskIds;
-  for (const c of node.children) g.add(buildNode(c, ctx, passToChildren));
-  applyFlowLayout(g, node);
+  for (const c of node.children) host.add(buildNode(c, ctx, passToChildren));
+  applyFlowLayout(host, node);
   return g;
+}
+
+/**
+ * Phase 2B — create an inner pivot-anchor Group when the transform has a
+ * non-zero Pivot. Returns the host that should receive children:
+ * `outer` when pivot is absent/zero, otherwise a freshly added inner Group
+ * with `position = -pivot`. The inner is named "<outer.name> (pivot)" so the
+ * Object3D tree stays readable.
+ */
+function applyPivotAnchor(outer: Group, t: W3DTransform): Group {
+  if (!hasNonZeroPivot(t.pivot)) return outer;
+  const p = t.pivot!;
+  const inner = new Group();
+  inner.name = `${outer.name} (pivot)`;
+  inner.position.set(-p.x, -p.y, -p.z);
+  outer.add(inner);
+  return inner;
+}
+
+function hasNonZeroPivot(p?: W3DTransform["pivot"]): boolean {
+  return !!p && (p.x !== 0 || p.y !== 0 || p.z !== 0);
 }
 
 /**
@@ -240,6 +267,13 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
     // isMask quads are stencil planes — hide the plane itself until Phase H
     mesh.visible = node.enable && !node.isMask;
     applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
+    // Phase 2B — leaf Quad with pivot: wrap mesh in an outer Group so the
+    // pivot anchor applies under the Quad's own transform. Outer carries
+    // T(position) × R × S; mesh becomes a child at -pivot with identity
+    // local transform.
+    if (hasNonZeroPivot(node.transform.pivot)) {
+      return wrapMeshWithPivot(mesh, node);
+    }
     return mesh;
   }
   const wrapper = new Group();
@@ -250,13 +284,37 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
   wrapper.userData.w3d = {
     id: node.id, name: node.name, kind: "Quad", hasChildren: true, maskIds: node.maskIds,
   };
+  // Phase 2B — pivot anchor for Quad-with-children. Mesh and children both
+  // sit inside the pivot host so they share the same anchor offset.
+  const host = applyPivotAnchor(wrapper, node.transform);
   const mesh = makeQuadMesh(node, ctx);
   // Hide the mask plane itself even when wrapper is visible
   if (node.isMask) mesh.visible = false;
-  wrapper.add(mesh);
+  host.add(mesh);
   const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
-  for (const c of node.children) wrapper.add(buildNode(c, ctx, passToChildren));
+  for (const c of node.children) host.add(buildNode(c, ctx, passToChildren));
   return wrapper;
+}
+
+/**
+ * Phase 2B — wrap a leaf Quad mesh in an outer Group so the Quad's pivot
+ * anchor applies. The outer takes over the mesh's position/rotation/scale;
+ * the mesh becomes a child at -pivot with identity local transform. The
+ * mesh's visibility (set by buildQuad / applyPhotoMaskStencil) is preserved
+ * so stencil + enable semantics still work.
+ */
+function wrapMeshWithPivot(mesh: Mesh, node: W3DQuadData): Group {
+  const p = node.transform.pivot!;
+  const outer = new Group();
+  outer.name = `${node.name} (pivot wrapper)`;
+  outer.position.copy(mesh.position);
+  outer.rotation.copy(mesh.rotation);
+  outer.scale.copy(mesh.scale);
+  mesh.position.set(-p.x, -p.y, -p.z);
+  mesh.rotation.set(0, 0, 0);
+  mesh.scale.set(1, 1, 1);
+  outer.add(mesh);
+  return outer;
 }
 
 function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
@@ -556,7 +614,8 @@ function applyTransform(obj: Object3D, t: W3DTransform): void {
   obj.position.set(t.position.x, t.position.y, t.position.z);
   obj.rotation.set(degToRad(t.rotationDeg.x), degToRad(t.rotationDeg.y), degToRad(t.rotationDeg.z));
   obj.scale.set(t.scale.x, t.scale.y, t.scale.z);
-  // pivot intentionally not applied in this phase
+  // Pivot is applied by applyPivotAnchor / wrapMeshWithPivot (Phase 2B), not
+  // here — those routines insert an inner offset under the transformed outer.
 }
 
 function degToRad(d: number): number {
