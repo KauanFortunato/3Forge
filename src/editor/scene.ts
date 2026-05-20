@@ -1131,15 +1131,10 @@ export class SceneEditor {
     const environmentScene = this.scene as Scene & { environmentIntensity?: number };
     environmentScene.environmentIntensity = settings.environment.intensity;
 
-    // Solid mode falls back to the neutral env regardless of the user's HDR
-    // choice, keeping ambient light cheap and consistent while working flat.
-    // The HDR is re-bound when the user switches back to rendered/wireframe.
-    if (this.store.viewMode === "solid") {
-      this.scene.environment = this.neutralEnvironmentTarget.texture;
-      environmentScene.environmentIntensity = 1;
-      return;
-    }
-
+    // Honour an explicit "no environment" regardless of view mode — the user
+    // turning the env off in settings is a strong signal that they don't want
+    // any ambient/IBL on the materials, and solid mode shouldn't silently
+    // re-bind a neutral env over that intent.
     if (settings.environment.type === "none") {
       this.scene.environment = null;
       environmentScene.environmentIntensity = 0;
@@ -1149,6 +1144,16 @@ export class SceneEditor {
     if (settings.environment.type === "default") {
       this.scene.environment = this.neutralEnvironmentTarget.texture;
       environmentScene.environmentIntensity = settings.environment.intensity;
+      return;
+    }
+
+    // From here on, type === "hdr". Solid mode suppresses the HDR back to the
+    // neutral env so working flat doesn't pay for an HDR upload + the heavy
+    // reflections it would put on every material; the HDR re-binds the moment
+    // the user switches to rendered or wireframe.
+    if (this.store.viewMode === "solid") {
+      this.scene.environment = this.neutralEnvironmentTarget.texture;
+      environmentScene.environmentIntensity = 1;
       return;
     }
 
