@@ -39,8 +39,9 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   const renderer = new WebGLRenderer({ antialias: true, stencil: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.domElement.style.display = "block";
-  renderer.domElement.style.width = "100%";
-  renderer.domElement.style.height = "100%";
+  // Phase DEV-Viewport — render into a 16:9 frame matching the 3Forge project
+  // aspect (1920×1080). The canvas size is computed by resize() below to fit
+  // inside the host while preserving 16:9; CSS centers it inside the host.
   host.appendChild(renderer.domElement);
 
   const scene = new Scene();
@@ -65,18 +66,25 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   let controls: OrbitControls | null = new OrbitControls(perspectiveCam, renderer.domElement);
   controls.enableDamping = true;
 
+  const TARGET_ASPECT = 16 / 9; // 3Forge project default (1920×1080)
   const resize = () => {
-    const w = Math.max(host.clientWidth, 1);
-    const h = Math.max(host.clientHeight, 1);
+    const hostW = Math.max(host.clientWidth, 1);
+    const hostH = Math.max(host.clientHeight, 1);
+    // Letterbox: fit the largest 16:9 rectangle inside the host.
+    let w = hostW;
+    let h = hostW / TARGET_ASPECT;
+    if (h > hostH) {
+      h = hostH;
+      w = hostH * TARGET_ASPECT;
+    }
     renderer.setSize(w, h);
     if (activeCam instanceof PerspectiveCamera) {
-      activeCam.aspect = w / h;
+      activeCam.aspect = TARGET_ASPECT;
       activeCam.updateProjectionMatrix();
     } else {
-      // ortho frustum stays fixed at 16:9 inside the host (letterbox style)
-      const aspect = w / h;
+      // Ortho frustum locked to 16:9 — letterbox bars are pure CSS now.
       const halfH = 5;
-      const halfW = halfH * aspect;
+      const halfW = halfH * TARGET_ASPECT;
       activeCam.left = -halfW;
       activeCam.right = halfW;
       activeCam.top = halfH;
