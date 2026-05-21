@@ -618,6 +618,203 @@ describe("builder — BuildContext", () => {
     expect((dummyMesh.material as MeshBasicMaterial).colorWrite).toBe(false);
   });
 
+  // -----------------------------------------------------------------------
+  // Phase 2D.3 — generic colored-mask stencil writers + clipped clients.
+  // Bits 6-7 are reserved for non-PHOTO IsColoredMask=True masks (BASE_MAIN,
+  // BASE_TEAM, ...). Disjoint from the Phase 2J PHOTO owner fields.
+  // -----------------------------------------------------------------------
+
+  test("Phase 2D.3: BASE_MAIN-like writer WITH a client gets stencilWrite=true AND colorWrite=true", async () => {
+    const { AlwaysStencilFunc, ReplaceStencilOp } = await import("three");
+    const baseMain = quadData({
+      id: "base-main", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const client = quadData({ id: "ff-main", name: "TEXTURE_FULLFRAME_MAIN", maskIds: ["base-main"] });
+    const ctx = makeCtx();
+    const root = buildNodeTree([baseMain, client], ctx);
+    const mat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(true);
+    expect(mat.stencilFunc).toBe(AlwaysStencilFunc);
+    expect(mat.stencilZPass).toBe(ReplaceStencilOp);
+    expect(mat.colorWrite).toBe(true); // KEY difference from PHOTO_* writers
+  });
+
+  test("Phase 2D.3: first generic writer uses ref=64 (1<<6); second uses ref=128 (2<<6)", () => {
+    const m1 = quadData({
+      id: "base-main", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const m2 = quadData({
+      id: "base-team", name: "BASE_TEAM", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const c1 = quadData({ id: "c1", name: "FF_MAIN", maskIds: ["base-main"] });
+    const c2 = quadData({ id: "c2", name: "FF_BENCH", maskIds: ["base-team"] });
+    const root = buildNodeTree([m1, m2, c1, c2], makeCtx());
+    const mat1 = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    const mat2 = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    expect(mat1.stencilRef).toBe(64);  // 1 << 6
+    expect(mat2.stencilRef).toBe(128); // 2 << 6
+  });
+
+  test("Phase 2D.3: generic writer writeMask = STENCIL_GENERIC_OWNER_FIELD (0b11000000 = 192)", () => {
+    const m1 = quadData({
+      id: "base-main", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const client = quadData({ id: "c", name: "FF", maskIds: ["base-main"] });
+    const root = buildNodeTree([m1, client], makeCtx());
+    const mat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilWriteMask).toBe(0b11000000); // 192
+  });
+
+  test("Phase 2D.3: generic field is disjoint from PHOTO_MASK and PHOTO_DUMMY fields", () => {
+    const photoMask = quadData({
+      id: "pmask", name: "PHOTO_MASK_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const photoDummy = quadData({
+      id: "pdummy", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const baseMain = quadData({
+      id: "bmain", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const client = quadData({ id: "c", name: "FF", maskIds: ["bmain"] });
+    const root = buildNodeTree([photoMask, photoDummy, baseMain, client], makeCtx());
+    const pMaskMat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    const pDummyMat = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    const genMat = (root.children[2] as Mesh).material as MeshBasicMaterial;
+    // All three writer writeMasks are mutually disjoint.
+    expect(pMaskMat.stencilWriteMask & pDummyMat.stencilWriteMask).toBe(0);
+    expect(pMaskMat.stencilWriteMask & genMat.stencilWriteMask).toBe(0);
+    expect(pDummyMat.stencilWriteMask & genMat.stencilWriteMask).toBe(0);
+    // And union covers bits 0-7 used so far.
+    expect(pMaskMat.stencilWriteMask | pDummyMat.stencilWriteMask | genMat.stencilWriteMask).toBe(0b11111111);
+  });
+
+  test("Phase 2D.3: generic reader (MaskId=BASE_MAIN, IsInvertedMask=True) → Equal func, ref=64, funcMask=0b11000000", async () => {
+    const { EqualStencilFunc, KeepStencilOp } = await import("three");
+    const baseMain = quadData({
+      id: "base-main", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const client = quadData({ id: "ff-main", name: "TEXTURE_FULLFRAME_MAIN", maskIds: ["base-main"] });
+    const root = buildNodeTree([baseMain, client], makeCtx());
+    const mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(true);
+    expect(mat.stencilFunc).toBe(EqualStencilFunc);
+    expect(mat.stencilRef).toBe(64);
+    expect(mat.stencilFuncMask).toBe(0b11000000); // 192
+    expect(mat.stencilFail).toBe(KeepStencilOp);
+    expect(mat.stencilZFail).toBe(KeepStencilOp);
+    expect(mat.stencilZPass).toBe(KeepStencilOp);
+    expect(mat.depthTest).toBe(false);
+  });
+
+  test("Phase 2D.3: generic reader's ref/funcMask does NOT touch PHOTO bits", () => {
+    const baseMain = quadData({
+      id: "bmain", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const client = quadData({ id: "c", name: "FF", maskIds: ["bmain"] });
+    const root = buildNodeTree([baseMain, client], makeCtx());
+    const mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    // ref and funcMask only have bits inside the generic field (6-7).
+    expect(mat.stencilRef & 0b00111111).toBe(0);     // no PHOTO bits set
+    expect(mat.stencilFuncMask & 0b00111111).toBe(0); // PHOTO fields not queried
+  });
+
+  test("Phase 2D.3: mixed PHOTO_DUMMY + generic reader combines bits without contamination", () => {
+    // A hypothetical client with maskIds=[PHOTO_DUMMY_01, BASE_MAIN] should
+    // emit ref = (1<<3) | (1<<6) = 8 | 64 = 72 and funcMask = 0b00111000 |
+    // 0b11000000 = 0b11111000. Each field is tested independently.
+    const photoDummy = quadData({
+      id: "pdummy", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const baseMain = quadData({
+      id: "bmain", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const mixedClient = quadData({ id: "c", name: "MIXED", maskIds: ["pdummy", "bmain"] });
+    const root = buildNodeTree([photoDummy, baseMain, mixedClient], makeCtx());
+    const mat = (root.children[2] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilRef).toBe(72);            // (1<<3) | (1<<6)
+    expect(mat.stencilFuncMask).toBe(0b11111000); // DUMMY | GENERIC
+  });
+
+  test("Phase 2D.3: 4th generic mask gets warning and skipped (limit = 3)", () => {
+    const mk = (id: string, name: string) => quadData({
+      id, name, isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const clientFor = (id: string, n: number) => quadData({ id: `c${n}`, name: `C${n}`, maskIds: [id] });
+    const ctx = makeCtx();
+    const root = buildNodeTree(
+      [mk("g1", "G1"), mk("g2", "G2"), mk("g3", "G3"), mk("g4", "G4"),
+       clientFor("g1", 1), clientFor("g2", 2), clientFor("g3", 3), clientFor("g4", 4)],
+      ctx,
+    );
+    // First three get stencilWrite=true; fourth does NOT
+    expect(((root.children[0] as Mesh).material as MeshBasicMaterial).stencilWrite).toBe(true);
+    expect(((root.children[1] as Mesh).material as MeshBasicMaterial).stencilWrite).toBe(true);
+    expect(((root.children[2] as Mesh).material as MeshBasicMaterial).stencilWrite).toBe(true);
+    expect(((root.children[3] as Mesh).material as MeshBasicMaterial).stencilWrite).toBe(false);
+    expect(ctx.warnings.some(w => w.includes("G4") && w.includes("exceeds"))).toBe(true);
+  });
+
+  test("Phase 2D.3: generic mask without any client does NOT consume an index", () => {
+    const orphan = quadData({
+      id: "orphan", name: "ORPHAN_MASK", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    // Three "real" generic masks WITH clients should still get indices 1,2,3
+    // (orphan in front does not steal the first slot).
+    const g1 = quadData({
+      id: "g1", name: "G1", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const c1 = quadData({ id: "c1", name: "C1", maskIds: ["g1"] });
+    const root = buildNodeTree([orphan, g1, c1], makeCtx());
+    const orphanMat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    const g1Mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    expect(orphanMat.stencilWrite).toBe(false); // orphan stays as a non-writer
+    expect(g1Mat.stencilWrite).toBe(true);
+    expect(g1Mat.stencilRef).toBe(64); // index 1, not 2
+  });
+
+  test("Phase 2D.3: generic writer renderOrder=15, generic-only reader renderOrder=16", () => {
+    const baseMain = quadData({
+      id: "bmain", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const client = quadData({ id: "c", name: "TEXTURE_FULLFRAME_MAIN", maskIds: ["bmain"] });
+    const root = buildNodeTree([baseMain, client], makeCtx());
+    const writer = root.children[0] as Mesh;
+    const reader = root.children[1] as Mesh;
+    expect(writer.renderOrder).toBe(15);
+    expect(reader.renderOrder).toBe(16);
+    expect(writer.renderOrder).toBeLessThan(reader.renderOrder);
+  });
+
+  test("Phase 2D.3 regression: existing 'non-PHOTO_MASK isMask quad' WITHOUT clients still has stencilWrite=false", () => {
+    // The orphan-mask path: BASE_MAIN-like quad with NO client should NOT
+    // become a generic writer (no index consumed, no stencil setup applied).
+    // This mirrors the existing "Phase 1a scope" test invariant.
+    const baseMain = quadData({
+      id: "bmain", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([baseMain], ctx);
+    const mat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(false);
+    expect((root.children[0] as Mesh).visible).toBe(true); // Phase 2D.1 visibility preserved
+  });
+
   test("Phase 2E: PHOTO_FILL-like client with [DUMMY, MASK] reads via bitMask=3 (intersection)", async () => {
     // Simulates PHOTO_FILL_02..05 with [PHOTO_DUMMY_0X, PHOTO_MASK_0X]. The
     // reader OR's both bits (DUMMY=2, MASK=1) into bitMask=3 and tests it with

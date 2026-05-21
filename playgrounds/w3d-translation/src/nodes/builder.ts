@@ -63,6 +63,25 @@ const STENCIL_DUMMY_SHIFT = 3;
 const STENCIL_PLAYER_INDEX_MAX = 7;
 
 /**
+ * Phase 2D.3 — generic colored-mask owner field.
+ *
+ * Reserved bits 6-7 for non-PHOTO `IsMask=True IsColoredMask=True` writers
+ * (e.g. BASE_MAIN, BASE_TEAM in LINEUP_LEFT). These masks RENDER VISIBLY
+ * (their gradient texture shows) AND write a stencil silhouette for their
+ * MaskId clients (e.g. TEXTURE_FULLFRAME_MAIN clipping inside BASE_MAIN).
+ *
+ * The field is disjoint from the Phase 2J PHOTO fields:
+ *   STENCIL_GENERIC_OWNER_FIELD & (STENCIL_MASK_OWNER_FIELD | STENCIL_DUMMY_OWNER_FIELD) === 0
+ *
+ * Index 0 means "no generic mask wrote here", indices 1..3 identify the
+ * first three referenced generic masks discovered in document order. LINEUP_LEFT
+ * needs 2 (BASE_MAIN, BASE_TEAM); the 4th generic mask emits a warning.
+ */
+const STENCIL_GENERIC_OWNER_FIELD = 0b11000000; // bits 6-7
+const STENCIL_GENERIC_SHIFT = 6;
+const STENCIL_GENERIC_INDEX_MAX = 3;
+
+/**
  * Phase 2F — alphaTest threshold for textured mask writers (e.g. PHOTO_DUMMY_0X
  * which uses the player photo + VERTICAL_RAMP alphaMap as the mask shape).
  * Fragments with combined alpha (map.a × alphaMap.r) below this threshold are
@@ -73,6 +92,13 @@ const STENCIL_PLAYER_INDEX_MAX = 7;
  */
 const TEXTURED_MASK_ALPHA_TEST = 0.5;
 
+export type GenericMaskInfo = {
+  /** Generic mask owner index (1..STENCIL_GENERIC_INDEX_MAX). */
+  index: number;
+  isInverted: boolean;
+  name: string;
+};
+
 export type BuildContext = {
   registry: W3DResourceRegistry;
   textureUrlsByFilename: Map<string, string>;
@@ -82,11 +108,16 @@ export type BuildContext = {
   stencilDebugShowMask?: boolean;
   /** Populated automatically by buildNodeTree from the input roots. */
   photoMaskInfoByMaskId?: Map<string, PhotoMaskInfo>;
+  /** Phase 2D.3 — populated automatically by buildNodeTree. */
+  genericMaskInfoByMaskId?: Map<string, GenericMaskInfo>;
 };
 
 export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
   if (ctx && !ctx.photoMaskInfoByMaskId) {
     ctx.photoMaskInfoByMaskId = collectPhotoMaskInfo(roots, ctx.warnings);
+  }
+  if (ctx && !ctx.genericMaskInfoByMaskId) {
+    ctx.genericMaskInfoByMaskId = collectGenericMaskInfo(roots, ctx.warnings);
   }
   const top = new Group();
   top.name = "w3d-nodes-root";
@@ -123,6 +154,52 @@ function collectPhotoMaskInfo(
     for (const c of n.children) walk(c);
   };
   for (const r of roots) walk(r);
+  return out;
+}
+
+/**
+ * Phase 2D.3 — collect non-PHOTO `IsMask=True IsColoredMask=True` quads as
+ * generic stencil writers. A candidate is registered only when at least one
+ * other node references its GUID via `maskIds[]` (otherwise the index would
+ * be wasted on an orphan mask). Document order determines the index 1..MAX;
+ * the 4th candidate emits a warning and is skipped.
+ */
+function collectGenericMaskInfo(
+  roots: W3DNodeData[],
+  warnings?: string[],
+): Map<string, GenericMaskInfo> {
+  const candidates: W3DQuadData[] = [];
+  const referencedIds = new Set<string>();
+  const walk = (n: W3DNodeData): void => {
+    for (const id of n.maskIds) referencedIds.add(id);
+    if (
+      n.kind === "Quad" &&
+      n.isMask &&
+      n.maskProperties?.isColoredMask === true &&
+      !PHOTO_MASK_NAME_RE.test(n.name) &&
+      !PHOTO_DUMMY_NAME_RE.test(n.name)
+    ) {
+      candidates.push(n);
+    }
+    for (const c of n.children) walk(c);
+  };
+  for (const r of roots) walk(r);
+
+  const out = new Map<string, GenericMaskInfo>();
+  let next = 1;
+  for (const cand of candidates) {
+    if (!referencedIds.has(cand.id)) continue; // orphan — no client references it
+    if (next > STENCIL_GENERIC_INDEX_MAX) {
+      warnings?.push(`Generic colored mask "${cand.name}" exceeds the ${STENCIL_GENERIC_INDEX_MAX}-mask limit; skipping stencil setup.`);
+      continue;
+    }
+    out.set(cand.id, {
+      index: next,
+      isInverted: !!cand.maskProperties?.isInvertedMask,
+      name: cand.name,
+    });
+    next++;
+  }
   return out;
 }
 
@@ -540,6 +617,31 @@ function applyPhotoMaskStencil(
     return;
   }
 
+  // Writer: generic colored mask (BASE_MAIN, BASE_TEAM, ...). Phase 2D.3.
+  // Diverges from the PHOTO_* writer in TWO ways:
+  //   - writes only to STENCIL_GENERIC_OWNER_FIELD (bits 6-7);
+  //   - keeps colorWrite=true so the gradient texture renders as a visible
+  //     band underneath its clipped clients (TEXTURE_FULLFRAME_*).
+  const genericInfo = ctx.genericMaskInfoByMaskId;
+  if (genericInfo && node.isMask && genericInfo.has(node.id)) {
+    const { index } = genericInfo.get(node.id)!;
+    mat.depthWrite = false;
+    mat.depthTest = false;
+    mat.stencilWrite = true;
+    mat.stencilWriteMask = STENCIL_GENERIC_OWNER_FIELD;
+    mat.stencilFunc = AlwaysStencilFunc;
+    mat.stencilRef = index << STENCIL_GENERIC_SHIFT;
+    mat.stencilZPass = ReplaceStencilOp;
+    mat.stencilFail = ReplaceStencilOp;
+    mat.stencilZFail = ReplaceStencilOp;
+    mesh.renderOrder = RENDER_ORDER_GENERIC_WRITER;
+    mesh.visible = node.enable;
+    // colorWrite intentionally left at default (true) so the colored gradient
+    // band paints into the framebuffer. This is the structural difference vs
+    // PHOTO_* writers, which suppress color by setting colorWrite=false.
+    return;
+  }
+
   // Reader: own maskIds take precedence; otherwise inherit from parent Group.
   // Phase 2E + 2J — collect MASK and DUMMY owner player indices separately.
   // Each field is tested independently for owner == N:
@@ -559,23 +661,36 @@ function applyPhotoMaskStencil(
   if (effectiveMaskIds.length > 0) {
     let maskOwner: number | undefined;
     let dummyOwner: number | undefined;
+    let genericOwner: number | undefined;
     let isInverted = false;
     let mixedOwner = false;
     for (const id of effectiveMaskIds) {
-      const target = info.get(id);
-      if (!target) continue;
-      isInverted = target.isInverted;
-      if (target.klass === "mask") {
-        if (maskOwner === undefined) maskOwner = target.playerIndex;
-        else if (maskOwner !== target.playerIndex) mixedOwner = true;
-      } else {
-        if (dummyOwner === undefined) dummyOwner = target.playerIndex;
-        else if (dummyOwner !== target.playerIndex) mixedOwner = true;
+      const target = info ? info.get(id) : undefined;
+      if (target) {
+        isInverted = target.isInverted;
+        if (target.klass === "mask") {
+          if (maskOwner === undefined) maskOwner = target.playerIndex;
+          else if (maskOwner !== target.playerIndex) mixedOwner = true;
+        } else {
+          if (dummyOwner === undefined) dummyOwner = target.playerIndex;
+          else if (dummyOwner !== target.playerIndex) mixedOwner = true;
+        }
+        continue;
+      }
+      // Phase 2D.3 — check the generic-mask map. Fields are disjoint from
+      // PHOTO bits, so a reader can carry both a PHOTO owner and a generic
+      // owner simultaneously; the combined ref/funcMask still tests each
+      // pipeline independently.
+      const genericTarget = genericInfo ? genericInfo.get(id) : undefined;
+      if (genericTarget) {
+        isInverted = genericTarget.isInverted;
+        if (genericOwner === undefined) genericOwner = genericTarget.index;
+        else if (genericOwner !== genericTarget.index) mixedOwner = true;
       }
     }
-    if (maskOwner === undefined && dummyOwner === undefined) return;
+    if (maskOwner === undefined && dummyOwner === undefined && genericOwner === undefined) return;
     if (mixedOwner) {
-      ctx.warnings.push(`Quad "${node.name}": effective maskIds reference multiple owner player indices within the same class; skipping stencil setup to avoid cross-player leakage.`);
+      ctx.warnings.push(`Quad "${node.name}": effective maskIds reference multiple owner indices within the same field; skipping stencil setup to avoid cross-owner leakage.`);
       return;
     }
     if (maskOwner !== undefined && dummyOwner !== undefined && maskOwner !== dummyOwner) {
@@ -592,6 +707,10 @@ function applyPhotoMaskStencil(
       ref |= (dummyOwner << STENCIL_DUMMY_SHIFT);
       funcMask |= STENCIL_DUMMY_OWNER_FIELD;
     }
+    if (genericOwner !== undefined) {
+      ref |= (genericOwner << STENCIL_GENERIC_SHIFT);
+      funcMask |= STENCIL_GENERIC_OWNER_FIELD;
+    }
     mat.stencilWrite = true;
     mat.stencilFunc = isInverted ? EqualStencilFunc : NotEqualStencilFunc;
     mat.stencilRef = ref;
@@ -601,7 +720,14 @@ function applyPhotoMaskStencil(
     mat.stencilZPass = KeepStencilOp;
     mat.depthWrite = false;
     mat.depthTest = false;
-    mesh.renderOrder = photoCardRenderOrder(node.name);
+    // Phase 2D.3 — generic-only readers (no PHOTO bits) get
+    // RENDER_ORDER_GENERIC_CLIENT so they sit between BASE_MAIN/BASE_TEAM
+    // (writer @ 15) and player photo cards (TEXTURE_PHOTO @ 18+).
+    const isGenericOnly =
+      maskOwner === undefined && dummyOwner === undefined && genericOwner !== undefined;
+    mesh.renderOrder = isGenericOnly
+      ? RENDER_ORDER_GENERIC_CLIENT
+      : photoCardRenderOrder(node.name);
     // Patch D2 — force photo-card readers (PHOTO_0X, PHOTO_COLOR_0X,
     // TEXTURE_PHOTO_0X) into the transparent pass so Three.js sorts them
     // strictly by renderOrder. Without this, an opaque reader (PHOTO_COLOR_0X
@@ -628,6 +754,8 @@ function applyPhotoMaskStencil(
  * the R3 visual order. Forcing renderOrder per node-name role restores the
  * intended back-to-front: TEXTURE (pattern) → COLOR (yellow) → PHOTO (player).
  */
+const RENDER_ORDER_GENERIC_WRITER = 15;   // Phase 2D.3 — between PHOTO writer (10) and PHOTO reader (18+)
+const RENDER_ORDER_GENERIC_CLIENT = 16;   // Phase 2D.3 — generic readers (TEXTURE_FULLFRAME_*, etc.)
 const RENDER_ORDER_TEXTURE_PHOTO = 18;
 const RENDER_ORDER_PHOTO_COLOR = 19;
 const RENDER_ORDER_DEFAULT_CLIENT = 20;
