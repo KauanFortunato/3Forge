@@ -550,6 +550,18 @@ function buildTextureText(
   };
 
   applyTransform(mesh, node.transform);
+
+  // Phase TextureText render-order — baseline state for labels without a
+  // MaskId so they render above the photo-card stack (18/19/20). When the
+  // TextureText carries a MaskId (own or inherited), applyPhotoMaskStencil's
+  // reader path runs next and OVERRIDES renderOrder with the correct
+  // stencil-reader value (16 for generic, 18-20 for photo-card). depth state
+  // is set to false here so it matches the rest of the pipeline regardless
+  // of which path runs.
+  mesh.renderOrder = RENDER_ORDER_TEXT;
+  material.depthWrite = false;
+  material.depthTest = false;
+
   applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
 
   if (hasNonZeroPivot(node.transform.pivot)) {
@@ -973,6 +985,14 @@ const RENDER_ORDER_GENERIC_CLIENT = 16;   // Phase 2D.3 — generic readers (TEX
 const RENDER_ORDER_TEXTURE_PHOTO = 18;
 const RENDER_ORDER_PHOTO_COLOR = 19;
 const RENDER_ORDER_DEFAULT_CLIENT = 20;
+/**
+ * Phase TextureText render-order — labels without a MaskId default to renderOrder=22
+ * (above the photo-card stack at 18/19/20) so PLAYER_NUMBER / PLAYER_POSITION /
+ * PLAYER_LAST_NAME draw on top of their card. TextureText nodes WITH a MaskId
+ * still pass through applyPhotoMaskStencil's reader path which overrides this
+ * value with the appropriate stencil-reader renderOrder.
+ */
+const RENDER_ORDER_TEXT = 22;
 
 const PHOTO_CARD_CLIENT_RE = /^(TEXTURE_PHOTO_\d+|PHOTO_COLOR_\d+|PHOTO_\d+)$/;
 

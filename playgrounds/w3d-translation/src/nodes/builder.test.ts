@@ -2350,6 +2350,169 @@ describe("builder — BuildContext", () => {
     expect(mat.stencilFuncMask).toBe(0b11000000);
   });
 
+  // -----------------------------------------------------------------------
+  // Phase TextureText render-order fix — labels without a MaskId render
+  // on top of the photo-card stack (renderOrder=22). Stencil readers keep
+  // their existing renderOrder (16 generic, 18/19/20 photo-card).
+  // -----------------------------------------------------------------------
+
+  test("Phase TextureText render-order: TextureText without maskIds gets renderOrder=22, depthWrite=false, depthTest=false", () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "PLAYER_LAST_NAME_02",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "JACKSON",
+      textBox: { x: 0.38, y: 0.33 },
+      textQuality: 3,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    expect(mesh.renderOrder).toBe(22);
+    expect(mat.depthWrite).toBe(false);
+    expect(mat.depthTest).toBe(false);
+  });
+
+  test("Phase TextureText render-order: PLAYER_NUMBER-like TextureText gets renderOrder=22 and transparent=true", () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "num", name: "PLAYER_NUMBER_02",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "23",
+      textBox: { x: 0.08, y: 0.19 },
+      textQuality: 4,
+      maskIds: [],
+      transform: {
+        position: { x: -0.5, y: 0.435, z: -3 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 3, y: 3, z: 3 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    expect(mesh.renderOrder).toBe(22);
+    expect(mat.transparent).toBe(true);
+  });
+
+  test("Phase TextureText render-order: TextureText with MaskId=BASE_MAIN stays at renderOrder=16 (generic reader wins)", () => {
+    // SMALL_TEAM_NAME-like: own MaskId references BASE_MAIN; reader path
+    // overrides the default-22 baseline back to the generic 16.
+    const baseMain = quadData({
+      id: "base-main", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const text = {
+      kind: "TextureText" as const,
+      id: "tt", name: "SMALL_TEAM_NAME",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "DETROIT IRONHAWKS",
+      textBox: { x: 6.39, y: 0.23 },
+      textQuality: 0.8,
+      maskIds: ["base-main"],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const root = buildNodeTree([baseMain, text], makeCtx());
+    const mesh = root.children[1] as Mesh;
+    expect(mesh.renderOrder).toBe(16); // generic-only reader wins over the default 22
+  });
+
+  test("Phase TextureText render-order: TextureText inherits MaskId from parent Group and stencil reader wins", () => {
+    // TEAM_NAME-style: parent Group has MaskId=BASE_MAIN, TextureText child has none.
+    // Inherited maskIds resolve to a generic writer → reader path fires → renderOrder=16.
+    const baseMain = quadData({
+      id: "base-main", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const text = {
+      kind: "TextureText" as const,
+      id: "tt", name: "TEAM_NAME_FS_01_L_01",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "DETROIT",
+      textBox: { x: 0.43, y: 0.4 },
+      textQuality: 5,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const parent = groupData({
+      id: "team-name", name: "TEAM_NAME",
+      maskIds: ["base-main"],
+      children: [text],
+    });
+    const root = buildNodeTree([baseMain, parent], makeCtx());
+    const teamNameGroup = root.children[1] as Group;
+    const textMesh = teamNameGroup.children[0] as Mesh;
+    expect(textMesh.renderOrder).toBe(16); // inherited generic reader
+  });
+
+  test("Phase TextureText render-order: TextureText inside PHOTO_FILL gets photoCardRenderOrder default 20 (regression)", () => {
+    // A TextureText sitting under PHOTO_FILL_02 with maskIds=[DUMMY_02, MASK_02]
+    // inherits both → Phase 2E intersection reader fires → renderOrder via
+    // photoCardRenderOrder(name). Name doesn't match TEXTURE_PHOTO/COLOR/PHOTO,
+    // so falls back to RENDER_ORDER_DEFAULT_CLIENT = 20.
+    const photoMask = quadData({
+      id: "mask-2", name: "PHOTO_MASK_02", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const photoDummy = quadData({
+      id: "dummy-2", name: "PHOTO_DUMMY_02", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const text = {
+      kind: "TextureText" as const,
+      id: "tt", name: "MASKED_TEXT",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "X",
+      textBox: { x: 0.1, y: 0.1 },
+      textQuality: 3,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const fill = groupData({
+      id: "fill-2", name: "PHOTO_FILL_02",
+      maskIds: ["dummy-2", "mask-2"],
+      children: [text],
+    });
+    const root = buildNodeTree([photoMask, photoDummy, fill], makeCtx());
+    const fillGroup = root.children[2] as Group;
+    const mesh = fillGroup.children[0] as Mesh;
+    expect(mesh.renderOrder).toBe(20); // photoCardRenderOrder default for non-PHOTO/COLOR/TEXTURE_PHOTO name
+  });
+
+  test("Phase TextureText render-order regression: PHOTO_02 reader still gets renderOrder=20", () => {
+    // The TextureText fix must NOT change the existing Phase 1a + Patch D2
+    // renderOrder for Quad photo-card clients.
+    const photoMask = quadData({
+      id: "mask-2", name: "PHOTO_MASK_02", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const photo = quadData({ id: "p2", name: "PHOTO_02", maskIds: ["mask-2"] });
+    const root = buildNodeTree([photoMask, photo], makeCtx());
+    const photoMesh = root.children[1] as Mesh;
+    expect(photoMesh.renderOrder).toBe(20);
+  });
+
   test("Phase 2C regression: PHOTO_MASK_05 (no texture layer) is unaffected by UV transform plumbing", () => {
     // PHOTO_MASK_05 uses TextureLayerId="Standard" → no texture lookup, no
     // UV transform path triggered. The Mesh's geometry stays exactly as
