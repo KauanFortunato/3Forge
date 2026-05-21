@@ -550,8 +550,72 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([baseMask], ctx);
     const m = root.children[0] as Mesh;
     const mat = m.material as MeshBasicMaterial;
-    expect(mat.stencilWrite).toBe(false); // untouched by Phase 1a
-    expect(m.visible).toBe(false); // still hidden by the old "isMask = hide" default
+    expect(mat.stencilWrite).toBe(false); // untouched by Phase 1a — name not in PHOTO_* scope
+    // Phase 2D.1 — IsColoredMask=true makes the mesh visible. The stencil
+    // writer is still NOT attached (Phase 1a's PHOTO_* name gate stays
+    // intact), so this asserts visibility ONLY changed for colored masks
+    // and the stencil pipeline is genuinely orthogonal.
+    expect(m.visible).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // Phase 2D.1 — colored-mask visibility (BASE_MAIN / BASE_TEAM class).
+  // R3 carries some IsMask=True nodes that are ALSO meant to render as
+  // colored bands (IsColoredMask=True). Pure stencil masks (PHOTO_MASK_0X,
+  // PHOTO_DUMMY_0X) stay hidden because they carry IsColoredMask=False.
+  // -----------------------------------------------------------------------
+
+  test("Phase 2D.1: IsMask=true + IsColoredMask=true + non-PHOTO name → mesh visible when enable=true", () => {
+    const baseMain = quadData({
+      id: "base-main", name: "BASE_MAIN", enable: true, isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const root = buildNodeTree([baseMain], makeCtx());
+    const m = root.children[0] as Mesh;
+    expect(m.visible).toBe(true);
+  });
+
+  test("Phase 2D.1: IsMask=true + IsColoredMask=false → mesh hidden (pure stencil mask)", () => {
+    const pureMask = quadData({
+      id: "p", name: "SOME_STENCIL_ONLY", enable: true, isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const root = buildNodeTree([pureMask], makeCtx());
+    const m = root.children[0] as Mesh;
+    expect(m.visible).toBe(false);
+  });
+
+  test("Phase 2D.1: IsMask=true + IsColoredMask=true + Enable=false → mesh hidden (enable always wins)", () => {
+    const disabled = quadData({
+      id: "d", name: "BASE_MAIN", enable: false, isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const root = buildNodeTree([disabled], makeCtx());
+    const m = root.children[0] as Mesh;
+    expect(m.visible).toBe(false);
+  });
+
+  test("Phase 2D.1 regression: PHOTO_MASK_01 / PHOTO_DUMMY_01 (IsColoredMask=false) stay hidden as stencil writers", () => {
+    const photoMask = quadData({
+      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const photoDummy = quadData({
+      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([photoMask, photoDummy], ctx);
+    const maskMesh = root.children[0] as Mesh;
+    const dummyMesh = root.children[1] as Mesh;
+    // Stencil writer branch sets mesh.visible = node.enable (= true here),
+    // but stencilDebugShowMask is off and colorWrite is false, so the mesh
+    // is effectively invisible despite mesh.visible=true. Confirm both the
+    // stencil setup and the "no colored mask visibility" invariant.
+    expect((maskMesh.material as MeshBasicMaterial).stencilWrite).toBe(true);
+    expect((maskMesh.material as MeshBasicMaterial).colorWrite).toBe(false);
+    expect((dummyMesh.material as MeshBasicMaterial).stencilWrite).toBe(true);
+    expect((dummyMesh.material as MeshBasicMaterial).colorWrite).toBe(false);
   });
 
   test("Phase 2E: PHOTO_FILL-like client with [DUMMY, MASK] reads via bitMask=3 (intersection)", async () => {

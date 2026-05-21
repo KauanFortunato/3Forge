@@ -12,7 +12,7 @@ import { parseW3DSceneMetadata } from "../../../src/editor/import/w3d";
 import type { ComponentBlueprint } from "../../../src/editor/types";
 import { parseNodes, type W3DNodeData } from "./nodes/data";
 import { parseResources, type W3DResourceRegistry } from "./nodes/resources";
-import { parseTimelinePreviewSnapshot } from "./nodes/timelines";
+import { parseTimelinePreviewSnapshot, type TimelinePreviewSnapshot } from "./nodes/timelines";
 
 export interface TranslateOptions {
   onWarn?: (msg: string) => void;
@@ -38,12 +38,15 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
   const nodesResult = parseNodes(xml);
   for (const w of nodesResult.warnings) warn(w);
 
-  // Phase 2G — evaluate animated properties at the selected timeline's
-  // PreviewMarker and override the corresponding static <Quad> attributes on
-  // the parsed tree. Only Alpha is evaluated for now; other animated
-  // properties stay at their authored static value until needed.
+  // Phase 2G + 2D.2 — evaluate animated properties at the selected timeline's
+  // PreviewMarker and override the corresponding static <Quad>/<Group>
+  // attributes on the parsed tree:
+  //   - Alpha            → Quad.alpha
+  //   - Size.XProp/YProp → Quad.geometry.size.x/y
+  //   - Transform.Position.{X,Y,Z}Prop → Quad/Group.transform.position.{x,y,z}
+  // Other animated properties stay at their authored static value until needed.
   const previewSnapshot = parseTimelinePreviewSnapshot(xml);
-  applyAlphaSnapshot(nodesResult.roots, previewSnapshot.alphaByControllableId);
+  applyTimelineSnapshot(nodesResult.roots, previewSnapshot);
 
   const resourcesResult = parseResources(xml);
   for (const w of resourcesResult.warnings) warn(w);
@@ -57,15 +60,40 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
 }
 
 /**
- * Walk the parsed Quad tree and replace each Quad.alpha with the timeline-
- * evaluated value, when one exists for that node's GUID. Operates in place.
+ * Walk the parsed node tree and apply the timeline preview snapshot in place:
+ *
+ *  - Alpha overrides Quad.alpha (Groups don't carry alpha).
+ *  - Size.X/Y overrides Quad.geometry.size.x/y (Groups don't carry geometry).
+ *  - Position.X/Y/Z overrides Quad/Group.transform.position.x/y/z.
+ *
+ * Partial axes are supported — a controller with only Size.XProp leaves
+ * geometry.size.y untouched. Nodes whose GUID is absent from every map
+ * remain at their authored static values.
  */
-function applyAlphaSnapshot(roots: W3DNodeData[], alphaMap: Map<string, number>): void {
-  if (alphaMap.size === 0) return;
+function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapshot): void {
+  const { alphaByControllableId, sizeByControllableId, positionByControllableId } = snap;
+  if (
+    alphaByControllableId.size === 0 &&
+    sizeByControllableId.size === 0 &&
+    positionByControllableId.size === 0
+  ) {
+    return;
+  }
   const walk = (n: W3DNodeData): void => {
     if (n.kind === "Quad") {
-      const a = alphaMap.get(n.id);
+      const a = alphaByControllableId.get(n.id);
       if (a !== undefined) n.alpha = a;
+      const sz = sizeByControllableId.get(n.id);
+      if (sz !== undefined) {
+        if (sz.x !== undefined) n.geometry.size.x = sz.x;
+        if (sz.y !== undefined) n.geometry.size.y = sz.y;
+      }
+    }
+    const pos = positionByControllableId.get(n.id);
+    if (pos !== undefined) {
+      if (pos.x !== undefined) n.transform.position.x = pos.x;
+      if (pos.y !== undefined) n.transform.position.y = pos.y;
+      if (pos.z !== undefined) n.transform.position.z = pos.z;
     }
     for (const c of n.children) walk(c);
   };

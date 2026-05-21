@@ -247,6 +247,16 @@ function hasNonZeroPivot(p?: W3DTransform["pivot"]): boolean {
 }
 
 /**
+ * Phase 2D.1 — true when a Quad's MaskProperties marks it as a "colored mask"
+ * (R3 IsColoredMask="True"). Such masks are BOTH clip sources AND visible
+ * colored content (e.g. BASE_MAIN, BASE_TEAM). Pure stencil masks
+ * (PHOTO_MASK_0X / PHOTO_DUMMY_0X) carry IsColoredMask="False" and stay hidden.
+ */
+function isColoredMask(node: W3DQuadData): boolean {
+  return node.maskProperties?.isColoredMask === true;
+}
+
+/**
  * Phase 2A — R3 FlowChildren horizontal distribution for the PLAYERS group.
  *
  * Rollout guard: this is intentionally scoped by node name to PLAYERS only.
@@ -278,8 +288,15 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
   if (node.children.length === 0) {
     const mesh = makeQuadMesh(node, ctx);
     applyTransform(mesh, node.transform);
-    // isMask quads are stencil planes — hide the plane itself until Phase H
-    mesh.visible = node.enable && !node.isMask;
+    // Phase 2D.1 — isMask quads default to hidden (stencil-only writers like
+    // PHOTO_MASK_0X / PHOTO_DUMMY_0X have IsColoredMask=False). When a mask
+    // carries IsColoredMask=True (e.g. BASE_MAIN / BASE_TEAM in R3), it is
+    // BOTH a clip source AND visible colored content — keep it visible.
+    // applyPhotoMaskStencil's writer branch overrides this again to
+    // `mesh.visible = node.enable` for PHOTO_* writers, but that path is
+    // gated by name (collectPhotoMaskInfo), so non-PHOTO colored masks pass
+    // through this rule.
+    mesh.visible = node.enable && (!node.isMask || isColoredMask(node));
     applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
     // Phase 2B — leaf Quad with pivot: wrap mesh in an outer Group so the
     // pivot anchor applies under the Quad's own transform. Outer carries
@@ -302,8 +319,10 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
   // sit inside the pivot host so they share the same anchor offset.
   const host = applyPivotAnchor(wrapper, node.transform);
   const mesh = makeQuadMesh(node, ctx);
-  // Hide the mask plane itself even when wrapper is visible
-  if (node.isMask) mesh.visible = false;
+  // Phase 2D.1 — same colored-mask rule as the leaf-Quad path. Pure stencil
+  // masks (IsColoredMask=False) stay hidden; colored masks (IsColoredMask=True)
+  // remain visible so the Quad-with-children carrier still renders its band.
+  if (node.isMask && !isColoredMask(node)) mesh.visible = false;
   host.add(mesh);
   const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
   for (const c of node.children) host.add(buildNode(c, ctx, passToChildren));
