@@ -252,13 +252,49 @@ function expandPerCorner(
     if (!outSkinIndex || !outSkinWeight || !skinBinding) return;
     const dst = cornerIdx * THREE_INFLUENCES;
     const src = vertexId * usdInfluences;
-    // Copy the first min(USD, 4) influences; pad the rest with (0,0) so
-    // Three.js sees a stable fixed-width attribute. If USD has more than
-    // 4 we truncate — a 5th+ influence is rare and contributes little.
+    // Three.js wants exactly 4 influences. When USD authored more (the
+    // seahorse uses 11), picking the FIRST 4 would often skip the strongest
+    // bones; instead, do a small top-K by weight so the dominant deformers
+    // survive. For usdInfluences <= 4 the loop is essentially a copy + pad.
     const take = Math.min(usdInfluences, THREE_INFLUENCES);
-    for (let i = 0; i < take; i++) {
-      outSkinIndex[dst + i] = skinBinding.jointIndices[src + i] ?? 0;
-      outSkinWeight[dst + i] = skinBinding.jointWeights[src + i] ?? 0;
+    if (usdInfluences <= THREE_INFLUENCES) {
+      for (let i = 0; i < take; i++) {
+        outSkinIndex[dst + i] = skinBinding.jointIndices[src + i] ?? 0;
+        outSkinWeight[dst + i] = skinBinding.jointWeights[src + i] ?? 0;
+      }
+    } else {
+      // O(N) top-4 by weight — N rarely exceeds ~12, no need for a heap.
+      let totalWeight = 0;
+      const picked: Array<{ idx: number; weight: number }> = [];
+      for (let i = 0; i < usdInfluences; i++) {
+        const weight = skinBinding.jointWeights[src + i] ?? 0;
+        if (weight <= 0) continue;
+        if (picked.length < THREE_INFLUENCES) {
+          picked.push({ idx: skinBinding.jointIndices[src + i] ?? 0, weight });
+        } else {
+          let minPos = 0;
+          for (let p = 1; p < picked.length; p++) if (picked[p].weight < picked[minPos].weight) minPos = p;
+          if (weight > picked[minPos].weight) {
+            picked[minPos] = { idx: skinBinding.jointIndices[src + i] ?? 0, weight };
+          }
+        }
+      }
+      for (const p of picked) totalWeight += p.weight;
+      // Renormalize so the kept-4 weights sum to whatever the original sum
+      // was (Three.js auto-normalizes per vertex anyway, but this preserves
+      // relative contributions when we dropped influences).
+      const scale = totalWeight > 0 ? 1 / totalWeight : 0;
+      for (let i = 0; i < THREE_INFLUENCES; i++) {
+        const entry = picked[i];
+        if (entry) {
+          outSkinIndex[dst + i] = entry.idx;
+          outSkinWeight[dst + i] = entry.weight * scale;
+        } else {
+          outSkinIndex[dst + i] = 0;
+          outSkinWeight[dst + i] = 0;
+        }
+      }
+      return;
     }
     for (let i = take; i < THREE_INFLUENCES; i++) {
       outSkinIndex[dst + i] = 0;

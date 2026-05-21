@@ -582,11 +582,24 @@ em::val getSkelRootInfo(int stageId, const std::string& primPath) {
     pxr::UsdSkelBindingAPI bindingAPI(prim);
     if (bindingAPI) {
         pxr::UsdSkelSkeleton skel;
-        if (bindingAPI.GetSkeleton(&skel)) {
+        bool hasSkel = bindingAPI.GetSkeleton(&skel);
+        if (hasSkel) {
             r.set("skeletonPath", skel.GetPath().GetString());
         }
         pxr::UsdPrim animPrim;
-        if (bindingAPI.GetAnimationSource(&animPrim)) {
+        bool hasAnim = bindingAPI.GetAnimationSource(&animPrim);
+        // animationSource is commonly authored on the Skeleton prim itself
+        // rather than on each mesh (or even on the SkelRoot). When the local
+        // binding doesn't resolve one, fall back to the bound skeleton's
+        // binding API, which is where Apple's USDZ samples (biplane,
+        // seahorse) put it.
+        if (!hasAnim && hasSkel) {
+            pxr::UsdSkelBindingAPI skelBindingAPI(skel.GetPrim());
+            if (skelBindingAPI) {
+                hasAnim = skelBindingAPI.GetAnimationSource(&animPrim);
+            }
+        }
+        if (hasAnim) {
             r.set("animationPath", animPrim.GetPath().GetString());
         }
     }
@@ -674,13 +687,25 @@ em::val getSkinBinding(int stageId, const std::string& meshPath) {
     em::val r = em::val::object();
 
     pxr::UsdSkelSkeleton skel;
-    if (binding.GetSkeleton(&skel)) {
+    bool hasSkel = binding.GetSkeleton(&skel);
+    if (hasSkel) {
         r.set("skelPath", skel.GetPath().GetString());
     } else {
         r.set("skelPath", std::string(""));
     }
     pxr::UsdPrim animPrim;
-    if (binding.GetAnimationSource(&animPrim)) {
+    bool hasAnim = binding.GetAnimationSource(&animPrim);
+    // Same fallback as getSkelRootInfo: many real-world USDZ files (Apple
+    // biplane, seahorse) author animationSource on the Skeleton, not on
+    // every skinned mesh. Reach through the skeleton's binding when the
+    // mesh-local lookup comes up empty.
+    if (!hasAnim && hasSkel) {
+        pxr::UsdSkelBindingAPI skelBindingAPI(skel.GetPrim());
+        if (skelBindingAPI) {
+            hasAnim = skelBindingAPI.GetAnimationSource(&animPrim);
+        }
+    }
+    if (hasAnim) {
         r.set("animationPath", animPrim.GetPath().GetString());
     } else {
         r.set("animationPath", std::string(""));
