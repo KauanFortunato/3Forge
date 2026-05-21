@@ -210,6 +210,89 @@ describe("translateBlueprint — Phase 2D.2 Size/Position snapshot", () => {
     expect(q.geometry.size.y).toBeCloseTo(2.3, 5); // unchanged — no Size.YProp
   });
 
+  test("Phase 2D.4: NAME_01-like Group with static Scale=(0,0,1) and timeline Transform.Scale → group scale overridden to (0.75, 0.75, 0.75)", () => {
+    const xml = buildSceneWithControllers(
+      `<Group Id="name-01" Name="NAME_01">
+         <GeometryOptions/>
+         <NodeTransform PivotType="Absolute">
+           <Position X="0.35" Y="-1" Z="-2"/>
+           <Scale X="0" Y="0" Lock="XtoYtoZ"/>
+         </NodeTransform>
+         <Children/>
+       </Group>`,
+      `<KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="name-01">
+         <KeyFrame FrameNumber="140" Value="0,0,1"/>
+         <KeyFrame FrameNumber="175" Value="1,1,1"/>
+         <KeyFrame FrameNumber="220" Value="1,1,1"/>
+         <KeyFrame FrameNumber="255" Value="0.75,0.75,0.75"/>
+       </KeyFrameAnimationController>`,
+    );
+    const { nodes } = translateBlueprint(xml);
+    const g = nodes[0] as W3DGroupData;
+    expect(g.kind).toBe("Group");
+    expect(g.transform.scale.x).toBeCloseTo(0.75, 5);
+    expect(g.transform.scale.y).toBeCloseTo(0.75, 5);
+    expect(g.transform.scale.z).toBeCloseTo(0.75, 5);
+  });
+
+  test("Phase 2D.4: PLAYER_0X outer Group with timeline Scale ending at authored value → no visible change", () => {
+    // PLAYER_01 static (0.95, 0.95, 0.85); timeline final value is the same.
+    const xml = buildSceneWithControllers(
+      `<Group Id="p1" Name="PLAYER_01">
+         <GeometryOptions/>
+         <NodeTransform>
+           <Scale X="0.95" Y="0.95" Z="0.85"/>
+         </NodeTransform>
+         <Children/>
+       </Group>`,
+      `<KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="p1">
+         <KeyFrame FrameNumber="140" Value="0.95,0.95,0.85"/>
+         <KeyFrame FrameNumber="255" Value="0.95,0.95,0.85"/>
+       </KeyFrameAnimationController>`,
+    );
+    const { nodes } = translateBlueprint(xml);
+    const g = nodes[0] as W3DGroupData;
+    expect(g.transform.scale.x).toBeCloseTo(0.95, 5);
+    expect(g.transform.scale.y).toBeCloseTo(0.95, 5);
+    expect(g.transform.scale.z).toBeCloseTo(0.85, 5);
+  });
+
+  test("Phase 2D.4: Quad scale also overridden by timeline Transform.Scale", () => {
+    const xml = buildSceneWithControllers(
+      `<Quad Id="q" Name="Q">
+         <GeometryOptions><Size X="1" Y="1"/></GeometryOptions>
+         <NodeTransform><Scale X="1" Y="1" Z="1"/></NodeTransform>
+       </Quad>`,
+      `<KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="q">
+         <KeyFrame FrameNumber="0" Value="0,0,0"/>
+         <KeyFrame FrameNumber="100" Value="2,2,2"/>
+       </KeyFrameAnimationController>`,
+    );
+    const { nodes } = translateBlueprint(xml);
+    const q = nodes[0] as W3DQuadData;
+    expect(q.transform.scale.x).toBeCloseTo(2, 5);
+    expect(q.transform.scale.y).toBeCloseTo(2, 5);
+    expect(q.transform.scale.z).toBeCloseTo(2, 5);
+  });
+
+  test("Phase 2D.4: Node without Transform.Scale animation keeps its authored scale", () => {
+    const xml = buildSceneWithControllers(
+      `<Group Id="other" Name="OTHER">
+         <GeometryOptions/>
+         <NodeTransform><Scale X="3" Y="4" Z="5"/></NodeTransform>
+         <Children/>
+       </Group>`,
+      `<KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="unrelated">
+         <KeyFrame FrameNumber="0" Value="9,9,9"/>
+       </KeyFrameAnimationController>`,
+    );
+    const { nodes } = translateBlueprint(xml);
+    const g = nodes[0] as W3DGroupData;
+    expect(g.transform.scale.x).toBeCloseTo(3, 5);
+    expect(g.transform.scale.y).toBeCloseTo(4, 5);
+    expect(g.transform.scale.z).toBeCloseTo(5, 5);
+  });
+
   test("Partial axes — Size.XProp only leaves geometry.size.y untouched (and vice-versa)", () => {
     const xml = buildSceneWithControllers(
       `<Quad Id="n" Name="N">

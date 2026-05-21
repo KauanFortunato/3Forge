@@ -41,20 +41,35 @@ export interface TimelinePreviewSnapshot {
    * Quads and Groups (both kinds carry a transform).
    */
   positionByControllableId: Map<string, { x?: number; y?: number; z?: number }>;
+  /**
+   * Phase 2D.4 — partial Scale override per ControllableId. Populated from
+   * the W3D `Transform.Scale` controller (vec3 string Value="x,y,z") and the
+   * per-axis variants Transform.Scale.{X,Y,Z}Prop. Applied to
+   * W3DTransform.scale on Quads, Groups and TextureText nodes.
+   */
+  scaleByControllableId: Map<string, { x?: number; y?: number; z?: number }>;
 }
 
 interface RawKeyFrame { frame: number; value: number }
 
-/** Property names recognised by Phase 2D.2 timeline evaluation. */
+/** Property names recognised by Phase 2D.2 / 2D.4 timeline evaluation. */
 const PROP_ALPHA = "Alpha";
 const PROP_SIZE_X = "Size.XProp";
 const PROP_SIZE_Y = "Size.YProp";
 const PROP_POS_X = "Transform.Position.XProp";
 const PROP_POS_Y = "Transform.Position.YProp";
 const PROP_POS_Z = "Transform.Position.ZProp";
+// Phase 2D.4 — Transform.Scale uses a vec3 string Value="x,y,z" in LINEUP_LEFT.
+// The per-axis variants are accepted defensively for scenes that may use them.
+const PROP_SCALE_VEC3 = "Transform.Scale";
+const PROP_SCALE_X = "Transform.Scale.XProp";
+const PROP_SCALE_Y = "Transform.Scale.YProp";
+const PROP_SCALE_Z = "Transform.Scale.ZProp";
 
 const SUPPORTED_PROPS = new Set<string>([
-  PROP_ALPHA, PROP_SIZE_X, PROP_SIZE_Y, PROP_POS_X, PROP_POS_Y, PROP_POS_Z,
+  PROP_ALPHA, PROP_SIZE_X, PROP_SIZE_Y,
+  PROP_POS_X, PROP_POS_Y, PROP_POS_Z,
+  PROP_SCALE_VEC3, PROP_SCALE_X, PROP_SCALE_Y, PROP_SCALE_Z,
 ]);
 
 export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapshot {
@@ -62,6 +77,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
     alphaByControllableId: new Map(),
     sizeByControllableId: new Map(),
     positionByControllableId: new Map(),
+    scaleByControllableId: new Map(),
   };
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, "application/xml");
@@ -94,12 +110,14 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
       alphaByControllableId: new Map(),
       sizeByControllableId: new Map(),
       positionByControllableId: new Map(),
+      scaleByControllableId: new Map(),
     };
   }
 
   const alphaByControllableId = new Map<string, number>();
   const sizeByControllableId = new Map<string, { x?: number; y?: number }>();
   const positionByControllableId = new Map<string, { x?: number; y?: number; z?: number }>();
+  const scaleByControllableId = new Map<string, { x?: number; y?: number; z?: number }>();
 
   for (const ctrl of Array.from(selected.children)) {
     if (ctrl.tagName !== "KeyFrameAnimationController") continue;
@@ -117,6 +135,23 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
         keyframes.push({ frame, value });
       }
     }
+    // Phase 2D.4 — Transform.Scale uses a vec3 string Value; handle it before
+    // the scalar parser path so we don't drop perfectly-good controllers.
+    if (prop === PROP_SCALE_VEC3) {
+      const vec3KFs: { frame: number; value: { x: number; y: number; z: number } }[] = [];
+      for (const kf of Array.from(ctrl.children)) {
+        if (kf.tagName !== "KeyFrame") continue;
+        const frame = Number(kf.getAttribute("FrameNumber"));
+        const value = parseVec3String(kf.getAttribute("Value"));
+        if (Number.isFinite(frame) && value) vec3KFs.push({ frame, value });
+      }
+      if (vec3KFs.length === 0) continue;
+      vec3KFs.sort((a, b) => a.frame - b.frame);
+      const v = evaluateVec3At(vec3KFs, previewMarker);
+      scaleByControllableId.set(controllableId, { x: v.x, y: v.y, z: v.z });
+      continue;
+    }
+
     if (keyframes.length === 0) continue;
     keyframes.sort((a, b) => a.frame - b.frame);
     const v = evaluateAt(keyframes, previewMarker);
@@ -143,6 +178,18 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
       const cur = positionByControllableId.get(controllableId) ?? {};
       cur.z = v;
       positionByControllableId.set(controllableId, cur);
+    } else if (prop === PROP_SCALE_X) {
+      const cur = scaleByControllableId.get(controllableId) ?? {};
+      cur.x = v;
+      scaleByControllableId.set(controllableId, cur);
+    } else if (prop === PROP_SCALE_Y) {
+      const cur = scaleByControllableId.get(controllableId) ?? {};
+      cur.y = v;
+      scaleByControllableId.set(controllableId, cur);
+    } else if (prop === PROP_SCALE_Z) {
+      const cur = scaleByControllableId.get(controllableId) ?? {};
+      cur.z = v;
+      scaleByControllableId.set(controllableId, cur);
     }
   }
 
@@ -152,7 +199,42 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
     alphaByControllableId,
     sizeByControllableId,
     positionByControllableId,
+    scaleByControllableId,
   };
+}
+
+/** Parse a comma-separated "x,y,z" string into a vec3, or null if malformed. */
+function parseVec3String(raw: string | null): { x: number; y: number; z: number } | null {
+  if (!raw) return null;
+  const parts = raw.split(",").map((p) => Number(p.trim()));
+  if (parts.length !== 3 || !parts.every((n) => Number.isFinite(n))) return null;
+  return { x: parts[0], y: parts[1], z: parts[2] };
+}
+
+/** Linear interpolation between vec3 keyframes, same hold-first/hold-last as evaluateAt. */
+function evaluateVec3At(
+  keyframes: { frame: number; value: { x: number; y: number; z: number } }[],
+  frame: number,
+): { x: number; y: number; z: number } {
+  const first = keyframes[0];
+  const last = keyframes[keyframes.length - 1];
+  if (frame <= first.frame) return first.value;
+  if (frame >= last.frame) return last.value;
+  for (let i = 1; i < keyframes.length; i++) {
+    const prev = keyframes[i - 1];
+    const curr = keyframes[i];
+    if (frame <= curr.frame) {
+      const span = curr.frame - prev.frame;
+      if (span === 0) return curr.value;
+      const t = (frame - prev.frame) / span;
+      return {
+        x: prev.value.x + (curr.value.x - prev.value.x) * t,
+        y: prev.value.y + (curr.value.y - prev.value.y) * t,
+        z: prev.value.z + (curr.value.z - prev.value.z) * t,
+      };
+    }
+  }
+  return last.value;
 }
 
 /**

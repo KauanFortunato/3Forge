@@ -255,7 +255,7 @@ describe("parseTimelinePreviewSnapshot — Phase 2D.2 Size / Position", () => {
     expect(snap.positionByControllableId.size).toBe(0);
   });
 
-  test('Timeline with PreviewMarker=-1 → all three maps empty (regression with Phase 2G semantics)', () => {
+  test('Timeline with PreviewMarker=-1 → all maps empty (regression with Phase 2G semantics)', () => {
     const snap = parseTimelinePreviewSnapshot(wrapWithAttr(``, `
       <Timeline Name="Out" Id="t" PreviewMarker="-1" MaxFrames="200">
         <KeyFrameAnimationController AnimatedProperty="Size.XProp" ControllableId="x">
@@ -268,6 +268,104 @@ describe("parseTimelinePreviewSnapshot — Phase 2D.2 Size / Position", () => {
     expect(snap.alphaByControllableId.size).toBe(0);
     expect(snap.sizeByControllableId.size).toBe(0);
     expect(snap.positionByControllableId.size).toBe(0);
+    expect(snap.scaleByControllableId.size).toBe(0);
+  });
+});
+
+// -------------------------------------------------------------------------
+// Phase 2D.4 — Transform.Scale snapshot.
+// -------------------------------------------------------------------------
+describe("parseTimelinePreviewSnapshot — Phase 2D.4 Transform.Scale", () => {
+  test('NAME_01-like vec3 Scale: KF 140→"0,0,1" 175→"1,1,1" 220→"1,1,1" 255→"0.75,0.75,0.75", preview=799 → (0.75, 0.75, 0.75)', () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t"`, `
+      <Timeline Name="In" Id="t" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="name-01">
+          <KeyFrame FrameNumber="140" Value="0,0,1"/>
+          <KeyFrame FrameNumber="175" Value="1,1,1"/>
+          <KeyFrame FrameNumber="220" Value="1,1,1"/>
+          <KeyFrame FrameNumber="255" Value="0.75,0.75,0.75"/>
+        </KeyFrameAnimationController>
+      </Timeline>
+    `));
+    const v = snap.scaleByControllableId.get("name-01")!;
+    expect(v.x).toBeCloseTo(0.75, 5);
+    expect(v.y).toBeCloseTo(0.75, 5);
+    expect(v.z).toBeCloseTo(0.75, 5);
+  });
+
+  test('Transform.Scale linear interpolation between vec3 keyframes (frame between two KFs)', () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t"`, `
+      <Timeline Name="In" Id="t" PreviewMarker="50">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="0,0,1"/>
+          <KeyFrame FrameNumber="100" Value="1,1,1"/>
+        </KeyFrameAnimationController>
+      </Timeline>
+    `));
+    const v = snap.scaleByControllableId.get("n")!;
+    expect(v.x).toBeCloseTo(0.5, 5);
+    expect(v.y).toBeCloseTo(0.5, 5);
+    expect(v.z).toBeCloseTo(1, 5);
+  });
+
+  test('malformed Value (not 3 components) → keyframe is dropped silently', () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t"`, `
+      <Timeline Name="In" Id="t" PreviewMarker="50">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="0,0"/>
+          <KeyFrame FrameNumber="100" Value="1,1,1"/>
+        </KeyFrameAnimationController>
+      </Timeline>
+    `));
+    // Only the second keyframe survived → preview frame past it → returns last
+    const v = snap.scaleByControllableId.get("n")!;
+    expect(v.x).toBeCloseTo(1, 5);
+    expect(v.y).toBeCloseTo(1, 5);
+    expect(v.z).toBeCloseTo(1, 5);
+  });
+
+  test('per-axis Transform.Scale.{X,Y,Z}Prop variants are also accepted (defensive)', () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t"`, `
+      <Timeline Name="In" Id="t" PreviewMarker="500">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Scale.XProp" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="0.1"/>
+          <KeyFrame FrameNumber="100" Value="2"/>
+        </KeyFrameAnimationController>
+        <KeyFrameAnimationController AnimatedProperty="Transform.Scale.YProp" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="3"/>
+        </KeyFrameAnimationController>
+      </Timeline>
+    `));
+    const v = snap.scaleByControllableId.get("n")!;
+    expect(v.x).toBeCloseTo(2, 5);   // hold last past frame 100
+    expect(v.y).toBeCloseTo(3, 5);
+    expect(v.z).toBeUndefined();      // no Z controller
+  });
+
+  test('Mixed Alpha + Size + Position + Scale on same controllable → all four populated', () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t"`, `
+      <Timeline Name="In" Id="t" PreviewMarker="799">
+        <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="1"/>
+        </KeyFrameAnimationController>
+        <KeyFrameAnimationController AnimatedProperty="Size.XProp" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="0"/><KeyFrame FrameNumber="100" Value="7.7"/>
+        </KeyFrameAnimationController>
+        <KeyFrameAnimationController AnimatedProperty="Transform.Position.XProp" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="3.993"/>
+        </KeyFrameAnimationController>
+        <KeyFrameAnimationController AnimatedProperty="Transform.Scale" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="0,0,1"/><KeyFrame FrameNumber="100" Value="0.75,0.75,1"/>
+        </KeyFrameAnimationController>
+      </Timeline>
+    `));
+    expect(snap.alphaByControllableId.get("n")).toBeCloseTo(1, 5);
+    expect(snap.sizeByControllableId.get("n")!.x).toBeCloseTo(7.7, 5);
+    expect(snap.positionByControllableId.get("n")!.x).toBeCloseTo(3.993, 5);
+    const sc = snap.scaleByControllableId.get("n")!;
+    expect(sc.x).toBeCloseTo(0.75, 5);
+    expect(sc.y).toBeCloseTo(0.75, 5);
+    expect(sc.z).toBeCloseTo(1, 5);
   });
 });
 

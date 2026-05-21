@@ -71,11 +71,17 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
  * remain at their authored static values.
  */
 function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapshot): void {
-  const { alphaByControllableId, sizeByControllableId, positionByControllableId } = snap;
+  const {
+    alphaByControllableId,
+    sizeByControllableId,
+    positionByControllableId,
+    scaleByControllableId,
+  } = snap;
   if (
     alphaByControllableId.size === 0 &&
     sizeByControllableId.size === 0 &&
-    positionByControllableId.size === 0
+    positionByControllableId.size === 0 &&
+    scaleByControllableId.size === 0
   ) {
     return;
   }
@@ -88,12 +94,23 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
         if (sz.x !== undefined) n.geometry.size.x = sz.x;
         if (sz.y !== undefined) n.geometry.size.y = sz.y;
       }
+    } else if (n.kind === "TextureText") {
+      const a = alphaByControllableId.get(n.id);
+      if (a !== undefined) n.alpha = a;
     }
     const pos = positionByControllableId.get(n.id);
     if (pos !== undefined) {
       if (pos.x !== undefined) n.transform.position.x = pos.x;
       if (pos.y !== undefined) n.transform.position.y = pos.y;
       if (pos.z !== undefined) n.transform.position.z = pos.z;
+    }
+    // Phase 2D.4 — Scale snapshot applies to all node kinds (Group/Quad/TextureText)
+    // because each carries a transform.scale.
+    const sc = scaleByControllableId.get(n.id);
+    if (sc !== undefined) {
+      if (sc.x !== undefined) n.transform.scale.x = sc.x;
+      if (sc.y !== undefined) n.transform.scale.y = sc.y;
+      if (sc.z !== undefined) n.transform.scale.z = sc.z;
     }
     for (const c of n.children) walk(c);
   };
