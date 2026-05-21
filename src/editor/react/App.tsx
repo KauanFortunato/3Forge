@@ -805,8 +805,11 @@ export function App() {
   const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const blueprintSnapshot = useMemo(() => store.getSnapshot(), [store, storeView]);
-  const blueprintJson = useMemo(() => exportBlueprintToJson(blueprintSnapshot), [blueprintSnapshot]);
-  const typeScriptExport = useMemo(() => generateTypeScriptComponent(blueprintSnapshot), [blueprintSnapshot]);
+  // NOTE: blueprintJson / typeScriptExport are intentionally NOT memoized at
+  // the top level. `JSON.stringify` on a USDZ-heavy blueprint serialises the
+  // entire base64 src (100MB+) into a string — running that eagerly on every
+  // store revision (including undo/redo) was the dominant heap-churn source.
+  // Compute them on-demand in the download handlers instead.
   const isPhoneLayout = layoutMode === "phone";
   const isCompactLayout = layoutMode !== "desktop";
   const effectiveToolMode = isPhoneLayout ? "select" : currentTool;
@@ -966,33 +969,42 @@ export function App() {
       return;
     }
 
-    const didPersistWorkspace = persistWorkspace(blueprintSnapshot, projectContext);
-    if (!didPersistWorkspace) {
-      setTransientStatus("Project is too large for browser autosave. Save or export it manually.");
-    }
-    setPersistedWorkspace({
-      blueprint: blueprintSnapshot,
-      context: {
-        ...projectContext,
-        updatedAt: Date.now(),
-      },
-    });
-
-    if (projectContext.recentProjectId) {
-      const didPersistRecentSnapshot = persistRecentSnapshot(projectContext.recentProjectId, blueprintSnapshot);
-      if (!didPersistRecentSnapshot) {
-        setTransientStatus("Project is too large for recent-project storage. Save or export it manually.");
+    // Debounce: `persistWorkspace` does `JSON.stringify(blueprint)` which for
+    // USDZ-heavy projects serialises 100MB+ of base64 src strings every call.
+    // Rapid undo/redo bursts used to trigger one serialisation per cycle —
+    // the dominant heap churn that crashed the renderer. Now we coalesce
+    // bursts into a single save 500ms after the user pauses.
+    const timeoutId = window.setTimeout(() => {
+      const didPersistWorkspace = persistWorkspace(blueprintSnapshot, projectContext);
+      if (!didPersistWorkspace) {
+        setTransientStatus("Project is too large for browser autosave. Save or export it manually.");
       }
-      const entry = createRecentProjectEntry({
-        id: projectContext.recentProjectId,
-        label: buildRecentProjectLabel(projectContext.fileName, blueprintSnapshot.componentName),
-        componentName: blueprintSnapshot.componentName,
-        source: projectContext.fileHandleId ? "file-handle" : "snapshot",
-        fileName: projectContext.fileName,
-        fileHandleId: projectContext.fileHandleId,
+      setPersistedWorkspace({
+        blueprint: blueprintSnapshot,
+        context: {
+          ...projectContext,
+          updatedAt: Date.now(),
+        },
       });
-      setRecentProjects(upsertRecentProject(entry));
-    }
+
+      if (projectContext.recentProjectId) {
+        const didPersistRecentSnapshot = persistRecentSnapshot(projectContext.recentProjectId, blueprintSnapshot);
+        if (!didPersistRecentSnapshot) {
+          setTransientStatus("Project is too large for recent-project storage. Save or export it manually.");
+        }
+        const entry = createRecentProjectEntry({
+          id: projectContext.recentProjectId,
+          label: buildRecentProjectLabel(projectContext.fileName, blueprintSnapshot.componentName),
+          componentName: blueprintSnapshot.componentName,
+          source: projectContext.fileHandleId ? "file-handle" : "snapshot",
+          fileName: projectContext.fileName,
+          fileHandleId: projectContext.fileHandleId,
+        });
+        setRecentProjects(upsertRecentProject(entry));
+      }
+    }, 500);
+
+    return () => window.clearTimeout(timeoutId);
   }, [blueprintSnapshot, projectContext, setTransientStatus, shouldPersistWorkspace]);
 
   useEffect(() => {
@@ -1910,12 +1922,14 @@ export function App() {
   }, [setTransientStatus, store]);
 
   const downloadExportFile = useCallback((mode: ExportMode) => {
-    const content = mode === "json" ? blueprintJson : typeScriptExport;
+    const content = mode === "json"
+      ? exportBlueprintToJson(blueprintSnapshot)
+      : generateTypeScriptComponent(blueprintSnapshot);
     const extension = mode === "json" ? "json" : "ts";
     const fileName = `${blueprintSnapshot.componentName || "3forge-component"}.${extension}`;
     downloadTextFile(content, fileName, mode === "json" ? "application/json" : "text/plain");
     setTransientStatus(`Downloaded ${fileName}.`);
-  }, [blueprintJson, blueprintSnapshot.componentName, setTransientStatus, typeScriptExport]);
+  }, [blueprintSnapshot, setTransientStatus]);
 
   const downloadExportPackage = useCallback(async () => {
     try {
@@ -2671,13 +2685,13 @@ export function App() {
 
     if (result.status === "unsupported") {
       const fileName = getBlueprintFileName(blueprintSnapshot.componentName);
-      downloadTextFile(blueprintJson, fileName, "application/json");
+      downloadTextFile(exportBlueprintToJson(blueprintSnapshot), fileName, "application/json");
       setTransientStatus(`File System Access unavailable. Downloaded ${fileName} instead.`);
       return;
     }
 
     setTransientStatus("Unable to save the project.");
-  }, [blueprintJson, blueprintSnapshot, projectContext.fileName, setTransientStatus, syncRecentProject]);
+  }, [blueprintSnapshot, projectContext.fileName, setTransientStatus, syncRecentProject]);
 
   const handleSaveProject = useCallback(async () => {
     const linkedHandle = activeFileHandleRef.current

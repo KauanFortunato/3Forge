@@ -2208,4 +2208,97 @@ describe("inspector keyframing", () => {
       expect(store.undo()).toBe(true);
       expect(store.getAnimationTrackForProperty(box.id, "transform.position.z")?.keyframes[0].value).toBe(2.5);
     });
+
+  describe("getSnapshot memory regressions", () => {
+    // Background: `getSnapshot` used to call `structuredClone(_blueprint)`
+    // unconditionally. For USDZ-heavy projects (100MB+ base64 in models[].src)
+    // that duplicated every payload byte-by-byte on every store revision,
+    // because App.tsx re-derives the snapshot via `useMemo([store, storeView])`
+    // on every notify (including each undo/redo). Heap churn from this single
+    // line crashed the renderer.
+    //
+    // Fix: `getSnapshot` now delegates to the same shallow-asset-clone logic
+    // used by the history machinery — heavy asset entries are spread-cloned
+    // so their `src`/`data`/nested object refs are shared with the live
+    // blueprint instead of byte-duplicated.
+    //
+    // These tests pin that contract so a future refactor that re-introduces
+    // a naive `structuredClone` is caught.
+
+    it("shares nested asset sub-objects (like ModelAsset.structure) by reference", () => {
+      const store = new EditorStore();
+      const structure = {
+        format: "usdz" as const,
+        source: "openusd" as const,
+        nodeCount: 1,
+        meshCount: 1,
+        materialCount: 0,
+        textureCount: 0,
+        roots: [
+          { id: "0", name: "root", type: "Xform", childCount: 0, meshCount: 0, materialCount: 0, children: [] },
+        ],
+      };
+      store.addModelAsset({
+        id: "m1",
+        name: "Hero",
+        mimeType: "model/vnd.usdz+zip",
+        src: "data:model/vnd.usdz+zip;base64,AAAA",
+        format: "usdz",
+        structure,
+      });
+
+      const snapshot = store.getSnapshot();
+      const liveModel = store.blueprint.models?.[0];
+      const snapshotModel = snapshot.models?.[0];
+
+      expect(snapshotModel).toBeDefined();
+      // The wrapper object must be a fresh instance (so future field-level
+      // mutations on the live asset don't leak into the snapshot).
+      expect(snapshotModel).not.toBe(liveModel);
+      // But the nested `structure` and the heavy `src` string MUST be shared
+      // by reference. A naive structuredClone here would create a brand-new
+      // structure subtree and re-allocate the src string buffer.
+      expect(snapshotModel?.structure).toBe(liveModel?.structure);
+      expect(snapshotModel?.structure?.roots).toBe(liveModel?.structure?.roots);
+      expect(snapshotModel?.src).toBe(liveModel?.src);
+    });
+
+    it("shares image asset src strings by reference (no byte duplication)", () => {
+      const store = new EditorStore();
+      const heavySrc = "data:image/png;base64," + "A".repeat(1024);
+      store.addImageAsset({
+        id: "img-1",
+        name: "Cover",
+        mimeType: "image/png",
+        src: heavySrc,
+        width: 1024,
+        height: 1024,
+      });
+
+      const snapshot = store.getSnapshot();
+      const liveImage = store.blueprint.images[0];
+      const snapshotImage = snapshot.images[0];
+
+      expect(snapshotImage).not.toBe(liveImage);
+      expect(snapshotImage.src).toBe(liveImage.src);
+    });
+
+    it("deep-clones blueprint.nodes so live mutations do not bleed into a snapshot", () => {
+      const store = new EditorStore();
+      const boxId = store.insertNode("box", ROOT_NODE_ID);
+
+      const snapshot = store.getSnapshot();
+      const snapshotBox = snapshot.nodes.find((n) => n.id === boxId);
+      expect(snapshotBox).toBeDefined();
+
+      // Mutate the live blueprint after taking the snapshot.
+      store.setNodeTransformProperties(boxId, { "transform.position.x": 42 });
+
+      const liveBox = store.blueprint.nodes.find((n) => n.id === boxId);
+      // Snapshot must reflect the state at the time it was taken.
+      expect((snapshotBox as unknown as { transform: { position: { x: number } } }).transform.position.x).toBe(0);
+      // Sanity: the live blueprint actually moved.
+      expect((liveBox as unknown as { transform: { position: { x: number } } }).transform.position.x).toBe(42);
+    });
+  });
 });

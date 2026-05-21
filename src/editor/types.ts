@@ -566,6 +566,14 @@ export type EditorStoreChange = {
   reason: EditorStoreChangeReason;
   source: "ui" | "scene" | "system" | "import" | "history";
   nodeId?: string;
+  /**
+   * Set on "history" notifications. "lightweight" means the change is fully
+   * representable as transform/visibility updates on existing nodes, so the
+   * scene can patch Object3Ds in place instead of doing a full rebuild.
+   * `affectedNodeIds` lists the nodes whose Object3D needs to be re-synced.
+   */
+  historyKind?: "lightweight" | "heavy";
+  affectedNodeIds?: ReadonlySet<string>;
 };
 
 export type ViewMode = "rendered" | "solid" | "wireframe";

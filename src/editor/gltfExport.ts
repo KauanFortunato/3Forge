@@ -93,10 +93,23 @@ export function convertMaterialsForUsdz(group: Group): void {
       return;
     }
     if (Array.isArray(object.material)) {
-      object.material = object.material.map((material) => convertMaterialForUsdz(material));
+      object.material = object.material.map((material) => {
+        const replacement = convertMaterialForUsdz(material);
+        if (replacement !== material) {
+          // The replacement reuses the source material's textures, so dispose
+          // only the (now-orphaned) material wrapper, never its textures.
+          material.dispose();
+        }
+        return replacement;
+      });
       return;
     }
-    object.material = convertMaterialForUsdz(object.material);
+    const original = object.material;
+    const replacement = convertMaterialForUsdz(original);
+    if (replacement !== original) {
+      original.dispose();
+    }
+    object.material = replacement;
   });
 }
 

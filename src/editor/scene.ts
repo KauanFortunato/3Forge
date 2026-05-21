@@ -165,11 +165,14 @@ function disposeObjectResources(
     if (!(object instanceof Mesh)) {
       return;
     }
-    if (options.skipModelResources && object.userData.nodeType === "model") {
-      return;
-    }
+    // For model-node meshes the geometry + shared materials live in the
+    // modelGroupCache and must not be disposed here. Per-node material
+    // *clones* are tagged with `userData.isClonedForNode` so we still dispose
+    // them — otherwise the cloned MeshPhysicalMaterial leaks GPU memory once
+    // the wrapper is removed from the scene.
+    const isSharedModelMesh = !!options.skipModelResources && object.userData.nodeType === "model";
 
-    if (object.geometry && !disposedGeometries.has(object.geometry)) {
+    if (!isSharedModelMesh && object.geometry && !disposedGeometries.has(object.geometry)) {
       object.geometry.dispose();
       disposedGeometries.add(object.geometry);
     }
@@ -177,6 +180,9 @@ function disposeObjectResources(
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) {
       if (!material || disposedMaterials.has(material)) {
+        continue;
+      }
+      if (isSharedModelMesh && material.userData?.isClonedForNode !== true) {
         continue;
       }
       if (options.disposeTextures) {
@@ -845,6 +851,7 @@ export class SceneEditor {
     window.removeEventListener("blur", this.handleWindowBlur);
     this.renderer.domElement.removeEventListener("pointerdown", this.handleCanvasPointerDown);
     this.renderer.domElement.removeEventListener("pointerup", this.handleCanvasPointerUp);
+    this.orientationRenderer.domElement.removeEventListener("pointerdown", this.handleOrientationPointerDown);
     this.transformControls.detach();
     this.transformControls.dispose();
     this.cameraControls.dispose();
@@ -856,13 +863,13 @@ export class SceneEditor {
     this.selectionOutlineMaterial.dispose();
     this.infiniteGrid.geometry.dispose();
     this.infiniteGrid.material.dispose();
+    disposeObjectResources(this.orientationRoot);
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.neutralEnvironmentTarget.dispose();
     this.pmremGenerator.dispose();
     this.orientationRenderer.dispose();
     this.orientationRenderer.forceContextLoss();
-    this.orientationRenderer.domElement.removeEventListener("pointerdown", this.handleOrientationPointerDown);
     this.renderer.domElement.remove();
     this.orientationRenderer.domElement.remove();
   }
@@ -972,7 +979,37 @@ export class SceneEditor {
       return;
     }
 
+    // Fast-path: an undo/redo of a transform-or-visibility-only change can
+    // patch the existing Object3Ds in place. This avoids `rebuildScene()` —
+    // which re-clones the entire parsed USDZ tree on every cycle and is the
+    // single biggest source of JS-heap churn for USDZ-heavy scenes.
+    if (
+      change.reason === "history" &&
+      change.historyKind === "lightweight" &&
+      change.affectedNodeIds &&
+      change.affectedNodeIds.size > 0
+    ) {
+      this.applyLightweightHistory(change.affectedNodeIds);
+      return;
+    }
+
     this.rebuildScene();
+  }
+
+  private applyLightweightHistory(affectedNodeIds: ReadonlySet<string>): void {
+    for (const nodeId of affectedNodeIds) {
+      const node = this.store.getNode(nodeId);
+      const object = this.objectMap.get(nodeId);
+      if (!node || !object) continue;
+      object.position.set(node.transform.position.x, node.transform.position.y, node.transform.position.z);
+      object.rotation.set(node.transform.rotation.x, node.transform.rotation.y, node.transform.rotation.z);
+      object.scale.set(node.transform.scale.x, node.transform.scale.y, node.transform.scale.z);
+      object.visible = node.visible;
+    }
+    // Selection bounds, outlines, and the transform gizmo anchor read live
+    // Object3D state, so refresh them after the in-place patch.
+    this.selectionHelperDirty = true;
+    this.refreshSelection();
   }
 
   private updateViewMode(): void {
@@ -1554,6 +1591,12 @@ export class SceneEditor {
         if (this.modelGroupCache.get(asset.id)?.promise !== cacheEntry.promise) {
           return;
         }
+        // Bail if a later rebuild has already detached this wrapper. Without
+        // this guard the cloned materials we'd attach below escape the
+        // disposeObjectResources sweep and leak GPU memory.
+        if (!wrapper.parent) {
+          return;
+        }
         // primPath path: this ModelNode renders ONLY the meshes attached to
         // the specific USD prim in the cached group (its sibling prims are
         // rendered by other ModelNodes that share the same modelId). The
@@ -1589,11 +1632,13 @@ export class SceneEditor {
             if (Array.isArray(sourceMaterial)) {
               clonedMesh.material = sourceMaterial.map((m) => {
                 const c = m.clone();
+                c.userData = { ...c.userData, isClonedForNode: true };
                 applyMaterialSpecOverrides(c, node.material);
                 return c;
               });
             } else if (sourceMaterial) {
               const c = sourceMaterial.clone();
+              c.userData = { ...c.userData, isClonedForNode: true };
               applyMaterialSpecOverrides(c, node.material);
               clonedMesh.material = c;
             }

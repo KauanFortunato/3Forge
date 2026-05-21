@@ -16,6 +16,7 @@ import {
   sortTrackKeyframes,
 } from "./animation";
 import { DEFAULT_FONT_ID, getAvailableFonts, getFontData, normalizeFontLibrary, parseFontAsset, pruneParsedFontCache } from "./fonts";
+import { applyPatches, computePatches, summarizePatches, type Patch } from "./historyDiff";
 import { normalizeHdrAsset, normalizeHdrLibrary } from "./hdr";
 import { createTransparentImageAsset, fitImageToMaxSize, normalizeImageAsset, normalizeImageLibrary } from "./images";
 import {
@@ -1459,15 +1460,37 @@ interface EditorStoreSnapshot {
   selectedNodeIds: string[];
 }
 
+interface SelectionState {
+  primaryId: string;
+  ids: string[];
+}
+
+interface HistoryEntry {
+  patches: Patch[];
+  selectionBefore: SelectionState;
+  selectionAfter: SelectionState;
+}
+
+interface PendingHistory {
+  beforeBlueprint: ComponentBlueprint;
+  beforeSelection: SelectionState;
+}
+
 export class EditorStore extends EventTarget {
   private _blueprint: ComponentBlueprint;
   private _selectedNodeId: string;
   private _selectedNodeIds: string[];
   private _viewMode: ViewMode = "solid";
-  private _undoStack: EditorStoreSnapshot[] = [];
-  private _redoStack: EditorStoreSnapshot[] = [];
+  private _undoStack: HistoryEntry[] = [];
+  private _redoStack: HistoryEntry[] = [];
   private _activeHistorySnapshot: EditorStoreSnapshot | null = null;
   private _activeHistoryDirty = false;
+  // Outside of an explicit transaction, `recordHistorySnapshot()` stages a
+  // before-blueprint here. The pending entry is committed (diffed against the
+  // current state and pushed to `_undoStack`) as soon as the next `notify()`
+  // fires — i.e. when the public mutation method finishes its work. This way
+  // we record only the patch between before/after, never a full snapshot.
+  private _pendingHistoryEntry: PendingHistory | null = null;
   private _revision = 0;
   private _propertyClipboard: PropertyClipboard | null = null;
   // Transient (not persisted): which sub-part of a ModelNode is currently
@@ -1663,7 +1686,14 @@ export class EditorStore extends EventTarget {
   }
 
   getSnapshot(): ComponentBlueprint {
-    return structuredClone(this._blueprint);
+    // Use the same shallow-asset-clone strategy as `cloneBlueprintForHistory`:
+    // the 100MB+ base64 payloads on Image/Model/HDR/Font asset entries are
+    // shared by reference instead of byte-duplicated. `getSnapshot` is hit on
+    // every React re-render (App.tsx memoizes it on the store revision), so a
+    // naive `structuredClone` here multiplies USDZ payloads by however many
+    // snapshots concurrent rendering keeps alive — the single biggest source
+    // of JS heap churn during undo/redo cycles on USDZ-heavy scenes.
+    return this.cloneBlueprintForHistory();
   }
 
   beginHistoryTransaction(): void {
@@ -1671,6 +1701,10 @@ export class EditorStore extends EventTarget {
       return;
     }
 
+    // Make sure any non-transaction pending entry from a previous action is
+    // committed first — otherwise its mutations would be lumped into this
+    // transaction's diff instead of standing as their own undo step.
+    this.flushPendingHistoryEntry();
     this._activeHistorySnapshot = this.snapshotState();
     this._activeHistoryDirty = false;
   }
@@ -1690,7 +1724,16 @@ export class EditorStore extends EventTarget {
       return false;
     }
 
-    this.pushUndoSnapshot(snapshot);
+    const patches = computePatches(snapshot.blueprint, this._blueprint);
+    const afterSelection: SelectionState = {
+      primaryId: this._selectedNodeId,
+      ids: [...this._selectedNodeIds],
+    };
+    const beforeSelection: SelectionState = {
+      primaryId: snapshot.selectedNodeId,
+      ids: [...snapshot.selectedNodeIds],
+    };
+    this.pushHistoryEntry({ patches, selectionBefore: beforeSelection, selectionAfter: afterSelection });
     this._redoStack = [];
     this.notify({ reason: "history", source, nodeId: this._selectedNodeId });
     return true;
@@ -1715,27 +1758,53 @@ export class EditorStore extends EventTarget {
   }
 
   undo(source: EditorStoreChange["source"] = "history"): boolean {
-    const previous = this._undoStack.pop();
-    if (!previous) {
+    this.flushPendingHistoryEntry();
+    const entry = this._undoStack.pop();
+    if (!entry) {
       return false;
     }
 
-    this._redoStack.push(this.snapshotState());
-    this.restoreSnapshot(previous);
-    this.notify({ reason: "history", source, nodeId: this._selectedNodeId });
+    applyPatches(this._blueprint, entry.patches, "reverse");
+    pruneParsedFontCache(this.fonts);
+    this.applySelectionState(entry.selectionBefore);
+    this._redoStack.push(entry);
+    const summary = summarizePatches(entry.patches);
+    this.notify({
+      reason: "history",
+      source,
+      nodeId: this._selectedNodeId,
+      historyKind: summary.kind,
+      affectedNodeIds: summary.affectedNodeIds,
+    });
     return true;
   }
 
   redo(source: EditorStoreChange["source"] = "history"): boolean {
-    const next = this._redoStack.pop();
-    if (!next) {
+    this.flushPendingHistoryEntry();
+    const entry = this._redoStack.pop();
+    if (!entry) {
       return false;
     }
 
-    this.pushUndoSnapshot(this.snapshotState());
-    this.restoreSnapshot(next);
-    this.notify({ reason: "history", source, nodeId: this._selectedNodeId });
+    applyPatches(this._blueprint, entry.patches, "forward");
+    pruneParsedFontCache(this.fonts);
+    this.applySelectionState(entry.selectionAfter);
+    this.pushHistoryEntry(entry);
+    const summary = summarizePatches(entry.patches);
+    this.notify({
+      reason: "history",
+      source,
+      nodeId: this._selectedNodeId,
+      historyKind: summary.kind,
+      affectedNodeIds: summary.affectedNodeIds,
+    });
     return true;
+  }
+
+  private applySelectionState(selection: SelectionState): void {
+    const sanitized = this.sanitizeSelectionIds(selection.ids, selection.primaryId);
+    this._selectedNodeIds = sanitized;
+    this._selectedNodeId = this.resolvePrimarySelectionId(sanitized, selection.primaryId);
   }
 
   getNode(nodeId: string): EditorNode | undefined {
@@ -4370,15 +4439,16 @@ export class EditorStore extends EventTarget {
     return false;
   }
 
-  private snapshotState(): EditorStoreSnapshot {
-    // ImageAsset/ModelAsset/HdrAsset.src and FontAsset.data hold base64
-    // dataURLs that can be 100MB+. structuredClone copies strings byte-by-byte,
-    // so the default deep-clone would duplicate every payload per history slot
-    // — at HISTORY_LIMIT=100, a single 100MB image becomes ~10GB across the
-    // undo stack and crashes the renderer with OOM. Treat each asset entry as
-    // immutable: shallow-clone the entry object so future in-place mutations
-    // (updateImageAsset/renameImageAsset) don't leak into older snapshots,
-    // but share the heavy string payload across all snapshots.
+  /**
+   * Clone the current blueprint for use as the "before" half of a diff or as
+   * a transaction rollback target. Asset entries are shallow-cloned (spread)
+   * because their `src`/`data` fields can hold 100MB+ base64 payloads that
+   * `structuredClone` would duplicate byte-by-byte — at HISTORY_LIMIT=100
+   * we'd otherwise blow up renderer memory. Everything else is deep-cloned
+   * so future in-place mutations on the live blueprint don't leak into the
+   * snapshot.
+   */
+  private cloneBlueprintForHistory(): ComponentBlueprint {
     const source = this._blueprint;
     const blueprint = structuredClone({
       ...source,
@@ -4391,15 +4461,21 @@ export class EditorStore extends EventTarget {
     blueprint.images = source.images.map((image) => ({ ...image }));
     blueprint.models = source.models?.map((model) => ({ ...model }));
     blueprint.hdrs = source.hdrs?.map((hdr) => ({ ...hdr }));
+    return blueprint;
+  }
+
+  private snapshotState(): EditorStoreSnapshot {
     return {
-      blueprint,
+      blueprint: this.cloneBlueprintForHistory(),
       selectedNodeId: this._selectedNodeId,
       selectedNodeIds: [...this._selectedNodeIds],
     };
   }
 
   private restoreSnapshot(snapshot: EditorStoreSnapshot): void {
-    this._blueprint = structuredClone(snapshot.blueprint);
+    // The snapshot is consumed (cancel path passes the only reference), so we
+    // can take ownership of its blueprint instead of cloning again.
+    this._blueprint = snapshot.blueprint;
     pruneParsedFontCache(this.fonts);
     this._selectedNodeIds = this.sanitizeSelectionIds(snapshot.selectedNodeIds, snapshot.selectedNodeId);
     this._selectedNodeId = this.resolvePrimarySelectionId(this._selectedNodeIds, snapshot.selectedNodeId);
@@ -4410,13 +4486,47 @@ export class EditorStore extends EventTarget {
       this._activeHistoryDirty = true;
       return;
     }
+    if (this._pendingHistoryEntry) {
+      // The current action already staged its before-state — repeat calls
+      // within the same action are no-ops.
+      return;
+    }
+    this._pendingHistoryEntry = {
+      beforeBlueprint: this.cloneBlueprintForHistory(),
+      beforeSelection: { primaryId: this._selectedNodeId, ids: [...this._selectedNodeIds] },
+    };
+  }
 
-    this.pushUndoSnapshot(this.snapshotState());
+  private flushPendingHistoryEntry(): void {
+    const pending = this._pendingHistoryEntry;
+    if (!pending) return;
+    this._pendingHistoryEntry = null;
+
+    const patches = computePatches(pending.beforeBlueprint, this._blueprint);
+    const afterSelection: SelectionState = {
+      primaryId: this._selectedNodeId,
+      ids: [...this._selectedNodeIds],
+    };
+    const selectionChanged =
+      pending.beforeSelection.primaryId !== afterSelection.primaryId ||
+      pending.beforeSelection.ids.length !== afterSelection.ids.length ||
+      pending.beforeSelection.ids.some((id, index) => id !== afterSelection.ids[index]);
+
+    if (patches.length === 0 && !selectionChanged) {
+      // No effective change — skip pushing a noop history entry.
+      return;
+    }
+
+    this.pushHistoryEntry({
+      patches,
+      selectionBefore: pending.beforeSelection,
+      selectionAfter: afterSelection,
+    });
     this._redoStack = [];
   }
 
-  private pushUndoSnapshot(snapshot: EditorStoreSnapshot): void {
-    this._undoStack.push(snapshot);
+  private pushHistoryEntry(entry: HistoryEntry): void {
+    this._undoStack.push(entry);
     if (this._undoStack.length > HISTORY_LIMIT) {
       this._undoStack.shift();
     }
@@ -4448,6 +4558,11 @@ export class EditorStore extends EventTarget {
   }
 
   private notify(change: EditorStoreChange): void {
+    // Commit any pending non-transaction history entry BEFORE we bump the
+    // revision and dispatch the event. UI subscribers re-render in response
+    // to "change" and inspect canUndo/canRedo at that point — flushing first
+    // means the entry they record matches the state they're rendering.
+    this.flushPendingHistoryEntry();
     this._revision += 1;
     this.dispatchEvent(new CustomEvent<EditorStoreChange>("change", { detail: change }));
   }
