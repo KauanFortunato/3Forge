@@ -1,11 +1,11 @@
 // playgrounds/w3d-translation/src/nodes/builder.ts
 import {
-  AlwaysStencilFunc, Color, DoubleSide, EqualStencilFunc, Group, KeepStencilOp,
+  AlwaysStencilFunc, ClampToEdgeWrapping, Color, DoubleSide, EqualStencilFunc, Group, KeepStencilOp,
   Mesh, MeshBasicMaterial, NotEqualStencilFunc, Object3D, PlaneGeometry,
   ReplaceStencilOp, SRGBColorSpace, Texture, TextureLoader,
 } from "three";
 import type { W3DGroupData, W3DNodeData, W3DQuadData, W3DTransform } from "./data";
-import { resolveMaterial, displayColorToHex } from "./materialResolver";
+import { resolveMaterial, displayColorToHex, type UVTransform } from "./materialResolver";
 import type { W3DResourceRegistry } from "./resources";
 
 /**
@@ -346,6 +346,8 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
   let resolvedTransparent: boolean;
   let resolvedMapUrl: string | undefined;
   let resolvedAlphaMapUrl: string | undefined;
+  let resolvedMapTransform: UVTransform | undefined;
+  let resolvedAlphaMapTransform: UVTransform | undefined;
   let hasMaterialResolved = false;
   let hasTextureLayerResolved = false;
   let materialName: string | undefined;
@@ -371,6 +373,8 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
     resolvedAlphaMapUrl = (resolved.alphaMapUrl && resolved.alphaMapUrl !== resolved.mapUrl)
       ? resolved.alphaMapUrl
       : undefined;
+    resolvedMapTransform = resolved.mapTransform;
+    resolvedAlphaMapTransform = resolvedAlphaMapUrl ? resolved.alphaMapTransform : undefined;
     hasMaterialResolved = resolved.hasMaterialResolved;
     hasTextureLayerResolved = resolved.hasTextureLayerResolved;
     materialName = resolved.materialName;
@@ -391,11 +395,11 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
   });
 
   if (resolvedMapUrl && ctx) {
-    material.map = loadCachedTexture(resolvedMapUrl, ctx.textureCache);
+    material.map = acquireTexture(resolvedMapUrl, resolvedMapTransform, ctx.textureCache);
     material.needsUpdate = true;
   }
   if (resolvedAlphaMapUrl && ctx) {
-    material.alphaMap = loadCachedTexture(resolvedAlphaMapUrl, ctx.textureCache);
+    material.alphaMap = acquireTexture(resolvedAlphaMapUrl, resolvedAlphaMapTransform, ctx.textureCache);
     material.needsUpdate = true;
   }
 
@@ -628,6 +632,43 @@ function loadCachedTexture(url: string, cache: Map<string, Texture>): Texture {
   tex.colorSpace = SRGBColorSpace;
   cache.set(url, tex);
   return tex;
+}
+
+/**
+ * Phase 2C — acquire a Texture instance with an optional UV transform applied.
+ *
+ * The shared singleton from `loadCachedTexture` is never mutated. When the
+ * transform is identity (or absent), the cached instance is returned as-is.
+ * For any non-identity transform the cached base is cloned and the clone
+ * receives the offset/repeat/rotation/wrap state. This isolates per-material
+ * UV transforms from each other, even when two materials reference the same
+ * underlying texture file.
+ */
+function acquireTexture(
+  url: string,
+  transform: UVTransform | undefined,
+  cache: Map<string, Texture>,
+): Texture {
+  const base = loadCachedTexture(url, cache);
+  if (!transform || isIdentityUVTransform(transform)) return base;
+  const tex = base.clone();
+  tex.offset.set(transform.offset.x, transform.offset.y);
+  tex.repeat.set(transform.repeat.x, transform.repeat.y);
+  tex.rotation = degToRad(transform.rotationDeg);
+  tex.wrapS = transform.wrapS;
+  tex.wrapT = transform.wrapT;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function isIdentityUVTransform(t: UVTransform): boolean {
+  return (
+    t.offset.x === 0 && t.offset.y === 0 &&
+    t.repeat.x === 1 && t.repeat.y === 1 &&
+    t.rotationDeg === 0 &&
+    t.wrapS === ClampToEdgeWrapping &&
+    t.wrapT === ClampToEdgeWrapping
+  );
 }
 
 function applyTransform(obj: Object3D, t: W3DTransform): void {

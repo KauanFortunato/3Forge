@@ -1630,4 +1630,275 @@ describe("builder — BuildContext", () => {
     // A freshly constructed material has version=0; after needsUpdate=true it becomes 1.
     expect(mat.version).toBeGreaterThan(0);
   });
+
+  // -----------------------------------------------------------------------
+  // Phase 2C — Texture UV transforms (clone-on-apply, map/alphaMap separate).
+  // -----------------------------------------------------------------------
+
+  test("Phase 2C: identity transform reuses cached Texture instance (no clone)", () => {
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false },
+      // No offset / scale / rotation / address modes → identity transform.
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["L", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
+    const fm = { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false };
+    const m1 = buildNode(quadData({ id: "q1", faceMapping: fm }), ctx) as Mesh;
+    const m2 = buildNode(quadData({ id: "q2", faceMapping: fm }), ctx) as Mesh;
+    const tex1 = (m1.material as MeshBasicMaterial).map;
+    const tex2 = (m2.material as MeshBasicMaterial).map;
+    expect(tex1).not.toBeNull();
+    // Identity → cached singleton reused across materials.
+    expect(tex1).toBe(tex2);
+    expect(ctx.textureCache.get("blob:T")).toBe(tex1);
+  });
+
+  test("Phase 2C: non-identity transform clones the cached Texture (no shared cache mutation)", () => {
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const layerWithOffset: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L1", name: "L1", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false },
+      offset: { x: -0.07, y: 0 },
+    };
+    const layerPlain: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L2", name: "L2", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["L1", layerWithOffset], ["L2", layerPlain]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
+    const m1 = buildNode(quadData({ id: "q1", faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L1", baseMaterialInherited: false, textureInherited: false } }), ctx) as Mesh;
+    const m2 = buildNode(quadData({ id: "q2", faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L2", baseMaterialInherited: false, textureInherited: false } }), ctx) as Mesh;
+    const tex1 = (m1.material as MeshBasicMaterial).map!;
+    const tex2 = (m2.material as MeshBasicMaterial).map!;
+    // Distinct Texture instances — L1 cloned, L2 reused cached singleton.
+    expect(tex1).not.toBe(tex2);
+    // The cached singleton (used by L2) must remain at identity offset.
+    expect(tex2.offset.x).toBe(0);
+    expect(tex2.offset.y).toBe(0);
+    // The cloned instance (used by L1) carries the layer's offset.
+    expect(tex1.offset.x).toBeCloseTo(-0.07, 5);
+  });
+
+  test("Phase 2C: layer Offset X=-0.07 → material.map.offset.x=-0.07", () => {
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "PHOTO_01", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false },
+      offset: { x: -0.07, y: 0 },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["L", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    expect(mat.map!.offset.x).toBeCloseTo(-0.07, 5);
+    expect(mat.map!.offset.y).toBeCloseTo(0, 5);
+  });
+
+  test("Phase 2C: layer Scale X=1.7 Y=0.82 → material.map.repeat = (1.7, 0.82)", () => {
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "PATTERN.png", filename: "PATTERN.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "FF_PHOTO", name: "FF_PHOTO", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: true, useMipMapping: true },
+      scale: { x: 1.7, y: 0.82 },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["FF_PHOTO", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["PATTERN.png", "blob:PATTERN"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "FF_PHOTO", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    expect(mat.map!.repeat.x).toBeCloseTo(1.7, 5);
+    expect(mat.map!.repeat.y).toBeCloseTo(0.82, 5);
+  });
+
+  test("Phase 2C: layer Rotation Z=45 → material.map.rotation = π/4 (radians)", () => {
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false },
+      rotationDeg: 45,
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["L", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    expect(mat.map!.rotation).toBeCloseTo(Math.PI / 4, 5);
+  });
+
+  test("Phase 2C: OffsetKey Y=-0.2 + ScaleKey Y=0.5 → material.alphaMap independent from map", () => {
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const ramp: W3DTextureData = { kind: "Texture", id: "ramp", name: "VERTICAL_RAMP.png", filename: "VERTICAL_RAMP.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "PHOTO_01", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", keyGuid: "ramp", keyType: "AlphaKey", isEmissive: false, useMipMapping: false },
+      offset: { x: -0.07, y: 0 },
+      offsetKey: { y: -0.2 },
+      scaleKey: { y: 0.5 },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex], ["ramp", ramp]]),
+      textureLayers: new Map([["L", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"], ["VERTICAL_RAMP.png", "blob:RAMP"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    // map carries the layer's Offset, untouched by OffsetKey/ScaleKey.
+    expect(mat.map!.offset.x).toBeCloseTo(-0.07, 5);
+    expect(mat.map!.offset.y).toBeCloseTo(0, 5);
+    expect(mat.map!.repeat.y).toBe(1);
+    // alphaMap carries OffsetKey/ScaleKey, untouched by Offset.
+    expect(mat.alphaMap!.offset.x).toBeCloseTo(0, 5);
+    expect(mat.alphaMap!.offset.y).toBeCloseTo(-0.2, 5);
+    expect(mat.alphaMap!.repeat.y).toBeCloseTo(0.5, 5);
+    // map and alphaMap must be distinct Texture instances even if cached
+    // file URLs differ (here they do — separate Map entries).
+    expect(mat.map).not.toBe(mat.alphaMap);
+  });
+
+  test('Phase 2C: AddressMode "Repeat" → wrapS=RepeatWrapping on cloned Texture, cached singleton untouched', async () => {
+    const { RepeatWrapping, ClampToEdgeWrapping } = await import("three");
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const repeatLayer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "Lr", name: "REPEAT", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false, textureAddressModeU: "Repeat" },
+    };
+    const clampLayer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "Lc", name: "CLAMP", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["Lr", repeatLayer], ["Lc", clampLayer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
+    const matRepeat = (buildNode(quadData({ id: "qR", faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "Lr", baseMaterialInherited: false, textureInherited: false } }), ctx) as Mesh).material as MeshBasicMaterial;
+    const matClamp = (buildNode(quadData({ id: "qC", faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "Lc", baseMaterialInherited: false, textureInherited: false } }), ctx) as Mesh).material as MeshBasicMaterial;
+    expect(matRepeat.map!.wrapS).toBe(RepeatWrapping);
+    expect(matRepeat.map!.wrapT).toBe(ClampToEdgeWrapping);
+    // Clamp layer is identity → cached singleton must remain at ClampToEdge defaults.
+    expect(matClamp.map!.wrapS).toBe(ClampToEdgeWrapping);
+    expect(matClamp.map!.wrapT).toBe(ClampToEdgeWrapping);
+    // Sanity: the cached singleton must NOT have been mutated by the Repeat layer.
+    expect(matClamp.map).toBe(ctx.textureCache.get("blob:T"));
+  });
+
+  test('Phase 2C: AddressMode "Mirror" maps to MirroredRepeatWrapping', async () => {
+    const { MirroredRepeatWrapping } = await import("three");
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false, textureAddressModeU: "Mirror", textureAddressModeV: "Mirror" },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["L", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    expect(mat.map!.wrapS).toBe(MirroredRepeatWrapping);
+    expect(mat.map!.wrapT).toBe(MirroredRepeatWrapping);
+  });
+
+  test("Phase 2C: applied texture has needsUpdate triggered (version > 0)", () => {
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false },
+      offset: { x: -0.07, y: 0 },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["L", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    expect(mat.map!.version).toBeGreaterThan(0);
+  });
+
+  test("Phase 2C regression: PHOTO_MASK_05 (no texture layer) is unaffected by UV transform plumbing", () => {
+    // PHOTO_MASK_05 uses TextureLayerId="Standard" → no texture lookup, no
+    // UV transform path triggered. The Mesh's geometry stays exactly as
+    // Phase 2A asserted (width 1.55, height 3, Left alignment).
+    const mask = quadData({
+      id: "mask-5", name: "PHOTO_MASK_05", isMask: true,
+      geometry: { alignmentX: "Left", size: { x: 1.55, y: 3 } },
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([mask], ctx);
+    const m = root.children[0] as Mesh;
+    const mat = m.material as MeshBasicMaterial;
+    expect(mat.map).toBeNull();
+    expect(mat.alphaMap).toBeNull();
+    const params = (m.geometry as InstanceType<typeof import("three").PlaneGeometry>).parameters;
+    expect(params.width).toBeCloseTo(1.55, 5);
+    expect(params.height).toBeCloseTo(3, 5);
+  });
+
+  test("Phase 2C regression: stencil writer (PHOTO_DUMMY_01) keeps Phase 2J ref/writeMask after UV transform plumbing", () => {
+    // Belt-and-suspenders: confirm the new acquireTexture path does not
+    // disturb the stencil setup applied by applyPhotoMaskStencil.
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "PHOTO_01", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: false, useMipMapping: false },
+      offset: { x: -0.07, y: 0 },
+    };
+    const ctx = makeCtx({
+      registry: {
+        baseMaterials: new Map(),
+        textures: new Map([["t", tex]]),
+        textureLayers: new Map([["L", layer]]),
+        dynamicTextureFilenameByLayerId: new Map(),
+      },
+      textureUrlsByFilename: new Map([["T.png", "blob:T"]]),
+    });
+    const dummy = quadData({
+      id: "d", name: "PHOTO_DUMMY_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+      faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false },
+    });
+    const root = buildNodeTree([dummy], ctx);
+    const mat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(true);
+    expect(mat.stencilWriteMask).toBe(56); // Phase 2J DUMMY_OWNER_FIELD
+    expect(mat.stencilRef).toBe(8);        // DUMMY owner=1 << 3
+    // And the texture still carries the layer's UV transform.
+    expect(mat.map!.offset.x).toBeCloseTo(-0.07, 5);
+  });
 });

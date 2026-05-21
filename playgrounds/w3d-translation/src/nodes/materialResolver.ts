@@ -1,4 +1,5 @@
-import type { W3DResourceRegistry } from "./resources";
+import { ClampToEdgeWrapping, MirroredRepeatWrapping, RepeatWrapping, type Wrapping } from "three";
+import type { W3DResourceRegistry, W3DTextureLayerData } from "./resources";
 
 /**
  * W3D project-level default transparent material.
@@ -7,18 +8,82 @@ import type { W3DResourceRegistry } from "./resources";
  */
 const W3D_DEFAULT_TRANSPARENT = "DE1A3E3C-AE85-4B7B-BA86-056463611630";
 
+/**
+ * Phase 2C — UV transform extracted from a <TextureMappingOption> block.
+ * The resolver computes this from W3DTextureLayerData; the builder applies it
+ * to a (cloned) Three.js Texture before assigning it to material.map or
+ * material.alphaMap. Identity values are the Three.js defaults so an identity
+ * transform can be detected and the cached singleton reused without cloning.
+ */
+export type UVTransform = {
+  offset: { x: number; y: number };
+  repeat: { x: number; y: number };
+  rotationDeg: number;
+  wrapS: Wrapping;
+  wrapT: Wrapping;
+};
+
 export type ResolvedMaterial = {
   color: string;
   opacity: number;
   transparent: boolean;
   mapUrl?: string;
   alphaMapUrl?: string;
+  /** UV transform for material.map. Present when mapUrl is present. */
+  mapTransform?: UVTransform;
+  /**
+   * UV transform for material.alphaMap, sourced from the W3D OffsetKey /
+   * ScaleKey / RotationKey elements (independent from map). Present when
+   * alphaMapUrl is present.
+   */
+  alphaMapTransform?: UVTransform;
   hasMaterialResolved: boolean;
   hasTextureLayerResolved: boolean;
   materialName?: string;
   textureLayerName?: string;
   textureFilename?: string;
 };
+
+/**
+ * Map W3D TextureAddressMode strings to Three.js Wrapping constants.
+ * Falls back to ClampToEdgeWrapping for missing / unrecognised values.
+ */
+export function addressModeToWrap(mode: string | undefined): Wrapping {
+  if (!mode) return ClampToEdgeWrapping;
+  switch (mode.trim().toLowerCase()) {
+    case "repeat":
+      return RepeatWrapping;
+    case "mirror":
+    case "mirrorrepeat":
+    case "mirroredrepeat":
+      return MirroredRepeatWrapping;
+    case "clamp":
+    case "clamptoedge":
+    default:
+      return ClampToEdgeWrapping;
+  }
+}
+
+function buildMapTransform(tl: W3DTextureLayerData): UVTransform {
+  return {
+    offset: { x: tl.offset?.x ?? 0, y: tl.offset?.y ?? 0 },
+    repeat: { x: tl.scale?.x ?? 1, y: tl.scale?.y ?? 1 },
+    rotationDeg: tl.rotationDeg ?? 0,
+    wrapS: addressModeToWrap(tl.mapping?.textureAddressModeU),
+    wrapT: addressModeToWrap(tl.mapping?.textureAddressModeV),
+  };
+}
+
+function buildAlphaMapTransform(tl: W3DTextureLayerData): UVTransform {
+  return {
+    offset: { x: tl.offsetKey?.x ?? 0, y: tl.offsetKey?.y ?? 0 },
+    repeat: { x: tl.scaleKey?.x ?? 1, y: tl.scaleKey?.y ?? 1 },
+    rotationDeg: tl.rotationKeyDeg ?? 0,
+    // alphaMap shares the layer's TextureAddressMode (W3D has no per-Key mode).
+    wrapS: addressModeToWrap(tl.mapping?.textureAddressModeU),
+    wrapT: addressModeToWrap(tl.mapping?.textureAddressModeV),
+  };
+}
 
 export type ResolverContext = {
   registry: W3DResourceRegistry;
@@ -76,6 +141,8 @@ export function resolveMaterial(
   // --- 3. Texture from TextureLayer ---
   let mapUrl: string | undefined;
   let alphaMapUrl: string | undefined;
+  let mapTransform: UVTransform | undefined;
+  let alphaMapTransform: UVTransform | undefined;
   let hasTextureLayerResolved = false;
   let textureLayerName: string | undefined;
   let textureFilename: string | undefined;
@@ -136,6 +203,12 @@ export function resolveMaterial(
           warnings.push(`KeyGuid "${keyGuid}" not found in texture registry.`);
         }
       }
+
+      // Phase 2C — populate UV transforms when the corresponding URL resolved.
+      // Each transform is independent: map uses Offset/Scale/Rotation; alphaMap
+      // uses OffsetKey/ScaleKey/RotationKey. Both share the layer's wrap mode.
+      if (mapUrl) mapTransform = buildMapTransform(tl);
+      if (alphaMapUrl) alphaMapTransform = buildAlphaMapTransform(tl);
     }
   }
 
@@ -152,6 +225,8 @@ export function resolveMaterial(
     transparent,
     mapUrl,
     alphaMapUrl,
+    mapTransform,
+    alphaMapTransform,
     hasMaterialResolved,
     hasTextureLayerResolved,
     materialName,

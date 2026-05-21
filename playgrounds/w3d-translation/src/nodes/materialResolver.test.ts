@@ -320,3 +320,165 @@ describe("resolveMaterial — dynamic texture binding (Phase H)", () => {
     expect(r.transparent).toBe(true); // true because PNG has alpha, not because of DE1A3E3C rule
   });
 });
+
+// -------------------------------------------------------------------------
+// Phase 2C — UV transform exposure on ResolvedMaterial.
+// -------------------------------------------------------------------------
+describe("resolveMaterial — Phase 2C UV transform exposure", () => {
+  const TEX: W3DTextureData = {
+    kind: "Texture", id: "tex-id", name: "T.png", filename: "T.png", folderPath: "",
+  };
+  const KEY_TEX: W3DTextureData = {
+    kind: "Texture", id: "key-id", name: "VERTICAL_RAMP.png", filename: "VERTICAL_RAMP.png", folderPath: "",
+  };
+
+  function ctxFor(layer: W3DTextureLayerData, withKey = false) {
+    const textures = withKey ? [TEX, KEY_TEX] : [TEX];
+    const reg = makeFullRegistry([], textures, [layer]);
+    const urls = new Map<string, string>([["T.png", "blob:T"]]);
+    if (withKey) urls.set("VERTICAL_RAMP.png", "blob:RAMP");
+    return { registry: reg, textureUrlsByFilename: urls };
+  }
+
+  test("Offset X=-0.07 → mapTransform.offset.x=-0.07, mapTransform.offset.y=0", async () => {
+    const { ClampToEdgeWrapping } = await import("three");
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false },
+      offset: { x: -0.07, y: 0 },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
+    expect(r.mapTransform).toBeDefined();
+    expect(r.mapTransform!.offset.x).toBeCloseTo(-0.07, 5);
+    expect(r.mapTransform!.offset.y).toBeCloseTo(0, 5);
+    expect(r.mapTransform!.repeat.x).toBe(1);
+    expect(r.mapTransform!.repeat.y).toBe(1);
+    expect(r.mapTransform!.rotationDeg).toBe(0);
+    expect(r.mapTransform!.wrapS).toBe(ClampToEdgeWrapping);
+    expect(r.mapTransform!.wrapT).toBe(ClampToEdgeWrapping);
+  });
+
+  test("Scale X=1.7 Y=0.82 → mapTransform.repeat = (1.7, 0.82)", () => {
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false },
+      scale: { x: 1.7, y: 0.82 },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
+    expect(r.mapTransform!.repeat.x).toBeCloseTo(1.7, 5);
+    expect(r.mapTransform!.repeat.y).toBeCloseTo(0.82, 5);
+  });
+
+  test("Rotation Z=45 → mapTransform.rotationDeg=45 (degrees, not radians)", () => {
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false },
+      rotationDeg: 45,
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
+    expect(r.mapTransform!.rotationDeg).toBe(45);
+  });
+
+  test("OffsetKey Y=-0.2 + ScaleKey Y=0.5 → alphaMapTransform independent from mapTransform", () => {
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "PHOTO_01", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", keyGuid: "key-id", keyType: "AlphaKey", isEmissive: false, useMipMapping: false },
+      offset: { x: -0.07, y: 0 },
+      offsetKey: { y: -0.2 },
+      scaleKey: { y: 0.5 },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer, true), []);
+    // map transform — driven by Offset, untouched by OffsetKey/ScaleKey
+    expect(r.mapTransform!.offset.x).toBeCloseTo(-0.07, 5);
+    expect(r.mapTransform!.offset.y).toBeCloseTo(0, 5);
+    expect(r.mapTransform!.repeat.y).toBe(1);
+    // alphaMap transform — driven by OffsetKey/ScaleKey, untouched by Offset
+    expect(r.alphaMapTransform).toBeDefined();
+    expect(r.alphaMapTransform!.offset.x).toBeCloseTo(0, 5);
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(-0.2, 5);
+    expect(r.alphaMapTransform!.repeat.x).toBe(1);
+    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5);
+  });
+
+  test('TextureAddressModeU="Repeat" → wrapS=RepeatWrapping', async () => {
+    const { RepeatWrapping, ClampToEdgeWrapping } = await import("three");
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false, textureAddressModeU: "Repeat" },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
+    expect(r.mapTransform!.wrapS).toBe(RepeatWrapping);
+    expect(r.mapTransform!.wrapT).toBe(ClampToEdgeWrapping); // V default
+  });
+
+  test('TextureAddressModeV="Mirror" → wrapT=MirroredRepeatWrapping', async () => {
+    const { MirroredRepeatWrapping, ClampToEdgeWrapping } = await import("three");
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false, textureAddressModeV: "Mirror" },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
+    expect(r.mapTransform!.wrapT).toBe(MirroredRepeatWrapping);
+    expect(r.mapTransform!.wrapS).toBe(ClampToEdgeWrapping);
+  });
+
+  test('TextureAddressMode missing → both wrap modes default to ClampToEdgeWrapping', async () => {
+    const { ClampToEdgeWrapping } = await import("three");
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
+    expect(r.mapTransform!.wrapS).toBe(ClampToEdgeWrapping);
+    expect(r.mapTransform!.wrapT).toBe(ClampToEdgeWrapping);
+  });
+
+  test("no Offset/Scale/Rotation present → mapTransform is identity (offset 0, repeat 1, rotation 0)", () => {
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
+    expect(r.mapTransform).toEqual({
+      offset: { x: 0, y: 0 },
+      repeat: { x: 1, y: 1 },
+      rotationDeg: 0,
+      wrapS: 1001, // ClampToEdgeWrapping numeric constant
+      wrapT: 1001,
+    });
+  });
+
+  test("layer with Key (alphaMap) but no Offset → alphaMapTransform present, mapTransform identity", () => {
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", keyGuid: "key-id", keyType: "AlphaKey", isEmissive: false, useMipMapping: false },
+      offsetKey: { y: -0.2 },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer, true), []);
+    expect(r.mapTransform!.offset).toEqual({ x: 0, y: 0 });
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(-0.2, 5);
+  });
+
+  test("PHOTO_01-like LINEUP_LEFT layer — full Offset/OffsetKey/ScaleKey combo populated independently", () => {
+    // Mirror the exact authored values from LINEUP_LEFT scene PHOTO_01 layer.
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "PHOTO_01", textureBlending: "Multiply",
+      mapping: {
+        textureGuid: "tex-id", keyGuid: "key-id", keyType: "AlphaKey",
+        isEmissive: true, useMipMapping: true,
+        textureAddressModeU: "Clamp", textureAddressModeV: "Clamp",
+      },
+      offset: { x: -0.07, y: 0 },
+      offsetKey: { y: -0.2 },
+      scaleKey: { y: 0.5 },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer, true), []);
+    expect(r.mapTransform!.offset.x).toBeCloseTo(-0.07, 5);
+    expect(r.mapTransform!.repeat.x).toBe(1);
+    expect(r.mapTransform!.repeat.y).toBe(1);
+    expect(r.alphaMapTransform!.offset.x).toBe(0);
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(-0.2, 5);
+    expect(r.alphaMapTransform!.repeat.x).toBe(1);
+    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5);
+  });
+});
