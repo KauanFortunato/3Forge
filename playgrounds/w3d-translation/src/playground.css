@@ -117,21 +117,16 @@ body {
   position: absolute;
   inset: 0;
   /* Phase DEV-Viewport — 16:9 broadcast frame.
-     Black background acts as the letterbox bars; canvas is locked to a 16:9
-     aspect ratio so the rendered area always matches the 3Forge / R3 project
-     resolution (1920×1080). Whichever axis is constrained (width OR height)
-     scales the canvas down to fit the available area while preserving 16:9. */
+     The JS renderer.setSize stretches the canvas to the LARGEST 16:9 pixel
+     rectangle that fits inside this host. CSS just centers the resulting
+     fixed-size canvas; the host's black background acts as letterbox bars on
+     whichever axis is shorter. */
   display: flex;
   align-items: center;
   justify-content: center;
   background: #000;
 }
 .playground__viewport-host canvas {
-  aspect-ratio: 16 / 9;
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
   display: block;
   background: #1e1f25;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
