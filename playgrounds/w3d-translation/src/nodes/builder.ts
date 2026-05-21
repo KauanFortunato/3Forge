@@ -266,6 +266,10 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: s
     kind: "Group",
     maskIds: node.maskIds,
     transform: node.transform,
+    // DEV-Inspector — expose FlowChildren info on the Group userData so the
+    // inspector can show authored LeadingSpace (e.g. PLAYERS LeadingSpace=-1.26).
+    ...(node.flow ? { flow: node.flow } : {}),
+    ...(node.displayColor ? { displayColor: node.displayColor } : {}),
   };
   // Phase 2B — pivot anchor. When NodeTransform/Pivot is non-zero, route
   // children through an inner Group offset by -pivot AND shift outer.position
@@ -315,6 +319,12 @@ function applyPivotAnchor(outer: Group, t: W3DTransform): Group {
   const inner = new Group();
   inner.name = `${outer.name} (pivot)`;
   inner.position.set(-p.x, -p.y, -p.z);
+  // DEV-Inspector — mark pivot helpers so the inspector resolves clicks
+  // through them up to the real W3D node.
+  inner.userData.w3d = {
+    kind: "(pivot helper)",
+    forNodeId: (outer.userData?.w3d?.id as string | undefined) ?? "",
+  };
   outer.add(inner);
   return inner;
 }
@@ -389,9 +399,17 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
   applyTransform(wrapper, node.transform);
   // Wrapper stays visible so children (text, other quads) render correctly
   wrapper.visible = node.enable;
-  wrapper.userData.w3d = {
-    id: node.id, name: node.name, kind: "Quad", hasChildren: true, maskIds: node.maskIds,
-  };
+  // DEV-Inspector — wrapper userData carries the same payload shape as the
+  // leaf-Quad mesh so the inspector report is uniform regardless of whether
+  // the Quad has children.
+  {
+    const { children: _wc, ...wrest } = node;
+    wrapper.userData.w3d = {
+      ...wrest,
+      kind: "Quad",
+      hasChildren: true,
+    };
+  }
   // Phase 2B — pivot anchor for Quad-with-children. Mesh and children both
   // sit inside the pivot host so they share the same anchor offset.
   const host = applyPivotAnchor(wrapper, node.transform);
@@ -429,6 +447,10 @@ function wrapMeshWithPivot(mesh: Mesh, node: W3DQuadData): Group {
   mesh.position.set(-p.x, -p.y, -p.z);
   mesh.rotation.set(0, 0, 0);
   mesh.scale.set(1, 1, 1);
+  // DEV-Inspector — pivot wrapper carries no W3D semantics; mark it so the
+  // inspector skips it and resolves to the inner mesh (which has the real
+  // Quad userData).
+  outer.userData.w3d = { kind: "(pivot helper)", forNodeId: node.id };
   outer.add(mesh);
   return outer;
 }

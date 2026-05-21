@@ -159,3 +159,68 @@ body {
 .playground__quads-table th { color: var(--muted); font-weight: 500; }
 .playground__quads-table tr.is-group td { background: rgba(124, 68, 222, 0.07); }
 .playground__quads-table code { font-size: 11px; }
+
+/* DEV-Inspector — floating panel anchored to the viewport area. */
+.playground__inspector {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 380px;
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  background: rgba(20, 22, 28, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11px;
+  z-index: 5;
+}
+.playground__inspector header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 6px 0;
+}
+.playground__inspector h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.playground__inspector button.close {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.playground__inspector button.close:hover { color: var(--text); }
+.playground__inspector details {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.playground__inspector details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+.playground__inspector dl {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 2px 8px;
+  margin: 0;
+}
+.playground__inspector dt {
+  color: var(--muted);
+}
+.playground__inspector dd {
+  margin: 0;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  word-break: break-all;
+}

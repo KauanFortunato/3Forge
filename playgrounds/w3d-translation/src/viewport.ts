@@ -8,18 +8,23 @@
 import {
   AmbientLight,
   BoxGeometry,
+  BoxHelper,
   CircleGeometry,
   Color,
   CylinderGeometry,
   DirectionalLight,
   Group,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
+  Object3D,
   OrthographicCamera,
   PerspectiveCamera,
   PlaneGeometry,
+  Raycaster,
   Scene,
   SphereGeometry,
+  Vector2,
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -27,10 +32,21 @@ import type { ComponentBlueprint, EditorNode } from "../../../src/editor/types";
 import { buildNodeTree, type BuildContext } from "./nodes/builder";
 import type { W3DNodeData } from "./nodes/data";
 
+/** DEV-Inspector callback payload. */
+export type InspectorEvent =
+  | { phase: "click"; target: Object3D }
+  | { phase: "clear" };
+
 export interface PlaygroundViewport {
   /** Replace what's drawn. Call whenever the blueprint changes. */
   setBlueprint(blueprint: ComponentBlueprint): void;
   setNodes(roots: W3DNodeData[], ctx?: BuildContext): void;
+  /** DEV-Inspector — enable click-to-pick + selection box outline. */
+  setInspectorEnabled(on: boolean): void;
+  /** DEV-Inspector — callback receives click/clear events. */
+  setInspectorCallback(cb: ((event: InspectorEvent) => void) | null): void;
+  /** DEV-Inspector — clear the current selection outline. */
+  clearInspectorSelection(): void;
   dispose(): void;
 }
 
@@ -96,10 +112,95 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   ro.observe(host);
   resize();
 
+  // ---- DEV-Inspector state ----------------------------------------------
+  let inspectorEnabled = false;
+  let inspectorCallback: ((event: InspectorEvent) => void) | null = null;
+  let selectionHelper: BoxHelper | null = null;
+  const raycaster = new Raycaster();
+  const ndc = new Vector2();
+  // Track pointerdown coords to distinguish click vs OrbitControls drag.
+  let downX = 0;
+  let downY = 0;
+  const CLICK_THRESHOLD_PX = 3;
+
+  function clearSelectionHelper(): void {
+    if (selectionHelper) {
+      scene.remove(selectionHelper);
+      selectionHelper.geometry.dispose();
+      // BoxHelper carries a LineBasicMaterial — dispose via the generic Material type.
+      (selectionHelper.material as { dispose?: () => void }).dispose?.();
+      selectionHelper = null;
+    }
+  }
+
+  function setSelection(target: Object3D | null): void {
+    clearSelectionHelper();
+    if (!target) return;
+    selectionHelper = new BoxHelper(target, 0x7c44de);
+    scene.add(selectionHelper);
+  }
+
+  function pickAt(clientX: number, clientY: number): Object3D | null {
+    if (!mountedNodes) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, activeCam);
+    const hits = raycaster.intersectObject(mountedNodes, true);
+    for (const hit of hits) {
+      const o = hit.object;
+      if (!o.visible) continue;
+      // Drop any ancestor-invisible chain.
+      let anc: Object3D | null = o.parent;
+      let ancestorVisible = true;
+      while (anc) {
+        if (!anc.visible) { ancestorVisible = false; break; }
+        anc = anc.parent;
+      }
+      if (!ancestorVisible) continue;
+      const mat = (o as Mesh).material as MeshBasicMaterial | undefined;
+      if (mat) {
+        // PHOTO_MASK / PHOTO_DUMMY stencil writers paint no pixels — skip them.
+        if (mat.colorWrite === false) continue;
+        // alpha=0 helpers (PLAYERS_MASK etc.).
+        if (typeof mat.opacity === "number" && mat.opacity <= 0.01) continue;
+      }
+      return o;
+    }
+    return null;
+  }
+
+  const onPointerDown = (e: PointerEvent) => {
+    downX = e.clientX;
+    downY = e.clientY;
+  };
+  const onPointerUp = (e: PointerEvent) => {
+    if (Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_THRESHOLD_PX) return; // drag
+    const target = pickAt(e.clientX, e.clientY);
+    if (target) {
+      setSelection(target);
+      inspectorCallback?.({ phase: "click", target });
+    } else {
+      setSelection(null);
+      inspectorCallback?.({ phase: "clear" });
+    }
+  };
+
+  function attachInspectorListeners(): void {
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
+  }
+  function detachInspectorListeners(): void {
+    renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+    renderer.domElement.removeEventListener("pointerup", onPointerUp);
+  }
+  // ---- End DEV-Inspector state ------------------------------------------
+
   let frame = 0;
   const tick = () => {
     frame = requestAnimationFrame(tick);
     if (activeCam === perspectiveCam) controls?.update();
+    if (selectionHelper) selectionHelper.update();
     renderer.render(scene, activeCam);
   };
   tick();
@@ -146,12 +247,31 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       mountedNodes = buildNodeTree(roots, ctx);
       scene.add(mountedNodes);
     },
+    setInspectorEnabled(on: boolean) {
+      if (on === inspectorEnabled) return;
+      inspectorEnabled = on;
+      if (on) {
+        attachInspectorListeners();
+      } else {
+        detachInspectorListeners();
+        clearSelectionHelper();
+        inspectorCallback?.({ phase: "clear" });
+      }
+    },
+    setInspectorCallback(cb) {
+      inspectorCallback = cb;
+    },
+    clearInspectorSelection() {
+      clearSelectionHelper();
+    },
     dispose() {
       if (mountedNodes) {
         scene.remove(mountedNodes);
         disposeGroup(mountedNodes);
         mountedNodes = null;
       }
+      detachInspectorListeners();
+      clearSelectionHelper();
       cancelAnimationFrame(frame);
       ro.disconnect();
       controls?.dispose();

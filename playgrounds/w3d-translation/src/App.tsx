@@ -8,6 +8,7 @@ import { translateBlueprint } from "./translate";
 import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
 import type { BuildContext } from "./nodes/builder";
 import type { W3DResourceRegistry } from "./nodes/resources";
+import { buildInspectorReport, type InspectorReport } from "./inspector";
 import type { Texture } from "three";
 
 interface LoadedScene {
@@ -29,6 +30,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<"stats" | "xml" | "blueprint" | "quads">("stats");
   const [stencilDebugShowMask, setStencilDebugShowMask] = useState(false);
+  const [inspectorEnabled, setInspectorEnabled] = useState(false);
+  const [inspectorReport, setInspectorReport] = useState<InspectorReport | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const viewportHostRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<PlaygroundViewport | null>(null);
@@ -58,6 +61,37 @@ export function App() {
       viewportRef.current.setNodes(loaded.nodes, ctx);
     }
   }, [loaded, stencilDebugShowMask]);
+
+  // DEV-Inspector — wire the toggle into the viewport raycaster + selection.
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    vp.setInspectorCallback((event) => {
+      if (event.phase === "click") {
+        const report = buildInspectorReport(event.target, loaded?.resources);
+        if (report) setInspectorReport(report);
+      } else {
+        setInspectorReport(null);
+      }
+    });
+    vp.setInspectorEnabled(inspectorEnabled);
+    return () => {
+      vp.setInspectorCallback(null);
+    };
+  }, [inspectorEnabled, loaded]);
+
+  // DEV-Inspector — Esc clears the panel and the in-viewport selection box.
+  useEffect(() => {
+    if (!inspectorReport) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setInspectorReport(null);
+        viewportRef.current?.clearInspectorSelection();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inspectorReport]);
 
   useEffect(() => {
     return () => {
@@ -148,6 +182,20 @@ export function App() {
             />
             show mask (red)
           </label>
+          <label style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }} title="Click a node in the viewport to inspect its W3D properties">
+            <input
+              type="checkbox"
+              checked={inspectorEnabled}
+              onChange={(e) => {
+                setInspectorEnabled(e.target.checked);
+                if (!e.target.checked) {
+                  setInspectorReport(null);
+                  viewportRef.current?.clearInspectorSelection();
+                }
+              }}
+            />
+            inspector
+          </label>
         </div>
       </header>
 
@@ -218,6 +266,15 @@ export function App() {
                 </details>
               ) : null}
             </div>
+          ) : null}
+          {inspectorReport ? (
+            <InspectorPanel
+              report={inspectorReport}
+              onClose={() => {
+                setInspectorReport(null);
+                viewportRef.current?.clearInspectorSelection();
+              }}
+            />
           ) : null}
         </main>
       </div>
@@ -308,4 +365,207 @@ function QuadsView({ loaded }: { loaded: LoadedScene }) {
 function shortId(s: string): string {
   if (s === "—" || s === "Standard") return s;
   return s.length > 12 ? s.slice(0, 8) + "…" : s;
+}
+
+// ---------------------------------------------------------------------------
+// DEV-Inspector — floating panel with W3D/XML-style properties of a clicked
+// Object3D. Pure read-only view of the InspectorReport built by inspector.ts.
+// ---------------------------------------------------------------------------
+
+interface Vec3Like { x: number; y: number; z: number }
+interface Vec2Like { x: number; y: number }
+
+function fmt(n: number, digits = 3): string {
+  if (!isFinite(n)) return "—";
+  return Number(n.toFixed(digits)).toString();
+}
+function fmtVec3(v: Vec3Like, digits = 3): string {
+  return `(${fmt(v.x, digits)}, ${fmt(v.y, digits)}, ${fmt(v.z, digits)})`;
+}
+function fmtVec2(v: Vec2Like, digits = 3): string {
+  return `(${fmt(v.x, digits)}, ${fmt(v.y, digits)})`;
+}
+function fmtBin(n: number, bits = 8): string {
+  if (!isFinite(n)) return "—";
+  return "0b" + (n & ((1 << bits) - 1)).toString(2).padStart(bits, "0");
+}
+
+function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose: () => void }) {
+  return (
+    <aside className="playground__inspector">
+      <header>
+        <h3>
+          {report.identity.name}
+          <span style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}>
+            ({report.identity.kind}{report.identity.hasChildren ? " w/ children" : ""})
+          </span>
+        </h3>
+        <button type="button" className="close" onClick={onClose} title="Close (Esc)">×</button>
+      </header>
+
+      <details open>
+        <summary>identity</summary>
+        <dl>
+          <dt>name</dt><dd>{report.identity.name}</dd>
+          <dt>kind</dt><dd>{report.identity.kind}</dd>
+          <dt>id (guid)</dt><dd>{report.identity.id || "—"}</dd>
+          <dt>path</dt><dd>{report.identity.hierarchyPath}</dd>
+        </dl>
+      </details>
+
+      <details open>
+        <summary>transform</summary>
+        <dl>
+          <dt>local pos</dt><dd>{fmtVec3(report.transform.localPosition)}</dd>
+          <dt>world pos</dt><dd>{fmtVec3(report.transform.worldPosition)}</dd>
+          <dt>rotation°</dt><dd>{fmtVec3(report.transform.rotationDeg)}</dd>
+          <dt>scale</dt><dd>{fmtVec3(report.transform.scale)}</dd>
+          {report.transform.pivot ? <><dt>pivot</dt><dd>{fmtVec3(report.transform.pivot)}</dd></> : null}
+          {report.transform.alignmentX ? <><dt>alignX</dt><dd>{report.transform.alignmentX}</dd></> : null}
+          {report.transform.alignmentY ? <><dt>alignY</dt><dd>{report.transform.alignmentY}</dd></> : null}
+        </dl>
+      </details>
+
+      <details open>
+        <summary>geometry</summary>
+        <dl>
+          {report.geometry.currentSize ? (
+            <><dt>size</dt><dd>{fmtVec2(report.geometry.currentSize)}</dd></>
+          ) : null}
+          <dt>bbox min</dt><dd>{fmtVec3(report.geometry.worldBounds.min)}</dd>
+          <dt>bbox max</dt><dd>{fmtVec3(report.geometry.worldBounds.max)}</dd>
+          <dt>bbox WxH</dt>
+          <dd>{fmt(report.geometry.worldBounds.width)} × {fmt(report.geometry.worldBounds.height)}</dd>
+          <dt>renderOrder</dt><dd>{report.geometry.renderOrder}</dd>
+        </dl>
+      </details>
+
+      <details open>
+        <summary>visibility</summary>
+        <dl>
+          {report.visibility.enable !== undefined
+            ? <><dt>enable</dt><dd>{String(report.visibility.enable)}</dd></>
+            : null}
+          <dt>visible</dt><dd>{String(report.visibility.visible)}</dd>
+          {report.visibility.alpha !== undefined
+            ? <><dt>alpha (W3D)</dt><dd>{fmt(report.visibility.alpha, 3)}</dd></>
+            : null}
+          {report.visibility.opacity !== undefined
+            ? <><dt>opacity</dt><dd>{fmt(report.visibility.opacity, 3)}</dd></>
+            : null}
+          {report.visibility.transparent !== undefined
+            ? <><dt>transparent</dt><dd>{String(report.visibility.transparent)}</dd></>
+            : null}
+          <dt>hiddenReason</dt><dd>{report.visibility.hiddenReason ?? "—"}</dd>
+        </dl>
+      </details>
+
+      <details open>
+        <summary>mask</summary>
+        <dl>
+          {report.mask.isMask !== undefined
+            ? <><dt>isMask</dt><dd>{String(report.mask.isMask)}</dd></>
+            : null}
+          {report.mask.isColoredMask !== undefined
+            ? <><dt>isColoredMask</dt><dd>{String(report.mask.isColoredMask)}</dd></>
+            : null}
+          {report.mask.isInvertedMask !== undefined
+            ? <><dt>isInvertedMask</dt><dd>{String(report.mask.isInvertedMask)}</dd></>
+            : null}
+          {report.mask.disableBinaryAlpha !== undefined
+            ? <><dt>disableBinaryAlpha</dt><dd>{String(report.mask.disableBinaryAlpha)}</dd></>
+            : null}
+          <dt>own maskIds</dt>
+          <dd>{report.mask.ownMaskIds.length === 0 ? "—" : report.mask.ownMaskIds.join("; ")}</dd>
+          <dt>effective</dt>
+          <dd>{report.mask.effectiveMaskIds.length === 0 ? "—" : report.mask.effectiveMaskIds.join("; ")}</dd>
+        </dl>
+      </details>
+
+      {report.stencil ? (
+        <details open>
+          <summary>stencil</summary>
+          <dl>
+            <dt>stencilWrite</dt><dd>{String(report.stencil.stencilWrite)}</dd>
+            <dt>stencilRef</dt><dd>{report.stencil.stencilRef} ({fmtBin(report.stencil.stencilRef)})</dd>
+            <dt>writeMask</dt><dd>{report.stencil.stencilWriteMask} ({fmtBin(report.stencil.stencilWriteMask)})</dd>
+            <dt>stencilFunc</dt><dd>{report.stencil.stencilFunc}</dd>
+            <dt>funcMask</dt><dd>{report.stencil.stencilFuncMask} ({fmtBin(report.stencil.stencilFuncMask)})</dd>
+            <dt>colorWrite</dt><dd>{String(report.stencil.colorWrite)}</dd>
+            <dt>depthWrite</dt><dd>{String(report.stencil.depthWrite)}</dd>
+            <dt>depthTest</dt><dd>{String(report.stencil.depthTest)}</dd>
+          </dl>
+        </details>
+      ) : null}
+
+      <details open>
+        <summary>material / texture</summary>
+        <dl>
+          {report.material.materialId
+            ? <><dt>materialId</dt><dd>{report.material.materialId}</dd></>
+            : null}
+          {report.material.materialName
+            ? <><dt>material name</dt><dd>{report.material.materialName}</dd></>
+            : null}
+          {report.material.textureLayerId
+            ? <><dt>layerId</dt><dd>{report.material.textureLayerId}</dd></>
+            : null}
+          {report.material.textureLayerName
+            ? <><dt>layer name</dt><dd>{report.material.textureLayerName}</dd></>
+            : null}
+          {report.material.mapFilename
+            ? <><dt>map file</dt><dd>{report.material.mapFilename}</dd></>
+            : null}
+          {report.material.alphaMapFilename
+            ? <><dt>alphaMap file</dt><dd>{report.material.alphaMapFilename}</dd></>
+            : null}
+        </dl>
+      </details>
+
+      {(report.uv.mapOffset || report.uv.alphaMapOffset) ? (
+        <details open>
+          <summary>uv</summary>
+          <dl>
+            {report.uv.mapOffset
+              ? <><dt>map offset</dt><dd>{fmtVec2(report.uv.mapOffset)}</dd></>
+              : null}
+            {report.uv.mapRepeat
+              ? <><dt>map repeat</dt><dd>{fmtVec2(report.uv.mapRepeat)}</dd></>
+              : null}
+            {report.uv.mapRotationRad !== undefined
+              ? <><dt>map rot°</dt><dd>{fmt((report.uv.mapRotationRad * 180) / Math.PI, 3)}</dd></>
+              : null}
+            {report.uv.mapWrapS !== undefined
+              ? <><dt>wrapS/wrapT</dt><dd>{report.uv.mapWrapS} / {report.uv.mapWrapT}</dd></>
+              : null}
+            {report.uv.alphaMapOffset
+              ? <><dt>α offset</dt><dd>{fmtVec2(report.uv.alphaMapOffset)}</dd></>
+              : null}
+            {report.uv.alphaMapRepeat
+              ? <><dt>α repeat</dt><dd>{fmtVec2(report.uv.alphaMapRepeat)}</dd></>
+              : null}
+            {report.uv.alphaMapRotationRad !== undefined
+              ? <><dt>α rot°</dt><dd>{fmt((report.uv.alphaMapRotationRad * 180) / Math.PI, 3)}</dd></>
+              : null}
+          </dl>
+        </details>
+      ) : null}
+
+      <details open>
+        <summary>flow</summary>
+        <dl>
+          <dt>flow parent</dt><dd>{report.flow.underFlowParent ?? "—"}</dd>
+          {report.flow.slotIndex !== undefined
+            ? <><dt>slot index</dt><dd>{report.flow.slotIndex}</dd></>
+            : null}
+          {report.flow.parentLeadingSpace !== undefined
+            ? <><dt>LeadingSpace</dt><dd>{report.flow.parentLeadingSpace} <span style={{ color: "var(--muted)" }}>(authored)</span></dd></>
+            : null}
+          {report.flow.parentFlowDirection
+            ? <><dt>Direction</dt><dd>{report.flow.parentFlowDirection}</dd></>
+            : null}
+        </dl>
+      </details>
+    </aside>
+  );
 }

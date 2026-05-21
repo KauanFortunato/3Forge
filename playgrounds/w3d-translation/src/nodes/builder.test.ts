@@ -2111,6 +2111,101 @@ describe("builder — BuildContext", () => {
     expect(mat.map!.version).toBeGreaterThan(0);
   });
 
+  // -----------------------------------------------------------------------
+  // DEV-Inspector — userData enrichment (Phase DEV-Inspector).
+  // The builder now attaches enough metadata to each Object3D for the
+  // inspector to report identity, transform, geometry, mask, material info
+  // without needing extra parsing at click time.
+  // -----------------------------------------------------------------------
+
+  test("DEV-Inspector: Group userData carries `flow` when authored (PLAYERS LeadingSpace=-1.26)", () => {
+    const players = groupData({
+      id: "PLAYERS", name: "PLAYERS",
+      flow: { children: true, leadingSpace: -1.26 },
+    });
+    const root = buildNodeTree([players]);
+    const g = root.children[0] as Group;
+    expect(g.userData.w3d).toMatchObject({
+      kind: "Group",
+      name: "PLAYERS",
+      flow: { children: true, leadingSpace: -1.26 },
+    });
+  });
+
+  test("DEV-Inspector: Quad wrapper (with children) userData carries full Quad metadata", () => {
+    const child = quadData({ id: "c", name: "CHILD" });
+    const parent = quadData({
+      id: "p", name: "PARENT",
+      isMask: true,
+      alpha: 0.5,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+      children: [child],
+    });
+    const obj = buildNode(parent) as Group;
+    const w = obj.userData.w3d as Record<string, unknown>;
+    expect(w.kind).toBe("Quad");
+    expect(w.hasChildren).toBe(true);
+    expect(w.isMask).toBe(true);
+    expect(w.alpha).toBe(0.5);
+    expect((w.maskProperties as { isColoredMask: boolean }).isColoredMask).toBe(true);
+    expect(w.geometry).toBeDefined();
+    expect(w.transform).toBeDefined();
+  });
+
+  test('DEV-Inspector: pivot inner Group is marked as "(pivot helper)" with forNodeId', () => {
+    const g = groupData({
+      id: "p1", name: "PLAYER_01",
+      transform: {
+        position: { x: 0, y: -3.5, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: -1.4, z: 0 },
+      },
+      children: [groupData({ id: "c", name: "CHILD" })],
+    });
+    const root = buildNodeTree([g]);
+    const outer = root.children[0] as Group;
+    const inner = outer.children[0] as Group;
+    expect(inner.userData.w3d).toMatchObject({
+      kind: "(pivot helper)",
+      forNodeId: "p1",
+    });
+  });
+
+  test('DEV-Inspector: leaf-Quad pivot wrapper is marked as "(pivot helper)" with forNodeId', () => {
+    const q = quadData({
+      id: "lq", name: "LEAF_PIVOT",
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        pivot: { x: 0, y: -0.7, z: 0 },
+      },
+    });
+    const obj = buildNode(q) as Group;
+    expect(obj.userData.w3d).toMatchObject({
+      kind: "(pivot helper)",
+      forNodeId: "lq",
+    });
+    // The Mesh inside still carries the real Quad userData.
+    const inner = obj.children[0] as Mesh;
+    expect((inner.userData.w3d as { kind: string }).kind).toBe("Quad");
+  });
+
+  test("DEV-Inspector regression: leaf Quad mesh userData still carries full W3DQuadData spread", () => {
+    const q = quadData({
+      id: "q", name: "Q", isMask: false, alpha: 0.7,
+      faceMapping: { surfaceName: "All", materialId: "M", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false },
+    });
+    const mesh = buildNode(q) as Mesh;
+    const w = mesh.userData.w3d as Record<string, unknown>;
+    expect(w.id).toBe("q");
+    expect(w.alpha).toBe(0.7);
+    expect(w.kind).toBe("Quad");
+    expect(w.faceMapping).toBeDefined();
+    expect(w.transform).toBeDefined();
+  });
+
   test("Phase 2C regression: PHOTO_MASK_05 (no texture layer) is unaffected by UV transform plumbing", () => {
     // PHOTO_MASK_05 uses TextureLayerId="Standard" → no texture lookup, no
     // UV transform path triggered. The Mesh's geometry stays exactly as
