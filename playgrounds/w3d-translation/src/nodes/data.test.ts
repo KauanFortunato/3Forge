@@ -278,6 +278,35 @@ describe("parseGroup and recursion", () => {
     expect(warnings.some((w) => w.includes("Ignored <TextureText>"))).toBe(false);
   });
 
+  test('Phase TextureText layout v2: GeometryOptions ConstrainMethod="Width" is parsed', () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <TextureText Id="tt" Name="NUM">
+        <GeometryOptions Text="23" FontStyle="fs-1" AlignmentX="Center" AlignmentY="Center"
+                         TextQuality="4" ConstrainMethod="Width">
+          <TextBoxSize X="0.08" Y="0.19"/>
+        </GeometryOptions>
+      </TextureText>
+    `));
+    expect(roots).toHaveLength(1);
+    const tt = roots[0];
+    expect(tt.kind).toBe("TextureText");
+    if (tt.kind !== "TextureText") return;
+    expect(tt.constrainMethod).toBe("Width");
+  });
+
+  test('Phase TextureText layout v2: ConstrainMethod absent → constrainMethod undefined', () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <TextureText Id="tt" Name="NUM">
+        <GeometryOptions Text="X" FontStyle="fs-1" AlignmentX="Center" AlignmentY="Center" TextQuality="1">
+          <TextBoxSize X="0.5" Y="0.5"/>
+        </GeometryOptions>
+      </TextureText>
+    `));
+    const tt = roots[0];
+    if (tt.kind !== "TextureText") throw new Error("expected TextureText");
+    expect(tt.constrainMethod).toBeUndefined();
+  });
+
   test("Group MaskId is parsed", () => {
     const { roots } = parseNodes(wrapInScene(`<Group Id="g" Name="x" MaskId="m1;"/>`));
     expect((roots[0] as W3DGroupData).maskIds).toEqual(["m1"]);

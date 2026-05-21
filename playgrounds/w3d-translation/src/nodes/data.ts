@@ -96,6 +96,12 @@ export type W3DTextureTextData = {
   alignmentY?: "Top" | "Bottom" | "Center";
   /** R3 rasterization quality multiplier (typical 0.8..5). */
   textQuality: number;
+  /**
+   * R3 GeometryOptions.ConstrainMethod (e.g. "Width", "Height", "None").
+   * Phase TextureText layout v2 honors "Width" by shrinking the font to fit
+   * the canvas width; other values fall through to the default sizing.
+   */
+  constrainMethod?: string;
   maskIds: string[];
   faceMapping?: W3DQuadFaceMapping;
   transform: W3DTransform;
@@ -276,6 +282,7 @@ function parseTextureText(el: Element, warnings: string[]): W3DTextureTextData {
   const alignmentX = (go?.getAttribute("AlignmentX") ?? undefined) as W3DTextureTextData["alignmentX"];
   const alignmentY = (go?.getAttribute("AlignmentY") ?? undefined) as W3DTextureTextData["alignmentY"];
   const textQuality = parseNumberAttr(go?.getAttribute("TextQuality") ?? undefined, 1);
+  const constrainMethod = go?.getAttribute("ConstrainMethod") ?? undefined;
 
   const tbsEl = go ? findDirectChild(go, "TextBoxSize") : null;
   const textBox = {
@@ -301,6 +308,7 @@ function parseTextureText(el: Element, warnings: string[]): W3DTextureTextData {
     alignmentX,
     alignmentY,
     textQuality,
+    ...(constrainMethod !== undefined ? { constrainMethod } : {}),
     maskIds: parseMaskIds(attrs.MaskId),
     transform,
     children: [],

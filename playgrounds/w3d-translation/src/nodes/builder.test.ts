@@ -2513,6 +2513,111 @@ describe("builder — BuildContext", () => {
     expect(photoMesh.renderOrder).toBe(20);
   });
 
+  // -----------------------------------------------------------------------
+  // Phase TextureText layout v2 — ConstrainMethod="Width" path.
+  // Structural assertions only — jsdom's canvas getContext("2d") returns
+  // null, so the actual measureText shrink loop is exercised by browser
+  // visual smoke, not unit tests.
+  // -----------------------------------------------------------------------
+
+  test('Phase TextureText layout v2: ConstrainMethod="Width" preserves PlaneGeometry size and material', () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "PLAYER_LAST_NAME_02",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "JACKSON",
+      textBox: { x: 0.38, y: 0.33 },
+      textQuality: 3,
+      alignmentX: "Left" as const,
+      alignmentY: "Center" as const,
+      constrainMethod: "Width",
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    const params = (mesh.geometry as InstanceType<typeof import("three").PlaneGeometry>).parameters;
+    // Plane size still matches TextBoxSize verbatim (Phase TextureText invariant).
+    expect(params.width).toBeCloseTo(0.38, 5);
+    expect(params.height).toBeCloseTo(0.33, 5);
+    expect(mat.map).not.toBeNull(); // CanvasTexture present regardless of ConstrainMethod path
+    expect(mat.transparent).toBe(true);
+  });
+
+  test('Phase TextureText layout v2: ConstrainMethod="Width" carried through to userData.w3d', () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "TEAM_NAME_FS_01_L_01",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "DETROIT",
+      textBox: { x: 0.43, y: 0.4 },
+      textQuality: 5,
+      alignmentX: "Left" as const,
+      alignmentY: "Center" as const,
+      constrainMethod: "Width",
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 5.635, y: 5.635, z: 5.635 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    const w = mesh.userData.w3d as Record<string, unknown>;
+    expect(w.constrainMethod).toBe("Width");
+  });
+
+  test('Phase TextureText layout v2: missing ConstrainMethod does NOT crash and still produces a mesh', () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "PLAIN",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "X",
+      textBox: { x: 0.5, y: 0.5 },
+      textQuality: 1,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    expect(mesh).toBeInstanceOf(Mesh);
+    const mat = mesh.material as MeshBasicMaterial;
+    expect(mat.map).not.toBeNull();
+  });
+
+  test('Phase TextureText layout v2: render-order baseline unchanged by ConstrainMethod', () => {
+    // Adding ConstrainMethod must not regress the renderOrder=22 default for
+    // a TextureText without maskIds.
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "X",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "ABCDEFG",
+      textBox: { x: 0.1, y: 0.3 },
+      textQuality: 4,
+      constrainMethod: "Width",
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    expect(mesh.renderOrder).toBe(22);
+  });
+
   test("Phase 2C regression: PHOTO_MASK_05 (no texture layer) is unaffected by UV transform plumbing", () => {
     // PHOTO_MASK_05 uses TextureLayerId="Standard" → no texture lookup, no
     // UV transform path triggered. The Mesh's geometry stays exactly as

@@ -526,6 +526,7 @@ function buildTextureText(
     alignmentX: node.alignmentX ?? "Center",
     alignmentY: node.alignmentY ?? "Center",
     quality: node.textQuality,
+    constrainMethod: node.constrainMethod,
   });
 
   const material = new MeshBasicMaterial({
@@ -599,6 +600,8 @@ interface RenderTextOptions {
   alignmentX: "Left" | "Right" | "Center";
   alignmentY: "Top" | "Bottom" | "Center";
   quality: number;
+  /** R3 ConstrainMethod hint — "Width" triggers the shrink-to-fit width path. */
+  constrainMethod?: string;
 }
 
 /**
@@ -617,9 +620,26 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
   const c2d = canvas.getContext("2d");
   if (c2d) {
     c2d.clearRect(0, 0, w, h);
-    // Font size: leave a small inset (~85% of canvas height) so descenders fit.
-    const fontPx = Math.max(4, Math.floor(h * 0.85));
+    // Small horizontal padding (~3% each side) so glyphs don't kiss the canvas edge.
+    const padX = Math.max(2, Math.round(w * 0.03));
+    const availableWidth = Math.max(8, w - padX * 2);
+
+    // Initial font size — leaves a small inset so descenders fit vertically.
+    let fontPx = Math.max(4, Math.floor(h * 0.85));
     c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+
+    // Phase TextureText layout v2 — when R3 authored ConstrainMethod="Width",
+    // shrink the font so the rendered text fits the canvas width minus
+    // padding. Single proportional rescale is enough (no iterative search):
+    // measureText scales linearly with fontPx for a given glyph run.
+    if (opts.constrainMethod === "Width" && opts.text.length > 0) {
+      const measured = c2d.measureText(opts.text).width;
+      if (measured > availableWidth && measured > 0) {
+        fontPx = Math.max(4, Math.floor((fontPx * availableWidth) / measured));
+        c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+      }
+    }
+
     c2d.fillStyle = opts.color;
     c2d.textAlign =
       opts.alignmentX === "Left" ? "left"
@@ -630,8 +650,8 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
       : opts.alignmentY === "Bottom" ? "bottom"
       : "middle";
     const tx =
-      opts.alignmentX === "Left" ? 0
-      : opts.alignmentX === "Right" ? w
+      opts.alignmentX === "Left" ? padX
+      : opts.alignmentX === "Right" ? w - padX
       : w / 2;
     const ty =
       opts.alignmentY === "Top" ? 0
