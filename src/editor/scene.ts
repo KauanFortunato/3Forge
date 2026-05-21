@@ -34,6 +34,7 @@ import {
   MeshStandardMaterial,
   MeshToonMaterial,
   PCFSoftShadowMap,
+  Quaternion,
   RGBADepthPacking,
   ShadowMaterial,
   Object3D,
@@ -47,6 +48,8 @@ import {
   RingGeometry,
   Scene,
   ShaderMaterial,
+  Skeleton,
+  SkinnedMesh,
   SRGBColorSpace,
   SphereGeometry,
   TetrahedronGeometry,
@@ -61,6 +64,7 @@ import {
   CircleGeometry,
   Clock,
 } from "three";
+import { clone as cloneSkeletalGroup } from "three/examples/jsm/utils/SkeletonUtils.js";
 import * as THREE from "three";
 import CameraControls from "camera-controls";
 
@@ -466,6 +470,31 @@ interface CompiledAnimationTrack {
   visibilityMesh?: Mesh | null;
 }
 
+/**
+ * One USDZ skeletal animation registered for playback on a ModelNode. The
+ * skeleton's bones (cloned via SkeletonUtils together with the SkinnedMesh
+ * so the new SkinnedMesh.skeleton references the cloned bones) live inside
+ * the model's wrapper Object3D. `joints` is the SkelAnimation's authored
+ * joint order remapped to indices into the skeleton's bone array — applying
+ * a frame walks this map writing position/quaternion/scale to bone i.
+ *
+ * `frames` is sorted by ascending frame; lookup is a binary-search to find
+ * the bracketing pair, then per-channel lerp/slerp. Out-of-range frames
+ * clamp to the nearest sample.
+ */
+interface SkeletalPlayback {
+  skeleton: Skeleton;
+  jointToBoneIndex: Int32Array;
+  fps: number;
+  durationFrames: number;
+  frames: Array<{
+    frame: number;
+    translations: Float32Array;
+    rotations: Float32Array;
+    scales: Float32Array;
+  }>;
+}
+
 export class SceneEditor {
   private readonly textureLoader = new TextureLoader();
   private readonly container: HTMLElement;
@@ -511,6 +540,12 @@ export class SceneEditor {
 
   private animationFrame = 0;
   private animationTracks: CompiledAnimationTrack[] = [];
+  // Skeletal playbacks keyed by ModelNode id. Each entry binds a SkinnedMesh
+  // assembly (cloned via SkeletonUtils so its bones live in the wrapper) to
+  // the per-frame joint TRS baked at import time. applyAnimationFrame walks
+  // these and writes bone.position/quaternion/scale at the current frame,
+  // independently of the keyframe track system.
+  private readonly skeletalPlaybacks = new Map<string, SkeletalPlayback>();
   private readonly animationPreviewOverrides = new Map<string, AnimationPreviewOverride>();
   private animationRuntimeReady = false;
   private currentAnimationFrame = 0;
@@ -1394,6 +1429,10 @@ export class SceneEditor {
     this.clearViewportRoot();
     this.objectMap.clear();
     this.childContainerMap.clear();
+    // Skeletal playbacks reference SkinnedMesh instances that lived in the
+    // about-to-be-cleared scene. They re-register as buildModelObject runs
+    // again for surviving model nodes.
+    this.skeletalPlaybacks.clear();
 
     for (const node of this.store.blueprint.nodes) {
       const object = this.createObject(node);
@@ -1612,7 +1651,12 @@ export class SceneEditor {
           return;
         }
 
-        const clone = cached.clone(true);
+        // Skinned USDZ assets need SkeletonUtils.clone so the cloned
+        // SkinnedMesh's skeleton reference rebinds to the cloned bones.
+        // For non-skinned content the standard recursive clone is fine.
+        const hasSkinned = cached.userData?.skeletalAnimations
+          && Object.keys(cached.userData.skeletalAnimations).length > 0;
+        const clone = (hasSkinned ? cloneSkeletalGroup(cached) : cached.clone(true)) as Group;
         tagForNode(clone);
 
         // Apply per-part visibility overrides. partId is the same index-path
@@ -1629,6 +1673,9 @@ export class SceneEditor {
 
         wrapper.clear();
         wrapper.add(clone);
+        if (hasSkinned) {
+          this.registerSkeletalPlayback(node.id, clone, cached);
+        }
         this.updateViewMode();
       })
       .catch((error) => {
@@ -1636,6 +1683,66 @@ export class SceneEditor {
       });
 
     return wrapper;
+  }
+
+  /**
+   * Scan a freshly-cloned skinned model for {@link SkeletalPlayback}
+   * candidates and register them under the owning ModelNode id. The cloned
+   * SkinnedMesh carries its own .skeleton (rebound by SkeletonUtils.clone),
+   * but the per-frame TRS data lives on the cached source group's userData
+   * (it's shared across instances; cloning would waste memory). Joints
+   * named on the SkelAnimation are remapped to skeleton bone indices via
+   * the bone's `.name` (set to the USD joint path in
+   * {@link buildThreeSkeleton}).
+   */
+  private registerSkeletalPlayback(nodeId: string, clone: Object3D, cached: Object3D): void {
+    const animations = cached.userData?.skeletalAnimations as
+      | Record<string, { fps: number; durationFrames: number; jointsOrder: string[]; frames: SkeletalPlayback["frames"] }>
+      | undefined;
+    if (!animations) return;
+
+    // Drop any previous playback for the same node (re-render replaces the
+    // wrapper, so the old skeleton ref is now orphaned).
+    this.skeletalPlaybacks.delete(nodeId);
+
+    let skinnedMesh: SkinnedMesh | null = null;
+    let playbackKey: string | null = null;
+    clone.traverse((object) => {
+      if (skinnedMesh) return;
+      if (!(object instanceof SkinnedMesh)) return;
+      skinnedMesh = object;
+      // The skeletalPlayback marker sits on the prim Object3D — walk parents
+      // looking for it.
+      let cursor: Object3D | null = object.parent;
+      while (cursor) {
+        const playback = cursor.userData?.skeletalPlayback as { animationPath: string } | undefined;
+        if (playback?.animationPath) {
+          playbackKey = playback.animationPath;
+          break;
+        }
+        cursor = cursor.parent;
+      }
+    });
+    if (!skinnedMesh || !playbackKey) return;
+    const animation = animations[playbackKey];
+    if (!animation || animation.frames.length === 0) return;
+
+    const skeleton = (skinnedMesh as SkinnedMesh).skeleton;
+    const boneIndexByName = new Map<string, number>();
+    skeleton.bones.forEach((bone, idx) => boneIndexByName.set(bone.name, idx));
+
+    const jointToBoneIndex = new Int32Array(animation.jointsOrder.length);
+    for (let i = 0; i < animation.jointsOrder.length; i += 1) {
+      jointToBoneIndex[i] = boneIndexByName.get(animation.jointsOrder[i]) ?? -1;
+    }
+
+    this.skeletalPlaybacks.set(nodeId, {
+      skeleton,
+      jointToBoneIndex,
+      fps: animation.fps,
+      durationFrames: animation.durationFrames,
+      frames: animation.frames,
+    });
   }
 
   private buildWrappedNodeObject(node: Exclude<EditorNode, { type: "group" | "model" }>): Object3D {
@@ -2392,7 +2499,80 @@ export class SceneEditor {
       this.selectionHelperDirty = true;
     }
 
+    this.applySkeletalPlaybacks(normalizedFrame);
     this.applyAnimationPreviewOverrides(normalizedFrame);
+  }
+
+  /**
+   * Drive every registered SkinnedMesh's bones from the baked per-frame
+   * joint TRS at the active clip's current frame. This runs after the
+   * keyframe-track pass so manual transform overrides on a model don't
+   * leak into the skeleton — the skin always reflects the authored
+   * skeletal animation while playback is active.
+   *
+   * Joints that didn't map to a bone (jointToBoneIndex[i] === -1) are
+   * silently skipped — that happens when the SkelAnimation animates more
+   * joints than the Skeleton declares (rare but allowed by USD).
+   */
+  private applySkeletalPlaybacks(frame: number): void {
+    if (this.skeletalPlaybacks.size === 0) return;
+
+    const tmpQuat = new Quaternion();
+    for (const playback of this.skeletalPlaybacks.values()) {
+      const { frames, skeleton, jointToBoneIndex } = playback;
+      if (frames.length === 0) continue;
+
+      const target = Math.max(0, Math.min(frame, playback.durationFrames));
+      const { lower, upper, alpha } = bracketSkeletalFrame(frames, target);
+      const lo = frames[lower];
+      const hi = frames[upper];
+
+      for (let j = 0; j < jointToBoneIndex.length; j += 1) {
+        const boneIdx = jointToBoneIndex[j];
+        if (boneIdx < 0 || boneIdx >= skeleton.bones.length) continue;
+        const bone = skeleton.bones[boneIdx];
+
+        const tBase = j * 3;
+        const rBase = j * 4;
+        // Translation/scale: per-channel linear interpolation. Both shrink
+        // to constants when lower === upper (alpha === 0), so the same code
+        // path handles "exact sample" too.
+        if (tBase + 2 < lo.translations.length && tBase + 2 < hi.translations.length) {
+          bone.position.set(
+            lerp(lo.translations[tBase], hi.translations[tBase], alpha),
+            lerp(lo.translations[tBase + 1], hi.translations[tBase + 1], alpha),
+            lerp(lo.translations[tBase + 2], hi.translations[tBase + 2], alpha),
+          );
+        }
+        if (tBase + 2 < lo.scales.length && tBase + 2 < hi.scales.length) {
+          bone.scale.set(
+            lerp(lo.scales[tBase], hi.scales[tBase], alpha),
+            lerp(lo.scales[tBase + 1], hi.scales[tBase + 1], alpha),
+            lerp(lo.scales[tBase + 2], hi.scales[tBase + 2], alpha),
+          );
+        }
+        // Rotation: slerp on quaternions; per-component lerp drifts off
+        // the unit sphere fast.
+        if (rBase + 3 < lo.rotations.length && rBase + 3 < hi.rotations.length) {
+          bone.quaternion.set(
+            lo.rotations[rBase],
+            lo.rotations[rBase + 1],
+            lo.rotations[rBase + 2],
+            lo.rotations[rBase + 3],
+          );
+          if (alpha > 0) {
+            tmpQuat.set(
+              hi.rotations[rBase],
+              hi.rotations[rBase + 1],
+              hi.rotations[rBase + 2],
+              hi.rotations[rBase + 3],
+            );
+            bone.quaternion.slerp(tmpQuat, alpha);
+          }
+        }
+      }
+      skeleton.update();
+    }
   }
 
   private applyAnimationPreviewOverrides(frame: number): void {
@@ -2519,6 +2699,35 @@ function resolveAnimationTarget(target: Object3D, path: string): [Record<string,
   }
 
   return [owner as Record<string, unknown>, property];
+}
+
+function bracketSkeletalFrame(
+  frames: SkeletalPlayback["frames"],
+  target: number,
+): { lower: number; upper: number; alpha: number } {
+  if (frames.length <= 1 || target <= frames[0].frame) {
+    return { lower: 0, upper: 0, alpha: 0 };
+  }
+  if (target >= frames[frames.length - 1].frame) {
+    return { lower: frames.length - 1, upper: frames.length - 1, alpha: 0 };
+  }
+  let lo = 0;
+  let hi = frames.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (frames[mid].frame <= target) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  const span = frames[hi].frame - frames[lo].frame;
+  const alpha = span === 0 ? 0 : (target - frames[lo].frame) / span;
+  return { lower: lo, upper: hi, alpha };
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
 }
 
 function evaluateCompiledTrack(track: CompiledAnimationTrack, frame: number): number {

@@ -1081,6 +1081,16 @@ async function parseUsdzDirect(
  * children of a single blueprint model node, not separate blueprint nodes).
  */
 export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
+  // Skinned USDZ files (UsdSkel) deform via shared bones, and exploding each
+  // mesh prim into its own ModelNode would force each clone to duplicate the
+  // skeleton (Three.js clone() shallow-copies skeleton refs — see SkeletonUtils
+  // for the remap dance). For Phase B v1 we fall back to a single ModelNode
+  // for the whole skinned asset (legacy import path). Per-prim editing for
+  // skinned models is Phase C.
+  if (groupContainsSkeletalPlayback(group)) {
+    return [];
+  }
+
   const visit = (object: Object3D): UsdImportPlanNode | null => {
     const usdPath = object.userData?.usdPath as string | undefined;
     const usdKind = object.userData?.usdKind as UsdImportPlanNode["kind"] | undefined;
@@ -1224,6 +1234,52 @@ export function extractUsdMaterialSnapshotsFromGroup(group: Group): UsdMaterialS
     });
   });
   return Array.from(snapshots.values());
+}
+
+/**
+ * Returns true if any descendant carries a `skeletalPlayback` userData
+ * marker — set by {@link buildGroupFromWorkerModel} on prim Object3Ds that
+ * own a skinned mesh + an authored SkelAnimation.
+ */
+export function groupContainsSkeletalPlayback(group: Group): boolean {
+  let found = false;
+  group.traverse((object) => {
+    if (object.userData?.skeletalPlayback) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+/**
+ * Locate the first skeletal playback entry on a Group's descendants. Used by
+ * the App-layer import flow to create an AnimationClip + animation registration
+ * for skinned USDZ models that take the legacy single-ModelNode path.
+ */
+export interface DiscoveredSkeletalPlayback {
+  skeletonPath: string;
+  animationPath: string;
+  fps: number;
+  durationFrames: number;
+}
+
+export function discoverSkeletalPlaybacks(group: Group): DiscoveredSkeletalPlayback[] {
+  const seen = new Set<string>();
+  const out: DiscoveredSkeletalPlayback[] = [];
+  group.traverse((object) => {
+    const playback = object.userData?.skeletalPlayback as DiscoveredSkeletalPlayback | undefined;
+    if (!playback) return;
+    const key = `${playback.skeletonPath}|${playback.animationPath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      skeletonPath: playback.skeletonPath,
+      animationPath: playback.animationPath,
+      fps: playback.fps ?? 24,
+      durationFrames: playback.durationFrames ?? 1,
+    });
+  });
+  return out;
 }
 
 /**
