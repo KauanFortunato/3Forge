@@ -186,6 +186,11 @@ The `.slice()` is essential — it copies the bytes into JS heap so the typed ar
 | `getTimeSamples(stageId, attrPath)` | Time codes for animated attributes. |
 | `getTimeSampledAttributes(stageId, primPath)` | Attribute names on a prim that author time samples. Used to detect suffixed `xformOp:*` animation. |
 | `getVisibility(stageId, primPath, t)` | Authored imageable visibility token at time `t` (`"inherited"` / `"invisible"`). |
+| `getSkelRootInfo(stageId, primPath)` | `{isSkelRoot, skeletonPath, animationPath}` — detect SkelRoot prims and resolve their bound skeleton + animation via SkelBindingAPI. |
+| `getSkeleton(stageId, skelPath)` | `{joints, parentIndices, restTransforms, bindTransforms}`. Joints are USD joint paths in skeleton order; `restTransforms` are LOCAL, `bindTransforms` are WORLD-space at bind time. |
+| `getSkinBinding(stageId, meshPath)` | Skin weights + skeleton/animation binding for a mesh: `{skelPath, animationPath, jointIndices, jointWeights, numInfluencesPerComponent, geomBindTransform, blendShapes, blendShapeTargets}` or null. |
+| `getSkelAnimation(stageId, animPath, t)` | Per-time-code joint TRS: `{joints, translations (xyz/joint), rotations (xyzw/joint — Three.js order), scales (xyz/joint), blendShapes, blendShapeWeights}`. |
+| `getBlendShapes(stageId, meshPath)` | Array of `{name, offsets (xyz deltas), pointIndices}` for each BlendShape prim referenced by the mesh. |
 
 The `EMSCRIPTEN_BINDINGS(openusd_module)` block at the bottom of `wrapper.cpp` exposes all of these by name.
 
