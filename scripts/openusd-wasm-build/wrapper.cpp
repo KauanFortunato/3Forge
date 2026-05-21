@@ -312,8 +312,12 @@ em::val getLocalTransform(int stageId, const std::string& primPath) {
     xform.GetLocalTransformation(&m, &resets);
 
     float v[16];
+    // USD GfMatrix4d is row-major with translation in the LAST ROW
+    // (m[3][0..2]). Three.js Matrix4 is column-major with translation in
+    // the LAST COLUMN (elements[12..14]). Transpose during copy so the
+    // semantics survive: USD m[r][c] -> Three.js element at row c, col r.
     for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) v[c * 4 + r] = static_cast<float>(m[r][c]);
+        for (int r = 0; r < 4; ++r) v[c * 4 + r] = static_cast<float>(m[c][r]);
     return makeFloat32Array(v, 16);
 }
 
@@ -329,8 +333,12 @@ em::val getWorldTransform(int stageId, const std::string& primPath, double t) {
     pxr::GfMatrix4d m = xform.ComputeLocalToWorldTransform(tc);
 
     float v[16];
+    // USD GfMatrix4d is row-major with translation in the LAST ROW
+    // (m[3][0..2]). Three.js Matrix4 is column-major with translation in
+    // the LAST COLUMN (elements[12..14]). Transpose during copy so the
+    // semantics survive: USD m[r][c] -> Three.js element at row c, col r.
     for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) v[c * 4 + r] = static_cast<float>(m[r][c]);
+        for (int r = 0; r < 4; ++r) v[c * 4 + r] = static_cast<float>(m[c][r]);
     return makeFloat32Array(v, 16);
 }
 
@@ -636,11 +644,14 @@ em::val getSkeleton(int stageId, const std::string& skelPath) {
 
     auto matrixArrayToFloat32 = [](const pxr::VtArray<pxr::GfMatrix4d>& mats) {
         std::vector<float> out(mats.size() * 16);
+        // Same transpose as the getLocalTransform/getWorldTransform helpers:
+        // USD row-major -> Three.js column-major, preserving translation
+        // in the LAST COLUMN that Three.js expects.
         for (size_t i = 0; i < mats.size(); ++i) {
             const pxr::GfMatrix4d& m = mats[i];
             for (int c = 0; c < 4; ++c)
                 for (int rIdx = 0; rIdx < 4; ++rIdx)
-                    out[i * 16 + c * 4 + rIdx] = static_cast<float>(m[rIdx][c]);
+                    out[i * 16 + c * 4 + rIdx] = static_cast<float>(m[c][rIdx]);
         }
         return out;
     };
@@ -721,9 +732,10 @@ em::val getSkinBinding(int stageId, const std::string& meshPath) {
     pxr::GfMatrix4d geomBind(1.0);
     binding.GetGeomBindTransformAttr().Get(&geomBind);
     float gb[16];
+    // Same row-major USD -> column-major Three.js transpose.
     for (int c = 0; c < 4; ++c)
         for (int rIdx = 0; rIdx < 4; ++rIdx)
-            gb[c * 4 + rIdx] = static_cast<float>(geomBind[rIdx][c]);
+            gb[c * 4 + rIdx] = static_cast<float>(geomBind[c][rIdx]);
     r.set("geomBindTransform", makeFloat32Array(gb, 16));
 
     // Mesh's local-space blend shape names (drives morph targets) — empty if none.
