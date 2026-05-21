@@ -25,6 +25,8 @@ const EXPECTED_FUNCTIONS = [
   // new — animation
   "getStageTimeInfo",
   "getTimeSamples",
+  "getTimeSampledAttributes",
+  "getVisibility",
 ] as const;
 
 export async function testOpenUSD() {

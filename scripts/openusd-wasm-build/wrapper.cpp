@@ -32,6 +32,7 @@
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usd/timeCode.h>
 #include <pxr/usd/usdGeom/mesh.h>
+#include <pxr/usd/usdGeom/imageable.h>
 #include <pxr/usd/usdGeom/primvar.h>
 #include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdGeom/subset.h>
@@ -506,6 +507,36 @@ em::val getTimeSamples(int stageId, const std::string& attrPath) {
     return arr;
 }
 
+em::val getTimeSampledAttributes(int stageId, const std::string& primPath) {
+    em::val arr = em::val::array();
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return arr;
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(primPath));
+    if (!prim) return arr;
+
+    size_t outIdx = 0;
+    for (const pxr::UsdAttribute& attr : prim.GetAttributes()) {
+        if (attr.GetNumTimeSamples() > 0) {
+            arr.set(outIdx++, attr.GetName().GetString());
+        }
+    }
+    return arr;
+}
+
+std::string getVisibility(int stageId, const std::string& primPath, double t) {
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return "";
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(primPath));
+    pxr::UsdGeomImageable imageable(prim);
+    if (!imageable) return "";
+
+    pxr::UsdTimeCode tc = std::isnan(t) ? pxr::UsdTimeCode::Default()
+                                        : pxr::UsdTimeCode(t);
+    pxr::TfToken visibility;
+    if (!imageable.GetVisibilityAttr().Get(&visibility, tc)) return "";
+    return visibility.GetString();
+}
+
 // ============================================================================
 // EMSCRIPTEN_BINDINGS
 // ============================================================================
@@ -535,4 +566,6 @@ EMSCRIPTEN_BINDINGS(openusd_module) {
     // new — animation
     function("getStageTimeInfo", &getStageTimeInfo);
     function("getTimeSamples", &getTimeSamples);
+    function("getTimeSampledAttributes", &getTimeSampledAttributes);
+    function("getVisibility", &getVisibility);
 }

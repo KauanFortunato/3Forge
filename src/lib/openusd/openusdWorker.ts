@@ -1,4 +1,5 @@
 import { loadOpenUSD, releaseOpenUSD } from "./loadOpenUsd";
+import { buildUsdPrimAnimation, type UsdStageTimeInfo } from "./usdAnimation";
 import type {
   OpenUsdWorkerRequest,
   OpenUsdWorkerResponse,
@@ -55,6 +56,10 @@ interface UsdModule {
   listPrims(id: number): PrimInfo[];
   getMeshData(id: number, primPath: string): MeshData | null;
   getWorldTransform(id: number, primPath: string, t: number): Float32Array | null;
+  getStageTimeInfo(id: number): UsdStageTimeInfo | null;
+  getTimeSamples(id: number, attrPath: string): number[] | ArrayLike<number> | null;
+  getTimeSampledAttributes(id: number, primPath: string): string[] | ArrayLike<string> | null;
+  getVisibility(id: number, primPath: string, t: number): string;
   getMaterialBinding(id: number, primPath: string): string;
   getMaterialParams(id: number, matPath: string): Record<string, MaterialInput> | null;
   getAssetBytes(stageId: number, assetPath: string): Uint8Array | null;
@@ -374,6 +379,7 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
 
   try {
     const prims = usd.listPrims(stageId);
+    const stageTimeInfo = usd.getStageTimeInfo(stageId);
     const primsByPath = new Map<string, PrimInfo>();
     for (const prim of prims) primsByPath.set(prim.path, prim);
 
@@ -422,6 +428,13 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
 
       const worldMatrix = usd.getWorldTransform(stageId, prim.path, NaN);
       const worldMatrixArray = worldMatrix && worldMatrix.length === 16 ? Array.from(worldMatrix) : null;
+      const animation = buildUsdPrimAnimation({
+        sampler: usd,
+        stageId,
+        primPath: prim.path,
+        parentPath,
+        stageTimeInfo,
+      });
 
       const subsetsOut: ParsedUsdSubsetData[] = [];
       let primaryMaterialPath: string | undefined;
@@ -478,6 +491,7 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
         kind: prim.isMesh ? "mesh" : "xform",
         worldMatrix: worldMatrixArray,
         primaryMaterialPath,
+        ...(animation ? { animation } : {}),
         subsets: subsetsOut,
       });
     }

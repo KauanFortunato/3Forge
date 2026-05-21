@@ -1,4 +1,5 @@
 import type { ParseUsdzProgressUpdate } from "./openusdParser";
+import type { ImportedNodeAnimation } from "../../editor/types";
 
 export interface ParsedUsdTextureData {
   bytes: Uint8Array;
@@ -61,6 +62,7 @@ export interface ParsedUsdPrim {
   kind: "xform" | "mesh";
   worldMatrix: number[] | null;
   primaryMaterialPath?: string;
+  animation?: ImportedNodeAnimation;
   subsets: ParsedUsdSubsetData[];
 }
 

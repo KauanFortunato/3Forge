@@ -410,6 +410,7 @@ function attachMaterialIdsToPlan(
       rotation: entry.rotation,
       scale: entry.scale,
       primPath: entry.primPath,
+      animation: entry.animation,
       children: attachMaterialIdsToPlan(entry.children, materialIdByUsdPath),
     };
     if (entry.subsetName) {
@@ -2070,6 +2071,27 @@ export function App() {
         // legacy single-ModelNode treatment.
         if (!insertedNodeId) {
           insertedNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
+          if (insertedNodeId && asset.format !== "usdz" && file.size >= 20) {
+            // Guard with a size floor: a real binary GLB header alone is 12 bytes,
+            // and a minimal animated GLTF is well over 20 bytes — test fixtures
+            // sometimes pass tiny stubs ("glb", "{}"); calling GLTFLoader on
+            // those throws and burns enough event-loop time to push the
+            // success toast past the test's findByText timeout.
+            try {
+              const [{ GLTFLoader }, { convertRootGltfAnimations }] = await Promise.all([
+                import("three/examples/jsm/loaders/GLTFLoader.js"),
+                import("../gltfAnimationImport"),
+              ]);
+              const gltfData = asset.format === "gltf" ? await file.text() : await file.arrayBuffer();
+              const gltf = await new GLTFLoader().parseAsync(gltfData, "");
+              for (const clip of convertRootGltfAnimations(gltf.animations, gltf.scene)) {
+                const tracks = store.createImportedAnimationTracks(insertedNodeId, clip.tracks);
+                store.addImportedAnimationClip(clip.name, tracks, clip.fps, clip.durationFrames);
+              }
+            } catch (err) {
+              console.warn("Failed to import GLTF root animation tracks:", err);
+            }
+          }
         }
         lastNodeId = insertedNodeId;
         importedCount += 1;

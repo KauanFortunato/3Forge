@@ -15,6 +15,7 @@ import {
 } from "three";
 
 import { loadOpenUSD, releaseOpenUSD } from "./loadOpenUsd";
+import { buildUsdPrimAnimation, type UsdStageTimeInfo } from "./usdAnimation";
 import type {
   OpenUsdWorkerRequest,
   OpenUsdWorkerResponse,
@@ -22,6 +23,7 @@ import type {
   ParsedUsdModelData,
   ParsedUsdTextureData,
 } from "./openusdWorkerTypes";
+import type { ImportedNodeAnimation } from "../../editor/types";
 
 /**
  * A node in the import plan derived from a USDZ stage, mirroring the prim
@@ -45,6 +47,7 @@ export interface UsdImportPlanNode {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number };
+  animation?: ImportedNodeAnimation;
   materialPath?: string;
   /**
    * GeomSubset name when this plan node represents one subset of a
@@ -136,6 +139,10 @@ interface UsdModule {
   getMeshData(id: number, primPath: string): MeshData | null;
   getLocalTransform(id: number, primPath: string): Float32Array | null;
   getWorldTransform(id: number, primPath: string, t: number): Float32Array | null;
+  getStageTimeInfo(id: number): UsdStageTimeInfo | null;
+  getTimeSamples(id: number, attrPath: string): number[] | ArrayLike<number> | null;
+  getTimeSampledAttributes(id: number, primPath: string): string[] | ArrayLike<string> | null;
+  getVisibility(id: number, primPath: string, t: number): string;
   getMaterialBinding(id: number, primPath: string): string;
   getMaterialParams(id: number, matPath: string): Record<string, MaterialInput> | null;
   getAssetBytes(stageId: number, assetPath: string): Uint8Array | null;
@@ -712,6 +719,9 @@ async function buildGroupFromWorkerModel(model: ParsedUsdModelData): Promise<Gro
     obj.name = primShortName(prim.path) || prim.path;
     obj.userData.usdPath = prim.path;
     obj.userData.usdKind = prim.kind;
+    if (prim.animation) {
+      obj.userData.usdAnimation = prim.animation;
+    }
     obj.applyMatrix4(localMatrix);
 
     if (prim.kind === "mesh") {
@@ -793,6 +803,7 @@ async function parseUsdzDirect(
     });
     await waitForPaint();
     const prims = usd.listPrims(stageId);
+    const stageTimeInfo = usd.getStageTimeInfo(stageId);
     const primsByPath = new Map<string, PrimInfo>();
     for (const p of prims) primsByPath.set(p.path, p);
     const meshPrims = prims.filter((prim) => prim.isMesh);
@@ -871,12 +882,14 @@ async function parseUsdzDirect(
     for (const prim of kept) {
       // Walk up to find the nearest already-processed (kept) ancestor.
       let parentPath = prim.parent;
+      let keptParentPath = "";
       let parentObj: Group = root;
       let parentWorld: Matrix4 | null = null;
       while (parentPath && parentPath !== "/" && parentPath !== "") {
         const existing = objectsByPath.get(parentPath);
         if (existing) {
           parentObj = existing;
+          keptParentPath = parentPath;
           parentWorld = getWorldMatrix(parentPath);
           break;
         }
@@ -894,6 +907,16 @@ async function parseUsdzDirect(
       obj.name = primShortName(prim.path) || prim.path;
       obj.userData.usdPath = prim.path;
       obj.userData.usdKind = prim.isMesh ? "mesh" : "xform";
+      const animation = buildUsdPrimAnimation({
+        sampler: usd,
+        stageId,
+        primPath: prim.path,
+        parentPath: keptParentPath,
+        stageTimeInfo,
+      });
+      if (animation) {
+        obj.userData.usdAnimation = animation;
+      }
       // applyMatrix4 premultiplies onto the current (identity) matrix and
       // decomposes back into position/quaternion/scale automatically.
       obj.applyMatrix4(localMatrix);
@@ -998,6 +1021,7 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
   const visit = (object: Object3D): UsdImportPlanNode | null => {
     const usdPath = object.userData?.usdPath as string | undefined;
     const usdKind = object.userData?.usdKind as UsdImportPlanNode["kind"] | undefined;
+    const animation = object.userData?.usdAnimation as ImportedNodeAnimation | undefined;
     if (!usdPath || !usdKind) return null;
 
     const childPlans: UsdImportPlanNode[] = [];
@@ -1045,6 +1069,7 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
           position: { x: object.position.x, y: object.position.y, z: object.position.z },
           rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
           scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
+          ...(animation ? { animation } : {}),
           children: childPlans,
         };
       }
@@ -1061,6 +1086,7 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
       position: { x: object.position.x, y: object.position.y, z: object.position.z },
       rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
       scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
+      ...(animation ? { animation } : {}),
       ...(materialPath ? { materialPath } : {}),
       children: childPlans,
     };

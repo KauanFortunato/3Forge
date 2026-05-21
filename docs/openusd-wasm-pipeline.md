@@ -184,6 +184,8 @@ The `.slice()` is essential — it copies the bytes into JS heap so the typed ar
 | `getAssetBytes(stageId, assetPath)` | Raw bytes of an asset (texture). **Requires stage context binding** — see §5.1. |
 | `getStageTimeInfo(stageId)` | `{startTime, endTime, framesPerSecond, timeCodesPerSecond}` for animation. |
 | `getTimeSamples(stageId, attrPath)` | Time codes for animated attributes. |
+| `getTimeSampledAttributes(stageId, primPath)` | Attribute names on a prim that author time samples. Used to detect suffixed `xformOp:*` animation. |
+| `getVisibility(stageId, primPath, t)` | Authored imageable visibility token at time `t` (`"inherited"` / `"invisible"`). |
 
 The `EMSCRIPTEN_BINDINGS(openusd_module)` block at the bottom of `wrapper.cpp` exposes all of these by name.
 
