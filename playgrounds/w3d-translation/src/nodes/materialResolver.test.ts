@@ -8,6 +8,7 @@ function makeRegistry(mats: W3DBaseMaterialData[] = []): W3DResourceRegistry {
     textures: new Map(),
     textureLayers: new Map(),
     dynamicTextureFilenameByLayerId: new Map(),
+    fontStyles: new Map(),
   };
 }
 
@@ -94,6 +95,7 @@ function makeFullRegistry(
     textures: new Map(textures.map(t => [t.id, t])),
     textureLayers: new Map(layers.map(l => [l.id, l])),
     dynamicTextureFilenameByLayerId: new Map(),
+    fontStyles: new Map(),
   };
 }
 
@@ -259,6 +261,7 @@ describe("resolveMaterial — dynamic texture binding (Phase H)", () => {
       textures: new Map(),
       textureLayers: new Map(layers.map(l => [l.id, l])),
       dynamicTextureFilenameByLayerId: new Map(dynMap),
+      fontStyles: new Map(),
     };
   }
 

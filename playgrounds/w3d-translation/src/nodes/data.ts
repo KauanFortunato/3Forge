@@ -78,7 +78,37 @@ export type W3DQuadData = {
   };
 };
 
-export type W3DNodeData = W3DGroupData | W3DQuadData;
+export type W3DTextureTextData = {
+  kind: "TextureText";
+  id: string;
+  name: string;
+  enable: boolean;
+  alpha: number;
+  speedScale: number;
+  displayColor?: string;
+  /** Verbatim text content from <GeometryOptions Text="…">. */
+  text: string;
+  /** FontStyle GUID — resolves via W3DResourceRegistry.fontStyles. */
+  fontStyleId?: string;
+  /** 2D box for text layout in world units (TextBoxSize). */
+  textBox: { x: number; y: number };
+  alignmentX?: "Left" | "Right" | "Center";
+  alignmentY?: "Top" | "Bottom" | "Center";
+  /** R3 rasterization quality multiplier (typical 0.8..5). */
+  textQuality: number;
+  maskIds: string[];
+  faceMapping?: W3DQuadFaceMapping;
+  transform: W3DTransform;
+  maskProperties?: W3DMaskProperties;
+  children: W3DNodeData[];
+  raw?: {
+    attributes: Record<string, string>;
+    unknownChildren: string[];
+    extraFaceMappings?: number;
+  };
+};
+
+export type W3DNodeData = W3DGroupData | W3DQuadData | W3DTextureTextData;
 
 export interface ParseNodesResult {
   roots: W3DNodeData[];
@@ -113,6 +143,8 @@ function walkChildren(parent: Element, warnings: string[]): W3DNodeData[] {
       out.push(parseQuad(child, warnings));
     } else if (tag === "Group") {
       out.push(parseGroup(child, warnings));
+    } else if (tag === "TextureText") {
+      out.push(parseTextureText(child, warnings));
     } else if (tag === "Extensions") {
       // <Extensions> appears on every W3D node and is empty in current scenes.
       // Treat as structural noise and skip silently — not a warning.
@@ -230,6 +262,59 @@ function parseQuad(el: Element, warnings: string[]): W3DQuadData {
     quad.children = walkChildren(childrenEl, warnings);
   }
   return quad;
+}
+
+function parseTextureText(el: Element, warnings: string[]): W3DTextureTextData {
+  const attrs = readAllAttrs(el);
+  const transform = readTransform(el);
+  const { faceMapping, extraFaceMappings } = readFaceMapping(el);
+  const maskProperties = readMaskProperties(el);
+
+  const go = findDirectChild(el, "GeometryOptions");
+  const text = go?.getAttribute("Text") ?? "";
+  const fontStyleId = go?.getAttribute("FontStyle") ?? undefined;
+  const alignmentX = (go?.getAttribute("AlignmentX") ?? undefined) as W3DTextureTextData["alignmentX"];
+  const alignmentY = (go?.getAttribute("AlignmentY") ?? undefined) as W3DTextureTextData["alignmentY"];
+  const textQuality = parseNumberAttr(go?.getAttribute("TextQuality") ?? undefined, 1);
+
+  const tbsEl = go ? findDirectChild(go, "TextBoxSize") : null;
+  const textBox = {
+    x: parseNumberAttr(tbsEl?.getAttribute("X") ?? undefined, 0),
+    y: parseNumberAttr(tbsEl?.getAttribute("Y") ?? undefined, 0),
+  };
+  const label = attrs.Name ?? attrs.Id ?? "?";
+  if (tbsEl && (textBox.x === 0 || textBox.y === 0)) {
+    warnings.push(`TextureText "${label}" has zero TextBoxSize (${textBox.x} x ${textBox.y}); building anyway.`);
+  }
+
+  const node: W3DTextureTextData = {
+    kind: "TextureText",
+    id: attrs.Id ?? "",
+    name: attrs.Name ?? "",
+    enable: parseBoolAttr(attrs.Enable, true),
+    alpha: parseNumberAttr(attrs.Alpha, 1),
+    speedScale: parseNumberAttr(attrs.SpeedScale, 1),
+    displayColor: attrs.DisplayColor,
+    text,
+    fontStyleId,
+    textBox,
+    alignmentX,
+    alignmentY,
+    textQuality,
+    maskIds: parseMaskIds(attrs.MaskId),
+    transform,
+    children: [],
+  };
+  if (faceMapping) node.faceMapping = faceMapping;
+  if (maskProperties) node.maskProperties = maskProperties;
+  if (extraFaceMappings !== undefined) {
+    node.raw = { ...(node.raw ?? { attributes: {}, unknownChildren: [] }), extraFaceMappings };
+  }
+  const childrenEl = findDirectChild(el, "Children");
+  if (childrenEl) {
+    node.children = walkChildren(childrenEl, warnings);
+  }
+  return node;
 }
 
 function readQuadGeometry(

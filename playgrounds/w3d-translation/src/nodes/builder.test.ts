@@ -214,6 +214,7 @@ function makeCtx(overrides: Partial<BuildContext> = {}): BuildContext {
     textures: new Map(),
     textureLayers: new Map(),
     dynamicTextureFilenameByLayerId: new Map(),
+    fontStyles: new Map(),
   };
   return {
     registry,
@@ -246,6 +247,7 @@ describe("builder — BuildContext", () => {
       textures: new Map(),
       textureLayers: new Map(),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry });
     const node = quadData({
@@ -284,6 +286,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["bg-id", bgTex]]),
       textureLayers: new Map([["bg-layer", bgLayer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const urls = new Map([["BG.png", "blob:fake-bg"]]);
     const ctx = makeCtx({ registry, textureUrlsByFilename: urls });
@@ -319,6 +322,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["bg-id", bgTex]]),
       textureLayers: new Map([["bg-layer", bgLayer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const urls = new Map([["BG.png", "blob:fake-bg"]]);
     const ctx = makeCtx({ registry, textureUrlsByFilename: urls });
@@ -344,6 +348,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["bg-id", bgTex]]),
       textureLayers: new Map([["bg-layer", bgLayer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["BG.png", "blob:fake-bg"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "bg-layer", baseMaterialInherited: false, textureInherited: false } });
@@ -1736,6 +1741,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["player-tex", playerTex], ["vramp-tex", vrampTex]]),
       textureLayers: new Map([["photo-01-layer", photoLayer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({
       registry,
@@ -1773,6 +1779,7 @@ describe("builder — BuildContext", () => {
         textures: new Map([["t-id", tex]]),
         textureLayers: new Map([["L", layer]]),
         dynamicTextureFilenameByLayerId: new Map(),
+        fontStyles: new Map(),
       },
       textureUrlsByFilename: new Map([["T.png", "blob:t"]]),
     });
@@ -1823,6 +1830,7 @@ describe("builder — BuildContext", () => {
         textures: new Map([["t-id", tex]]),
         textureLayers: new Map([["L", layer]]),
         dynamicTextureFilenameByLayerId: new Map(),
+        fontStyles: new Map(),
       },
       textureUrlsByFilename: new Map([["T.png", "blob:t"]]),
     });
@@ -1852,6 +1860,7 @@ describe("builder — BuildContext", () => {
         textures: new Map([["t-id", tex]]),
         textureLayers: new Map([["L", layer]]),
         dynamicTextureFilenameByLayerId: new Map(),
+        fontStyles: new Map(),
       },
       textureUrlsByFilename: new Map([["T.png", "blob:t"]]),
     });
@@ -1882,6 +1891,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["bg-id", bgTex]]),
       textureLayers: new Map([["bg-layer", bgLayer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["BG.png", "blob:fake-bg"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "bg-layer", baseMaterialInherited: false, textureInherited: false } });
@@ -1908,6 +1918,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex]]),
       textureLayers: new Map([["L", layer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
     const fm = { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false };
@@ -1937,6 +1948,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex]]),
       textureLayers: new Map([["L1", layerWithOffset], ["L2", layerPlain]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
     const m1 = buildNode(quadData({ id: "q1", faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L1", baseMaterialInherited: false, textureInherited: false } }), ctx) as Mesh;
@@ -1964,6 +1976,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex]]),
       textureLayers: new Map([["L", layer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
@@ -1984,6 +1997,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex]]),
       textureLayers: new Map([["FF_PHOTO", layer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["PATTERN.png", "blob:PATTERN"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "FF_PHOTO", baseMaterialInherited: false, textureInherited: false } });
@@ -2004,6 +2018,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex]]),
       textureLayers: new Map([["L", layer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
@@ -2026,6 +2041,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex], ["ramp", ramp]]),
       textureLayers: new Map([["L", layer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"], ["VERTICAL_RAMP.png", "blob:RAMP"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
@@ -2059,6 +2075,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex]]),
       textureLayers: new Map([["Lr", repeatLayer], ["Lc", clampLayer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
     const matRepeat = (buildNode(quadData({ id: "qR", faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "Lr", baseMaterialInherited: false, textureInherited: false } }), ctx) as Mesh).material as MeshBasicMaterial;
@@ -2084,6 +2101,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex]]),
       textureLayers: new Map([["L", layer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
@@ -2104,6 +2122,7 @@ describe("builder — BuildContext", () => {
       textures: new Map([["t", tex]]),
       textureLayers: new Map([["L", layer]]),
       dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
     };
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
@@ -2206,6 +2225,131 @@ describe("builder — BuildContext", () => {
     expect(w.transform).toBeDefined();
   });
 
+  // -----------------------------------------------------------------------
+  // Phase TextureText — canvas-to-texture static rendering.
+  // -----------------------------------------------------------------------
+
+  test("Phase TextureText: TextureText node builds a Mesh with PlaneGeometry sized to TextBoxSize", () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "SMALL_TEAM_NAME",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "DETROIT IRONHAWKS",
+      textBox: { x: 6.39, y: 0.23 },
+      alignmentX: "Right" as const,
+      alignmentY: "Center" as const,
+      textQuality: 0.8,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const obj = buildNode(node, makeCtx()) as Mesh;
+    expect(obj).toBeInstanceOf(Mesh);
+    const params = (obj.geometry as InstanceType<typeof import("three").PlaneGeometry>).parameters;
+    expect(params.width).toBeCloseTo(6.39, 5);
+    expect(params.height).toBeCloseTo(0.23, 5);
+  });
+
+  test("Phase TextureText: mesh.userData.w3d carries kind, text, textBox", () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "PLAYER_NUMBER_02",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "23",
+      textBox: { x: 0.08, y: 0.19 },
+      alignmentX: "Center" as const,
+      alignmentY: "Center" as const,
+      textQuality: 4,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    const w = mesh.userData.w3d as Record<string, unknown>;
+    expect(w.kind).toBe("TextureText");
+    expect(w.text).toBe("23");
+    expect(w.textBox).toEqual({ x: 0.08, y: 0.19 });
+  });
+
+  test("Phase TextureText: material is MeshBasicMaterial with map and transparent=true (canvas alpha)", () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "X",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "X",
+      textBox: { x: 1, y: 1 },
+      textQuality: 1,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    expect(mat.transparent).toBe(true);
+    expect(mat.map).not.toBeNull();
+    expect(mat.alphaTest).toBeGreaterThan(0);
+  });
+
+  test("Phase TextureText: enable=false hides the mesh", () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "HIDDEN",
+      enable: false, alpha: 1, speedScale: 1,
+      text: "HIDDEN",
+      textBox: { x: 1, y: 0.3 },
+      textQuality: 1,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, makeCtx()) as Mesh;
+    expect(mesh.visible).toBe(false);
+  });
+
+  test("Phase TextureText: MaskId=BASE_MAIN makes text a generic-stencil reader (Phase 2D.3 coexistence)", () => {
+    const baseMain = quadData({
+      id: "base-main", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const text = {
+      kind: "TextureText" as const,
+      id: "tt", name: "SMALL_TEAM_NAME",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "DETROIT IRONHAWKS",
+      textBox: { x: 6.39, y: 0.23 },
+      textQuality: 0.8,
+      maskIds: ["base-main"],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const root = buildNodeTree([baseMain, text], makeCtx());
+    const textMesh = root.children[1] as Mesh;
+    const mat = textMesh.material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(true);
+    expect(mat.stencilRef).toBe(64); // generic mask index 1 << 6
+    expect(mat.stencilFuncMask).toBe(0b11000000);
+  });
+
   test("Phase 2C regression: PHOTO_MASK_05 (no texture layer) is unaffected by UV transform plumbing", () => {
     // PHOTO_MASK_05 uses TextureLayerId="Standard" → no texture lookup, no
     // UV transform path triggered. The Mesh's geometry stays exactly as
@@ -2241,6 +2385,7 @@ describe("builder — BuildContext", () => {
         textures: new Map([["t", tex]]),
         textureLayers: new Map([["L", layer]]),
         dynamicTextureFilenameByLayerId: new Map(),
+        fontStyles: new Map(),
       },
       textureUrlsByFilename: new Map([["T.png", "blob:T"]]),
     });

@@ -19,9 +19,13 @@ export interface InspectorReport {
   identity: {
     id: string;
     name: string;
-    kind: "Quad" | "Group";
+    kind: "Quad" | "Group" | "TextureText";
     hierarchyPath: string;
     hasChildren?: boolean;
+    /** Phase TextureText — populated for TextureText nodes. */
+    text?: string;
+    /** Phase TextureText — populated for TextureText nodes. */
+    fontFamily?: string;
   };
   transform: {
     localPosition: InspectorVec3;
@@ -104,7 +108,7 @@ interface W3DUserDataPivotHelper {
 }
 
 interface W3DUserDataNode {
-  kind: "Quad" | "Group";
+  kind: "Quad" | "Group" | "TextureText";
   id: string;
   name: string;
   hasChildren?: boolean;
@@ -140,6 +144,14 @@ interface W3DUserDataNode {
     leadingSpace?: number;
     direction?: string;
   };
+  // Phase TextureText — populated by buildTextureText.
+  text?: string;
+  fontFamily?: string;
+  fontWeight?: string;
+  fontStyleName?: string;
+  fontStyleId?: string;
+  textBox?: { x: number; y: number };
+  textQuality?: number;
 }
 
 type AnyW3DUserData = W3DUserDataNode | W3DUserDataPivotHelper | undefined;
@@ -149,7 +161,7 @@ function readUserData(o: Object3D | null | undefined): AnyW3DUserData {
 }
 
 function isRealW3DNode(w: AnyW3DUserData): w is W3DUserDataNode {
-  return !!w && (w.kind === "Quad" || w.kind === "Group");
+  return !!w && (w.kind === "Quad" || w.kind === "Group" || w.kind === "TextureText");
 }
 
 /**
@@ -328,6 +340,8 @@ export function buildInspectorReport(
       kind: w.kind,
       hierarchyPath: hierarchyPathOf(target),
       ...(w.hasChildren !== undefined ? { hasChildren: w.hasChildren } : {}),
+      ...(w.text !== undefined ? { text: w.text } : {}),
+      ...(w.fontFamily !== undefined ? { fontFamily: w.fontFamily } : {}),
     },
     transform: {
       localPosition: vec3(target.position.x, target.position.y, target.position.z),
@@ -343,7 +357,9 @@ export function buildInspectorReport(
     geometry: {
       ...(w.geometry?.size
         ? { currentSize: { x: w.geometry.size.x, y: w.geometry.size.y } }
-        : {}),
+        : w.textBox
+          ? { currentSize: { x: w.textBox.x, y: w.textBox.y } }
+          : {}),
       worldBounds: {
         min: vec3(box.min.x, box.min.y, box.min.z),
         max: vec3(box.max.x, box.max.y, box.max.z),

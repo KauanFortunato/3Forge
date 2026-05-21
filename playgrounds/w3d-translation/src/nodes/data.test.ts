@@ -260,16 +260,22 @@ describe("parseGroup and recursion", () => {
     expect((parent.children[0] as W3DQuadData).id).toBe("q-child");
   });
 
-  test("TextureText is ignored with warning, adjacent Quads still parsed", () => {
+  test("TextureText is parsed alongside Quads (no longer ignored — Phase TextureText)", () => {
     const { roots, warnings } = parseNodes(wrapInScene(`
       <Quad Id="q1" Name="A"/>
-      <TextureText Id="tt" Name="TITLE"/>
+      <TextureText Id="tt" Name="TITLE">
+        <GeometryOptions Text="HELLO" FontStyle="fs-1" AlignmentX="Left" AlignmentY="Center" TextQuality="3">
+          <TextBoxSize X="1.5" Y="0.3"/>
+        </GeometryOptions>
+      </TextureText>
       <Quad Id="q2" Name="B"/>
     `));
-    expect(roots).toHaveLength(2);
+    expect(roots).toHaveLength(3);
     expect((roots[0] as W3DQuadData).id).toBe("q1");
-    expect((roots[1] as W3DQuadData).id).toBe("q2");
-    expect(warnings.some((w) => w.includes("TextureText") && w.includes("TITLE"))).toBe(true);
+    expect(roots[1].kind).toBe("TextureText");
+    expect((roots[2] as W3DQuadData).id).toBe("q2");
+    // No "Ignored <TextureText>" warning anymore.
+    expect(warnings.some((w) => w.includes("Ignored <TextureText>"))).toBe(false);
   });
 
   test("Group MaskId is parsed", () => {

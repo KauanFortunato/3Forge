@@ -1,10 +1,12 @@
 // playgrounds/w3d-translation/src/nodes/builder.ts
 import {
-  AlwaysStencilFunc, ClampToEdgeWrapping, Color, DoubleSide, EqualStencilFunc, Group, KeepStencilOp,
-  Mesh, MeshBasicMaterial, NotEqualStencilFunc, Object3D, PlaneGeometry,
+  AlwaysStencilFunc, CanvasTexture, ClampToEdgeWrapping, Color, DoubleSide, EqualStencilFunc,
+  Group, KeepStencilOp, Mesh, MeshBasicMaterial, NotEqualStencilFunc, Object3D, PlaneGeometry,
   ReplaceStencilOp, SRGBColorSpace, Texture, TextureLoader,
 } from "three";
-import type { W3DGroupData, W3DNodeData, W3DQuadData, W3DTransform } from "./data";
+import type {
+  W3DGroupData, W3DMaskProperties, W3DNodeData, W3DQuadData, W3DTextureTextData, W3DTransform,
+} from "./data";
 import { resolveMaterial, displayColorToHex, type UVTransform } from "./materialResolver";
 import type { W3DResourceRegistry } from "./resources";
 
@@ -253,6 +255,7 @@ function augmentPhotoFillMaskIds(
 
 export function buildNode(node: W3DNodeData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {
   if (node.kind === "Group") return buildGroup(node, ctx, inheritedMaskIds);
+  if (node.kind === "TextureText") return buildTextureText(node, ctx, inheritedMaskIds);
   return buildQuad(node, ctx, inheritedMaskIds);
 }
 
@@ -433,7 +436,8 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
  * visibility (set by buildQuad / applyPhotoMaskStencil) is preserved so
  * stencil + enable semantics still work.
  */
-function wrapMeshWithPivot(mesh: Mesh, node: W3DQuadData): Group {
+type PivotCandidate = { id: string; name: string; transform: W3DTransform };
+function wrapMeshWithPivot(mesh: Mesh, node: PivotCandidate): Group {
   const p = node.transform.pivot!;
   const outer = new Group();
   outer.name = `${node.name} (pivot wrapper)`;
@@ -453,6 +457,180 @@ function wrapMeshWithPivot(mesh: Mesh, node: W3DQuadData): Group {
   outer.userData.w3d = { kind: "(pivot helper)", forNodeId: node.id };
   outer.add(mesh);
   return outer;
+}
+
+// ---------------------------------------------------------------------------
+// Phase TextureText — static rendering via canvas-to-texture.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a TextureText node as a PlaneGeometry mesh with a CanvasTexture map.
+ * The text content is baked into the texture; the mesh's MeshBasicMaterial
+ * color stays white so the canvas color shows through unaltered.
+ *
+ * Reuses existing pipelines:
+ *   - resolveMaterial (color from BaseMaterial.emissive/diffuse, alpha)
+ *   - applyTransform (W3D Position/Rotation/Scale)
+ *   - applyPhotoMaskStencil (stencil reader for MaskId → BASE_MAIN etc.)
+ *   - wrapMeshWithPivot (when transform.pivot is non-zero)
+ *   - applyAlignment (PlaneGeometry vertex translation for AlignmentX/Y)
+ */
+function buildTextureText(
+  node: W3DTextureTextData,
+  ctx?: BuildContext,
+  inheritedMaskIds?: string[],
+): Object3D {
+  const geometry = new PlaneGeometry(
+    Math.max(node.textBox.x, 0.001),
+    Math.max(node.textBox.y, 0.001),
+  );
+  applyAlignment(geometry, {
+    alignmentX: node.alignmentX,
+    alignmentY: node.alignmentY,
+    size: node.textBox,
+  });
+
+  // Resolve color from the assigned BaseMaterial. TextureLayer is always
+  // "Standard" for TextureText — no map/alphaMap path runs.
+  let textColor = "#ffffff";
+  let opacity = node.alpha;
+  if (ctx) {
+    const warnings: string[] = [];
+    const resolved = resolveMaterial(
+      node.faceMapping?.materialId,
+      node.faceMapping?.textureLayerId,
+      node.displayColor,
+      node.alpha,
+      ctx,
+      warnings,
+    );
+    ctx.warnings.push(...warnings);
+    textColor = resolved.color;
+    opacity = resolved.opacity;
+  } else if (node.displayColor) {
+    textColor = displayColorToHex(node.displayColor);
+  }
+
+  // Resolve font family / weight / style from the registry FontStyle entry.
+  const fontStyle = ctx?.registry.fontStyles.get(node.fontStyleId ?? "");
+  const family = fontStyle?.fontName?.trim() || "sans-serif";
+  const { weight, style } = fontStyleTypeToCss(fontStyle?.type ?? "");
+
+  const texture = renderTextToCanvas({
+    text: node.text,
+    family,
+    weight,
+    style,
+    color: textColor,
+    textBox: node.textBox,
+    alignmentX: node.alignmentX ?? "Center",
+    alignmentY: node.alignmentY ?? "Center",
+    quality: node.textQuality,
+  });
+
+  const material = new MeshBasicMaterial({
+    color: new Color(0xffffff),     // texture carries the color; keep white tint
+    map: texture,
+    transparent: true,
+    opacity,
+    alphaTest: 0.01,
+    side: DoubleSide,
+  });
+
+  const mesh = new Mesh(geometry, material);
+  mesh.name = node.name;
+  mesh.visible = node.enable;
+  const { children: _c, ...rest } = node;
+  mesh.userData.w3d = {
+    ...rest,
+    kind: "TextureText",
+    fontFamily: family,
+    fontWeight: weight,
+    fontStyleName: fontStyle?.name,
+  };
+
+  applyTransform(mesh, node.transform);
+  applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
+
+  if (hasNonZeroPivot(node.transform.pivot)) {
+    return wrapMeshWithPivot(mesh, node);
+  }
+  return mesh;
+}
+
+/**
+ * Map a W3D FontStyle `Type` string (e.g. "Light", "Bold", "Italic",
+ * "Black Italic") to CSS weight + style. Unknown values fall back to
+ * normal-400 sans-serif.
+ */
+function fontStyleTypeToCss(type: string): { weight: string; style: string } {
+  const t = type.toLowerCase();
+  let weight = "400";
+  let style = "normal";
+  if (t.includes("thin")) weight = "100";
+  else if (t.includes("light")) weight = "300";
+  else if (t.includes("medium")) weight = "500";
+  else if (t.includes("semi") || t.includes("semibold")) weight = "600";
+  else if (t.includes("black")) weight = "900";
+  else if (t.includes("bold")) weight = "700";
+  if (t.includes("italic") || t.includes("oblique")) style = "italic";
+  return { weight, style };
+}
+
+interface RenderTextOptions {
+  text: string;
+  family: string;
+  weight: string;
+  style: string;
+  color: string;
+  textBox: { x: number; y: number };
+  alignmentX: "Left" | "Right" | "Center";
+  alignmentY: "Top" | "Bottom" | "Center";
+  quality: number;
+}
+
+/**
+ * Rasterize `text` into a CanvasTexture sized roughly proportional to the
+ * authored TextBoxSize × quality. In jsdom (test env) the 2D context is null;
+ * the helper returns a valid empty CanvasTexture in that case so structural
+ * tests can assert geometry/material without depending on font metrics.
+ */
+function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
+  const pxPerUnit = 200 * Math.max(opts.quality, 0.5);
+  const w = Math.max(8, Math.round(opts.textBox.x * pxPerUnit));
+  const h = Math.max(8, Math.round(opts.textBox.y * pxPerUnit));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const c2d = canvas.getContext("2d");
+  if (c2d) {
+    c2d.clearRect(0, 0, w, h);
+    // Font size: leave a small inset (~85% of canvas height) so descenders fit.
+    const fontPx = Math.max(4, Math.floor(h * 0.85));
+    c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+    c2d.fillStyle = opts.color;
+    c2d.textAlign =
+      opts.alignmentX === "Left" ? "left"
+      : opts.alignmentX === "Right" ? "right"
+      : "center";
+    c2d.textBaseline =
+      opts.alignmentY === "Top" ? "top"
+      : opts.alignmentY === "Bottom" ? "bottom"
+      : "middle";
+    const tx =
+      opts.alignmentX === "Left" ? 0
+      : opts.alignmentX === "Right" ? w
+      : w / 2;
+    const ty =
+      opts.alignmentY === "Top" ? 0
+      : opts.alignmentY === "Bottom" ? h
+      : h / 2;
+    c2d.fillText(opts.text, tx, ty);
+  }
+  const tex = new CanvasTexture(canvas);
+  tex.colorSpace = SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
@@ -575,9 +753,23 @@ function applyAlignment(geometry: PlaneGeometry, geo: W3DQuadData["geometry"]): 
  *   - reads only the writer's bit via stencilFuncMask
  *   - stencilFunc derived from the writer's IsInvertedMask
  */
+/**
+ * Minimal shape that both W3DQuadData and W3DTextureTextData satisfy. Phase
+ * TextureText reuses the stencil-reader path so text labels can be clipped by
+ * BASE_MAIN / BASE_TEAM the same way Quad clients are.
+ */
+type StencilCandidate = {
+  id: string;
+  name: string;
+  enable?: boolean;
+  isMask?: boolean;
+  maskIds: string[];
+  maskProperties?: W3DMaskProperties;
+};
+
 function applyPhotoMaskStencil(
   mesh: Mesh,
-  node: W3DQuadData,
+  node: StencilCandidate,
   ctx?: BuildContext,
   inheritedMaskIds?: string[],
 ): void {
@@ -606,7 +798,7 @@ function applyPhotoMaskStencil(
     mat.stencilFail = ReplaceStencilOp;
     mat.stencilZFail = ReplaceStencilOp;
     mesh.renderOrder = 10;
-    mesh.visible = node.enable; // override the "hide isMask" default in buildQuad
+    mesh.visible = node.enable ?? true; // override the "hide isMask" default in buildQuad
 
     // Phase 2F — textured mask writers (e.g. PHOTO_DUMMY_0X with the player
     // layer carrying Player N.png + VERTICAL_RAMP) must use the texture alpha
@@ -657,7 +849,7 @@ function applyPhotoMaskStencil(
     mat.stencilFail = ReplaceStencilOp;
     mat.stencilZFail = ReplaceStencilOp;
     mesh.renderOrder = RENDER_ORDER_GENERIC_WRITER;
-    mesh.visible = node.enable;
+    mesh.visible = node.enable ?? true;
     // colorWrite intentionally left at default (true) so the colored gradient
     // band paints into the framebuffer. This is the structural difference vs
     // PHOTO_* writers, which suppress color by setting colorWrite=false.

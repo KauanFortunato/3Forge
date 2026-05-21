@@ -52,11 +52,56 @@ function walk(
   textureUrlsByFilename?: Map<string, string>,
 ): void {
   const path = [...ancestors, node.name].join(" > ");
-  rows.push(node.kind === "Quad"
-    ? quadRow(node, depth, path, registry, textureUrlsByFilename)
-    : groupRow(node, depth, path));
+  if (node.kind === "Quad") {
+    rows.push(quadRow(node, depth, path, registry, textureUrlsByFilename));
+  } else if (node.kind === "Group") {
+    rows.push(groupRow(node, depth, path));
+  } else {
+    // Phase TextureText — diagnostics dump treats TextureText nodes as
+    // Quad-like rows for the existing table layout. Size column reflects
+    // the authored TextBoxSize rather than a PlaneGeometry size.
+    rows.push(textureTextRow(node, depth, path));
+  }
   for (const c of node.children)
     walk(c, depth + 1, [...ancestors, node.name], rows, registry, textureUrlsByFilename);
+}
+
+function textureTextRow(
+  node: Extract<W3DNodeData, { kind: "TextureText" }>,
+  depth: number,
+  path: string,
+): DumpRow {
+  const t = node.transform;
+  return {
+    depth,
+    path,
+    kind: "Quad", // group with the existing column layout
+    id: node.id,
+    name: `${node.name} [Text]`,
+    size: `${node.textBox.x} × ${node.textBox.y}`,
+    position: vecStr(t.position),
+    scale: vecStr(t.scale),
+    rotation: degStr(t.rotationDeg),
+    alpha: node.alpha,
+    enabled: node.enable,
+    effectiveVisible: node.enable && node.alpha > 0,
+    disabledByEnable: !node.enable,
+    transparentByAlpha0: node.alpha === 0,
+    isMask: false,
+    maskIds: node.maskIds,
+    maskProperties: "—",
+    materialId: node.faceMapping?.materialId ?? "—",
+    materialName: "—",
+    textureLayerId: node.faceMapping?.textureLayerId ?? "—",
+    hasMaterialResolved: false,
+    hasTextureLayerResolved: false,
+    textureLayerName: "—",
+    textureFilename: "—",
+    dynamicTextureSlot: false,
+    dynamicTextureResolved: false,
+    dynamicTextureFilename: "—",
+    childrenCount: node.children.length,
+  };
 }
 
 function groupRow(node: Extract<W3DNodeData, { kind: "Group" }>, depth: number, path: string): DumpRow {

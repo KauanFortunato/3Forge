@@ -48,11 +48,25 @@ export type W3DTextureLayerData = {
   raw?: Record<string, string>;
 };
 
+export type W3DFontStyleData = {
+  kind: "FontStyle";
+  id: string;
+  name: string;          // e.g. "FS_01"
+  fontName: string;      // e.g. "Obviously Cond"
+  type: string;          // e.g. "Light", "Bold", "Italic", "Black Italic"
+  baselineAligned: boolean;
+  lineSpacing: number;
+  kerning: number;
+  kerningScale: number;
+  raw?: Record<string, string>;
+};
+
 export type W3DResourceRegistry = {
   baseMaterials: Map<string, W3DBaseMaterialData>;
   textures: Map<string, W3DTextureData>;
   textureLayers: Map<string, W3DTextureLayerData>;
   dynamicTextureFilenameByLayerId: Map<string, string>;
+  fontStyles: Map<string, W3DFontStyleData>;
 };
 
 export interface ParseResourcesResult {
@@ -66,6 +80,7 @@ export function parseResources(xml: string): ParseResourcesResult {
     textures: new Map(),
     textureLayers: new Map(),
     dynamicTextureFilenameByLayerId: new Map(),
+    fontStyles: new Map(),
   };
   const warnings: string[] = [];
   const parser = new DOMParser();
@@ -101,6 +116,22 @@ export function parseResources(xml: string): ParseResourcesResult {
         name: attrs.Name ?? "",
         filename: attrs.Filename ?? "",   // NOTE: "Filename" not "FileName"
         folderPath: attrs.FolderPath ?? "",
+        raw: attrs,
+      });
+    } else if (el.tagName === "TextureTextFontStyle") {
+      const attrs = readAllAttrs(el);
+      const id = attrs.Id;
+      if (!id) { warnings.push(`TextureTextFontStyle missing Id, skipping.`); continue; }
+      registry.fontStyles.set(id, {
+        kind: "FontStyle",
+        id,
+        name: attrs.Name ?? "",
+        fontName: attrs.FontName ?? "",
+        type: attrs.Type ?? "",
+        baselineAligned: parseBool(attrs.BaselineAligned, false),
+        lineSpacing: parseNum(attrs.LineSpacing, 1),
+        kerning: parseNum(attrs.Kerning, 0),
+        kerningScale: parseNum(attrs.KerningScale, 1),
         raw: attrs,
       });
     } else if (el.tagName === "TextureLayer") {

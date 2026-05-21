@@ -72,6 +72,7 @@ function makeReg(
     textureLayers: new Map(layers.map(l => [l.id, l])),
     textures: new Map(textures.map(t => [t.id, t])),
     dynamicTextureFilenameByLayerId: new Map(),
+    fontStyles: new Map(),
   };
 }
 
@@ -173,6 +174,7 @@ describe("dumpNodes — dynamic texture fields (Phase H)", () => {
       textures: new Map(),
       textureLayers: new Map([["photo-01-id", dynLayer], ["ff-photo-id", ffLayer]]),
       dynamicTextureFilenameByLayerId: new Map([["photo-01-id", "Player 1.png"]]),
+      fontStyles: new Map(),
     };
   }
 

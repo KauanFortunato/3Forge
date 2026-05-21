@@ -32,6 +32,7 @@ function emptyRegistry(): W3DResourceRegistry {
     textures: new Map(),
     textureLayers: new Map(),
     dynamicTextureFilenameByLayerId: new Map(),
+    fontStyles: new Map(),
   };
 }
 
