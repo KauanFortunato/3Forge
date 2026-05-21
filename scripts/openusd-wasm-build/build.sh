@@ -17,6 +17,7 @@ em++ wrapper.cpp \
   "$LIBDIR/libusd_usd.a" \
   "$LIBDIR/libusd_usdGeom.a" \
   "$LIBDIR/libusd_usdShade.a" \
+  "$LIBDIR/libusd_usdSkel.a" \
   "$LIBDIR/libusd_sdr.a" \
   "$LIBDIR/libusd_kind.a" \
   "$LIBDIR/libusd_sdf.a" \

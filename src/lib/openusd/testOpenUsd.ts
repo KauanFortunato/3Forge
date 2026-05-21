@@ -27,6 +27,12 @@ const EXPECTED_FUNCTIONS = [
   "getTimeSamples",
   "getTimeSampledAttributes",
   "getVisibility",
+  // new — UsdSkel (Phase B)
+  "getSkelRootInfo",
+  "getSkeleton",
+  "getSkinBinding",
+  "getSkelAnimation",
+  "getBlendShapes",
 ] as const;
 
 export async function testOpenUSD() {
