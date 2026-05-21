@@ -83,22 +83,18 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   controls.enableDamping = true;
 
   const TARGET_ASPECT = 16 / 9; // 3Forge project default (1920×1080)
+  // The canvas size is now enforced by CSS (`aspect-ratio: 16/9` + max-width
+  // /max-height in playground.css). The renderer's drawing buffer just
+  // matches whatever pixel dimensions CSS chose for the canvas.
   const resize = () => {
-    const hostW = Math.max(host.clientWidth, 1);
-    const hostH = Math.max(host.clientHeight, 1);
-    // Letterbox: fit the largest 16:9 rectangle inside the host.
-    let w = hostW;
-    let h = hostW / TARGET_ASPECT;
-    if (h > hostH) {
-      h = hostH;
-      w = hostH * TARGET_ASPECT;
-    }
-    renderer.setSize(w, h);
+    const rect = renderer.domElement.getBoundingClientRect();
+    const w = Math.max(Math.round(rect.width), 1);
+    const h = Math.max(Math.round(rect.height), 1);
+    renderer.setSize(w, h, false); // false: do NOT touch CSS — CSS owns layout
     if (activeCam instanceof PerspectiveCamera) {
       activeCam.aspect = TARGET_ASPECT;
       activeCam.updateProjectionMatrix();
     } else {
-      // Ortho frustum locked to 16:9 — letterbox bars are pure CSS now.
       const halfH = 5;
       const halfW = halfH * TARGET_ASPECT;
       activeCam.left = -halfW;
@@ -108,8 +104,10 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       activeCam.updateProjectionMatrix();
     }
   };
+  // Observe both host (parent layout changes) and canvas (its own size).
   const ro = new ResizeObserver(resize);
   ro.observe(host);
+  ro.observe(renderer.domElement);
   resize();
 
   // ---- DEV-Inspector state ----------------------------------------------
