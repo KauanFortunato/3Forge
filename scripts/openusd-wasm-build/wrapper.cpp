@@ -585,9 +585,9 @@ em::val getSkelRootInfo(int stageId, const std::string& primPath) {
         if (bindingAPI.GetSkeleton(&skel)) {
             r.set("skeletonPath", skel.GetPath().GetString());
         }
-        pxr::UsdSkelAnimation anim;
-        if (bindingAPI.GetAnimationSource(&anim)) {
-            r.set("animationPath", anim.GetPath().GetString());
+        pxr::UsdPrim animPrim;
+        if (bindingAPI.GetAnimationSource(&animPrim)) {
+            r.set("animationPath", animPrim.GetPath().GetString());
         }
     }
     return r;
@@ -679,9 +679,9 @@ em::val getSkinBinding(int stageId, const std::string& meshPath) {
     } else {
         r.set("skelPath", std::string(""));
     }
-    pxr::UsdSkelAnimation anim;
-    if (binding.GetAnimationSource(&anim)) {
-        r.set("animationPath", anim.GetPath().GetString());
+    pxr::UsdPrim animPrim;
+    if (binding.GetAnimationSource(&animPrim)) {
+        r.set("animationPath", animPrim.GetPath().GetString());
     } else {
         r.set("animationPath", std::string(""));
     }
