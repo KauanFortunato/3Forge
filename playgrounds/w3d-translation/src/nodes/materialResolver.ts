@@ -64,9 +64,18 @@ export function addressModeToWrap(mode: string | undefined): Wrapping {
   }
 }
 
+/**
+ * Phase 2C.1 — W3D `<Offset>` sign convention is INVERTED relative to
+ * Three.js `texture.offset`. R3 positive Offset shifts texture content RIGHT
+ * on geometry; Three.js positive offset shifts content LEFT (because
+ * `sampledUV = fragmentUV × repeat + offset`, so positive offset moves the
+ * sampled texel right which makes content APPEAR shifted left). Negating
+ * here translates the W3D semantic to the Three.js one. Scale (→ repeat)
+ * and Rotation keep their W3D values unchanged.
+ */
 function buildMapTransform(tl: W3DTextureLayerData): UVTransform {
   return {
-    offset: { x: tl.offset?.x ?? 0, y: tl.offset?.y ?? 0 },
+    offset: { x: -(tl.offset?.x ?? 0), y: -(tl.offset?.y ?? 0) },
     repeat: { x: tl.scale?.x ?? 1, y: tl.scale?.y ?? 1 },
     rotationDeg: tl.rotationDeg ?? 0,
     wrapS: addressModeToWrap(tl.mapping?.textureAddressModeU),
@@ -76,7 +85,7 @@ function buildMapTransform(tl: W3DTextureLayerData): UVTransform {
 
 function buildAlphaMapTransform(tl: W3DTextureLayerData): UVTransform {
   return {
-    offset: { x: tl.offsetKey?.x ?? 0, y: tl.offsetKey?.y ?? 0 },
+    offset: { x: -(tl.offsetKey?.x ?? 0), y: -(tl.offsetKey?.y ?? 0) },
     repeat: { x: tl.scaleKey?.x ?? 1, y: tl.scaleKey?.y ?? 1 },
     rotationDeg: tl.rotationKeyDeg ?? 0,
     // alphaMap shares the layer's TextureAddressMode (W3D has no per-Key mode).

@@ -343,7 +343,7 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
     return { registry: reg, textureUrlsByFilename: urls };
   }
 
-  test("Offset X=-0.07 → mapTransform.offset.x=-0.07, mapTransform.offset.y=0", async () => {
+  test("Phase 2C.1: Offset X=-0.07 → mapTransform.offset.x=+0.07 (W3D→Three.js sign flip)", async () => {
     const { ClampToEdgeWrapping } = await import("three");
     const layer: W3DTextureLayerData = {
       kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
@@ -352,13 +352,46 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
     };
     const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
     expect(r.mapTransform).toBeDefined();
-    expect(r.mapTransform!.offset.x).toBeCloseTo(-0.07, 5);
+    expect(r.mapTransform!.offset.x).toBeCloseTo(0.07, 5); // negated W3D Offset X
     expect(r.mapTransform!.offset.y).toBeCloseTo(0, 5);
     expect(r.mapTransform!.repeat.x).toBe(1);
     expect(r.mapTransform!.repeat.y).toBe(1);
     expect(r.mapTransform!.rotationDeg).toBe(0);
     expect(r.mapTransform!.wrapS).toBe(ClampToEdgeWrapping);
     expect(r.mapTransform!.wrapT).toBe(ClampToEdgeWrapping);
+  });
+
+  test("Phase 2C.1 regression: only Offset/OffsetKey are negated — Scale/repeat, Rotation, AddressMode untouched", async () => {
+    const { RepeatWrapping } = await import("three");
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "L", textureBlending: "Multiply",
+      mapping: {
+        textureGuid: "tex-id",
+        keyGuid: "key-id",
+        isEmissive: false,
+        useMipMapping: false,
+        textureAddressModeU: "Repeat",
+        textureAddressModeV: "Repeat",
+      },
+      offset: { x: -0.07, y: 0 },
+      scale: { x: 1.7, y: 0.82 },         // must remain positive 1.7 / 0.82
+      rotationDeg: 45,                     // must remain +45
+      offsetKey: { y: -0.2 },
+      scaleKey: { y: 0.5 },                // must remain positive 0.5
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer, true), []);
+    // Offsets negated
+    expect(r.mapTransform!.offset.x).toBeCloseTo(0.07, 5);
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.2, 5);
+    // Scale (repeat) NOT negated
+    expect(r.mapTransform!.repeat.x).toBeCloseTo(1.7, 5);
+    expect(r.mapTransform!.repeat.y).toBeCloseTo(0.82, 5);
+    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5);
+    // Rotation NOT negated
+    expect(r.mapTransform!.rotationDeg).toBe(45);
+    // AddressMode unchanged
+    expect(r.mapTransform!.wrapS).toBe(RepeatWrapping);
+    expect(r.mapTransform!.wrapT).toBe(RepeatWrapping);
   });
 
   test("Scale X=1.7 Y=0.82 → mapTransform.repeat = (1.7, 0.82)", () => {
@@ -391,16 +424,17 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
       scaleKey: { y: 0.5 },
     };
     const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer, true), []);
-    // map transform — driven by Offset, untouched by OffsetKey/ScaleKey
-    expect(r.mapTransform!.offset.x).toBeCloseTo(-0.07, 5);
+    // Phase 2C.1: W3D Offset / OffsetKey are negated when handed to Three.js.
+    // map transform — driven by Offset (negated), untouched by OffsetKey/ScaleKey
+    expect(r.mapTransform!.offset.x).toBeCloseTo(0.07, 5);  // negated -0.07
     expect(r.mapTransform!.offset.y).toBeCloseTo(0, 5);
     expect(r.mapTransform!.repeat.y).toBe(1);
-    // alphaMap transform — driven by OffsetKey/ScaleKey, untouched by Offset
+    // alphaMap transform — driven by OffsetKey (negated)/ScaleKey, untouched by Offset
     expect(r.alphaMapTransform).toBeDefined();
     expect(r.alphaMapTransform!.offset.x).toBeCloseTo(0, 5);
-    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(-0.2, 5);
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.2, 5);  // negated -0.2
     expect(r.alphaMapTransform!.repeat.x).toBe(1);
-    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5);
+    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5); // ScaleKey NOT negated
   });
 
   test('TextureAddressModeU="Repeat" → wrapS=RepeatWrapping', async () => {
@@ -442,13 +476,14 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
       mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false },
     };
     const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
-    expect(r.mapTransform).toEqual({
-      offset: { x: 0, y: 0 },
-      repeat: { x: 1, y: 1 },
-      rotationDeg: 0,
-      wrapS: 1001, // ClampToEdgeWrapping numeric constant
-      wrapT: 1001,
-    });
+    // Note Phase 2C.1 negates W3D offsets; -0 (negation of 0) is mathematically
+    // equal to 0 but Object.is distinguishes signed zeros, so use toBeCloseTo.
+    expect(r.mapTransform!.offset.x).toBeCloseTo(0, 5);
+    expect(r.mapTransform!.offset.y).toBeCloseTo(0, 5);
+    expect(r.mapTransform!.repeat).toEqual({ x: 1, y: 1 });
+    expect(r.mapTransform!.rotationDeg).toBe(0);
+    expect(r.mapTransform!.wrapS).toBe(1001); // ClampToEdgeWrapping numeric constant
+    expect(r.mapTransform!.wrapT).toBe(1001);
   });
 
   test("layer with Key (alphaMap) but no Offset → alphaMapTransform present, mapTransform identity", () => {
@@ -458,8 +493,10 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
       offsetKey: { y: -0.2 },
     };
     const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer, true), []);
-    expect(r.mapTransform!.offset).toEqual({ x: 0, y: 0 });
-    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(-0.2, 5);
+    expect(r.mapTransform!.offset.x).toBeCloseTo(0, 5);
+    expect(r.mapTransform!.offset.y).toBeCloseTo(0, 5);
+    // Phase 2C.1: OffsetKey -0.2 is negated to +0.2 when handed to Three.js.
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.2, 5);
   });
 
   test("PHOTO_01-like LINEUP_LEFT layer — full Offset/OffsetKey/ScaleKey combo populated independently", () => {
@@ -476,12 +513,13 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
       scaleKey: { y: 0.5 },
     };
     const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer, true), []);
-    expect(r.mapTransform!.offset.x).toBeCloseTo(-0.07, 5);
+    // Phase 2C.1: W3D Offset/OffsetKey negated → Three.js convention
+    expect(r.mapTransform!.offset.x).toBeCloseTo(0.07, 5);   // negated -0.07
     expect(r.mapTransform!.repeat.x).toBe(1);
     expect(r.mapTransform!.repeat.y).toBe(1);
-    expect(r.alphaMapTransform!.offset.x).toBe(0);
-    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(-0.2, 5);
+    expect(r.alphaMapTransform!.offset.x).toBeCloseTo(0, 5);
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.2, 5); // negated -0.2
     expect(r.alphaMapTransform!.repeat.x).toBe(1);
-    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5);
+    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5); // ScaleKey NOT negated
   });
 });

@@ -1960,11 +1960,11 @@ describe("builder — BuildContext", () => {
     // The cached singleton (used by L2) must remain at identity offset.
     expect(tex2.offset.x).toBe(0);
     expect(tex2.offset.y).toBe(0);
-    // The cloned instance (used by L1) carries the layer's offset.
-    expect(tex1.offset.x).toBeCloseTo(-0.07, 5);
+    // Phase 2C.1: W3D Offset X=-0.07 is negated when handed to Three.js.
+    expect(tex1.offset.x).toBeCloseTo(0.07, 5);
   });
 
-  test("Phase 2C: layer Offset X=-0.07 → material.map.offset.x=-0.07", () => {
+  test("Phase 2C.1: layer Offset X=-0.07 → material.map.offset.x=+0.07 (W3D→Three.js sign flip)", () => {
     const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
     const layer: W3DTextureLayerData = {
       kind: "TextureLayer", id: "L", name: "PHOTO_01", textureBlending: "Multiply",
@@ -1981,7 +1981,7 @@ describe("builder — BuildContext", () => {
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
     const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
-    expect(mat.map!.offset.x).toBeCloseTo(-0.07, 5);
+    expect(mat.map!.offset.x).toBeCloseTo(0.07, 5); // negated W3D -0.07
     expect(mat.map!.offset.y).toBeCloseTo(0, 5);
   });
 
@@ -2046,14 +2046,15 @@ describe("builder — BuildContext", () => {
     const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["T.png", "blob:T"], ["VERTICAL_RAMP.png", "blob:RAMP"]]) });
     const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
     const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
-    // map carries the layer's Offset, untouched by OffsetKey/ScaleKey.
-    expect(mat.map!.offset.x).toBeCloseTo(-0.07, 5);
+    // Phase 2C.1: W3D Offset / OffsetKey are negated when handed to Three.js.
+    // map carries the layer's Offset (negated), untouched by OffsetKey/ScaleKey.
+    expect(mat.map!.offset.x).toBeCloseTo(0.07, 5);   // negated -0.07
     expect(mat.map!.offset.y).toBeCloseTo(0, 5);
     expect(mat.map!.repeat.y).toBe(1);
-    // alphaMap carries OffsetKey/ScaleKey, untouched by Offset.
+    // alphaMap carries OffsetKey (negated)/ScaleKey, untouched by Offset.
     expect(mat.alphaMap!.offset.x).toBeCloseTo(0, 5);
-    expect(mat.alphaMap!.offset.y).toBeCloseTo(-0.2, 5);
-    expect(mat.alphaMap!.repeat.y).toBeCloseTo(0.5, 5);
+    expect(mat.alphaMap!.offset.y).toBeCloseTo(0.2, 5); // negated -0.2
+    expect(mat.alphaMap!.repeat.y).toBeCloseTo(0.5, 5); // ScaleKey NOT negated
     // map and alphaMap must be distinct Texture instances even if cached
     // file URLs differ (here they do — separate Map entries).
     expect(mat.map).not.toBe(mat.alphaMap);
@@ -2667,7 +2668,7 @@ describe("builder — BuildContext", () => {
     expect(mat.stencilWrite).toBe(true);
     expect(mat.stencilWriteMask).toBe(56); // Phase 2J DUMMY_OWNER_FIELD
     expect(mat.stencilRef).toBe(8);        // DUMMY owner=1 << 3
-    // And the texture still carries the layer's UV transform.
-    expect(mat.map!.offset.x).toBeCloseTo(-0.07, 5);
+    // And the texture still carries the layer's UV transform (Phase 2C.1 negated).
+    expect(mat.map!.offset.x).toBeCloseTo(0.07, 5); // negated W3D -0.07
   });
 });
