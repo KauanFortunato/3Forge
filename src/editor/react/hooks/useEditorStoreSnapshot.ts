@@ -11,7 +11,7 @@ export function useEditorStoreSnapshot(store: EditorStore): EditorStoreView {
   return useMemo(
     () => ({
       blueprintComponentName: store.blueprint.componentName,
-      blueprintNodes: store.blueprint.nodes,
+      blueprintNodes: [...store.blueprint.nodes],
       selectedNodeId: store.selectedNodeId,
       selectedNodeIds: store.selectedNodeIds,
       selectedNode: store.selectedNode,
@@ -19,9 +19,9 @@ export function useEditorStoreSnapshot(store: EditorStore): EditorStoreView {
       selectedPartId: store.selectedPartId,
       fonts: store.fonts,
       materials: store.materials,
-      models: store.models,
-      images: store.images,
-      hdrs: store.hdrs,
+      models: [...store.models],
+      images: [...store.images],
+      hdrs: [...store.hdrs],
       sceneSettings: store.sceneSettings,
       editableFields: store.listEditableFields(),
       animation: store.animation,

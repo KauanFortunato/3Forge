@@ -20,8 +20,23 @@ function bytesToDataUrl(bytes: Uint8Array, mimeType: string): string {
   for (let i = 0; i < bytes.length; i += 1) {
     binary += String.fromCharCode(bytes[i]);
   }
-  const base64 = typeof btoa === "function" ? btoa(binary) : Buffer.from(bytes).toString("base64");
+  const base64 = typeof btoa === "function" ? btoa(binary) : encodeBase64Bytes(bytes);
   return `data:${mimeType};base64,${base64}`;
+}
+
+function encodeBase64Bytes(bytes: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let result = "";
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index];
+    const second = bytes[index + 1];
+    const third = bytes[index + 2];
+    result += alphabet[first >> 2];
+    result += alphabet[((first & 0x03) << 4) | ((second ?? 0) >> 4)];
+    result += index + 1 < bytes.length ? alphabet[((second & 0x0f) << 2) | ((third ?? 0) >> 6)] : "=";
+    result += index + 2 < bytes.length ? alphabet[(third ?? 0) & 0x3f] : "=";
+  }
+  return result;
 }
 
 async function readImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
