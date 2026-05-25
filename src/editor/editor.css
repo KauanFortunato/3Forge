@@ -1385,6 +1385,11 @@ code {
   overflow: auto;
 }
 
+.sg-tree__content {
+  width: max-content;
+  min-width: 100%;
+}
+
 .sg-tree__empty {
   padding: var(--sp-5) var(--sp-3);
   color: var(--c-text-dim);
@@ -1394,7 +1399,7 @@ code {
 
 .sg-row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: minmax(max-content, 1fr) auto auto auto;
   align-items: center;
   gap: var(--sp-3);
   height: var(--h-row);
@@ -1404,6 +1409,7 @@ code {
   cursor: default;
   position: relative;
   width: 100%;
+  min-width: 100%;
   background: transparent;
   border: 0;
   text-align: left;
@@ -1459,7 +1465,7 @@ code {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-width: 0;
+  min-width: max-content;
 }
 
 .sg-row__chev {
@@ -1540,11 +1546,10 @@ code {
 }
 
 .sg-row__name {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: visible;
   white-space: nowrap;
   flex: 1;
-  min-width: 0;
+  min-width: max-content;
 }
 
 .sg-row__badge {
@@ -6064,4 +6069,3 @@ code {
   from { transform: rotate(0deg); }
   to { transform: rotate(180deg); }
 }
-

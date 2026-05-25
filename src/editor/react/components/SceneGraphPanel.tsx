@@ -234,58 +234,60 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
             }
           }}
         >
-          {rows.map((row) => {
-            if (row.kind === "part") {
-              const modelNode = nodes.find((n) => n.id === row.modelNodeId) as ModelNode | undefined;
-              const isHidden = modelNode?.partVisibility?.[row.partId] === false;
-              const isSelected =
-                selectedNodeId === row.modelNodeId && selectedPartId === row.partId;
+          <div className="sg-tree__content">
+            {rows.map((row) => {
+              if (row.kind === "part") {
+                const modelNode = nodes.find((n) => n.id === row.modelNodeId) as ModelNode | undefined;
+                const isHidden = modelNode?.partVisibility?.[row.partId] === false;
+                const isSelected =
+                  selectedNodeId === row.modelNodeId && selectedPartId === row.partId;
+                return (
+                  <SceneGraphPartRow
+                    key={`${row.modelNodeId}::${row.partId}`}
+                    row={row}
+                    isSelected={isSelected}
+                    isHidden={!!isHidden}
+                    isCollapsed={collapsedIds.has(partCollapseKey(row.modelNodeId, row.partId))}
+                    onToggleCollapse={() => {
+                      const key = partCollapseKey(row.modelNodeId, row.partId);
+                      const next = new Set(collapsedIds);
+                      if (next.has(key)) next.delete(key);
+                      else next.add(key);
+                      onCollapsedIdsChange(next);
+                    }}
+                    onSelect={() => onSelectPart(row.modelNodeId, row.partId)}
+                    onToggleVisibility={() => onTogglePartVisibility(row.modelNodeId, row.partId)}
+                  />
+                );
+              }
               return (
-                <SceneGraphPartRow
-                  key={`${row.modelNodeId}::${row.partId}`}
+                <SceneGraphRow
+                  key={row.branch.node.id}
                   row={row}
-                  isSelected={isSelected}
-                  isHidden={!!isHidden}
-                  isCollapsed={collapsedIds.has(partCollapseKey(row.modelNodeId, row.partId))}
-                  onToggleCollapse={() => {
-                    const key = partCollapseKey(row.modelNodeId, row.partId);
-                    const next = new Set(collapsedIds);
-                    if (next.has(key)) next.delete(key);
-                    else next.add(key);
-                    onCollapsedIdsChange(next);
+                  modelsById={modelsById}
+                  selectedNodeId={selectedNodeId}
+                  selectedNodeIds={selectedNodeIdsSet}
+                  selectedPathIds={selectedPathIds}
+                  collapsedIds={collapsedIds}
+                  draggedNodeId={draggedNodeId}
+                  dropTarget={dropTarget}
+                  animatedNodeIds={animatedNodeIds}
+                  onToggleNode={toggleNode}
+                  onSelectNode={onSelectNode}
+                  onMoveNode={onMoveNode}
+                  onToggleVisibility={onToggleVisibility}
+                  onDuplicateNode={onDuplicateNode}
+                  onDeleteNode={onDeleteNode}
+                  onContextMenu={onContextMenu}
+                  onDragStateChange={(nextDragged, nextDropTarget) => {
+                    setDraggedNodeId(nextDragged);
+                    setDropTarget(nextDropTarget);
                   }}
-                  onSelect={() => onSelectPart(row.modelNodeId, row.partId)}
-                  onToggleVisibility={() => onTogglePartVisibility(row.modelNodeId, row.partId)}
+                  onClearDragState={clearDragState}
                 />
               );
-            }
-            return (
-              <SceneGraphRow
-                key={row.branch.node.id}
-                row={row}
-                modelsById={modelsById}
-                selectedNodeId={selectedNodeId}
-                selectedNodeIds={selectedNodeIdsSet}
-                selectedPathIds={selectedPathIds}
-                collapsedIds={collapsedIds}
-                draggedNodeId={draggedNodeId}
-                dropTarget={dropTarget}
-                animatedNodeIds={animatedNodeIds}
-                onToggleNode={toggleNode}
-                onSelectNode={onSelectNode}
-                onMoveNode={onMoveNode}
-                onToggleVisibility={onToggleVisibility}
-                onDuplicateNode={onDuplicateNode}
-                onDeleteNode={onDeleteNode}
-                onContextMenu={onContextMenu}
-                onDragStateChange={(nextDragged, nextDropTarget) => {
-                  setDraggedNodeId(nextDragged);
-                  setDropTarget(nextDropTarget);
-                }}
-                onClearDragState={clearDragState}
-              />
-            );
-          })}
+            })}
+          </div>
         </div>
       )}
     </div>
