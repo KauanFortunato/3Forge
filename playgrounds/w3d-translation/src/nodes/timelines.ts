@@ -48,6 +48,15 @@ export interface TimelinePreviewSnapshot {
    * W3DTransform.scale on Quads, Groups and TextureText nodes.
    */
   scaleByControllableId: Map<string, { x?: number; y?: number; z?: number }>;
+  /**
+   * Phase 2D.5 — Enabled snapshot per ControllableId. R3 stores visibility as
+   * an `Enabled` track whose KeyFrame Value is the string "True"/"False".
+   * Evaluated as a STEP (hold-last) — no interpolation — so the preview marker
+   * takes the most recent keyframe's boolean. Applied to W3DQuadData.enable /
+   * W3DTextureTextData.enable (Groups carry no `enable` in this model and the
+   * builder does not gate Group visibility on it).
+   */
+  enabledByControllableId: Map<string, boolean>;
 }
 
 interface RawKeyFrame { frame: number; value: number }
@@ -65,11 +74,14 @@ const PROP_SCALE_VEC3 = "Transform.Scale";
 const PROP_SCALE_X = "Transform.Scale.XProp";
 const PROP_SCALE_Y = "Transform.Scale.YProp";
 const PROP_SCALE_Z = "Transform.Scale.ZProp";
+// Phase 2D.5 — visibility track. KeyFrame Value is "True"/"False" (string).
+const PROP_ENABLED = "Enabled";
 
 const SUPPORTED_PROPS = new Set<string>([
   PROP_ALPHA, PROP_SIZE_X, PROP_SIZE_Y,
   PROP_POS_X, PROP_POS_Y, PROP_POS_Z,
   PROP_SCALE_VEC3, PROP_SCALE_X, PROP_SCALE_Y, PROP_SCALE_Z,
+  PROP_ENABLED,
 ]);
 
 export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapshot {
@@ -78,6 +90,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
     sizeByControllableId: new Map(),
     positionByControllableId: new Map(),
     scaleByControllableId: new Map(),
+    enabledByControllableId: new Map(),
   };
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, "application/xml");
@@ -111,6 +124,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
       sizeByControllableId: new Map(),
       positionByControllableId: new Map(),
       scaleByControllableId: new Map(),
+      enabledByControllableId: new Map(),
     };
   }
 
@@ -118,6 +132,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
   const sizeByControllableId = new Map<string, { x?: number; y?: number }>();
   const positionByControllableId = new Map<string, { x?: number; y?: number; z?: number }>();
   const scaleByControllableId = new Map<string, { x?: number; y?: number; z?: number }>();
+  const enabledByControllableId = new Map<string, boolean>();
 
   for (const ctrl of Array.from(selected.children)) {
     if (ctrl.tagName !== "KeyFrameAnimationController") continue;
@@ -149,6 +164,26 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
       vec3KFs.sort((a, b) => a.frame - b.frame);
       const v = evaluateVec3At(vec3KFs, previewMarker);
       scaleByControllableId.set(controllableId, { x: v.x, y: v.y, z: v.z });
+      continue;
+    }
+
+    // Phase 2D.5 — Enabled track. KeyFrame Value is "True"/"False"; the scalar
+    // parser above would drop these (Number("True") is NaN), so handle here.
+    // Evaluate as a STEP hold (visibility doesn't interpolate): the marker
+    // takes the most recent keyframe's boolean.
+    if (prop === PROP_ENABLED) {
+      const boolKFs: { frame: number; value: boolean }[] = [];
+      for (const kf of Array.from(ctrl.children)) {
+        if (kf.tagName !== "KeyFrame") continue;
+        const frame = Number(kf.getAttribute("FrameNumber"));
+        const raw = (kf.getAttribute("Value") ?? "").trim().toLowerCase();
+        if (Number.isFinite(frame) && (raw === "true" || raw === "false")) {
+          boolKFs.push({ frame, value: raw === "true" });
+        }
+      }
+      if (boolKFs.length === 0) continue;
+      boolKFs.sort((a, b) => a.frame - b.frame);
+      enabledByControllableId.set(controllableId, evaluateBoolAt(boolKFs, previewMarker));
       continue;
     }
 
@@ -200,7 +235,25 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
     sizeByControllableId,
     positionByControllableId,
     scaleByControllableId,
+    enabledByControllableId,
   };
+}
+
+/**
+ * Step-evaluate boolean keyframes (hold-first before the first frame, then the
+ * value of the most recent keyframe with frame <= target). Visibility is a
+ * step function — never interpolated.
+ */
+function evaluateBoolAt(
+  keyframes: { frame: number; value: boolean }[],
+  frame: number,
+): boolean {
+  let result = keyframes[0].value;
+  for (const kf of keyframes) {
+    if (kf.frame <= frame) result = kf.value;
+    else break;
+  }
+  return result;
 }
 
 /** Parse a comma-separated "x,y,z" string into a vec3, or null if malformed. */

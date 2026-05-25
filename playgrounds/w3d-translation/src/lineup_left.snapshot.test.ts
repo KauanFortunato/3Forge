@@ -18,7 +18,7 @@
 
 import { describe, expect, test } from "vitest";
 import { translateBlueprint } from "./translate";
-import type { W3DNodeData, W3DGroupData, W3DQuadData } from "./nodes/data";
+import type { W3DNodeData, W3DGroupData, W3DQuadData, W3DTextureTextData } from "./nodes/data";
 // Vite `?raw` import inlines the committed fixture as a string. The module type
 // comes from vite/client (configured in tsconfig types), so this needs neither
 // node:fs nor @types/node to typecheck — and works under the jsdom test env
@@ -102,5 +102,30 @@ describe("LINEUP_LEFT PreviewMarker snapshot fidelity (real scene.w3d)", () => {
 
   test("MAIN.position.x becomes ~-1 (Transform.Position.XProp)", () => {
     expect(group("MAIN").transform.position.x).toBeCloseTo(-1, 2);
+  });
+
+  // Phase 2D.5 — Enabled snapshot. Visibility tracks ("True"/"False", step
+  // hold-last) must flip node.enable on Quad/TextureText at the marker.
+  const text = (name: string) => {
+    const n = findByName(nodes, name);
+    expect(n, `node "${name}" not found`).toBeDefined();
+    expect(n!.kind, `node "${name}" should be a TextureText`).toBe("TextureText");
+    return n as W3DTextureTextData;
+  };
+
+  test("PLAYER_FIRST_NAME_02 becomes enabled at PreviewMarker (authored Enable=False → True)", () => {
+    expect(text("PLAYER_FIRST_NAME_02").enable).toBe(true);
+  });
+
+  test("team-name font swap: FS_01 disables and FS_03 enables by PreviewMarker", () => {
+    // R3 cross-fades the team-name font variants via Enabled. At frame 799 the
+    // FS_01 variants are off and the FS_03 variants are the live ones — the
+    // name stays visible, just in its final font. Verifies Enabled both ways.
+    expect(text("TEAM_NAME_FS_01_L_01").enable).toBe(false);
+    expect(text("TEAM_NAME_FS_03_L01").enable).toBe(true);
+  });
+
+  test("SPLITTER_06 (Quad) becomes enabled at PreviewMarker (authored Enable=False → True)", () => {
+    expect(quad("SPLITTER_06").enable).toBe(true);
   });
 });

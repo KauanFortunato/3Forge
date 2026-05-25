@@ -65,6 +65,7 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
  *  - Alpha overrides Quad.alpha (Groups don't carry alpha).
  *  - Size.X/Y overrides Quad.geometry.size.x/y (Groups don't carry geometry).
  *  - Position.X/Y/Z overrides Quad/Group.transform.position.x/y/z.
+ *  - Enabled overrides Quad/TextureText.enable (Groups don't carry enable).
  *
  * Partial axes are supported — a controller with only Size.XProp leaves
  * geometry.size.y untouched. Nodes whose GUID is absent from every map
@@ -76,12 +77,14 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
     sizeByControllableId,
     positionByControllableId,
     scaleByControllableId,
+    enabledByControllableId,
   } = snap;
   if (
     alphaByControllableId.size === 0 &&
     sizeByControllableId.size === 0 &&
     positionByControllableId.size === 0 &&
-    scaleByControllableId.size === 0
+    scaleByControllableId.size === 0 &&
+    enabledByControllableId.size === 0
   ) {
     return;
   }
@@ -94,9 +97,15 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
         if (sz.x !== undefined) n.geometry.size.x = sz.x;
         if (sz.y !== undefined) n.geometry.size.y = sz.y;
       }
+      // Phase 2D.5 — Enabled snapshot (visibility). Only Quad / TextureText
+      // carry `enable`; Groups have no enable field in this model.
+      const en = enabledByControllableId.get(n.id);
+      if (en !== undefined) n.enable = en;
     } else if (n.kind === "TextureText") {
       const a = alphaByControllableId.get(n.id);
       if (a !== undefined) n.alpha = a;
+      const en = enabledByControllableId.get(n.id);
+      if (en !== undefined) n.enable = en;
     }
     const pos = positionByControllableId.get(n.id);
     if (pos !== undefined) {
