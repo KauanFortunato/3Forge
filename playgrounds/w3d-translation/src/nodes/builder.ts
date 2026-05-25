@@ -1,6 +1,6 @@
 // playgrounds/w3d-translation/src/nodes/builder.ts
 import {
-  AlwaysStencilFunc, CanvasTexture, ClampToEdgeWrapping, Color, DoubleSide, EqualStencilFunc,
+  AlwaysStencilFunc, Box3, CanvasTexture, ClampToEdgeWrapping, Color, DoubleSide, EqualStencilFunc,
   Group, KeepStencilOp, Mesh, MeshBasicMaterial, NotEqualStencilFunc, Object3D, PlaneGeometry,
   ReplaceStencilOp, SRGBColorSpace, Texture, TextureLoader,
 } from "three";
@@ -347,31 +347,60 @@ function isColoredMask(node: W3DQuadData): boolean {
 }
 
 /**
- * Phase 2A — R3 FlowChildren horizontal distribution for the PLAYERS group.
+ * Phase 2F-flow — R3 FlowChildren horizontal distribution for the PLAYERS group.
  *
- * Rollout guard: this is intentionally scoped by node name to PLAYERS only.
- * The W3D <GeometryOptions FlowChildren/LeadingSpace/Direction> is parsed
- * generically on every Group, but the runtime layout below is restricted to
+ * Rollout guard: still intentionally scoped by node name to PLAYERS only. The
+ * W3D <GeometryOptions FlowChildren/LeadingSpace/Direction> is parsed
+ * generically on every Group, but the runtime layout below stays restricted to
  * PLAYERS until other axes (Direction="YMinus" used by BENCH_LIST) are
- * validated. Phase 2F removes this gate.
+ * validated.
  *
- * Formula: child.position.x += (n - 1 - i) * leadingSpace, where i is the
- * child's index in document order. With negative LeadingSpace (-1.26 for
- * PLAYERS), the first child gets the most negative offset and the last child
- * sits at the group origin (offset 0) — matching the R3 visual order
- * left → right of PLAYER_01..PLAYER_05.
+ * R3 lays flow children sequentially from the container origin: the FIRST
+ * child stays at the origin and each subsequent child advances by the PREVIOUS
+ * child's MEASURED WIDTH plus LeadingSpace. LeadingSpace is a gap (negative =
+ * overlap), NOT the whole stride:
  *
- * Additive: any X already authored on the child is preserved.
+ *     stride_i = measuredWidth(child_i) + leadingSpace
+ *
+ * This matches the R3 render (LINEUP_LEFT thumbnail), where the five ~2.2-wide
+ * player cards sit shoulder-to-shoulder filling the panel left → right. The
+ * earlier `(n-1-i)*leadingSpace` form treated LeadingSpace as the entire stride
+ * (ignoring child width, stride 1.26), which pushed four of five players off
+ * the left edge of the 16:9 frame.
+ *
+ * Notes:
+ *  - LeadingSpace value is read as-authored and NEVER mutated (node data is
+ *    untouched; only the built Object3D positions change).
+ *  - Width is measured from each child's built subtree as a world-space AABB.
+ *    PLAYERS carries no scale/rotation, so the X-extent equals the parent-space
+ *    width and is invariant to the flow translation we add.
+ *  - Additive: any X already authored on a child is preserved.
+ *  - Pivot Formula B is untouched — it runs per child before this and only
+ *    shifts content by (1-S)*pivot, which rides along with the slot.
  */
 function applyFlowLayout(group: Group, node: W3DGroupData): void {
-  if (node.name !== "PLAYERS") return; // TEMP gate — see Phase 2F
+  if (node.name !== "PLAYERS") return; // TEMP gate
   if (!node.flow?.children) return;
-  const spacing = node.flow.leadingSpace ?? 0;
-  if (spacing === 0) return;
-  const n = group.children.length;
-  group.children.forEach((child, i) => {
-    child.position.x += (n - 1 - i) * spacing;
-  });
+  const leadingSpace = node.flow.leadingSpace ?? 0;
+  let cursor = 0;
+  for (const child of group.children) {
+    child.position.x += cursor;
+    cursor += measuredWidthX(child) + leadingSpace;
+  }
+}
+
+/**
+ * Axis-aligned X-extent (width) of a built Object3D's subtree. Used by
+ * applyFlowLayout to advance the flow cursor by each child's measured width.
+ * PLAYERS has no scale/rotation, so this world-space width equals the width in
+ * the flow's coordinate space and is invariant to the translation we apply.
+ * Returns 0 for an empty/degenerate subtree.
+ */
+function measuredWidthX(obj: Object3D): number {
+  obj.updateWorldMatrix(true, true);
+  const box = new Box3().setFromObject(obj);
+  if (!isFinite(box.min.x) || !isFinite(box.max.x)) return 0;
+  return box.max.x - box.min.x;
 }
 
 function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {

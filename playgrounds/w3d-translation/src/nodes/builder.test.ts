@@ -1016,35 +1016,37 @@ describe("builder — BuildContext", () => {
     expect((root.children[1] as Mesh).renderOrder).toBe(10);
   });
 
-  test("Phase 2A: PLAYERS with 5 children + leadingSpace=-1.26 → reverse-index distribution", () => {
-    // Expected per R3: PLAYER_01 leftmost (most negative X), PLAYER_05 at origin.
-    const p1 = groupData({ id: "p1", name: "PLAYER_01" });
-    const p2 = groupData({ id: "p2", name: "PLAYER_02" });
-    const p3 = groupData({ id: "p3", name: "PLAYER_03" });
-    const p4 = groupData({ id: "p4", name: "PLAYER_04" });
-    const p5 = groupData({ id: "p5", name: "PLAYER_05" });
+  test("Phase 2F-flow: PLAYERS lays children +X by measuredWidth+leadingSpace, first child at origin", () => {
+    // R3 FlowChildren: stride = childWidth + leadingSpace. Equal-width cards
+    // (size 2) with leadingSpace -1.26 → stride 0.74. PLAYER_01 anchored at the
+    // origin, PLAYER_05 rightmost — visual order left→right preserved.
+    const mk = (i: number) => quadData({ id: `p${i}`, name: `PLAYER_0${i}`, geometry: { size: { x: 2, y: 1 } } });
     const players = groupData({
       id: "players", name: "PLAYERS",
       flow: { children: true, leadingSpace: -1.26 },
-      children: [p1, p2, p3, p4, p5],
+      children: [mk(1), mk(2), mk(3), mk(4), mk(5)],
     });
     const root = buildNodeTree([players]);
     const playersGroup = root.children[0] as Group;
-    expect(playersGroup.children[0].position.x).toBeCloseTo(-5.04, 5); // PLAYER_01
-    expect(playersGroup.children[1].position.x).toBeCloseTo(-3.78, 5); // PLAYER_02
-    expect(playersGroup.children[2].position.x).toBeCloseTo(-2.52, 5); // PLAYER_03
-    expect(playersGroup.children[3].position.x).toBeCloseTo(-1.26, 5); // PLAYER_04
-    expect(playersGroup.children[4].position.x).toBeCloseTo(0, 5);      // PLAYER_05
+    const stride = 2 + (-1.26); // 0.74
+    expect(playersGroup.children[0].position.x).toBeCloseTo(0, 5);          // PLAYER_01 at origin
+    expect(playersGroup.children[1].position.x).toBeCloseTo(stride, 5);     // 0.74
+    expect(playersGroup.children[2].position.x).toBeCloseTo(2 * stride, 5); // 1.48
+    expect(playersGroup.children[3].position.x).toBeCloseTo(3 * stride, 5); // 2.22
+    expect(playersGroup.children[4].position.x).toBeCloseTo(4 * stride, 5); // 2.96
+    // Visual order strictly left→right.
+    const xs = playersGroup.children.map((c) => c.position.x);
+    for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThan(xs[i - 1]);
   });
 
-  test("Phase 2A: PLAYERS flow is additive — preserves authored child position.x", () => {
-    const transform = {
+  test("Phase 2F-flow: PLAYERS flow is additive on authored child X; node data and leadingSpace not mutated", () => {
+    const transform = () => ({
       position: { x: 0.5, y: 0, z: 0 },
       rotationDeg: { x: 0, y: 0, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
-    };
-    const p1 = groupData({ id: "p1", name: "PLAYER_01", transform });
-    const p2 = groupData({ id: "p2", name: "PLAYER_02", transform });
+    });
+    const p1 = quadData({ id: "p1", name: "PLAYER_01", geometry: { size: { x: 2, y: 1 } }, transform: transform() });
+    const p2 = quadData({ id: "p2", name: "PLAYER_02", geometry: { size: { x: 2, y: 1 } }, transform: transform() });
     const players = groupData({
       id: "players", name: "PLAYERS",
       flow: { children: true, leadingSpace: -1.26 },
@@ -1052,10 +1054,15 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([players]);
     const g = root.children[0] as Group;
-    // n=2 → child[0].x += (2-1-0)*-1.26 = -1.26 → 0.5-1.26 = -0.76
-    // child[1].x += (2-1-1)*-1.26 = 0 → 0.5
-    expect(g.children[0].position.x).toBeCloseTo(0.5 - 1.26, 5);
-    expect(g.children[1].position.x).toBeCloseTo(0.5, 5);
+    const stride = 2 + (-1.26); // 0.74
+    // child[0] = authored 0.5 + cursor 0; child[1] = authored 0.5 + stride.
+    expect(g.children[0].position.x).toBeCloseTo(0.5, 5);
+    expect(g.children[1].position.x).toBeCloseTo(0.5 + stride, 5);
+    // Node data is never mutated by layout (only the built Object3D moves).
+    expect(p1.transform.position.x).toBe(0.5);
+    expect(p2.transform.position.x).toBe(0.5);
+    // LeadingSpace value stays authored.
+    expect(players.flow!.leadingSpace).toBe(-1.26);
   });
 
   test("Phase 2A gate: non-PLAYERS group with flow.children=true is NOT distributed", () => {
@@ -1259,10 +1266,10 @@ describe("builder — BuildContext", () => {
     expect((outer.children[0] as Group).name).toBe("CHILD"); // direct child, no wrapper
   });
 
-  test("Phase 2B: PLAYERS FlowChildren + PLAYER_0X Pivot compose — order remains and per-player anchor applies", () => {
+  test("Phase 2F-flow: PLAYERS FlowChildren + PLAYER_0X Pivot compose — left→right order, per-player anchor applies", () => {
     // PLAYERS has no pivot and FlowChildren=true (leadingSpace=-1.26). Each
-    // PLAYER_0X has Pivot Y=-1.4. PLAYERS FlowChildren must still distribute
-    // PLAYER_0X.position.x via the existing reverse-index formula, and each
+    // PLAYER_0X has Pivot Y=-1.4 and a measurable card child. FlowChildren must
+    // lay them out +X by (cardWidth + leadingSpace) from the origin, and each
     // PLAYER_0X must independently get its own inner pivot anchor.
     const mk = (i: number) => groupData({
       id: `p${i}`, name: `PLAYER_0${i}`,
@@ -1272,7 +1279,7 @@ describe("builder — BuildContext", () => {
         scale: { x: 1, y: 1, z: 1 },
         pivot: { x: 0, y: -1.4, z: 0 },
       },
-      children: [],
+      children: [quadData({ id: `c${i}`, name: `CARD_0${i}`, geometry: { size: { x: 2, y: 1 } } })],
     });
     const players = groupData({
       id: "PLAYERS", name: "PLAYERS",
@@ -1282,11 +1289,12 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([players]);
     const playersGroup = root.children[0] as Group;
     expect(playersGroup.children).toHaveLength(5);
-    // FlowChildren reverse-index: first child at most negative offset,
-    // last at offset 0.
-    const xs = playersGroup.children.map(c => c.position.x);
-    expect(xs[0]).toBeCloseTo(-1.26 * 4, 5);
-    expect(xs[4]).toBeCloseTo(0, 5);
+    // First child at origin; subsequent advance by stride = width(2) + (-1.26).
+    const stride = 2 + (-1.26); // 0.74 (player scale 1)
+    const xs = playersGroup.children.map((c) => c.position.x);
+    expect(xs[0]).toBeCloseTo(0, 5);
+    expect(xs[4]).toBeCloseTo(4 * stride, 5);
+    for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThan(xs[i - 1]); // left→right
     // Each PLAYER outer must contain its own pivot inner.
     for (const playerOuter of playersGroup.children) {
       const inner = (playerOuter as Group).children[0] as Group;
@@ -1331,13 +1339,11 @@ describe("builder — BuildContext", () => {
     expect(Math.abs(world.y)).toBeLessThan(0.1);
   });
 
-  test("Phase 2B: PLAYER_02-like pivot X=1.29 does NOT overlap PLAYER_01's FlowChildren slot", async () => {
-    // FlowChildren places PLAYER_01 at outer.x = (5-1-0) × -1.26 = -5.04
-    // and PLAYER_02 at outer.x = (5-1-1) × -1.26 = -3.78. Formula A would
-    // shift PLAYER_02 content by -0.95×1.29 ≈ -1.22, landing it at -5.005 —
-    // about 0.04 away from PLAYER_01's content X. Formula B shifts by only
-    // (1-0.95)×1.29 ≈ +0.0645, leaving the slot delta near the FlowChildren
-    // spacing.
+  test("Phase 2F-flow: PLAYER_02 pivot X=1.29 stays in its own slot, not overlapping PLAYER_01", async () => {
+    // Stride = measuredWidth (card 2 × player scale 0.95 = 1.9) + leadingSpace
+    // (-1.26) = 0.64. PLAYER_02 content lands at stride + Formula-B shift
+    // (1-0.95)×1.29 ≈ +0.0645 → dx ≈ 0.7045 from PLAYER_01. Pivot must not
+    // collapse the slot.
     const mk = (i: number, pivotX: number) => groupData({
       id: `p${i}`, name: `PLAYER_0${i}`,
       transform: {
@@ -1346,7 +1352,7 @@ describe("builder — BuildContext", () => {
         scale: { x: 0.95, y: 0.95, z: 0.85 },
         pivot: { x: pivotX, y: -1.4, z: 0 },
       },
-      children: [groupData({ id: `c${i}`, name: `CHILD_${i}` })],
+      children: [quadData({ id: `c${i}`, name: `CARD_0${i}`, geometry: { size: { x: 2, y: 1 } } })],
     });
     const players = groupData({
       id: "PLAYERS", name: "PLAYERS",
@@ -1356,24 +1362,20 @@ describe("builder — BuildContext", () => {
     const { Vector3 } = await import("three");
     const root = buildNodeTree([players]);
     root.updateMatrixWorld(true);
-    const p1Inner = ((root.children[0] as Group).children[0] as Group).children[0] as Group;
-    const p2Inner = ((root.children[0] as Group).children[1] as Group).children[0] as Group;
-    const p1Child = p1Inner.children[0] as Group;
-    const p2Child = p2Inner.children[0] as Group;
-    const w1 = p1Child.getWorldPosition(new Vector3());
-    const w2 = p2Child.getWorldPosition(new Vector3());
+    const p1Card = (((root.children[0] as Group).children[0] as Group).children[0] as Group).children[0];
+    const p2Card = (((root.children[0] as Group).children[1] as Group).children[0] as Group).children[0];
+    const w1 = p1Card.getWorldPosition(new Vector3());
+    const w2 = p2Card.getWorldPosition(new Vector3());
     const dx = w2.x - w1.x;
-    // Player 01..05 share an X-anchor inside their own slot up to the
-    // FlowChildren spacing (1.26). Player 02 must not land on top of Player 01.
-    expect(dx).toBeGreaterThan(1.0); // safely > 0.5 of a slot
-    expect(dx).toBeCloseTo(1.26 + 0.05 * 1.29, 5); // FlowChildren + Formula B X shift
+    const stride = 1.9 + (-1.26); // measuredWidth (2×0.95) + leadingSpace = 0.64
+    expect(dx).toBeGreaterThan(0.5); // Player 02 must not land on top of Player 01
+    expect(dx).toBeCloseTo(stride + 0.05 * 1.29, 5); // slot stride + Formula B X shift
   });
 
-  test("Phase 2B: FlowChildren + Pivot composition — each PLAYER stays in its own FlowChildren slot", async () => {
-    // Tighter version of the previous test: all 5 players, each must remain
-    // close (within 0.1) to the X position FlowChildren assigned them when
-    // pivot.x = 0, and PLAYER_02 (pivot.x = 1.29) must only deviate by the
-    // (1-S) × pivot.x = 0.0645 amount predicted by Formula B.
+  test("Phase 2F-flow: FlowChildren + Pivot — each PLAYER stays in its own slot", async () => {
+    // All 5 players, each must remain at the X position FlowChildren assigned
+    // (first at origin, +X by stride 0.64), and PLAYER_02 (pivot.x = 1.29) must
+    // only deviate by the (1-S)×pivot.x = 0.0645 amount predicted by Formula B.
     const mk = (i: number, pivotX: number) => groupData({
       id: `p${i}`, name: `PLAYER_0${i}`,
       transform: {
@@ -1382,7 +1384,7 @@ describe("builder — BuildContext", () => {
         scale: { x: 0.95, y: 0.95, z: 0.85 },
         pivot: { x: pivotX, y: -1.4, z: 0 },
       },
-      children: [groupData({ id: `c${i}`, name: `CHILD_${i}` })],
+      children: [quadData({ id: `c${i}`, name: `CARD_0${i}`, geometry: { size: { x: 2, y: 1 } } })],
     });
     const players = groupData({
       id: "PLAYERS", name: "PLAYERS",
@@ -1392,11 +1394,12 @@ describe("builder — BuildContext", () => {
     const { Vector3 } = await import("three");
     const root = buildNodeTree([players]);
     root.updateMatrixWorld(true);
-    const slotX = (i: number) => (5 - 1 - i) * -1.26;
+    const stride = 1.9 + (-1.26); // 0.64
+    const slotX = (i: number) => i * stride; // first child at origin, extending +X
     const expectedShift = [0, 0.05 * 1.29, 0, 0, 0]; // (1-S)×pivot.x for each
     for (let i = 0; i < 5; i++) {
       const inner = ((root.children[0] as Group).children[i] as Group).children[0] as Group;
-      const child = inner.children[0] as Group;
+      const child = inner.children[0];
       const w = child.getWorldPosition(new Vector3());
       expect(w.x).toBeCloseTo(slotX(i) + expectedShift[i], 5);
     }

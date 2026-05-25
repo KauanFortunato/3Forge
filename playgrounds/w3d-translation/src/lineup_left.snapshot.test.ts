@@ -16,8 +16,10 @@
 // The fixture is a verbatim copy of LINEUP_LEFT/scene.w3d; the source scene is
 // never modified.
 
+import { Box3, type Object3D } from "three";
 import { describe, expect, test } from "vitest";
 import { translateBlueprint } from "./translate";
+import { buildNodeTree } from "./nodes/builder";
 import type { W3DNodeData, W3DGroupData, W3DQuadData, W3DTextureTextData } from "./nodes/data";
 // Vite `?raw` import inlines the committed fixture as a string. The module type
 // comes from vite/client (configured in tsconfig types), so this needs neither
@@ -127,5 +129,57 @@ describe("LINEUP_LEFT PreviewMarker snapshot fidelity (real scene.w3d)", () => {
 
   test("SPLITTER_06 (Quad) becomes enabled at PreviewMarker (authored Enable=False → True)", () => {
     expect(quad("SPLITTER_06").enable).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // Phase 2F-flow — built world-space composition. Builds the snapshot-applied
+  // node tree to Three.js and checks the PLAYERS row registers within the
+  // frame / panels (the full 16:9 frame is the 7.3638-wide BACKGROUND quad →
+  // world X in [-3.682, +3.682]).
+  // -----------------------------------------------------------------------
+  const FRAME_HALF_W = 7.363797 / 2; // ≈ 3.682
+
+  const buildWorldRoot = (): Object3D => {
+    const root = buildNodeTree(nodes); // no ctx needed for geometry/transform bounds
+    root.updateMatrixWorld(true);
+    return root;
+  };
+  const findObj = (root: Object3D, name: string): Object3D => {
+    let found: Object3D | undefined;
+    root.traverse((o) => {
+      if (!found && (o.userData?.w3d as { name?: string } | undefined)?.name === name) found = o;
+    });
+    expect(found, `built object "${name}" not found`).toBeDefined();
+    return found!;
+  };
+  const boundsX = (root: Object3D, name: string) => {
+    const box = new Box3().setFromObject(findObj(root, name));
+    return { min: box.min.x, max: box.max.x, center: (box.min.x + box.max.x) / 2 };
+  };
+
+  test("Phase 2F-flow: PLAYER_01..05 world-X centers are inside the frame and ordered left→right", () => {
+    const root = buildWorldRoot();
+    const centers = [1, 2, 3, 4, 5].map((i) => boundsX(root, `PLAYER_0${i}`).center);
+    for (const c of centers) {
+      expect(c).toBeGreaterThan(-FRAME_HALF_W);
+      expect(c).toBeLessThan(FRAME_HALF_W);
+    }
+    for (let i = 1; i < centers.length; i++) {
+      expect(centers[i]).toBeGreaterThan(centers[i - 1]); // PLAYER_01 left … PLAYER_05 right
+    }
+  });
+
+  test("Phase 2F-flow: player row horizontal span overlaps BASE_MAIN and BASE_TEAM", () => {
+    const root = buildWorldRoot();
+    const players = [1, 2, 3, 4, 5].map((i) => boundsX(root, `PLAYER_0${i}`));
+    const rowMin = Math.min(...players.map((b) => b.min));
+    const rowMax = Math.max(...players.map((b) => b.max));
+    const baseMain = boundsX(root, "BASE_MAIN");
+    const baseTeam = boundsX(root, "BASE_TEAM");
+    // Ranges intersect (row no longer overflows entirely left of the panels).
+    expect(rowMax).toBeGreaterThan(baseMain.min);
+    expect(rowMin).toBeLessThan(baseMain.max);
+    expect(rowMax).toBeGreaterThan(baseTeam.min);
+    expect(rowMin).toBeLessThan(baseTeam.max);
   });
 });
