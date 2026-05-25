@@ -966,13 +966,17 @@ function applyPhotoMaskStencil(
     mat.stencilZPass = KeepStencilOp;
     mat.depthWrite = false;
     mat.depthTest = false;
-    // Phase 2D.3 — generic-only readers (no PHOTO bits) get
-    // RENDER_ORDER_GENERIC_CLIENT so they sit between BASE_MAIN/BASE_TEAM
-    // (writer @ 15) and player photo cards (TEXTURE_PHOTO @ 18+).
+    // Phase 2D.3 — generic-only readers (no PHOTO bits) sit between
+    // BASE_MAIN/BASE_TEAM (writer @ 15) and player photo cards (TEXTURE_PHOTO
+    // @ 18+). Phase 2D.4 — split that band into a fill lane (16) and a text
+    // lane (17): TextureText clients (SMALL_TEAM_NAME, TEAM_NAME_*) render
+    // above the TEXTURE_FULLFRAME_* fill, both still below the photo cards.
     const isGenericOnly =
       maskOwner === undefined && dummyOwner === undefined && genericOwner !== undefined;
+    const isTextClient =
+      (mesh.userData?.w3d as { kind?: string } | undefined)?.kind === "TextureText";
     mesh.renderOrder = isGenericOnly
-      ? RENDER_ORDER_GENERIC_CLIENT
+      ? (isTextClient ? RENDER_ORDER_GENERIC_TEXT : RENDER_ORDER_GENERIC_CLIENT)
       : photoCardRenderOrder(node.name);
     // Patch D2 — force photo-card readers (PHOTO_0X, PHOTO_COLOR_0X,
     // TEXTURE_PHOTO_0X) into the transparent pass so Three.js sorts them
@@ -1001,7 +1005,17 @@ function applyPhotoMaskStencil(
  * intended back-to-front: TEXTURE (pattern) → COLOR (yellow) → PHOTO (player).
  */
 const RENDER_ORDER_GENERIC_WRITER = 15;   // Phase 2D.3 — between PHOTO writer (10) and PHOTO reader (18+)
-const RENDER_ORDER_GENERIC_CLIENT = 16;   // Phase 2D.3 — generic readers (TEXTURE_FULLFRAME_*, etc.)
+const RENDER_ORDER_GENERIC_CLIENT = 16;   // Phase 2D.3 — generic fill clients (TEXTURE_FULLFRAME_*, etc.)
+/**
+ * Phase 2D.4 — generic text lane. Generic-mask TextureText clients
+ * (SMALL_TEAM_NAME, TEAM_NAME_*) sit one lane above the fill clients (16) so
+ * the team name reads ON TOP of the TEXTURE_FULLFRAME_* pattern fill without
+ * depending on the transparent z-sort (depthTest/depthWrite are disabled on
+ * stencil clients, so equal-renderOrder + equal-Z siblings would otherwise
+ * fall back to insertion order). Kept below the photo-card stack (18+) so
+ * player cards still render over the team panel.
+ */
+const RENDER_ORDER_GENERIC_TEXT = 17;
 const RENDER_ORDER_TEXTURE_PHOTO = 18;
 const RENDER_ORDER_PHOTO_COLOR = 19;
 const RENDER_ORDER_DEFAULT_CLIENT = 20;
