@@ -196,3 +196,44 @@ Like A1 but for skeleton animations:
 | `a22d9a7` | Split multi-material subsets into per-subset model nodes |
 
 Animations are the next addition. **Start Phase A.** Don't open Phase B until A ships and you have a real USDZ-with-skin to test against.
+
+---
+
+## Shipped: Phase A + Phase B v1 on `usdz-skel-import`
+
+### Phase A (xform timeSamples + visibility + GLTF root)
+
+| Area | Files | Notes |
+|---|---|---|
+| WASM bindings | `wrapper.cpp` | `getStageTimeInfo`, `getTimeSamples`, `getTimeSampledAttributes`, `getVisibility` |
+| Sampler | `src/lib/openusd/usdAnimation.ts` | `buildUsdPrimAnimation` walks authored xform/visibility time samples, derives local TRS via `inverse(parentWorld) × primWorld` |
+| Parser plumbing | `openusdWorker.ts`, `openusdParser.ts` | Per-prim `userData.usdAnimation` → `UsdImportPlanNode.animation` |
+| State integration | `state.ts` | `insertModelImportPlan` rolls per-prim tracks into one `AnimationClip`, marks active |
+| GLTF | `gltfAnimationImport.ts` | Root-level position/quaternion/scale tracks; sub-part anim still skipped |
+| Test | `usdAnimation.test.ts`, `gltfAnimationImport.test.ts` | Uses spec-correct formula `frame = (timecode - start) × fps / tcps` |
+
+### Phase B v1 (UsdSkel — visible playback only)
+
+**Trade-off vs the original plan:** per-bone keyframes in the editor timeline (B4–B5's preferred path) would require either (a) loosening `AnimationPropertyPath` to accept opaque `bone:<name>:rot:x` strings — invasive across every animation file — or (b) generating one synthetic Group blueprint node per bone — adds tens of nodes to the hierarchy for a 30-joint rig. We deferred both to **Phase C (skel editing)** and shipped a simpler "playback-only" v1: animation is baked at import, replays via a dedicated subsystem in `scene.ts`, and is exposed in the panel through a placeholder track so the user can press play.
+
+| Area | Files | Notes |
+|---|---|---|
+| WASM lib | `build.sh` | Links `libusd_usdSkel.a` |
+| WASM bindings | `wrapper.cpp` | `getSkelRootInfo`, `getSkeleton`, `getSkinBinding`, `getSkelAnimation`, `getBlendShapes` |
+| Skin extraction | `openusdWorker.ts` | Per-vertex `jointIndices/Weights` truncated/padded to Three's 4-influence contract; expanded per-corner alongside positions |
+| Skeleton + anim cache | `openusdWorker.ts` | One `ParsedUsdSkeleton` per `skelPath`, one `ParsedUsdSkeletalAnimation` per `animPath`, baked at every authored time sample |
+| SkinnedMesh build | `openusdParser.ts` (`buildThreeSkeleton`) | Rest matrices → bone local TRS; bind matrices → `Skeleton.boneInverses` via invert; bones attached to model root group |
+| Per-prim playback marker | `openusdParser.ts` | `userData.skeletalPlayback` on the prim Object3D pointing at `(skelPath, animPath, fps, durationFrames)` |
+| Import flow | `App.tsx`, `openusdParser.ts` | `buildUsdImportPlanFromGroup` returns `[]` for skinned USDZ → falls back to legacy single-ModelNode path; App then `addImportedAnimationClip` with a placeholder visibility track so a clip appears |
+| Scene clone | `scene.ts` | Uses `SkeletonUtils.clone` for skinned cached groups so the cloned SkinnedMesh rebinds to cloned bones |
+| Playback registry | `scene.ts` (`SkeletalPlayback`, `registerSkeletalPlayback`) | One entry per ModelNode, joint→bone index map computed once |
+| Per-frame application | `scene.ts` (`applySkeletalPlaybacks`) | Binary-search bracket → per-channel lerp for translation/scale, slerp for quaternions → `skeleton.update()` |
+| Cleanup | `scene.ts` (`rebuildScene`) | `skeletalPlaybacks.clear()` on full rebuild |
+
+### Known limitations of v1
+
+- **No per-bone editing** — `bone.<name>.<channel>` property paths aren't in `AnimationPropertyPath`. The clip shown in the panel is a metadata placeholder; mutating its keyframes won't affect the skeleton. **Phase C.**
+- **No blend shapes** — `getBlendShapes` is exposed in WASM but the parser doesn't build morph targets yet. The biplane test asset doesn't use them. **Phase C.**
+- **Per-prim editing disabled for skinned USDZ** — the explode pipeline is skipped for any asset whose root has skeletal content. Non-skinned assets still explode normally. The user sees one ModelNode for a skinned import.
+- **One bone tree per ModelNode** — if the same skinned asset is instanced multiple times, bones are cloned per instance (Three.js limitation; SkeletonUtils.clone is the standard workaround). Memory-wise this is O(joints) per instance, not O(verts), so it's cheap.
+- **Animation is baked at import** — changes to the source USDZ require re-importing. There's no "re-sample" UI path.

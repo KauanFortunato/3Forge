@@ -180,6 +180,22 @@ export interface ModelAssetStructure {
   roots: ModelAssetStructureNode[];
 }
 
+export interface ImportedAnimationKeyframe {
+  frame: number;
+  value: number;
+}
+
+export interface ImportedAnimationTrack {
+  property: AnimationPropertyPath;
+  keyframes: ImportedAnimationKeyframe[];
+}
+
+export interface ImportedNodeAnimation {
+  fps: number;
+  durationFrames: number;
+  tracks: ImportedAnimationTrack[];
+}
+
 /**
  * Hierarchical plan handed to {@link EditorStore.insertModelImportPlan} to
  * "explode" an imported model (typically a USDZ) into a tree of editable
@@ -208,6 +224,7 @@ export interface ModelImportPlanNode {
    */
   subsetName?: string;
   materialId?: string;
+  animation?: ImportedNodeAnimation;
   children: ModelImportPlanNode[];
 }
 

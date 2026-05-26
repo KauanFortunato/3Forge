@@ -1,10 +1,14 @@
 import { loadOpenUSD, releaseOpenUSD } from "./loadOpenUsd";
+import { buildUsdPrimAnimation, resolveUsdAnimationFps, usdTimeCodeToFrame, type UsdStageTimeInfo } from "./usdAnimation";
 import type {
   OpenUsdWorkerRequest,
   OpenUsdWorkerResponse,
   ParsedUsdMaterialData,
   ParsedUsdModelData,
   ParsedUsdPrim,
+  ParsedUsdSkeletalAnimation,
+  ParsedUsdSkeleton,
+  ParsedUsdSkinning,
   ParsedUsdSubsetData,
   ParsedUsdTextureData,
 } from "./openusdWorkerTypes";
@@ -48,6 +52,33 @@ interface MaterialTextureInput {
 
 type MaterialInput = MaterialValueInput | MaterialTextureInput;
 
+interface SkeletonRaw {
+  joints: string[] | ArrayLike<string>;
+  parentIndices: Int32Array | number[];
+  restTransforms: Float32Array | number[];
+  bindTransforms: Float32Array | number[];
+}
+
+interface SkinBindingRaw {
+  skelPath: string;
+  animationPath: string;
+  jointIndices: Int32Array | number[];
+  jointWeights: Float32Array | number[];
+  numInfluencesPerComponent: number;
+  geomBindTransform: Float32Array | number[];
+  blendShapes: string[] | ArrayLike<string>;
+  blendShapeTargets: string[] | ArrayLike<string>;
+}
+
+interface SkelAnimationRaw {
+  joints: string[] | ArrayLike<string>;
+  rotations: Float32Array | number[];
+  translations: Float32Array | number[];
+  scales: Float32Array | number[];
+  blendShapes: string[] | ArrayLike<string>;
+  blendShapeWeights: Float32Array | number[];
+}
+
 interface UsdModule {
   registerPlugins(path: string): string;
   openStageFromBinary(bytes: Uint8Array, filename: string): number;
@@ -55,18 +86,31 @@ interface UsdModule {
   listPrims(id: number): PrimInfo[];
   getMeshData(id: number, primPath: string): MeshData | null;
   getWorldTransform(id: number, primPath: string, t: number): Float32Array | null;
+  getStageTimeInfo(id: number): UsdStageTimeInfo | null;
+  getTimeSamples(id: number, attrPath: string): number[] | ArrayLike<number> | null;
+  getTimeSampledAttributes(id: number, primPath: string): string[] | ArrayLike<string> | null;
+  getVisibility(id: number, primPath: string, t: number): string;
   getMaterialBinding(id: number, primPath: string): string;
   getMaterialParams(id: number, matPath: string): Record<string, MaterialInput> | null;
   getAssetBytes(stageId: number, assetPath: string): Uint8Array | null;
+  getSkeleton?: (id: number, skelPath: string) => SkeletonRaw | null;
+  getSkinBinding?: (id: number, meshPath: string) => SkinBindingRaw | null;
+  getSkelAnimation?: (id: number, animPath: string, t: number) => SkelAnimationRaw | null;
 }
 
 interface ExpandedAttributes {
   positions: Float32Array;
   normals: Float32Array | null;
   uvs: Float32Array | null;
+  skinIndex: Uint16Array | null;
+  skinWeight: Float32Array | null;
   triCount: number;
   triToFace: Uint32Array;
 }
+
+// Three.js SkinnedMesh requires exactly 4 influences per vertex; pad or
+// truncate when USD authored more or fewer.
+const THREE_INFLUENCES = 4;
 
 function post(response: OpenUsdWorkerResponse, transfer: Transferable[] = []): void {
   self.postMessage(response, { transfer });
@@ -187,7 +231,10 @@ function resolveMaterialData(
   return material;
 }
 
-function expandPerCorner(mesh: MeshData): ExpandedAttributes {
+function expandPerCorner(
+  mesh: MeshData,
+  skinBinding?: { jointIndices: ArrayLike<number>; jointWeights: ArrayLike<number>; numInfluencesPerComponent: number },
+): ExpandedAttributes {
   const { points, normals, uvs, faceVertexCounts, faceVertexIndices, normalsInterpolation, uvsInterpolation } = mesh;
   let triCount = 0;
   for (let i = 0; i < faceVertexCounts.length; i++) triCount += Math.max(0, faceVertexCounts[i] - 2);
@@ -197,6 +244,63 @@ function expandPerCorner(mesh: MeshData): ExpandedAttributes {
   const outNormals = normals.length > 0 ? new Float32Array(cornerCount * 3) : null;
   const outUvs = uvs.length > 0 ? new Float32Array(cornerCount * 2) : null;
   const triToFace = new Uint32Array(triCount);
+  const outSkinIndex = skinBinding ? new Uint16Array(cornerCount * THREE_INFLUENCES) : null;
+  const outSkinWeight = skinBinding ? new Float32Array(cornerCount * THREE_INFLUENCES) : null;
+  const usdInfluences = skinBinding?.numInfluencesPerComponent ?? 0;
+
+  const writeSkin = (cornerIdx: number, vertexId: number) => {
+    if (!outSkinIndex || !outSkinWeight || !skinBinding) return;
+    const dst = cornerIdx * THREE_INFLUENCES;
+    const src = vertexId * usdInfluences;
+    // Three.js wants exactly 4 influences. When USD authored more (the
+    // seahorse uses 11), picking the FIRST 4 would often skip the strongest
+    // bones; instead, do a small top-K by weight so the dominant deformers
+    // survive. For usdInfluences <= 4 the loop is essentially a copy + pad.
+    const take = Math.min(usdInfluences, THREE_INFLUENCES);
+    if (usdInfluences <= THREE_INFLUENCES) {
+      for (let i = 0; i < take; i++) {
+        outSkinIndex[dst + i] = skinBinding.jointIndices[src + i] ?? 0;
+        outSkinWeight[dst + i] = skinBinding.jointWeights[src + i] ?? 0;
+      }
+    } else {
+      // O(N) top-4 by weight — N rarely exceeds ~12, no need for a heap.
+      let totalWeight = 0;
+      const picked: Array<{ idx: number; weight: number }> = [];
+      for (let i = 0; i < usdInfluences; i++) {
+        const weight = skinBinding.jointWeights[src + i] ?? 0;
+        if (weight <= 0) continue;
+        if (picked.length < THREE_INFLUENCES) {
+          picked.push({ idx: skinBinding.jointIndices[src + i] ?? 0, weight });
+        } else {
+          let minPos = 0;
+          for (let p = 1; p < picked.length; p++) if (picked[p].weight < picked[minPos].weight) minPos = p;
+          if (weight > picked[minPos].weight) {
+            picked[minPos] = { idx: skinBinding.jointIndices[src + i] ?? 0, weight };
+          }
+        }
+      }
+      for (const p of picked) totalWeight += p.weight;
+      // Renormalize so the kept-4 weights sum to whatever the original sum
+      // was (Three.js auto-normalizes per vertex anyway, but this preserves
+      // relative contributions when we dropped influences).
+      const scale = totalWeight > 0 ? 1 / totalWeight : 0;
+      for (let i = 0; i < THREE_INFLUENCES; i++) {
+        const entry = picked[i];
+        if (entry) {
+          outSkinIndex[dst + i] = entry.idx;
+          outSkinWeight[dst + i] = entry.weight * scale;
+        } else {
+          outSkinIndex[dst + i] = 0;
+          outSkinWeight[dst + i] = 0;
+        }
+      }
+      return;
+    }
+    for (let i = take; i < THREE_INFLUENCES; i++) {
+      outSkinIndex[dst + i] = 0;
+      outSkinWeight[dst + i] = 0;
+    }
+  };
 
   const writeNormal = (cornerIdx: number, fvCorner: number, vertexId: number, faceId: number) => {
     if (!outNormals) return;
@@ -267,6 +371,9 @@ function expandPerCorner(mesh: MeshData): ExpandedAttributes {
       writeUv(corner0, c0, v0, f);
       writeUv(corner0 + 1, c1, v1, f);
       writeUv(corner0 + 2, c2, v2, f);
+      writeSkin(corner0, v0);
+      writeSkin(corner0 + 1, v1);
+      writeSkin(corner0 + 2, v2);
 
       triToFace[triCursor] = f;
       triCursor += 1;
@@ -274,16 +381,16 @@ function expandPerCorner(mesh: MeshData): ExpandedAttributes {
     fvCursor += n;
   }
 
-  return { positions, normals: outNormals, uvs: outUvs, triCount, triToFace };
+  return { positions, normals: outNormals, uvs: outUvs, skinIndex: outSkinIndex, skinWeight: outSkinWeight, triCount, triToFace };
 }
 
 function createGeometryData(
   expanded: ExpandedAttributes,
   faceIndices: Int32Array | null,
-): Pick<ParsedUsdSubsetData, "positions" | "normals" | "uvs"> {
-  const { positions, normals, uvs, triCount, triToFace } = expanded;
+): Pick<ParsedUsdSubsetData, "positions" | "normals" | "uvs" | "skinIndex" | "skinWeight"> {
+  const { positions, normals, uvs, skinIndex, skinWeight, triCount, triToFace } = expanded;
   if (!faceIndices) {
-    return { positions, normals, uvs };
+    return { positions, normals, uvs, skinIndex, skinWeight };
   }
 
   const allowed = new Set<number>(Array.from(faceIndices));
@@ -294,6 +401,8 @@ function createGeometryData(
   const subPos = new Float32Array(cornerCount * 3);
   const subNorm = normals ? new Float32Array(cornerCount * 3) : null;
   const subUv = uvs ? new Float32Array(cornerCount * 2) : null;
+  const subSkinIndex = skinIndex ? new Uint16Array(cornerCount * THREE_INFLUENCES) : null;
+  const subSkinWeight = skinWeight ? new Float32Array(cornerCount * THREE_INFLUENCES) : null;
   let dst = 0;
   for (let t = 0; t < triCount; t++) {
     if (!allowed.has(triToFace[t])) continue;
@@ -312,11 +421,17 @@ function createGeometryData(
         subUv[dstCorner * 2] = uvs[srcCorner * 2];
         subUv[dstCorner * 2 + 1] = uvs[srcCorner * 2 + 1];
       }
+      if (subSkinIndex && skinIndex && subSkinWeight && skinWeight) {
+        for (let i = 0; i < THREE_INFLUENCES; i++) {
+          subSkinIndex[dstCorner * THREE_INFLUENCES + i] = skinIndex[srcCorner * THREE_INFLUENCES + i];
+          subSkinWeight[dstCorner * THREE_INFLUENCES + i] = skinWeight[srcCorner * THREE_INFLUENCES + i];
+        }
+      }
     }
     dst += 1;
   }
 
-  return { positions: subPos, normals: subNorm, uvs: subUv };
+  return { positions: subPos, normals: subNorm, uvs: subUv, skinIndex: subSkinIndex, skinWeight: subSkinWeight };
 }
 
 function collectTransferables(model: ParsedUsdModelData): Transferable[] {
@@ -337,6 +452,11 @@ function collectTransferables(model: ParsedUsdModelData): Transferable[] {
       add(subset.positions.buffer);
       if (subset.normals) add(subset.normals.buffer);
       if (subset.uvs) add(subset.uvs.buffer);
+      if (subset.skinIndex) add(subset.skinIndex.buffer);
+      if (subset.skinWeight) add(subset.skinWeight.buffer);
+    }
+    if (prim.skinning) {
+      add(prim.skinning.geomBindTransform.buffer);
     }
   }
   for (const material of Object.values(model.materials)) {
@@ -344,7 +464,83 @@ function collectTransferables(model: ParsedUsdModelData): Transferable[] {
       if (texture) add(texture.bytes.buffer);
     }
   }
+  for (const skeleton of Object.values(model.skeletons)) {
+    add(skeleton.parentIndices.buffer);
+    add(skeleton.restMatrices.buffer);
+    add(skeleton.bindMatrices.buffer);
+  }
+  for (const animation of Object.values(model.skeletalAnimations)) {
+    for (const frame of animation.frames) {
+      add(frame.translations.buffer);
+      add(frame.rotations.buffer);
+      add(frame.scales.buffer);
+    }
+  }
   return transfer;
+}
+
+function toStringArray(raw: ArrayLike<string> | string[]): string[] {
+  return Array.from(raw).filter((value): value is string => typeof value === "string");
+}
+
+function toFloat32Array(raw: ArrayLike<number> | Float32Array | number[]): Float32Array {
+  if (raw instanceof Float32Array) return new Float32Array(raw);
+  return new Float32Array(Array.from(raw));
+}
+
+function toInt32Array(raw: ArrayLike<number> | Int32Array | number[]): Int32Array {
+  if (raw instanceof Int32Array) return new Int32Array(raw);
+  return new Int32Array(Array.from(raw));
+}
+
+function buildSkeletonFromRaw(raw: SkeletonRaw): ParsedUsdSkeleton {
+  return {
+    joints: toStringArray(raw.joints),
+    parentIndices: toInt32Array(raw.parentIndices),
+    restMatrices: toFloat32Array(raw.restTransforms),
+    bindMatrices: toFloat32Array(raw.bindTransforms),
+  };
+}
+
+function bakeSkeletalAnimation(
+  usd: UsdModule,
+  stageId: number,
+  animationPath: string,
+  stageTimeInfo: UsdStageTimeInfo | null,
+): ParsedUsdSkeletalAnimation | null {
+  if (!usd.getSkelAnimation) return null;
+  const fps = resolveUsdAnimationFps(stageTimeInfo);
+  const startTime = stageTimeInfo?.startTime ?? 0;
+  const endTime = stageTimeInfo?.endTime ?? startTime;
+  const tcps = stageTimeInfo?.timeCodesPerSecond ?? fps;
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime) {
+    return null;
+  }
+
+  // Sample every authored frame between startTime and endTime in time-code
+  // units (frames = timeCode delta * fps / tcps). For Apple-style stages
+  // where tcps == fps this gives one sample per integer time code.
+  const frames: ParsedUsdSkeletalAnimation["frames"] = [];
+  let jointsOrder: string[] = [];
+  const step = tcps / fps;
+  for (let t = startTime; t <= endTime + 1e-6; t += step) {
+    const sample = usd.getSkelAnimation(stageId, animationPath, t);
+    if (!sample) continue;
+    if (jointsOrder.length === 0) {
+      jointsOrder = toStringArray(sample.joints);
+    }
+    frames.push({
+      frame: usdTimeCodeToFrame(t, stageTimeInfo),
+      translations: toFloat32Array(sample.translations),
+      rotations: toFloat32Array(sample.rotations),
+      scales: toFloat32Array(sample.scales),
+    });
+  }
+
+  if (frames.length === 0) return null;
+
+  const durationFrames = Math.max(1, frames[frames.length - 1]?.frame ?? 0);
+  return { fps, durationFrames, jointsOrder, frames };
 }
 
 const NON_HIERARCHY_TYPES = new Set([
@@ -374,6 +570,7 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
 
   try {
     const prims = usd.listPrims(stageId);
+    const stageTimeInfo = usd.getStageTimeInfo(stageId);
     const primsByPath = new Map<string, PrimInfo>();
     for (const prim of prims) primsByPath.set(prim.path, prim);
 
@@ -391,6 +588,8 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
 
     const materialCache = new Map<string, ParsedUsdMaterialData>();
     const textureCache = new Map<string, ParsedUsdTextureData | null>();
+    const skeletonCache = new Map<string, ParsedUsdSkeleton>();
+    const animationCache = new Map<string, ParsedUsdSkeletalAnimation | null>();
     const meshPrims = kept.filter((prim) => prim.isMesh);
     const outPrims: ParsedUsdPrim[] = [];
     let meshIndex = 0;
@@ -402,6 +601,17 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
         materialCache.set(matPath, cached);
       }
       return cached;
+    };
+
+    const ensureSkeleton = (skelPath: string): void => {
+      if (!skelPath || skeletonCache.has(skelPath) || !usd.getSkeleton) return;
+      const raw = usd.getSkeleton(stageId, skelPath);
+      if (raw) skeletonCache.set(skelPath, buildSkeletonFromRaw(raw));
+    };
+
+    const ensureSkelAnimation = (animPath: string): void => {
+      if (!animPath || animationCache.has(animPath)) return;
+      animationCache.set(animPath, bakeSkeletalAnimation(usd, stageId, animPath, stageTimeInfo));
     };
 
     for (const prim of kept) {
@@ -422,9 +632,17 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
 
       const worldMatrix = usd.getWorldTransform(stageId, prim.path, NaN);
       const worldMatrixArray = worldMatrix && worldMatrix.length === 16 ? Array.from(worldMatrix) : null;
+      const animation = buildUsdPrimAnimation({
+        sampler: usd,
+        stageId,
+        primPath: prim.path,
+        parentPath,
+        stageTimeInfo,
+      });
 
       const subsetsOut: ParsedUsdSubsetData[] = [];
       let primaryMaterialPath: string | undefined;
+      let skinningOut: ParsedUsdSkinning | undefined;
 
       if (prim.isMesh) {
         report({
@@ -436,8 +654,17 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
           },
         });
         const meshData = usd.getMeshData(stageId, prim.path);
+        const skinRaw = usd.getSkinBinding?.(stageId, prim.path) ?? null;
+        const skinBinding = skinRaw
+          ? {
+              jointIndices: Array.from(skinRaw.jointIndices),
+              jointWeights: Array.from(skinRaw.jointWeights),
+              numInfluencesPerComponent: skinRaw.numInfluencesPerComponent || THREE_INFLUENCES,
+            }
+          : undefined;
+
         if (meshData && meshData.points.length > 0 && meshData.faceVertexIndices.length > 0) {
-          const expanded = expandPerCorner(meshData);
+          const expanded = expandPerCorner(meshData, skinBinding);
           if (meshData.subsets.length > 0) {
             for (const subset of meshData.subsets) {
               const geometry = createGeometryData(expanded, subset.indices);
@@ -469,6 +696,19 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
             });
           }
         }
+
+        if (skinRaw && skinRaw.skelPath) {
+          ensureSkeleton(skinRaw.skelPath);
+          if (skinRaw.animationPath) {
+            ensureSkelAnimation(skinRaw.animationPath);
+          }
+          skinningOut = {
+            skeletonPath: skinRaw.skelPath,
+            animationPath: skinRaw.animationPath ?? "",
+            geomBindTransform: toFloat32Array(skinRaw.geomBindTransform),
+            numInfluencesPerComponent: skinRaw.numInfluencesPerComponent || THREE_INFLUENCES,
+          };
+        }
         meshIndex += 1;
       }
 
@@ -478,6 +718,8 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
         kind: prim.isMesh ? "mesh" : "xform",
         worldMatrix: worldMatrixArray,
         primaryMaterialPath,
+        ...(animation ? { animation } : {}),
+        ...(skinningOut ? { skinning: skinningOut } : {}),
         subsets: subsetsOut,
       });
     }
@@ -487,7 +729,17 @@ async function parse(buffer: ArrayBuffer, filename: string): Promise<ParsedUsdMo
       materials[path] = data;
     }
 
-    return { name: filename, prims: outPrims, materials };
+    const skeletons: Record<string, ParsedUsdSkeleton> = {};
+    for (const [path, data] of skeletonCache) {
+      skeletons[path] = data;
+    }
+
+    const skeletalAnimations: Record<string, ParsedUsdSkeletalAnimation> = {};
+    for (const [path, data] of animationCache) {
+      if (data) skeletalAnimations[path] = data;
+    }
+
+    return { name: filename, prims: outPrims, materials, skeletons, skeletalAnimations };
   } finally {
     usd.closeStage(stageId);
     pluginsRegistered = false;

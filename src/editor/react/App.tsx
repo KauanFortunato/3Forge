@@ -410,6 +410,7 @@ function attachMaterialIdsToPlan(
       rotation: entry.rotation,
       scale: entry.scale,
       primPath: entry.primPath,
+      animation: entry.animation,
       children: attachMaterialIdsToPlan(entry.children, materialIdByUsdPath),
     };
     if (entry.subsetName) {
@@ -2046,10 +2047,11 @@ export function App() {
         // resolve to a single MaterialAsset id, so editing it in the Materials
         // panel propagates to every part referencing it.
         let insertedNodeId: string | null = null;
+        let skeletalPlaybacks: Array<{ fps: number; durationFrames: number }> = [];
         if (asset.format === "usdz") {
           try {
             const buffer = await file.arrayBuffer();
-            const { parseUsdz, buildUsdImportPlanFromGroup, extractUsdMaterialSnapshotsFromGroup } = await import("../../lib/openusd/openusdParser");
+            const { parseUsdz, buildUsdImportPlanFromGroup, extractUsdMaterialSnapshotsFromGroup, discoverSkeletalPlaybacks } = await import("../../lib/openusd/openusdParser");
             const group = await runTask(`Reading ${file.name} hierarchy...`, () => parseUsdz(buffer, asset.name ?? "asset.usdz"), { blocking: true });
             const snapshots = extractUsdMaterialSnapshotsFromGroup(group);
             const materialIdByUsdPath = new Map<string, string>();
@@ -2070,6 +2072,10 @@ export function App() {
               });
               materialIdByUsdPath.set(snapshot.path, materialId);
             }
+            // Capture skeletal-animation metadata BEFORE the plan check —
+            // the plan-builder returns [] for skinned USDZ so we can flow
+            // through the legacy single-ModelNode path below.
+            skeletalPlaybacks = discoverSkeletalPlaybacks(group);
             const plan = buildUsdImportPlanFromGroup(group);
             const enrichedPlan = attachMaterialIdsToPlan(plan, materialIdByUsdPath);
             if (enrichedPlan.length > 0) {
@@ -2084,6 +2090,51 @@ export function App() {
         // legacy single-ModelNode treatment.
         if (!insertedNodeId) {
           insertedNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
+          // For skinned USDZ, the bones deform via SkelAnimation rather than
+          // per-prim xform tracks. Create a placeholder AnimationClip so the
+          // user can see + play the animation; scene.ts drives the actual
+          // bone playback when it detects skeletalPlayback userData.
+          if (insertedNodeId && asset.format === "usdz" && skeletalPlaybacks.length > 0) {
+            const stem = stripFileExtension(asset.name ?? "asset");
+            for (const playback of skeletalPlaybacks) {
+              const placeholderTracks = store.createImportedAnimationTracks(insertedNodeId, [
+                {
+                  property: "visible",
+                  keyframes: [
+                    { frame: 0, value: 1 },
+                    { frame: Math.max(1, playback.durationFrames), value: 1 },
+                  ],
+                },
+              ]);
+              store.addImportedAnimationClip(
+                stem || "Skeletal animation",
+                placeholderTracks,
+                playback.fps,
+                playback.durationFrames,
+              );
+            }
+          }
+          if (insertedNodeId && asset.format !== "usdz" && file.size >= 20) {
+            // Guard with a size floor: a real binary GLB header alone is 12 bytes,
+            // and a minimal animated GLTF is well over 20 bytes — test fixtures
+            // sometimes pass tiny stubs ("glb", "{}"); calling GLTFLoader on
+            // those throws and burns enough event-loop time to push the
+            // success toast past the test's findByText timeout.
+            try {
+              const [{ GLTFLoader }, { convertRootGltfAnimations }] = await Promise.all([
+                import("three/examples/jsm/loaders/GLTFLoader.js"),
+                import("../gltfAnimationImport"),
+              ]);
+              const gltfData = asset.format === "gltf" ? await file.text() : await file.arrayBuffer();
+              const gltf = await new GLTFLoader().parseAsync(gltfData, "");
+              for (const clip of convertRootGltfAnimations(gltf.animations, gltf.scene)) {
+                const tracks = store.createImportedAnimationTracks(insertedNodeId, clip.tracks);
+                store.addImportedAnimationClip(clip.name, tracks, clip.fps, clip.durationFrames);
+              }
+            } catch (err) {
+              console.warn("Failed to import GLTF root animation tracks:", err);
+            }
+          }
         }
         lastNodeId = insertedNodeId;
         importedCount += 1;

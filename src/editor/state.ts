@@ -56,6 +56,7 @@ import type {
   HdrAsset,
   ImageAsset,
   ImageNode,
+  ImportedAnimationTrack,
   MaterialAsset,
   MaterialSpec,
   MaterialType,
@@ -2809,6 +2810,9 @@ export class EditorStore extends EventTarget {
 
     const targetParentId = this.resolveInsertParentId(parentId);
     const flatNodes: EditorNode[] = [];
+    const importedTracks: AnimationTrack[] = [];
+    let importedFps = 0;
+    let importedDurationFrames = 0;
 
     const buildNode = (planNode: ModelImportPlanNode, blueprintParentId: string | null): EditorNode => {
       const baseName = planNode.name.trim() || (planNode.kind === "mesh" ? "Part" : "Group");
@@ -2850,6 +2854,11 @@ export class EditorStore extends EventTarget {
       for (const planNode of planNodes) {
         const node = buildNode(planNode, blueprintParentId);
         flatNodes.push(node);
+        if (planNode.animation) {
+          importedFps = importedFps || planNode.animation.fps;
+          importedDurationFrames = Math.max(importedDurationFrames, planNode.animation.durationFrames);
+          importedTracks.push(...this.createImportedAnimationTracks(node.id, planNode.animation.tracks));
+        }
         if (planNode.children.length > 0) {
           walk(planNode.children, node.id);
         }
@@ -2873,10 +2882,83 @@ export class EditorStore extends EventTarget {
       targetParentId,
       siblingIndex,
     );
+    this.appendImportedAnimationClipForTracks(
+      stripExtension(asset.name) || "Imported animation",
+      importedTracks,
+      importedFps,
+      importedDurationFrames,
+    );
     this._selectedNodeId = rootNodeId;
     this._selectedNodeIds = [rootNodeId];
     this.notify({ reason: "structure", source, nodeId: rootNodeId });
     return rootNodeId;
+  }
+
+  addImportedAnimationClip(
+    name: string,
+    tracks: AnimationTrack[],
+    fps: number,
+    durationFrames: number,
+    source: EditorStoreChange["source"] = "ui",
+  ): string | null {
+    if (tracks.length === 0) {
+      return null;
+    }
+    this.recordHistorySnapshot();
+    const clip = this.appendImportedAnimationClipForTracks(name, tracks, fps, durationFrames);
+    if (!clip) {
+      return null;
+    }
+    this.notify({ reason: "animation", source });
+    return clip.id;
+  }
+
+  createImportedAnimationTracks(nodeId: string, importedTracks: ImportedAnimationTrack[]): AnimationTrack[] {
+    return importedTracks
+      .filter((track) => isAnimationPropertyPath(track.property) && track.keyframes.length > 0)
+      .map((track) => {
+        const nextTrack = createAnimationTrack(nodeId, track.property);
+        nextTrack.keyframes = sortTrackKeyframes(
+          track.keyframes.map((keyframe) => createAnimationKeyframe(keyframe.frame, keyframe.value, "linear")),
+        );
+        return nextTrack;
+      })
+      .filter((track) => track.keyframes.length > 0);
+  }
+
+  private appendImportedAnimationClipForTracks(
+    name: string,
+    tracks: AnimationTrack[],
+    fps: number,
+    durationFrames: number,
+  ): AnimationClip | null {
+    if (tracks.length === 0) {
+      return null;
+    }
+    const safeFps = Number.isFinite(fps) && fps > 0 ? Math.round(fps) : 24;
+    const trackFrames = tracks.flatMap((track) => track.keyframes.map((keyframe) => keyframe.frame));
+    if (trackFrames.length === 0) {
+      return null;
+    }
+    const maxTrackFrame = Math.max(...trackFrames);
+    const safeDuration = Math.max(1, Math.round(durationFrames), maxTrackFrame);
+    const clip = createAnimationClip(this.makeUniqueAnimationClipName(name.trim() || "Imported animation"), {
+      fps: safeFps,
+      durationFrames: safeDuration,
+      tracks: tracks.map((track) => ({
+        ...track,
+        keyframes: sortTrackKeyframes(track.keyframes).map((keyframe) => ({
+          ...keyframe,
+          ease: "linear",
+        })),
+      })),
+    });
+    this._blueprint.animation = {
+      ...this._blueprint.animation,
+      clips: [...this._blueprint.animation.clips, clip],
+      activeClipId: clip.id,
+    };
+    return clip;
   }
 
   pasteNodes(nodes: EditorNode[], parentId: string | null, source: EditorStoreChange["source"] = "ui"): string | null {

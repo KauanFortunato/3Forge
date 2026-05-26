@@ -677,6 +677,59 @@ describe("EditorStore", () => {
     expect(children.map((n) => n.name)).toEqual(["Tower", "Ground"]);
   });
 
+  it("creates and activates an imported animation clip from a model import plan", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const modelId = store.addModelAsset({
+      id: "animated-model",
+      name: "Animated Door.usdz",
+      mimeType: "model/vnd.usdz+zip",
+      src: "data:model/vnd.usdz+zip;base64,ZG9vcg==",
+      format: "usdz",
+      source: "imported",
+    });
+
+    const rootId = store.insertModelImportPlan(modelId, [
+      {
+        name: "Door",
+        kind: "mesh",
+        primPath: "/Door",
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        animation: {
+          fps: 30,
+          durationFrames: 60,
+          tracks: [{
+            property: "transform.rotation.y",
+            keyframes: [
+              { frame: 0, value: 0 },
+              { frame: 60, value: 1.2 },
+            ],
+          }],
+        },
+        children: [],
+      },
+    ], ROOT_NODE_ID);
+
+    expect(rootId).toBeTruthy();
+    const door = store.blueprint.nodes.find((node) => node.name === "Door");
+    const clip = store.getActiveAnimationClip();
+    expect(clip?.name).toBe("Animated Door");
+    expect(clip?.fps).toBe(30);
+    expect(clip?.durationFrames).toBe(60);
+    expect(clip?.tracks).toHaveLength(1);
+    expect(clip?.tracks[0]?.nodeId).toBe(door?.id);
+    expect(clip?.tracks[0]?.property).toBe("transform.rotation.y");
+    expect(clip?.tracks[0]?.keyframes.map((keyframe) => ({
+      frame: keyframe.frame,
+      value: keyframe.value,
+      ease: keyframe.ease,
+    }))).toEqual([
+      { frame: 0, value: 0, ease: "linear" },
+      { frame: 60, value: 1.2, ease: "linear" },
+    ]);
+  });
+
   it("returns null when insertModelImportPlan targets an unknown asset or receives an empty plan", () => {
     const store = new EditorStore(createDefaultBlueprint());
     expect(store.insertModelImportPlan("missing-asset", [

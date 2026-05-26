@@ -32,6 +32,7 @@
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usd/timeCode.h>
 #include <pxr/usd/usdGeom/mesh.h>
+#include <pxr/usd/usdGeom/imageable.h>
 #include <pxr/usd/usdGeom/primvar.h>
 #include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdGeom/subset.h>
@@ -41,6 +42,16 @@
 #include <pxr/usd/usdShade/material.h>
 #include <pxr/usd/usdShade/materialBindingAPI.h>
 #include <pxr/usd/usdShade/shader.h>
+#include <pxr/usd/usdSkel/animation.h>
+#include <pxr/usd/usdSkel/bindingAPI.h>
+#include <pxr/usd/usdSkel/blendShape.h>
+#include <pxr/usd/usdSkel/root.h>
+#include <pxr/usd/usdSkel/skeleton.h>
+#include <pxr/usd/usdSkel/topology.h>
+#include <pxr/usd/usdSkel/utils.h>
+#include <pxr/base/gf/matrix4f.h>
+#include <pxr/base/gf/quatf.h>
+#include <pxr/base/gf/vec3f.h>
 
 namespace em = emscripten;
 
@@ -301,8 +312,12 @@ em::val getLocalTransform(int stageId, const std::string& primPath) {
     xform.GetLocalTransformation(&m, &resets);
 
     float v[16];
+    // USD GfMatrix4d is row-major with translation in the LAST ROW
+    // (m[3][0..2]). Three.js Matrix4 is column-major with translation in
+    // the LAST COLUMN (elements[12..14]). Transpose during copy so the
+    // semantics survive: USD m[r][c] -> Three.js element at row c, col r.
     for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) v[c * 4 + r] = static_cast<float>(m[r][c]);
+        for (int r = 0; r < 4; ++r) v[c * 4 + r] = static_cast<float>(m[c][r]);
     return makeFloat32Array(v, 16);
 }
 
@@ -318,8 +333,12 @@ em::val getWorldTransform(int stageId, const std::string& primPath, double t) {
     pxr::GfMatrix4d m = xform.ComputeLocalToWorldTransform(tc);
 
     float v[16];
+    // USD GfMatrix4d is row-major with translation in the LAST ROW
+    // (m[3][0..2]). Three.js Matrix4 is column-major with translation in
+    // the LAST COLUMN (elements[12..14]). Transpose during copy so the
+    // semantics survive: USD m[r][c] -> Three.js element at row c, col r.
     for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r) v[c * 4 + r] = static_cast<float>(m[r][c]);
+        for (int r = 0; r < 4; ++r) v[c * 4 + r] = static_cast<float>(m[c][r]);
     return makeFloat32Array(v, 16);
 }
 
@@ -506,6 +525,356 @@ em::val getTimeSamples(int stageId, const std::string& attrPath) {
     return arr;
 }
 
+em::val getTimeSampledAttributes(int stageId, const std::string& primPath) {
+    em::val arr = em::val::array();
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return arr;
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(primPath));
+    if (!prim) return arr;
+
+    size_t outIdx = 0;
+    for (const pxr::UsdAttribute& attr : prim.GetAttributes()) {
+        if (attr.GetNumTimeSamples() > 0) {
+            arr.set(outIdx++, attr.GetName().GetString());
+        }
+    }
+    return arr;
+}
+
+std::string getVisibility(int stageId, const std::string& primPath, double t) {
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return "";
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(primPath));
+    pxr::UsdGeomImageable imageable(prim);
+    if (!imageable) return "";
+
+    pxr::UsdTimeCode tc = std::isnan(t) ? pxr::UsdTimeCode::Default()
+                                        : pxr::UsdTimeCode(t);
+    pxr::TfToken visibility;
+    if (!imageable.GetVisibilityAttr().Get(&visibility, tc)) return "";
+    return visibility.GetString();
+}
+
+// ============================================================================
+// NEW: UsdSkel — skeleton, skin binding, animation, blend shapes
+// ============================================================================
+//
+// USD skeletal model — quick refresher:
+//   * SkelRoot is an xform-like container whose descendants share a skeleton.
+//   * Skeleton authors the joint hierarchy: joint paths, rest pose, bind pose.
+//   * SkelAnimation drives the joints over time (rotations/translations/scales)
+//     and optionally drives blendshape weights.
+//   * Meshes inside the SkelRoot carry a SkelBindingAPI: per-point skinning
+//     weights, a binding to the Skeleton, and a binding to the SkelAnimation.
+//
+// These bindings return raw arrays the TS layer assembles into THREE.Skeleton
+// + THREE.SkinnedMesh. We deliberately do NOT compute final transforms here —
+// the renderer applies bone matrices at draw time.
+
+// Returns { isSkelRoot, skeletonPath, animationPath } for a prim, walking the
+// SkelBindingAPI on the prim itself OR inherited from a SkelRoot ancestor.
+// Empty strings if no binding.
+em::val getSkelRootInfo(int stageId, const std::string& primPath) {
+    em::val r = em::val::object();
+    r.set("isSkelRoot", false);
+    r.set("skeletonPath", std::string(""));
+    r.set("animationPath", std::string(""));
+
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return r;
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(primPath));
+    if (!prim) return r;
+
+    r.set("isSkelRoot", prim.IsA<pxr::UsdSkelRoot>());
+
+    pxr::UsdSkelBindingAPI bindingAPI(prim);
+    if (bindingAPI) {
+        pxr::UsdSkelSkeleton skel;
+        bool hasSkel = bindingAPI.GetSkeleton(&skel);
+        if (hasSkel) {
+            r.set("skeletonPath", skel.GetPath().GetString());
+        }
+        pxr::UsdPrim animPrim;
+        bool hasAnim = bindingAPI.GetAnimationSource(&animPrim);
+        // animationSource is commonly authored on the Skeleton prim itself
+        // rather than on each mesh (or even on the SkelRoot). When the local
+        // binding doesn't resolve one, fall back to the bound skeleton's
+        // binding API, which is where Apple's USDZ samples (biplane,
+        // seahorse) put it.
+        if (!hasAnim && hasSkel) {
+            pxr::UsdSkelBindingAPI skelBindingAPI(skel.GetPrim());
+            if (skelBindingAPI) {
+                hasAnim = skelBindingAPI.GetAnimationSource(&animPrim);
+            }
+        }
+        if (hasAnim) {
+            r.set("animationPath", animPrim.GetPath().GetString());
+        }
+    }
+    return r;
+}
+
+// Returns { joints, restTransforms, bindTransforms, parentIndices }.
+// Joints are USD joint paths (e.g. "root", "root/Bone1") in skeleton order.
+// restTransforms are LOCAL space; bindTransforms are WORLD space (USD convention).
+// parentIndices[i] = -1 for roots, else index of the joint's parent in `joints`.
+em::val getSkeleton(int stageId, const std::string& skelPath) {
+    em::val r = em::val::object();
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return em::val::null();
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(skelPath));
+    pxr::UsdSkelSkeleton skel(prim);
+    if (!skel) return em::val::null();
+
+    pxr::VtArray<pxr::TfToken> jointTokens;
+    skel.GetJointsAttr().Get(&jointTokens);
+
+    em::val jointsArr = em::val::array();
+    std::vector<std::string> jointStrs;
+    jointStrs.reserve(jointTokens.size());
+    for (size_t i = 0; i < jointTokens.size(); ++i) {
+        jointStrs.push_back(jointTokens[i].GetString());
+        jointsArr.set(i, jointStrs.back());
+    }
+    r.set("joints", jointsArr);
+
+    pxr::VtArray<pxr::GfMatrix4d> rest, bind;
+    skel.GetRestTransformsAttr().Get(&rest);
+    skel.GetBindTransformsAttr().Get(&bind);
+
+    auto matrixArrayToFloat32 = [](const pxr::VtArray<pxr::GfMatrix4d>& mats) {
+        std::vector<float> out(mats.size() * 16);
+        // Same transpose as the getLocalTransform/getWorldTransform helpers:
+        // USD row-major -> Three.js column-major, preserving translation
+        // in the LAST COLUMN that Three.js expects.
+        for (size_t i = 0; i < mats.size(); ++i) {
+            const pxr::GfMatrix4d& m = mats[i];
+            for (int c = 0; c < 4; ++c)
+                for (int rIdx = 0; rIdx < 4; ++rIdx)
+                    out[i * 16 + c * 4 + rIdx] = static_cast<float>(m[c][rIdx]);
+        }
+        return out;
+    };
+
+    std::vector<float> restF = matrixArrayToFloat32(rest);
+    std::vector<float> bindF = matrixArrayToFloat32(bind);
+    r.set("restTransforms", makeFloat32Array(restF.data(), restF.size()));
+    r.set("bindTransforms", makeFloat32Array(bindF.data(), bindF.size()));
+
+    // UsdSkelTopology gives us the parent index of each joint, computed from
+    // the slash-separated joint paths (a joint "root/A/B" has parent "root/A").
+    pxr::UsdSkelTopology topology(jointTokens);
+    std::vector<int> parents(topology.GetNumJoints());
+    for (size_t i = 0; i < parents.size(); ++i) {
+        parents[i] = topology.GetParent(i);
+    }
+    r.set("parentIndices", makeInt32Array(parents.data(), parents.size()));
+
+    return r;
+}
+
+// Returns { skelPath, animationPath, jointIndices, jointWeights,
+//           numInfluencesPerComponent, geomBindTransform } for a mesh prim
+// with SkelBindingAPI, or null if the mesh isn't skinned.
+em::val getSkinBinding(int stageId, const std::string& meshPath) {
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return em::val::null();
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(meshPath));
+    if (!prim) return em::val::null();
+
+    pxr::UsdSkelBindingAPI binding(prim);
+    if (!binding) return em::val::null();
+
+    pxr::UsdGeomPrimvar jiPv = binding.GetJointIndicesPrimvar();
+    pxr::UsdGeomPrimvar jwPv = binding.GetJointWeightsPrimvar();
+    if (!jiPv || !jwPv) return em::val::null();
+
+    pxr::VtArray<int> jointIndices;
+    pxr::VtArray<float> jointWeights;
+    if (!jiPv.ComputeFlattened(&jointIndices) || !jwPv.ComputeFlattened(&jointWeights)) {
+        return em::val::null();
+    }
+
+    em::val r = em::val::object();
+
+    pxr::UsdSkelSkeleton skel;
+    bool hasSkel = binding.GetSkeleton(&skel);
+    if (hasSkel) {
+        r.set("skelPath", skel.GetPath().GetString());
+    } else {
+        r.set("skelPath", std::string(""));
+    }
+    pxr::UsdPrim animPrim;
+    bool hasAnim = binding.GetAnimationSource(&animPrim);
+    // Same fallback as getSkelRootInfo: many real-world USDZ files (Apple
+    // biplane, seahorse) author animationSource on the Skeleton, not on
+    // every skinned mesh. Reach through the skeleton's binding when the
+    // mesh-local lookup comes up empty.
+    if (!hasAnim && hasSkel) {
+        pxr::UsdSkelBindingAPI skelBindingAPI(skel.GetPrim());
+        if (skelBindingAPI) {
+            hasAnim = skelBindingAPI.GetAnimationSource(&animPrim);
+        }
+    }
+    if (hasAnim) {
+        r.set("animationPath", animPrim.GetPath().GetString());
+    } else {
+        r.set("animationPath", std::string(""));
+    }
+
+    r.set("jointIndices", makeInt32Array(jointIndices.data(), jointIndices.size()));
+    r.set("jointWeights", makeFloat32Array(jointWeights.data(), jointWeights.size()));
+
+    int elementSize = jiPv.GetElementSize();
+    if (elementSize <= 0) elementSize = 1;
+    r.set("numInfluencesPerComponent", elementSize);
+
+    pxr::GfMatrix4d geomBind(1.0);
+    binding.GetGeomBindTransformAttr().Get(&geomBind);
+    float gb[16];
+    // Same row-major USD -> column-major Three.js transpose.
+    for (int c = 0; c < 4; ++c)
+        for (int rIdx = 0; rIdx < 4; ++rIdx)
+            gb[c * 4 + rIdx] = static_cast<float>(geomBind[c][rIdx]);
+    r.set("geomBindTransform", makeFloat32Array(gb, 16));
+
+    // Mesh's local-space blend shape names (drives morph targets) — empty if none.
+    pxr::VtArray<pxr::TfToken> blendShapes;
+    binding.GetBlendShapesAttr().Get(&blendShapes);
+    em::val bsArr = em::val::array();
+    std::vector<std::string> bsStrs;
+    bsStrs.reserve(blendShapes.size());
+    for (size_t i = 0; i < blendShapes.size(); ++i) {
+        bsStrs.push_back(blendShapes[i].GetString());
+        bsArr.set(i, bsStrs.back());
+    }
+    r.set("blendShapes", bsArr);
+
+    // Relationship to BlendShape prims (one target prim per blend shape name).
+    pxr::SdfPathVector blendShapeTargets;
+    binding.GetBlendShapeTargetsRel().GetTargets(&blendShapeTargets);
+    em::val bsTargetsArr = em::val::array();
+    std::vector<std::string> bsTargetStrs;
+    bsTargetStrs.reserve(blendShapeTargets.size());
+    for (size_t i = 0; i < blendShapeTargets.size(); ++i) {
+        bsTargetStrs.push_back(blendShapeTargets[i].GetString());
+        bsTargetsArr.set(i, bsTargetStrs.back());
+    }
+    r.set("blendShapeTargets", bsTargetsArr);
+
+    return r;
+}
+
+// Returns { joints, rotations, translations, scales, blendShapes, blendShapeWeights }
+// at the given timeCode. `rotations` is a Float32Array of quaternions packed as
+// [x,y,z,w,x,y,z,w,...] (Three.js convention). `translations` and `scales` are
+// xyz triples per joint. `joints` and `blendShapes` are the SkelAnimation's
+// own joint/blendShape ordering — the TS layer must remap to skeleton order.
+em::val getSkelAnimation(int stageId, const std::string& animPath, double t) {
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return em::val::null();
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(animPath));
+    pxr::UsdSkelAnimation anim(prim);
+    if (!anim) return em::val::null();
+
+    pxr::UsdTimeCode tc = std::isnan(t) ? pxr::UsdTimeCode::Default()
+                                        : pxr::UsdTimeCode(t);
+
+    em::val r = em::val::object();
+
+    pxr::VtArray<pxr::TfToken> jointTokens;
+    anim.GetJointsAttr().Get(&jointTokens);
+    em::val jointsArr = em::val::array();
+    std::vector<std::string> jointStrs;
+    jointStrs.reserve(jointTokens.size());
+    for (size_t i = 0; i < jointTokens.size(); ++i) {
+        jointStrs.push_back(jointTokens[i].GetString());
+        jointsArr.set(i, jointStrs.back());
+    }
+    r.set("joints", jointsArr);
+
+    pxr::VtArray<pxr::GfQuatf> rotations;
+    anim.GetRotationsAttr().Get(&rotations, tc);
+    std::vector<float> rotF(rotations.size() * 4);
+    for (size_t i = 0; i < rotations.size(); ++i) {
+        const pxr::GfQuatf& q = rotations[i];
+        rotF[i * 4 + 0] = q.GetImaginary()[0];
+        rotF[i * 4 + 1] = q.GetImaginary()[1];
+        rotF[i * 4 + 2] = q.GetImaginary()[2];
+        rotF[i * 4 + 3] = q.GetReal();
+    }
+    r.set("rotations", makeFloat32Array(rotF.data(), rotF.size()));
+
+    pxr::VtArray<pxr::GfVec3f> translations;
+    anim.GetTranslationsAttr().Get(&translations, tc);
+    r.set("translations", makeFloat32Array(
+        reinterpret_cast<const float*>(translations.data()), translations.size() * 3));
+
+    pxr::VtArray<pxr::GfVec3h> scalesH;
+    anim.GetScalesAttr().Get(&scalesH, tc);
+    std::vector<float> scaleF(scalesH.size() * 3);
+    for (size_t i = 0; i < scalesH.size(); ++i) {
+        scaleF[i * 3 + 0] = static_cast<float>(scalesH[i][0]);
+        scaleF[i * 3 + 1] = static_cast<float>(scalesH[i][1]);
+        scaleF[i * 3 + 2] = static_cast<float>(scalesH[i][2]);
+    }
+    r.set("scales", makeFloat32Array(scaleF.data(), scaleF.size()));
+
+    pxr::VtArray<pxr::TfToken> bsTokens;
+    anim.GetBlendShapesAttr().Get(&bsTokens);
+    em::val bsArr = em::val::array();
+    std::vector<std::string> bsStrs;
+    bsStrs.reserve(bsTokens.size());
+    for (size_t i = 0; i < bsTokens.size(); ++i) {
+        bsStrs.push_back(bsTokens[i].GetString());
+        bsArr.set(i, bsStrs.back());
+    }
+    r.set("blendShapes", bsArr);
+
+    pxr::VtArray<float> bsWeights;
+    anim.GetBlendShapeWeightsAttr().Get(&bsWeights, tc);
+    r.set("blendShapeWeights", makeFloat32Array(bsWeights.data(), bsWeights.size()));
+
+    return r;
+}
+
+// Returns [{ name, offsets, pointIndices }] for each BlendShape prim referenced
+// by the mesh's SkelBindingAPI.blendShapeTargets. `offsets` are xyz deltas per
+// affected point, `pointIndices` indexes into the mesh's points array.
+em::val getBlendShapes(int stageId, const std::string& meshPath) {
+    em::val arr = em::val::array();
+    auto it = g_stages.find(stageId);
+    if (it == g_stages.end()) return arr;
+    pxr::UsdPrim prim = it->second->GetPrimAtPath(pxr::SdfPath(meshPath));
+    if (!prim) return arr;
+
+    pxr::UsdSkelBindingAPI binding(prim);
+    if (!binding) return arr;
+
+    pxr::SdfPathVector targets;
+    binding.GetBlendShapeTargetsRel().GetTargets(&targets);
+
+    size_t outIdx = 0;
+    for (const auto& targetPath : targets) {
+        pxr::UsdPrim bsPrim = it->second->GetPrimAtPath(targetPath);
+        pxr::UsdSkelBlendShape bs(bsPrim);
+        if (!bs) continue;
+
+        pxr::VtArray<pxr::GfVec3f> offsets;
+        bs.GetOffsetsAttr().Get(&offsets);
+        pxr::VtArray<int> pointIndices;
+        bs.GetPointIndicesAttr().Get(&pointIndices);
+
+        em::val entry = em::val::object();
+        entry.set("name", bsPrim.GetName().GetString());
+        entry.set("offsets", makeFloat32Array(
+            reinterpret_cast<const float*>(offsets.data()), offsets.size() * 3));
+        entry.set("pointIndices", makeInt32Array(pointIndices.data(), pointIndices.size()));
+        arr.set(outIdx++, entry);
+    }
+    return arr;
+}
+
 // ============================================================================
 // EMSCRIPTEN_BINDINGS
 // ============================================================================
@@ -535,4 +904,12 @@ EMSCRIPTEN_BINDINGS(openusd_module) {
     // new — animation
     function("getStageTimeInfo", &getStageTimeInfo);
     function("getTimeSamples", &getTimeSamples);
+    function("getTimeSampledAttributes", &getTimeSampledAttributes);
+    function("getVisibility", &getVisibility);
+    // new — UsdSkel (Phase B)
+    function("getSkelRootInfo", &getSkelRootInfo);
+    function("getSkeleton", &getSkeleton);
+    function("getSkinBinding", &getSkinBinding);
+    function("getSkelAnimation", &getSkelAnimation);
+    function("getBlendShapes", &getBlendShapes);
 }

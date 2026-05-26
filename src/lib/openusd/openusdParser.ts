@@ -1,4 +1,5 @@
 import {
+  Bone,
   BufferAttribute,
   BufferGeometry,
   ClampToEdgeWrapping,
@@ -11,17 +12,24 @@ import {
   Object3D,
   RepeatWrapping,
   SRGBColorSpace,
+  Skeleton,
+  SkinnedMesh,
   Texture,
+  Uint16BufferAttribute,
 } from "three";
 
 import { loadOpenUSD, releaseOpenUSD } from "./loadOpenUsd";
+import { buildUsdPrimAnimation, type UsdStageTimeInfo } from "./usdAnimation";
 import type {
   OpenUsdWorkerRequest,
   OpenUsdWorkerResponse,
   ParsedUsdMaterialData,
   ParsedUsdModelData,
+  ParsedUsdSkeletalAnimation,
+  ParsedUsdSkeleton,
   ParsedUsdTextureData,
 } from "./openusdWorkerTypes";
+import type { ImportedNodeAnimation } from "../../editor/types";
 
 /**
  * A node in the import plan derived from a USDZ stage, mirroring the prim
@@ -45,6 +53,7 @@ export interface UsdImportPlanNode {
   position: { x: number; y: number; z: number };
   rotation: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number };
+  animation?: ImportedNodeAnimation;
   materialPath?: string;
   /**
    * GeomSubset name when this plan node represents one subset of a
@@ -136,6 +145,10 @@ interface UsdModule {
   getMeshData(id: number, primPath: string): MeshData | null;
   getLocalTransform(id: number, primPath: string): Float32Array | null;
   getWorldTransform(id: number, primPath: string, t: number): Float32Array | null;
+  getStageTimeInfo(id: number): UsdStageTimeInfo | null;
+  getTimeSamples(id: number, attrPath: string): number[] | ArrayLike<number> | null;
+  getTimeSampledAttributes(id: number, primPath: string): string[] | ArrayLike<string> | null;
+  getVisibility(id: number, primPath: string, t: number): string;
   getMaterialBinding(id: number, primPath: string): string;
   getMaterialParams(id: number, matPath: string): Record<string, MaterialInput> | null;
   getAssetBytes(stageId: number, assetPath: string): Uint8Array | null;
@@ -674,6 +687,11 @@ async function buildGroupFromWorkerModel(model: ParsedUsdModelData): Promise<Gro
   root.name = model.name;
   root.userData.usdPath = "/";
   root.userData.usdKind = "xform";
+  // Stash the per-skeleton built data + per-animation baked frames at the
+  // model root so the renderer (scene.ts) can locate them when applying
+  // playback. Keyed by USD path; same shape the worker emitted.
+  root.userData.skeletons = new Map<string, { skeleton: Skeleton; bonesByJoint: Map<string, Bone>; jointOrder: string[] }>();
+  root.userData.skeletalAnimations = model.skeletalAnimations;
 
   const materialCache = new Map<string, MeshPhysicalMaterial>();
   const resolveMaterial = async (path: string | undefined): Promise<MeshPhysicalMaterial> => {
@@ -686,6 +704,29 @@ async function buildGroupFromWorkerModel(model: ParsedUsdModelData): Promise<Gro
       : new MeshPhysicalMaterial({ side: DoubleSide });
     materialCache.set(path, cached);
     return cached;
+  };
+
+  // Build one THREE.Skeleton per USD Skeleton prim path, cached so multiple
+  // skinned meshes that bind to the same Skeleton share a single bone tree.
+  // The bones are attached to the model root group so they live in the scene
+  // graph (Three.js needs that for skeleton.update() to compute world matrices),
+  // but they don't render anything by themselves.
+  const skeletonCache = root.userData.skeletons as Map<string, { skeleton: Skeleton; bonesByJoint: Map<string, Bone>; jointOrder: string[] }>;
+  const buildSkeleton = (skelPath: string): { skeleton: Skeleton; bonesByJoint: Map<string, Bone>; jointOrder: string[] } | null => {
+    const cached = skeletonCache.get(skelPath);
+    if (cached) return cached;
+    const data: ParsedUsdSkeleton | undefined = model.skeletons[skelPath];
+    if (!data) return null;
+    const built = buildThreeSkeleton(data);
+    if (!built) return null;
+    skeletonCache.set(skelPath, built);
+    // Bones need to live in the scene graph for Three.js to compute their
+    // world matrices each frame. Attach the root bone (or any orphan bone
+    // that has no parent) to the model root group.
+    for (const bone of built.skeleton.bones) {
+      if (!bone.parent) root.add(bone);
+    }
+    return built;
   };
 
   // World matrices keyed by prim path so each prim can compute its local
@@ -712,9 +753,13 @@ async function buildGroupFromWorkerModel(model: ParsedUsdModelData): Promise<Gro
     obj.name = primShortName(prim.path) || prim.path;
     obj.userData.usdPath = prim.path;
     obj.userData.usdKind = prim.kind;
+    if (prim.animation) {
+      obj.userData.usdAnimation = prim.animation;
+    }
     obj.applyMatrix4(localMatrix);
 
     if (prim.kind === "mesh") {
+      const skinBuilt = prim.skinning ? buildSkeleton(prim.skinning.skeletonPath) : null;
       for (const subset of prim.subsets) {
         const geometry = new BufferGeometry();
         geometry.setAttribute("position", new BufferAttribute(subset.positions, 3));
@@ -726,7 +771,20 @@ async function buildGroupFromWorkerModel(model: ParsedUsdModelData): Promise<Gro
         if (!subset.normals) geometry.computeVertexNormals();
 
         const material = await resolveMaterial(subset.materialPath);
-        const mesh = new Mesh(geometry, material);
+        let mesh: Mesh | SkinnedMesh;
+        if (skinBuilt && subset.skinIndex && subset.skinWeight) {
+          geometry.setAttribute("skinIndex", new Uint16BufferAttribute(subset.skinIndex, 4));
+          geometry.setAttribute("skinWeight", new BufferAttribute(subset.skinWeight, 4));
+          const skinned = new SkinnedMesh(geometry, material);
+          if (prim.skinning) {
+            skinned.bindMatrix.fromArray(Array.from(prim.skinning.geomBindTransform));
+            skinned.bindMatrixInverse.copy(skinned.bindMatrix).invert();
+          }
+          skinned.bind(skinBuilt.skeleton, skinned.bindMatrix);
+          mesh = skinned;
+        } else {
+          mesh = new Mesh(geometry, material);
+        }
         mesh.name = subset.name;
         mesh.userData.usdSubsetName = subset.name;
         if (subset.materialPath) {
@@ -736,6 +794,21 @@ async function buildGroupFromWorkerModel(model: ParsedUsdModelData): Promise<Gro
       }
       if (prim.primaryMaterialPath) {
         obj.userData.usdMaterialPath = prim.primaryMaterialPath;
+      }
+      if (skinBuilt && prim.skinning?.animationPath) {
+        const skelAnim = model.skeletalAnimations[prim.skinning.animationPath];
+        if (skelAnim) {
+          // Stash the baked playback so scene.ts can drive bones at render
+          // time. The same skeleton may animate from multiple skinned-mesh
+          // prims, but the bones are shared, so any of these triggers the
+          // same skeleton.update() chain.
+          obj.userData.skeletalPlayback = {
+            skeletonPath: prim.skinning.skeletonPath,
+            animationPath: prim.skinning.animationPath,
+            fps: skelAnim.fps,
+            durationFrames: skelAnim.durationFrames,
+          };
+        }
       }
     }
 
@@ -793,6 +866,7 @@ async function parseUsdzDirect(
     });
     await waitForPaint();
     const prims = usd.listPrims(stageId);
+    const stageTimeInfo = usd.getStageTimeInfo(stageId);
     const primsByPath = new Map<string, PrimInfo>();
     for (const p of prims) primsByPath.set(p.path, p);
     const meshPrims = prims.filter((prim) => prim.isMesh);
@@ -871,12 +945,14 @@ async function parseUsdzDirect(
     for (const prim of kept) {
       // Walk up to find the nearest already-processed (kept) ancestor.
       let parentPath = prim.parent;
+      let keptParentPath = "";
       let parentObj: Group = root;
       let parentWorld: Matrix4 | null = null;
       while (parentPath && parentPath !== "/" && parentPath !== "") {
         const existing = objectsByPath.get(parentPath);
         if (existing) {
           parentObj = existing;
+          keptParentPath = parentPath;
           parentWorld = getWorldMatrix(parentPath);
           break;
         }
@@ -894,6 +970,16 @@ async function parseUsdzDirect(
       obj.name = primShortName(prim.path) || prim.path;
       obj.userData.usdPath = prim.path;
       obj.userData.usdKind = prim.isMesh ? "mesh" : "xform";
+      const animation = buildUsdPrimAnimation({
+        sampler: usd,
+        stageId,
+        primPath: prim.path,
+        parentPath: keptParentPath,
+        stageTimeInfo,
+      });
+      if (animation) {
+        obj.userData.usdAnimation = animation;
+      }
       // applyMatrix4 premultiplies onto the current (identity) matrix and
       // decomposes back into position/quaternion/scale automatically.
       obj.applyMatrix4(localMatrix);
@@ -995,9 +1081,46 @@ async function parseUsdzDirect(
  * children of a single blueprint model node, not separate blueprint nodes).
  */
 export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
+  // Skinned USDZ files (UsdSkel) deform via shared bones, and exploding each
+  // mesh prim into its own ModelNode would force each clone to duplicate the
+  // skeleton (Three.js clone() shallow-copies skeleton refs — see SkeletonUtils
+  // for the remap dance). For Phase B v1 we fall back to a single ModelNode
+  // for the whole skinned asset (legacy import path). Per-prim editing for
+  // skinned models is Phase C.
+  if (groupContainsSkeletalPlayback(group)) {
+    return [];
+  }
+
   const visit = (object: Object3D): UsdImportPlanNode | null => {
     const usdPath = object.userData?.usdPath as string | undefined;
     const usdKind = object.userData?.usdKind as UsdImportPlanNode["kind"] | undefined;
+    let animation = object.userData?.usdAnimation as ImportedNodeAnimation | undefined;
+    // For skinned meshes the actual animation is driven outside the keyframe
+    // track system (scene.ts:applyAnimationFrame applies baked joint TRS to
+    // bones every frame). But we still want an AnimationClip to exist so the
+    // user sees it in the Assets > Animations panel and can hit play. Inject
+    // a placeholder visibility track (no-op since the node is already visible)
+    // that gives the clip a non-zero track count + duration.
+    const skelPlayback = object.userData?.skeletalPlayback as
+      | { fps?: number; durationFrames?: number }
+      | undefined;
+    if (skelPlayback && !animation) {
+      const fps = skelPlayback.fps ?? 24;
+      const durationFrames = Math.max(1, skelPlayback.durationFrames ?? 1);
+      animation = {
+        fps,
+        durationFrames,
+        tracks: [
+          {
+            property: "visible",
+            keyframes: [
+              { frame: 0, value: 1 },
+              { frame: durationFrames, value: 1 },
+            ],
+          },
+        ],
+      };
+    }
     if (!usdPath || !usdKind) return null;
 
     const childPlans: UsdImportPlanNode[] = [];
@@ -1045,6 +1168,7 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
           position: { x: object.position.x, y: object.position.y, z: object.position.z },
           rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
           scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
+          ...(animation ? { animation } : {}),
           children: childPlans,
         };
       }
@@ -1061,6 +1185,7 @@ export function buildUsdImportPlanFromGroup(group: Group): UsdImportPlanNode[] {
       position: { x: object.position.x, y: object.position.y, z: object.position.z },
       rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
       scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
+      ...(animation ? { animation } : {}),
       ...(materialPath ? { materialPath } : {}),
       children: childPlans,
     };
@@ -1109,6 +1234,111 @@ export function extractUsdMaterialSnapshotsFromGroup(group: Group): UsdMaterialS
     });
   });
   return Array.from(snapshots.values());
+}
+
+/**
+ * Returns true if any descendant carries a `skeletalPlayback` userData
+ * marker — set by {@link buildGroupFromWorkerModel} on prim Object3Ds that
+ * own a skinned mesh + an authored SkelAnimation.
+ */
+export function groupContainsSkeletalPlayback(group: Group): boolean {
+  let found = false;
+  group.traverse((object) => {
+    if (object.userData?.skeletalPlayback) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+/**
+ * Locate the first skeletal playback entry on a Group's descendants. Used by
+ * the App-layer import flow to create an AnimationClip + animation registration
+ * for skinned USDZ models that take the legacy single-ModelNode path.
+ */
+export interface DiscoveredSkeletalPlayback {
+  skeletonPath: string;
+  animationPath: string;
+  fps: number;
+  durationFrames: number;
+}
+
+export function discoverSkeletalPlaybacks(group: Group): DiscoveredSkeletalPlayback[] {
+  const seen = new Set<string>();
+  const out: DiscoveredSkeletalPlayback[] = [];
+  group.traverse((object) => {
+    const playback = object.userData?.skeletalPlayback as DiscoveredSkeletalPlayback | undefined;
+    if (!playback) return;
+    const key = `${playback.skeletonPath}|${playback.animationPath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      skeletonPath: playback.skeletonPath,
+      animationPath: playback.animationPath,
+      fps: playback.fps ?? 24,
+      durationFrames: playback.durationFrames ?? 1,
+    });
+  });
+  return out;
+}
+
+/**
+ * Build a THREE.Skeleton from a parsed USD Skeleton record. Returns the
+ * skeleton + a quick lookup from USD joint path → THREE.Bone so the runtime
+ * playback can locate bones by joint name without scanning. Returns null if
+ * the input is empty or topology is malformed.
+ *
+ * USD authors joint paths like "root", "root/A", "root/A/B". The parent of
+ * "root/A/B" is "root/A", which we already have in {@link ParsedUsdSkeleton.parentIndices}.
+ * USD rest transforms are joint-LOCAL; bind transforms are WORLD-space at
+ * bind time. Three.js needs:
+ *   - bone.position / .quaternion / .scale = decomposed local rest matrix
+ *   - skeleton.boneInverses[i] = inverse(world bind matrix)
+ *
+ * The bone hierarchy is wired by setting each non-root bone's parent to its
+ * parent bone. Three.js Bone is just an Object3D, so add()/remove() works
+ * exactly like a regular scene graph.
+ */
+export function buildThreeSkeleton(data: ParsedUsdSkeleton): { skeleton: Skeleton; bonesByJoint: Map<string, Bone>; jointOrder: string[] } | null {
+  if (data.joints.length === 0) return null;
+
+  const bones: Bone[] = [];
+  const bonesByJoint = new Map<string, Bone>();
+  const tmpMatrix = new Matrix4();
+
+  for (let i = 0; i < data.joints.length; i += 1) {
+    const bone = new Bone();
+    // Joint path with slashes isn't a legal three.js name for property
+    // binding, but PropertyBinding isn't used here — we look up bones by
+    // index, not name. Setting .name still helps debugging.
+    bone.name = data.joints[i];
+    if (data.restMatrices.length >= (i + 1) * 16) {
+      tmpMatrix.fromArray(data.restMatrices, i * 16);
+      tmpMatrix.decompose(bone.position, bone.quaternion, bone.scale);
+    }
+    bones.push(bone);
+    bonesByJoint.set(data.joints[i], bone);
+  }
+
+  for (let i = 0; i < bones.length; i += 1) {
+    const parentIdx = data.parentIndices[i];
+    if (parentIdx >= 0 && parentIdx < bones.length) {
+      bones[parentIdx].add(bones[i]);
+    }
+  }
+
+  const boneInverses: Matrix4[] = [];
+  for (let i = 0; i < bones.length; i += 1) {
+    const inv = new Matrix4();
+    if (data.bindMatrices.length >= (i + 1) * 16) {
+      tmpMatrix.fromArray(data.bindMatrices, i * 16);
+      inv.copy(tmpMatrix).invert();
+    }
+    boneInverses.push(inv);
+  }
+
+  const skeleton = new Skeleton(bones, boneInverses);
+  return { skeleton, bonesByJoint, jointOrder: [...data.joints] };
 }
 
 // Test/dev: clear the registered-plugins flag so plugins re-register on next call.
