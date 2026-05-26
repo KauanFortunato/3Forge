@@ -301,4 +301,37 @@ describe("inspector — buildInspectorReport", () => {
     const r = buildInspectorReport(mesh);
     expect(r!.material.textureBlending).toBeUndefined();
   });
+
+  test("Phase H3: identity.fontLoaded surfaces when stamped on TextureText userData", () => {
+    const mesh = quadMesh("BENCH_NAME_01", {
+      kind: "TextureText", id: "tt", name: "BENCH_NAME_01",
+      text: "LOGAN BRANDON",
+      fontFamily: "Obviously Cond",
+      fontWeight: "700",
+      fontLoaded: true,
+    });
+    const r = buildInspectorReport(mesh);
+    expect(r!.identity.fontFamily).toBe("Obviously Cond");
+    expect(r!.identity.fontLoaded).toBe(true);
+  });
+
+  test("Phase H3: identity.fontLoaded=false marks a missing font", () => {
+    const mesh = quadMesh("BENCH_NAME_01", {
+      kind: "TextureText", id: "tt", name: "BENCH_NAME_01",
+      text: "X",
+      fontFamily: "Obviously Cond",
+      fontLoaded: false,
+    });
+    const r = buildInspectorReport(mesh);
+    expect(r!.identity.fontLoaded).toBe(false);
+  });
+
+  test("Phase H3: identity.fontLoaded absent when no playground index was supplied", () => {
+    const mesh = quadMesh("Q", {
+      kind: "TextureText", id: "tt", name: "Q",
+      fontFamily: "Obviously",
+    });
+    const r = buildInspectorReport(mesh);
+    expect(r!.identity.fontLoaded).toBeUndefined();
+  });
 });

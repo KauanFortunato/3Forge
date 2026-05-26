@@ -112,6 +112,14 @@ export type BuildContext = {
   photoMaskInfoByMaskId?: Map<string, PhotoMaskInfo>;
   /** Phase 2D.3 — populated automatically by buildNodeTree. */
   genericMaskInfoByMaskId?: Map<string, GenericMaskInfo>;
+  /**
+   * Phase H3 — set of "<family>|<weight>|<style>" keys that the playground
+   * successfully registered via FontFace. The TextureText builder consults
+   * this only to surface a per-node `fontLoaded` flag on userData (for the
+   * DEV inspector); the actual canvas rendering still trusts the browser
+   * to pick the registered face when present and fall back otherwise.
+   */
+  loadedFontIndex?: Set<string>;
 };
 
 export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
@@ -562,6 +570,13 @@ function buildTextureText(
   const fontStyle = ctx?.registry.fontStyles.get(node.fontStyleId ?? "");
   const family = fontStyle?.fontName?.trim() || "sans-serif";
   const { weight, style } = fontStyleTypeToCss(fontStyle?.type ?? "");
+  // Phase H3 — non-rendering diagnostic. `true` when a FontFace matching
+  // family/weight/style has been registered via the playground font loader.
+  // Surfaces in the DEV inspector so a user can confirm whether the canvas
+  // is using the authored R3 family or system fallback.
+  const fontLoaded = ctx?.loadedFontIndex
+    ? ctx.loadedFontIndex.has(`${family}|${weight}|${style}`)
+    : undefined;
 
   const texture = renderTextToCanvas({
     text: node.text,
@@ -595,6 +610,7 @@ function buildTextureText(
     fontFamily: family,
     fontWeight: weight,
     fontStyleName: fontStyle?.name,
+    ...(fontLoaded !== undefined ? { fontLoaded } : {}),
   };
 
   applyTransform(mesh, node.transform);

@@ -2448,6 +2448,107 @@ describe("builder — BuildContext", () => {
     expect(mat.alphaTest).toBeGreaterThan(0);
   });
 
+  test("Phase H3: TextureText userData carries fontLoaded=true when index says family/weight/style is registered", () => {
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map(),
+      textureLayers: new Map(),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map([
+        ["fs-1", {
+          kind: "FontStyle", id: "fs-1", name: "FS_01",
+          fontName: "Obviously Cond", type: "Bold",
+          baselineAligned: true, lineSpacing: 1, kerning: 0, kerningScale: 1,
+        }],
+      ]),
+    };
+    const ctx = makeCtx({
+      registry,
+      loadedFontIndex: new Set(["Obviously Cond|700|normal"]),
+    });
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "T",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "X",
+      fontStyleId: "fs-1",
+      textBox: { x: 1, y: 0.3 },
+      textQuality: 1,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, ctx) as Mesh;
+    const w = mesh.userData.w3d as { fontFamily?: string; fontLoaded?: boolean };
+    expect(w.fontFamily).toBe("Obviously Cond");
+    expect(w.fontLoaded).toBe(true);
+  });
+
+  test("Phase H3: TextureText userData fontLoaded=false when index lacks the font", () => {
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map(),
+      textureLayers: new Map(),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map([
+        ["fs-1", {
+          kind: "FontStyle", id: "fs-1", name: "FS_01",
+          fontName: "Obviously Cond", type: "Bold",
+          baselineAligned: true, lineSpacing: 1, kerning: 0, kerningScale: 1,
+        }],
+      ]),
+    };
+    const ctx = makeCtx({
+      registry,
+      loadedFontIndex: new Set(["Obviously|400|normal"]), // different family
+    });
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "T",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "X",
+      fontStyleId: "fs-1",
+      textBox: { x: 1, y: 0.3 },
+      textQuality: 1,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, ctx) as Mesh;
+    const w = mesh.userData.w3d as { fontLoaded?: boolean };
+    expect(w.fontLoaded).toBe(false);
+  });
+
+  test("Phase H3: TextureText userData omits fontLoaded when no index supplied", () => {
+    const ctx = makeCtx(); // no loadedFontIndex
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "T",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "X",
+      textBox: { x: 1, y: 0.3 },
+      textQuality: 1,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const mesh = buildNode(node, ctx) as Mesh;
+    const w = mesh.userData.w3d as { fontLoaded?: boolean };
+    expect(w.fontLoaded).toBeUndefined();
+  });
+
   test("Phase TextureText: enable=false hides the mesh", () => {
     const node = {
       kind: "TextureText" as const,

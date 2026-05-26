@@ -26,6 +26,13 @@ export interface InspectorReport {
     text?: string;
     /** Phase TextureText — populated for TextureText nodes. */
     fontFamily?: string;
+    /**
+     * Phase H3 — `true` when a FontFace matching this node's authored family/
+     * weight/style was registered by the playground loader. `false` means the
+     * browser canvas is falling back (system sans-serif). `undefined` means
+     * no loader index was supplied (e.g. tests).
+     */
+    fontLoaded?: boolean;
   };
   transform: {
     localPosition: InspectorVec3;
@@ -160,6 +167,8 @@ interface W3DUserDataNode {
   fontFamily?: string;
   fontWeight?: string;
   fontStyleName?: string;
+  /** Phase H3 — set by buildTextureText when the playground supplies a loaded-font index. */
+  fontLoaded?: boolean;
   fontStyleId?: string;
   textBox?: { x: number; y: number };
   textQuality?: number;
@@ -354,6 +363,7 @@ export function buildInspectorReport(
       ...(w.hasChildren !== undefined ? { hasChildren: w.hasChildren } : {}),
       ...(w.text !== undefined ? { text: w.text } : {}),
       ...(w.fontFamily !== undefined ? { fontFamily: w.fontFamily } : {}),
+      ...(w.fontLoaded !== undefined ? { fontLoaded: w.fontLoaded } : {}),
     },
     transform: {
       localPosition: vec3(target.position.x, target.position.y, target.position.z),

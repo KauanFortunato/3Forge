@@ -95,4 +95,38 @@ describe("parseW3DFromFolder", () => {
     expect(rasters).toEqual(["Background.png", "Player 1.png", "badge.JPG", "logo.svg"]);
     expect(result.movFiles.map((f) => f.name)).toEqual(["Pitch_In.mov"]);
   });
+
+  it("Phase H3: collects font files under Resources/Fonts/ and _GRAPHICS/FONTS/", async () => {
+    const files = [
+      makeFile("PROJ/scene.w3d", MINIMAL_SCENE_XML),
+      makeFile("PROJ/Resources/Fonts/Obviously-Bold.ttf", "binary"),
+      makeFile("PROJ/Resources/Fonts/ObviouslyCond-Black.ttf", "binary"),
+      makeFile("PROJ/Resources/Fonts/arial.ttf", "binary"),
+      // alternate location used by 26PT_WTV_BASKETBALL
+      makeFile("PROJ/_GRAPHICS/FONTS/Obviously-Semibold.otf", "binary"),
+      // woff2 variants are accepted too
+      makeFile("PROJ/Resources/Fonts/Obviously-Regular.woff2", "binary"),
+      // Non-font under a Fonts dir is ignored.
+      makeFile("PROJ/Resources/Fonts/notes.txt", "txt"),
+      // Font outside any Fonts dir is ignored.
+      makeFile("PROJ/Other/extra.ttf", "binary"),
+    ];
+
+    const result = await parseW3DFromFolder(files);
+    const names = result.fontFiles.map((f) => f.name).sort();
+
+    expect(names).toEqual([
+      "Obviously-Bold.ttf",
+      "Obviously-Regular.woff2",
+      "Obviously-Semibold.otf",
+      "ObviouslyCond-Black.ttf",
+      "arial.ttf",
+    ]);
+  });
+
+  it("Phase H3: returns empty fontFiles when folder has none", async () => {
+    const files = [makeFile("PROJ/scene.w3d", MINIMAL_SCENE_XML)];
+    const result = await parseW3DFromFolder(files);
+    expect(result.fontFiles).toEqual([]);
+  });
 });

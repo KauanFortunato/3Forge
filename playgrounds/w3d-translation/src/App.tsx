@@ -9,6 +9,7 @@ import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
 import type { BuildContext } from "./nodes/builder";
 import type { W3DResourceRegistry } from "./nodes/resources";
 import { buildInspectorReport, type InspectorReport } from "./inspector";
+import { buildLoadedFontIndex, loadW3DFontFiles, type FontLoadResult } from "./fonts";
 import type { Texture } from "three";
 
 interface LoadedScene {
@@ -23,6 +24,10 @@ interface LoadedScene {
   stats: DocumentStats;
   movFiles: number;
   rasterTextureFiles: number;
+  /** Phase H3 — outcome of registering the W3D corpus fonts via FontFace. */
+  fontLoadResults: FontLoadResult[];
+  /** Phase H3 — fast lookup: "<family>|<weight>|<style>" → registered. */
+  loadedFontIndex: Set<string>;
 }
 
 export function App() {
@@ -56,6 +61,7 @@ export function App() {
         textureCache: loaded.textureCache,
         warnings: builderWarnings,
         stencilDebugShowMask,
+        loadedFontIndex: loaded.loadedFontIndex,
       };
       viewportRef.current.setBlueprint(loaded.blueprint);
       viewportRef.current.setNodes(loaded.nodes, ctx);
@@ -121,6 +127,11 @@ export function App() {
       for (const f of folder.rasterTextureFiles) {
         textureUrlsByFilename.set(f.name, URL.createObjectURL(f));
       }
+      // Phase H3 — register R3 fonts via FontFace so canvas TextureText renders
+      // with the authored family instead of system sans-serif fallback. Failures
+      // are non-fatal; per-file status surfaces in the inspector / summary.
+      const fontLoadResults = await loadW3DFontFiles(folder.fontFiles);
+      const loadedFontIndex = buildLoadedFontIndex(fontLoadResults);
       setLoaded({
         sceneFileName: folder.sceneFileName,
         xml,
@@ -133,6 +144,8 @@ export function App() {
         stats,
         movFiles: folder.movFiles.length,
         rasterTextureFiles: folder.rasterTextureFiles.length,
+        fontLoadResults,
+        loadedFontIndex,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -256,7 +269,7 @@ export function App() {
             <div className="playground__viewport-meta">
               <span>{loaded.sceneFileName}</span>
               <span>{loaded.stats.totalElements} elements · max depth {loaded.stats.maxDepth}</span>
-              <span>{loaded.movFiles} .mov · {loaded.rasterTextureFiles} textures</span>
+              <span>{loaded.movFiles} .mov · {loaded.rasterTextureFiles} textures · {loaded.fontLoadResults.filter((r) => r.registered).length}/{loaded.fontLoadResults.length} fonts</span>
               {loaded.warnings.length > 0 ? (
                 <details>
                   <summary>{loaded.warnings.length} warning(s)</summary>
@@ -410,6 +423,9 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
           <dt>kind</dt><dd>{report.identity.kind}</dd>
           <dt>id (guid)</dt><dd>{report.identity.id || "—"}</dd>
           <dt>path</dt><dd>{report.identity.hierarchyPath}</dd>
+          {report.identity.fontFamily
+            ? <><dt>font family</dt><dd>{report.identity.fontFamily}{report.identity.fontLoaded === false ? <span style={{ color: "#d97706", marginLeft: 6 }}>(not loaded — using fallback)</span> : report.identity.fontLoaded === true ? <span style={{ color: "var(--muted)", marginLeft: 6 }}>(loaded)</span> : null}</dd></>
+            : null}
         </dl>
       </details>
 

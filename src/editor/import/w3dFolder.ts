@@ -22,10 +22,20 @@ export interface W3DFolderImportResult extends W3DImportResult {
    * `Resources/Textures/`. The caller turns them into `ImageAsset`s
    * via `imageFileToAsset`. */
   rasterTextureFiles: File[];
+  /**
+   * Phase H3 — `.ttf`/`.otf`/`.woff`/`.woff2` files discovered under
+   * `Resources/Fonts/` (or any sibling `**\/Fonts/` / `**\/FONTS/` folder, e.g.
+   * `_GRAPHICS/FONTS/`). The playground registers these with the browser via
+   * the FontFace API at runtime so `<TextureText>` canvas rendering can use
+   * the authored R3 font family (Obviously / Obviously Cond / etc.) instead
+   * of falling back to system sans-serif.
+   */
+  fontFiles: File[];
 }
 
 const VIDEO_EXTENSIONS = [".mov", ".mp4", ".webm"];
 const RASTER_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".svg"];
+const FONT_EXTENSIONS = [".ttf", ".otf", ".woff", ".woff2"];
 
 export async function parseW3DFromFolder(
   files: FileList | File[],
@@ -39,6 +49,7 @@ export async function parseW3DFromFolder(
   let sceneFileFallback: File | null = null;
   const movFiles: File[] = [];
   const rasterTextureFiles: File[] = [];
+  const fontFiles: File[] = [];
 
   for (const file of list) {
     const relPath = relativePath(file);
@@ -65,6 +76,12 @@ export async function parseW3DFromFolder(
         rasterTextureFiles.push(file);
       }
     }
+
+    // Phase H3 — pick up font files from any `/fonts/` folder. The 26PT corpus
+    // keeps them in `Resources/Fonts/` (.ttf) and `_GRAPHICS/FONTS/` (.otf).
+    if (FONT_EXTENSIONS.includes(ext) && /\/fonts\//.test(lower)) {
+      fontFiles.push(file);
+    }
   }
 
   const chosen = sceneFile ?? sceneFileFallback;
@@ -83,6 +100,7 @@ export async function parseW3DFromFolder(
     sceneFileName: relativePath(chosen),
     movFiles,
     rasterTextureFiles,
+    fontFiles,
   };
 }
 
