@@ -519,6 +519,9 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
           {report.material.alphaMapFilename
             ? <><dt>alphaMap file</dt><dd>{report.material.alphaMapFilename}</dd></>
             : null}
+          {report.material.textureBlending
+            ? <><dt>TextureBlending</dt><dd>{report.material.textureBlending} <span style={{ color: "var(--muted)" }}>(authored)</span></dd></>
+            : null}
         </dl>
       </details>
 

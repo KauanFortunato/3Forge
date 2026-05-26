@@ -284,4 +284,21 @@ describe("inspector — buildInspectorReport", () => {
     root.add(helper);
     expect(buildInspectorReport(helper)).toBeNull();
   });
+
+  test("Phase H2: material.textureBlending appears when stamped on userData", () => {
+    const mesh = quadMesh("GRADIENT", {
+      kind: "Quad", id: "g", name: "GRADIENT",
+      faceMapping: { materialId: "M", textureLayerId: "L" },
+      textureLayerName: "GRADIENT",
+      textureBlending: "Multiply",
+    });
+    const r = buildInspectorReport(mesh);
+    expect(r!.material.textureBlending).toBe("Multiply");
+  });
+
+  test("Phase H2: material.textureBlending absent when userData lacks it", () => {
+    const mesh = quadMesh("Q", { kind: "Quad", id: "q", name: "Q" });
+    const r = buildInspectorReport(mesh);
+    expect(r!.material.textureBlending).toBeUndefined();
+  });
 });

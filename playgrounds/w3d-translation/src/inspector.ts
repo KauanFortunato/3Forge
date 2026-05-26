@@ -81,6 +81,13 @@ export interface InspectorReport {
     textureLayerName?: string;
     mapFilename?: string;
     alphaMapFilename?: string;
+    /**
+     * Phase H2 — verbatim W3D `TextureLayer.TextureBlending` value. Exposed
+     * for diagnostics; the renderer does not switch `material.blending` on
+     * this — R3 Multiply is realised via `material.color × material.map` by
+     * default. See `materialResolver.ts` doc-comment.
+     */
+    textureBlending?: string;
   };
   uv: {
     mapOffset?: InspectorVec2;
@@ -140,6 +147,8 @@ interface W3DUserDataNode {
   materialName?: string;
   textureLayerName?: string;
   textureFilename?: string;
+  /** Phase H2 — pass-through TextureLayer.TextureBlending for diagnostics. */
+  textureBlending?: string;
   flow?: {
     children: boolean;
     leadingSpace?: number;
@@ -404,6 +413,7 @@ export function buildInspectorReport(
         const f = alphaMapFilenameOf(w, registry);
         return f ? { alphaMapFilename: f } : {};
       })()),
+      ...(w.textureBlending ? { textureBlending: w.textureBlending } : {}),
     },
     uv: uvOf(mat),
     flow: flowContextOf(target),

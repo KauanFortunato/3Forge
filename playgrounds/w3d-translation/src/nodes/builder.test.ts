@@ -309,6 +309,59 @@ describe("builder — BuildContext", () => {
     expect((mesh2.material as MeshBasicMaterial).map).toBe(ctx.textureCache.get("blob:fake-bg"));
   });
 
+  test("Phase H2: TextureBlending='Multiply' does NOT change material.blending (stays at Three.js default)", async () => {
+    const { NormalBlending, MultiplyBlending } = await import("three");
+    const bgTex: W3DTextureData = {
+      kind: "Texture", id: "bg-id", name: "BG.png", filename: "BG.png", folderPath: "",
+    };
+    const bgLayer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "bg-layer", name: "BACKGROUND", textureBlending: "Multiply",
+      mapping: { textureGuid: "bg-id", keyType: "AlphaKey", isEmissive: false, useMipMapping: false },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["bg-id", bgTex]]),
+      textureLayers: new Map([["bg-layer", bgLayer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const urls = new Map([["BG.png", "blob:fake-bg"]]);
+    const ctx = makeCtx({ registry, textureUrlsByFilename: urls });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "bg-layer", baseMaterialInherited: false, textureInherited: false } });
+    const mesh = buildNode(node, ctx) as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    // R3 Multiply == color × map, which MeshBasicMaterial does at default
+    // NormalBlending. THREE.MultiplyBlending is a framebuffer screen-blend
+    // and must NOT be used here — see materialResolver.ts doc-comment.
+    expect(mat.blending).toBe(NormalBlending);
+    expect(mat.blending).not.toBe(MultiplyBlending);
+    expect((mesh.userData.w3d as { textureBlending?: string }).textureBlending).toBe("Multiply");
+  });
+
+  test("Phase H2: unknown TextureBlending value surfaces in warnings but does not crash", () => {
+    const bgTex: W3DTextureData = {
+      kind: "Texture", id: "tx", name: "X.png", filename: "X.png", folderPath: "",
+    };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "ODD",
+      textureBlending: "Add", // not in known set
+      mapping: { textureGuid: "tx", keyType: "AlphaKey", isEmissive: false, useMipMapping: false },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["tx", bgTex]]),
+      textureLayers: new Map([["L", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["X.png", "blob:url"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "L", baseMaterialInherited: false, textureInherited: false } });
+    const mesh = buildNode(node, ctx) as Mesh;
+    expect(mesh).toBeDefined();
+    expect((mesh.userData.w3d as { textureBlending?: string }).textureBlending).toBe("Add");
+    expect(ctx.warnings.some((w) => w.includes('"Add"') && w.includes("not recognised"))).toBe(true);
+  });
+
   test("resolved texture sets material.map, transparent=true, hasMaterialResolved in userData", () => {
     const bgTex: W3DTextureData = {
       kind: "Texture", id: "bg-id", name: "BG.png", filename: "BG.png", folderPath: "",

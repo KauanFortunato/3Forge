@@ -523,3 +523,58 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
     expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5); // ScaleKey NOT negated
   });
 });
+
+describe("resolveMaterial — TextureBlending pass-through (Phase H2)", () => {
+  const TEX: W3DTextureData = {
+    kind: "Texture", id: "t1", name: "x.png", filename: "x.png", folderPath: "",
+  };
+  const ctxFor = (layer: W3DTextureLayerData) => ({
+    registry: makeFullRegistry([], [TEX], [layer]),
+    textureUrlsByFilename: new Map([["x.png", "blob:url"]]),
+  });
+
+  test('Multiply layer → resolved.textureBlending = "Multiply", no warning', () => {
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "GRADIENT",
+      textureBlending: "Multiply",
+      mapping: { textureGuid: "t1", keyType: "AlphaKey", isEmissive: false, useMipMapping: true },
+    };
+    const warnings: string[] = [];
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), warnings);
+    expect(r.textureBlending).toBe("Multiply");
+    expect(warnings).toEqual([]);
+  });
+
+  test('Normal layer → resolved.textureBlending = "Normal", no warning', () => {
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "PLAIN",
+      textureBlending: "Normal",
+      mapping: { textureGuid: "t1", keyType: "AlphaKey", isEmissive: false, useMipMapping: true },
+    };
+    const warnings: string[] = [];
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), warnings);
+    expect(r.textureBlending).toBe("Normal");
+    expect(warnings).toEqual([]);
+  });
+
+  test('Unknown TextureBlending value emits a diagnostic warning, does not crash', () => {
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "ODD",
+      textureBlending: "Add",
+      mapping: { textureGuid: "t1", keyType: "AlphaKey", isEmissive: false, useMipMapping: true },
+    };
+    const warnings: string[] = [];
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), warnings);
+    expect(r.textureBlending).toBe("Add"); // verbatim pass-through
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('"ODD"');
+    expect(warnings[0]).toContain('"Add"');
+    expect(warnings[0]).toContain("not recognised");
+  });
+
+  test('Standard textureLayerId → no textureBlending on resolved material', () => {
+    const ctx = { registry: makeFullRegistry(), textureUrlsByFilename: new Map() };
+    const r = resolveMaterial(undefined, "Standard", undefined, 1, ctx, []);
+    expect(r.textureBlending).toBeUndefined();
+  });
+});

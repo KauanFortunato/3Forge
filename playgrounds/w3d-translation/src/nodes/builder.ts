@@ -728,6 +728,7 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
   let materialName: string | undefined;
   let textureLayerName: string | undefined;
   let textureFilename: string | undefined;
+  let textureBlending: string | undefined;
 
   if (ctx) {
     const warnings: string[] = [];
@@ -755,6 +756,7 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
     materialName = resolved.materialName;
     textureLayerName = resolved.textureLayerName;
     textureFilename = resolved.textureFilename;
+    textureBlending = resolved.textureBlending;
   } else {
     // Phase-F fallback: no BuildContext provided
     resolvedColor = displayColorToHex(node.displayColor);
@@ -762,6 +764,12 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
     resolvedTransparent = node.alpha < 1;
   }
 
+  // Phase H2 — `material.blending` is intentionally LEFT AT THE THREE.JS
+  // DEFAULT (NormalBlending). W3D `TextureBlending="Multiply"` denotes
+  // texture-modulates-base-color, which `MeshBasicMaterial` already produces
+  // via `color × map`. Do not assign `THREE.MultiplyBlending` here — that is
+  // a framebuffer screen-blend mode and is the wrong operation for the R3
+  // semantic. See `materialResolver.ts` doc-comment.
   const material = new MeshBasicMaterial({
     color: new Color(resolvedColor),
     transparent: resolvedTransparent,
@@ -791,6 +799,7 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
     textureFilename,
     ...(resolvedMapUrl ? { mapUrl: resolvedMapUrl } : {}),
     ...(resolvedAlphaMapUrl ? { alphaMapUrl: resolvedAlphaMapUrl } : {}),
+    ...(textureBlending !== undefined ? { textureBlending } : {}),
   };
   return mesh;
 }

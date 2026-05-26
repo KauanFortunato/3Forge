@@ -42,6 +42,13 @@ export type ResolvedMaterial = {
   materialName?: string;
   textureLayerName?: string;
   textureFilename?: string;
+  /**
+   * Phase H2 — W3D TextureLayer.TextureBlending verbatim from the registry
+   * ("Multiply" / "Normal" / undefined). Pass-through only; never drives
+   * `material.blending`. See doc-comment on `resolveMaterial` for the
+   * Three.js mapping.
+   */
+  textureBlending?: string;
 };
 
 /**
@@ -99,6 +106,32 @@ export type ResolverContext = {
   textureUrlsByFilename: Map<string, string>;
 };
 
+/**
+ * Phase H2 — W3D TextureBlending → Three.js mapping.
+ *
+ * R3 `TextureBlending="Multiply"` semantically means
+ * `fragment.rgb = baseMaterial.rgb × textureLayer.rgb`
+ * (the texture modulates the base material color per-fragment).
+ *
+ * Three.js `MeshBasicMaterial` with both `color` and `map` set already
+ * computes `gl_FragColor.rgb = color.rgb × map.rgb` by default — i.e. the R3
+ * Multiply semantic is achieved by `material.color × material.map`, NOT by
+ * setting `material.blending = THREE.MultiplyBlending`. `MultiplyBlending` is
+ * a *framebuffer* screen-blend mode (`destination.rgb × source.rgb`); using
+ * it here would make each layer multiply with whatever pixel is behind it on
+ * the framebuffer (e.g. the clear color or an unrelated quad), which is the
+ * wrong operation entirely.
+ *
+ * Empirical: in the 2D corpus every authored TextureLayer carries
+ * `TextureBlending="Multiply"` and zero layers carry any other value. The
+ * current Three.js path already renders them correctly. The resolver
+ * therefore PASSES THROUGH `textureBlending` for diagnostics/inspector
+ * exposure and never touches `material.blending`. Any future explicit value
+ * other than `Multiply` / `Normal` produces a diagnostic warning so a
+ * corpus regression cannot land silently.
+ */
+const KNOWN_TEXTURE_BLENDING_VALUES: ReadonlySet<string> = new Set(["Multiply", "Normal"]);
+
 export function resolveMaterial(
   materialId: string | undefined,
   textureLayerId: string | undefined,
@@ -155,6 +188,7 @@ export function resolveMaterial(
   let hasTextureLayerResolved = false;
   let textureLayerName: string | undefined;
   let textureFilename: string | undefined;
+  let textureBlending: string | undefined;
 
   if (textureLayerId && textureLayerId !== "Standard") {
     const tl = ctx.registry.textureLayers.get(textureLayerId);
@@ -162,6 +196,14 @@ export function resolveMaterial(
       warnings.push(`TextureLayerId "${textureLayerId}" not in registry.`);
     } else {
       textureLayerName = tl.name;
+      textureBlending = tl.textureBlending;
+      if (textureBlending && !KNOWN_TEXTURE_BLENDING_VALUES.has(textureBlending)) {
+        warnings.push(
+          `TextureLayer "${tl.name}" TextureBlending="${textureBlending}" not recognised ` +
+          `(known: Multiply, Normal). Rendering will use the Three.js default ` +
+          `(color × map) — visual fidelity not validated for this value.`,
+        );
+      }
       const texGuid = tl.mapping?.textureGuid;
 
       if (texGuid) {
@@ -241,6 +283,7 @@ export function resolveMaterial(
     materialName,
     textureLayerName,
     textureFilename,
+    ...(textureBlending !== undefined ? { textureBlending } : {}),
   };
 }
 
