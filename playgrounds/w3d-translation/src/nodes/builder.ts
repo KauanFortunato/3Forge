@@ -477,6 +477,16 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
   // remain visible so the Quad-with-children carrier still renders its band.
   if (node.isMask && !isColoredMask(node)) mesh.visible = false;
   host.add(mesh);
+  // Phase A1 carry-over — run the stencil writer/reader path for the carrier
+  // mesh too. Without this, a Quad-with-children that is also a colored mask
+  // (e.g. BASE_TEAM in LINEUP_LEFT, which carries BASE_BENCH as a child)
+  // never gets stencilWrite=true, depthTest=false, or its per-mask render
+  // order. It then ends up in the opaque pass with depthTest=true, where Z
+  // sorts the carrier behind closer panels (BASE_MAIN at Z=0 vs BASE_TEAM at
+  // Z=-17.44), occluding most of its visible region. Leaf-Quad masks already
+  // call this on line 445 — this restores the same invariant for the
+  // children-carrier branch.
+  applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
   const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
   for (const c of node.children) host.add(buildNode(c, ctx, passToChildren));
   return wrapper;
@@ -952,7 +962,7 @@ function applyPhotoMaskStencil(
     mat.stencilZPass = ReplaceStencilOp;
     mat.stencilFail = ReplaceStencilOp;
     mat.stencilZFail = ReplaceStencilOp;
-    mesh.renderOrder = RENDER_ORDER_GENERIC_WRITER;
+    mesh.renderOrder = genericWriterLane(index);
     mesh.visible = node.enable ?? true;
     // colorWrite intentionally left at default (true) so the colored gradient
     // band paints into the framebuffer. This is the structural difference vs
@@ -1038,17 +1048,21 @@ function applyPhotoMaskStencil(
     mat.stencilZPass = KeepStencilOp;
     mat.depthWrite = false;
     mat.depthTest = false;
-    // Phase 2D.3 — generic-only readers (no PHOTO bits) sit between
-    // BASE_MAIN/BASE_TEAM (writer @ 15) and player photo cards (TEXTURE_PHOTO
-    // @ 18+). Phase 2D.4 — split that band into a fill lane (16) and a text
-    // lane (17): TextureText clients (SMALL_TEAM_NAME, TEAM_NAME_*) render
-    // above the TEXTURE_FULLFRAME_* fill, both still below the photo cards.
+    // Phase 2D.3 + A1 — generic-only readers (no PHOTO bits) sit in the
+    // per-mask block belonging to their writer: fill readers one lane above
+    // the writer, text readers two lanes above. Each generic mask owner gets
+    // a contiguous 3-lane block (writer/fill/text), so a later mask pair
+    // fully replaces an earlier one in their overlap region. All blocks
+    // remain below the photo-card stack (TEXTURE_PHOTO @ 20+).
     const isGenericOnly =
       maskOwner === undefined && dummyOwner === undefined && genericOwner !== undefined;
     const isTextClient =
       (mesh.userData?.w3d as { kind?: string } | undefined)?.kind === "TextureText";
+    // Phase A1 — per-mask reader lanes. `genericOwner` is the 1-based discovery
+    // index of the writer this reader is clipped against; its block sits at
+    // genericWriterLane(index) so fill/text readers land just above it.
     mesh.renderOrder = isGenericOnly
-      ? (isTextClient ? RENDER_ORDER_GENERIC_TEXT : RENDER_ORDER_GENERIC_CLIENT)
+      ? (isTextClient ? genericTextLane(genericOwner!) : genericFillLane(genericOwner!))
       : photoCardRenderOrder(node.name);
     // Patch D2 — force photo-card readers (PHOTO_0X, PHOTO_COLOR_0X,
     // TEXTURE_PHOTO_0X) into the transparent pass so Three.js sorts them
@@ -1076,29 +1090,62 @@ function applyPhotoMaskStencil(
  * the R3 visual order. Forcing renderOrder per node-name role restores the
  * intended back-to-front: TEXTURE (pattern) → COLOR (yellow) → PHOTO (player).
  */
-const RENDER_ORDER_GENERIC_WRITER = 15;   // Phase 2D.3 — between PHOTO writer (10) and PHOTO reader (18+)
-const RENDER_ORDER_GENERIC_CLIENT = 16;   // Phase 2D.3 — generic fill clients (TEXTURE_FULLFRAME_*, etc.)
 /**
- * Phase 2D.4 — generic text lane. Generic-mask TextureText clients
- * (SMALL_TEAM_NAME, TEAM_NAME_*) sit one lane above the fill clients (16) so
- * the team name reads ON TOP of the TEXTURE_FULLFRAME_* pattern fill without
- * depending on the transparent z-sort (depthTest/depthWrite are disabled on
- * stencil clients, so equal-renderOrder + equal-Z siblings would otherwise
- * fall back to insertion order). Kept below the photo-card stack (18+) so
- * player cards still render over the team panel.
+ * Phase A1 — per-mask renderOrder block for generic colored masks.
+ *
+ * R3 renders generic colored-mask pairs in document order: writer N → readers
+ * of N → writer N+1 → readers of N+1. A later mask pair must fully replace an
+ * earlier one in their overlap region. The previous flat 15/16/17 layout
+ * (every writer at 15, every reader at 16, every text reader at 17) violated
+ * this: in LINEUP_LEFT, FF_MAIN (reader of BASE_MAIN @ 16) drew on top of
+ * BASE_TEAM (writer @ 15) in their overlap, reducing the visible purple
+ * panel to a thin sliver at the canvas right edge.
+ *
+ * New scheme: each generic mask gets a contiguous 3-lane block keyed off
+ * its 1-based discovery index from `collectGenericMaskInfo`:
+ *
+ *   block(i) = [GENERIC_BLOCK_BASE + 3·(i-1) … GENERIC_BLOCK_BASE + 3·i - 1]
+ *     writer  = block(i)[0]
+ *     fill    = block(i)[1]   (TEXTURE_FULLFRAME_* and similar Quad readers)
+ *     text    = block(i)[2]   (SMALL_TEAM_NAME / TEAM_NAME_* TextureText readers)
+ *
+ * With BASE_MAIN @ index 1 and BASE_TEAM @ index 2, LINEUP_LEFT lanes become:
+ *   BASE_MAIN block  → 11 / 12 / 13   (writer / fill / text)
+ *   BASE_TEAM block  → 14 / 15 / 16   (writer / fill / text)
+ *
+ * `STENCIL_GENERIC_INDEX_MAX = 3` caps the field to 3 owners, so the
+ * highest possible generic lane is 19 (writer-3=17, fill-3=18, text-3=19).
+ * Photo card readers therefore start at 20, leaving room beneath them for
+ * up to 3 generic mask pairs without collision.
+ *
+ * Stencil refs/funcs/writeMasks are untouched by this phase — owner-field
+ * allocation, mask-shape silhouette and reader equality tests remain
+ * exactly as Phase 2J left them. Only the paint order changes.
  */
-const RENDER_ORDER_GENERIC_TEXT = 17;
-const RENDER_ORDER_TEXTURE_PHOTO = 18;
-const RENDER_ORDER_PHOTO_COLOR = 19;
-const RENDER_ORDER_DEFAULT_CLIENT = 20;
+const GENERIC_BLOCK_BASE = 11;   // writer lane of the first generic mask block
+const GENERIC_BLOCK_SIZE = 3;    // writer + fill-reader + text-reader
+
+function genericWriterLane(maskIndex: number): number {
+  return GENERIC_BLOCK_BASE + GENERIC_BLOCK_SIZE * (maskIndex - 1);
+}
+function genericFillLane(maskIndex: number): number {
+  return genericWriterLane(maskIndex) + 1;
+}
+function genericTextLane(maskIndex: number): number {
+  return genericWriterLane(maskIndex) + 2;
+}
+
+const RENDER_ORDER_TEXTURE_PHOTO = 20;   // photo-card pattern fill (was 18)
+const RENDER_ORDER_PHOTO_COLOR = 21;     // photo-card colored block (was 19)
+const RENDER_ORDER_DEFAULT_CLIENT = 22;  // PHOTO_NN and default photo-stencil reader (was 20)
 /**
- * Phase TextureText render-order — labels without a MaskId default to renderOrder=22
- * (above the photo-card stack at 18/19/20) so PLAYER_NUMBER / PLAYER_POSITION /
- * PLAYER_LAST_NAME draw on top of their card. TextureText nodes WITH a MaskId
- * still pass through applyPhotoMaskStencil's reader path which overrides this
- * value with the appropriate stencil-reader renderOrder.
+ * Phase TextureText render-order — labels without a MaskId default to
+ * renderOrder=24 (above the photo-card stack at 20/21/22) so PLAYER_NUMBER /
+ * PLAYER_POSITION / PLAYER_LAST_NAME draw on top of their card. TextureText
+ * nodes WITH a MaskId still pass through applyPhotoMaskStencil's reader path
+ * which overrides this value with the appropriate stencil-reader renderOrder.
  */
-const RENDER_ORDER_TEXT = 22;
+const RENDER_ORDER_TEXT = 24;
 
 const PHOTO_CARD_CLIENT_RE = /^(TEXTURE_PHOTO_\d+|PHOTO_COLOR_\d+|PHOTO_\d+)$/;
 

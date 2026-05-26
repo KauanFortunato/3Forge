@@ -584,7 +584,7 @@ describe("builder — BuildContext", () => {
     expect(mat.stencilFunc).toBe(NotEqualStencilFunc);
   });
 
-  test("Phase 1a: mask renderOrder (10) is less than client renderOrder (20)", () => {
+  test("Phase 1a: mask renderOrder (10) is less than client renderOrder (22)", () => {
     const mask = quadData({
       id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
@@ -595,7 +595,7 @@ describe("builder — BuildContext", () => {
     const maskMesh = root.children[0] as Mesh;
     const photoMesh = root.children[1] as Mesh;
     expect(maskMesh.renderOrder).toBe(10);
-    expect(photoMesh.renderOrder).toBe(20);
+    expect(photoMesh.renderOrder).toBe(22); // Phase A1 — PHOTO_NN default reader (was 20)
     expect(maskMesh.renderOrder).toBeLessThan(photoMesh.renderOrder);
   });
 
@@ -844,7 +844,8 @@ describe("builder — BuildContext", () => {
     expect(g1Mat.stencilRef).toBe(64); // index 1, not 2
   });
 
-  test("Phase 2D.3: generic writer renderOrder=15, generic-only reader renderOrder=16", () => {
+  test("Phase 2D.3 + A1: first generic writer renderOrder=11, generic-only reader renderOrder=12", () => {
+    // Single generic mask (BASE_MAIN) → discovery index 1 → block lanes 11/12/13.
     const baseMain = quadData({
       id: "bmain", name: "BASE_MAIN", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
@@ -853,8 +854,8 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([baseMain, client], makeCtx());
     const writer = root.children[0] as Mesh;
     const reader = root.children[1] as Mesh;
-    expect(writer.renderOrder).toBe(15);
-    expect(reader.renderOrder).toBe(16);
+    expect(writer.renderOrder).toBe(11);
+    expect(reader.renderOrder).toBe(12);
     expect(writer.renderOrder).toBeLessThan(reader.renderOrder);
   });
 
@@ -935,9 +936,9 @@ describe("builder — BuildContext", () => {
       expect(mat.depthWrite).toBe(false);
       expect(mat.depthTest).toBe(false);
     }
-    // Patch D2: renderOrder is granular by node name (TEXTURE behind COLOR).
-    expect(colorMesh.renderOrder).toBe(19);
-    expect(textureMesh.renderOrder).toBe(18);
+    // Patch D2 + A1: renderOrder is granular by node name (TEXTURE behind COLOR).
+    expect(colorMesh.renderOrder).toBe(21);   // PHOTO_COLOR (was 19)
+    expect(textureMesh.renderOrder).toBe(20); // TEXTURE_PHOTO (was 18)
   });
 
   test("Patch A: own maskIds on a Quad override inherited from parent Group", () => {
@@ -983,8 +984,8 @@ describe("builder — BuildContext", () => {
     const colorMesh = fillGroup.children[0] as Mesh;
     const textureMesh = fillGroup.children[1] as Mesh;
     expect(textureMesh.renderOrder).toBeLessThan(colorMesh.renderOrder);
-    expect(textureMesh.renderOrder).toBe(18);
-    expect(colorMesh.renderOrder).toBe(19);
+    expect(textureMesh.renderOrder).toBe(20); // Phase A1 — TEXTURE_PHOTO (was 18)
+    expect(colorMesh.renderOrder).toBe(21);   // Phase A1 — PHOTO_COLOR (was 19)
   });
 
   test("Patch D2: PHOTO_COLOR_0X gets lower renderOrder than PHOTO_0X (COLOR behind PHOTO)", () => {
@@ -1008,8 +1009,8 @@ describe("builder — BuildContext", () => {
     const photoMesh = root.children[2] as Mesh;
     const colorMesh = (root.children[3] as Group).children[0] as Mesh;
     expect(colorMesh.renderOrder).toBeLessThan(photoMesh.renderOrder);
-    expect(colorMesh.renderOrder).toBe(19);
-    expect(photoMesh.renderOrder).toBe(20);
+    expect(colorMesh.renderOrder).toBe(21); // Phase A1 — PHOTO_COLOR (was 19)
+    expect(photoMesh.renderOrder).toBe(22); // Phase A1 — PHOTO_NN default (was 20)
   });
 
   test("Patch D2: non-photo-card stencil reader keeps authored transparency (scope guard)", () => {
@@ -2599,12 +2600,12 @@ describe("builder — BuildContext", () => {
 
   // -----------------------------------------------------------------------
   // Phase TextureText render-order fix — labels without a MaskId render
-  // on top of the photo-card stack (renderOrder=22). Stencil readers keep
-  // their existing renderOrder (16 generic fill, 17 generic text per Phase
-  // 2D.4, 18/19/20 photo-card).
+  // on top of the photo-card stack (Phase A1: renderOrder=24). Stencil
+  // readers use per-mask lanes: writer(11+3·(i−1)) / fill(+1) / text(+2),
+  // with photo-card readers at 20/21/22.
   // -----------------------------------------------------------------------
 
-  test("Phase TextureText render-order: TextureText without maskIds gets renderOrder=22, depthWrite=false, depthTest=false", () => {
+  test("Phase TextureText render-order: TextureText without maskIds gets renderOrder=24, depthWrite=false, depthTest=false", () => {
     const node = {
       kind: "TextureText" as const,
       id: "tt", name: "PLAYER_LAST_NAME_02",
@@ -2622,12 +2623,12 @@ describe("builder — BuildContext", () => {
     };
     const mesh = buildNode(node, makeCtx()) as Mesh;
     const mat = mesh.material as MeshBasicMaterial;
-    expect(mesh.renderOrder).toBe(22);
+    expect(mesh.renderOrder).toBe(24); // Phase A1 — labels above all generic + photo lanes
     expect(mat.depthWrite).toBe(false);
     expect(mat.depthTest).toBe(false);
   });
 
-  test("Phase TextureText render-order: PLAYER_NUMBER-like TextureText gets renderOrder=22 and transparent=true", () => {
+  test("Phase TextureText render-order: PLAYER_NUMBER-like TextureText gets renderOrder=24 and transparent=true", () => {
     const node = {
       kind: "TextureText" as const,
       id: "num", name: "PLAYER_NUMBER_02",
@@ -2645,14 +2646,16 @@ describe("builder — BuildContext", () => {
     };
     const mesh = buildNode(node, makeCtx()) as Mesh;
     const mat = mesh.material as MeshBasicMaterial;
-    expect(mesh.renderOrder).toBe(22);
+    expect(mesh.renderOrder).toBe(24); // Phase A1 — labels above all generic + photo lanes
     expect(mat.transparent).toBe(true);
   });
 
-  test("Phase 2D.4: SMALL_TEAM_NAME (TextureText, MaskId=BASE_MAIN) gets renderOrder=17 (generic text lane)", () => {
-    // SMALL_TEAM_NAME-like: own MaskId references BASE_MAIN; the generic-text
-    // lane overrides the default-22 baseline to 17 so it reads above the
-    // TEXTURE_FULLFRAME_* fill (16) but below the photo cards (18+).
+  test("Phase 2D.4 + A1: SMALL_TEAM_NAME (TextureText, MaskId=BASE_MAIN) gets renderOrder=13 (BASE_MAIN text lane)", () => {
+    // SMALL_TEAM_NAME-like: own MaskId references BASE_MAIN (single generic
+    // mask → discovery index 1 → block lanes 11/12/13). The generic-text
+    // override drops the default-24 label baseline down into the BASE_MAIN
+    // block so the team-name reads above its TEXTURE_FULLFRAME_* fill (12)
+    // but below the photo cards (20+).
     const baseMain = quadData({
       id: "base-main", name: "BASE_MAIN", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
@@ -2674,12 +2677,12 @@ describe("builder — BuildContext", () => {
     };
     const root = buildNodeTree([baseMain, text], makeCtx());
     const mesh = root.children[1] as Mesh;
-    expect(mesh.renderOrder).toBe(17); // generic TEXT lane (Phase 2D.4)
+    expect(mesh.renderOrder).toBe(13); // Phase A1 — BASE_MAIN block text lane (index 1)
   });
 
-  test("Phase 2D.4: TEAM_NAME TextureText child inheriting MaskId=BASE_MAIN gets renderOrder=17", () => {
+  test("Phase 2D.4 + A1: TEAM_NAME TextureText child inheriting MaskId=BASE_MAIN gets renderOrder=13", () => {
     // TEAM_NAME-style: parent Group has MaskId=BASE_MAIN, TextureText child has none.
-    // Inherited maskIds resolve to a generic writer → text lane → renderOrder=17.
+    // Inherited maskIds resolve to a generic writer → text lane of that writer's block.
     const baseMain = quadData({
       id: "base-main", name: "BASE_MAIN", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
@@ -2707,13 +2710,14 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([baseMain, parent], makeCtx());
     const teamNameGroup = root.children[1] as Group;
     const textMesh = teamNameGroup.children[0] as Mesh;
-    expect(textMesh.renderOrder).toBe(17); // inherited generic reader → text lane
+    expect(textMesh.renderOrder).toBe(13); // Phase A1 — inherited generic reader → text lane (BASE_MAIN block)
   });
 
-  test("Phase 2D.4: TEXTURE_FULLFRAME_MAIN (Quad fill client) stays at renderOrder=16; text lane sits above fill, below cards", async () => {
-    // The fill/pattern client (a Quad) keeps the generic fill lane (16); the
-    // sibling team-name text (TextureText) goes to the text lane (17). Assert
-    // the full lane ordering: writer(15) < fill(16) < text(17) < cards(18).
+  test("Phase 2D.4 + A1: TEXTURE_FULLFRAME_MAIN (Quad fill client) sits at BASE_MAIN fill lane (12); text lane (13) above fill, below cards", async () => {
+    // BASE_MAIN is the only generic mask here → discovery index 1 → block
+    // lanes 11/12/13. The fill client (Quad) lands at 12, the sibling team-
+    // name text (TextureText) at 13. Assert the full lane ordering:
+    //   writer(11) < fill(12) < text(13) < photo cards (20+).
     const { EqualStencilFunc } = await import("three");
     const baseMain = quadData({
       id: "base-main", name: "BASE_MAIN", isMask: true,
@@ -2739,11 +2743,12 @@ describe("builder — BuildContext", () => {
     const writerMesh = root.children[0] as Mesh;
     const fillMesh = root.children[1] as Mesh;
     const textMesh = root.children[2] as Mesh;
-    expect(fillMesh.renderOrder).toBe(16);
-    expect(textMesh.renderOrder).toBe(17);
-    expect(writerMesh.renderOrder).toBeLessThan(fillMesh.renderOrder); // 15 < 16
-    expect(fillMesh.renderOrder).toBeLessThan(textMesh.renderOrder);   // 16 < 17
-    expect(textMesh.renderOrder).toBeLessThan(18);                     // below photo cards
+    expect(writerMesh.renderOrder).toBe(11);                            // BASE_MAIN writer
+    expect(fillMesh.renderOrder).toBe(12);                              // BASE_MAIN fill
+    expect(textMesh.renderOrder).toBe(13);                              // BASE_MAIN text
+    expect(writerMesh.renderOrder).toBeLessThan(fillMesh.renderOrder); // 11 < 12
+    expect(fillMesh.renderOrder).toBeLessThan(textMesh.renderOrder);   // 12 < 13
+    expect(textMesh.renderOrder).toBeLessThan(20);                     // below photo cards (20+)
     // Masking is untouched: the text client still reads BASE_MAIN's generic
     // field (Equal, ref 64, funcMask 192), and the writer ref is unchanged.
     const textMat = textMesh.material as MeshBasicMaterial;
@@ -2753,10 +2758,12 @@ describe("builder — BuildContext", () => {
     expect((writerMesh.material as MeshBasicMaterial).stencilRef).toBe(64);
   });
 
-  test("Phase 2D.4: BASE_TEAM text client reads ref=128 and lands in the text lane (17)", async () => {
+  test("Phase 2D.4 + A1: BASE_TEAM text client reads ref=128 and lands in BASE_TEAM block text lane (16)", async () => {
     // A TextureText client of the SECOND generic writer (BASE_TEAM, owner
-    // index 2 → ref 128) must still read the correct generic field and use the
-    // text lane, proving the lane split is independent of which writer.
+    // index 2 → ref 128, block lanes 14/15/16) must read the correct generic
+    // field AND land in the text lane of its OWN writer's block — proving
+    // that the per-mask block scheme correctly routes readers to the lane
+    // belonging to their writer, not a shared global lane.
     const { EqualStencilFunc } = await import("three");
     const baseMain = quadData({
       id: "base-main", name: "BASE_MAIN", isMask: true,
@@ -2786,17 +2793,96 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([baseMain, baseTeam, ffMain, benchText], makeCtx());
     const benchMesh = root.children[3] as Mesh;
     const benchMat = benchMesh.material as MeshBasicMaterial;
-    expect(benchMesh.renderOrder).toBe(17);
+    expect(benchMesh.renderOrder).toBe(16); // Phase A1 — BASE_TEAM block text lane (index 2)
     expect(benchMat.stencilFunc).toBe(EqualStencilFunc);
     expect(benchMat.stencilRef).toBe(128); // BASE_TEAM owner index 2 << 6
     expect(benchMat.stencilFuncMask).toBe(0b11000000);
   });
 
-  test("Phase TextureText render-order: TextureText inside PHOTO_FILL gets photoCardRenderOrder default 20 (regression)", () => {
+  test("Phase A1: with two generic masks M1 then M2, M1's whole block renders before M2's whole block", () => {
+    // The bug this fixes: with the old flat 15/16/17 scheme, FF_MAIN (reader
+    // of BASE_MAIN at lane 16) drew on top of BASE_TEAM (writer at lane 15) in
+    // their overlap region, reducing the visible BASE_TEAM panel to a thin
+    // strip. The per-mask block scheme guarantees that every reader of M1
+    // renders before M1+1's writer.
+    const baseMain = quadData({
+      id: "M1", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const baseTeam = quadData({
+      id: "M2", name: "BASE_TEAM", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const ffMain = quadData({ id: "ffm", name: "TEXTURE_FULLFRAME_MAIN", maskIds: ["M1"] });
+    const ffBench = quadData({ id: "ffb", name: "TEXTURE_FULLFRAME_BENCH", maskIds: ["M2"] });
+    const root = buildNodeTree([baseMain, ffMain, baseTeam, ffBench], makeCtx());
+    const m1Writer = root.children[0] as Mesh;
+    const m1Fill = root.children[1] as Mesh;
+    const m2Writer = root.children[2] as Mesh;
+    const m2Fill = root.children[3] as Mesh;
+    // Block 1 lanes 11/12, block 2 lanes 14/15.
+    expect(m1Writer.renderOrder).toBe(11);
+    expect(m1Fill.renderOrder).toBe(12);
+    expect(m2Writer.renderOrder).toBe(14);
+    expect(m2Fill.renderOrder).toBe(15);
+    // The key invariant: M1 fill < M2 writer (so M2 paints over M1's fill in
+    // the overlap region, matching R3 document-order semantics).
+    expect(m1Fill.renderOrder).toBeLessThan(m2Writer.renderOrder);
+  });
+
+  test("Phase A1: photo-card lanes (20/21/22) sit above every generic mask block (max 19) and below label lane (24)", () => {
+    // Even with the maximum allowed generic masks (STENCIL_GENERIC_INDEX_MAX=3),
+    // the highest generic lane is 19 (text of block 3). Photo readers start at
+    // 20 and labels at 24, so the relative stack ordering invariant holds.
+    const mkGenericMask = (i: number) => quadData({
+      id: `G${i}`, name: `BASE_${i}`, isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const mkGenericClient = (i: number) =>
+      quadData({ id: `c${i}`, name: `FF_${i}`, maskIds: [`G${i}`] });
+    const photoMask = quadData({
+      id: "pm", name: "PHOTO_MASK_01", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const photo = quadData({ id: "p1", name: "PHOTO_01", maskIds: ["pm"] });
+    const label = {
+      kind: "TextureText" as const,
+      id: "lbl", name: "PLAYER_NUMBER_01",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "5",
+      textBox: { x: 0.08, y: 0.19 },
+      textQuality: 4,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const root = buildNodeTree(
+      [mkGenericMask(1), mkGenericClient(1), mkGenericMask(2), mkGenericClient(2), mkGenericMask(3), mkGenericClient(3), photoMask, photo, label],
+      makeCtx(),
+    );
+    const lanes = root.children.map((c) => (c as Mesh).renderOrder);
+    const [g1w, g1f, g2w, g2f, g3w, g3f, pmw, pr, lbl] = lanes;
+    // Per-mask block lanes ascend in pairs of writer/fill.
+    expect([g1w, g1f, g2w, g2f, g3w, g3f]).toEqual([11, 12, 14, 15, 17, 18]);
+    // Photo-mask writer stays at 10 (its own dedicated lane).
+    expect(pmw).toBe(10);
+    // Photo-card reader sits above all generic blocks.
+    expect(pr).toBe(22);
+    expect(pr).toBeGreaterThan(g3f);
+    // Label sits above the photo-card stack.
+    expect(lbl).toBe(24);
+    expect(lbl).toBeGreaterThan(pr);
+  });
+
+  test("Phase TextureText render-order: TextureText inside PHOTO_FILL gets photoCardRenderOrder default 22 (regression)", () => {
     // A TextureText sitting under PHOTO_FILL_02 with maskIds=[DUMMY_02, MASK_02]
     // inherits both → Phase 2E intersection reader fires → renderOrder via
     // photoCardRenderOrder(name). Name doesn't match TEXTURE_PHOTO/COLOR/PHOTO,
-    // so falls back to RENDER_ORDER_DEFAULT_CLIENT = 20.
+    // so falls back to RENDER_ORDER_DEFAULT_CLIENT (Phase A1 = 22, was 20).
     const photoMask = quadData({
       id: "mask-2", name: "PHOTO_MASK_02", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
@@ -2828,12 +2914,12 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([photoMask, photoDummy, fill], makeCtx());
     const fillGroup = root.children[2] as Group;
     const mesh = fillGroup.children[0] as Mesh;
-    expect(mesh.renderOrder).toBe(20); // photoCardRenderOrder default for non-PHOTO/COLOR/TEXTURE_PHOTO name
+    expect(mesh.renderOrder).toBe(22); // Phase A1 — photoCardRenderOrder default (was 20)
   });
 
-  test("Phase TextureText render-order regression: PHOTO_02 reader still gets renderOrder=20", () => {
+  test("Phase TextureText render-order regression: PHOTO_02 reader still gets renderOrder=22", () => {
     // The TextureText fix must NOT change the existing Phase 1a + Patch D2
-    // renderOrder for Quad photo-card clients.
+    // renderOrder for Quad photo-card clients (Phase A1 shifted 20→22).
     const photoMask = quadData({
       id: "mask-2", name: "PHOTO_MASK_02", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
@@ -2841,7 +2927,7 @@ describe("builder — BuildContext", () => {
     const photo = quadData({ id: "p2", name: "PHOTO_02", maskIds: ["mask-2"] });
     const root = buildNodeTree([photoMask, photo], makeCtx());
     const photoMesh = root.children[1] as Mesh;
-    expect(photoMesh.renderOrder).toBe(20);
+    expect(photoMesh.renderOrder).toBe(22); // Phase A1 — PHOTO_NN default reader (was 20)
   });
 
   // -----------------------------------------------------------------------
@@ -2927,8 +3013,8 @@ describe("builder — BuildContext", () => {
   });
 
   test('Phase TextureText layout v2: render-order baseline unchanged by ConstrainMethod', () => {
-    // Adding ConstrainMethod must not regress the renderOrder=22 default for
-    // a TextureText without maskIds.
+    // Adding ConstrainMethod must not regress the renderOrder=24 default for
+    // a TextureText without maskIds (Phase A1 shifted 22→24).
     const node = {
       kind: "TextureText" as const,
       id: "tt", name: "X",
@@ -2946,7 +3032,7 @@ describe("builder — BuildContext", () => {
       children: [],
     };
     const mesh = buildNode(node, makeCtx()) as Mesh;
-    expect(mesh.renderOrder).toBe(22);
+    expect(mesh.renderOrder).toBe(24); // Phase A1 — labels lane shifted 22 → 24
   });
 
   test("Phase 2C regression: PHOTO_MASK_05 (no texture layer) is unaffected by UV transform plumbing", () => {
