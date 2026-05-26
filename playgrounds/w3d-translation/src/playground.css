@@ -119,17 +119,23 @@ body {
   /* Phase DEV-Viewport — 16:9 broadcast frame.
      The JS renderer.setSize stretches the canvas to the LARGEST 16:9 pixel
      rectangle that fits inside this host. CSS just centers the resulting
-     fixed-size canvas; the host's black background acts as letterbox bars on
-     whichever axis is shorter. */
+     fixed-size canvas; this host's color paints the letterbox bars on
+     whichever axis is shorter. The native 3Forge editor clears its outer
+     viewport region to 0x000000 via scissor; the playground uses CSS instead
+     and intentionally picks a slightly lighter slate-grey so the canvas
+     edges are visible in the sandbox even when the authored scene's
+     SceneLayer.BackgroundColor is also black (e.g. LINEUP_LEFT = #000000). */
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #000;
+  background: var(--border); /* #2a2e36 — dev-only outer letterbox; the active 16:9 keeps the authored bg */
 }
 .playground__viewport-host canvas {
   display: block;
   background: #1e1f25;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+  /* Stronger 1px outline so the 16:9 canvas edge stands out against the
+     outer letterbox color, regardless of what the scene background is. */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 .playground__viewport-meta {
   position: absolute;
