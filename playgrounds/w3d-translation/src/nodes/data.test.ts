@@ -336,6 +336,28 @@ describe("parseGroup and recursion", () => {
     expect(g.flow?.leadingSpace).toBeCloseTo(-0.084, 5);
   });
 
+  test("Phase G: FlowChildrenAlignment is preserved (e.g. Trailing, Center)", () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <Group Id="g" Name="BENCH_LIST">
+        <GeometryOptions FlowChildren="True" LeadingSpace="-0.084" Direction="YMinus" FlowChildrenAlignment="Trailing"/>
+      </Group>
+    `));
+    const g = roots[0] as W3DGroupData;
+    expect(g.flow?.alignment).toBe("Trailing");
+  });
+
+  test("Phase G: FlowChildrenAlignment alone (without FlowChildren=True) still parses but flow.children=false", () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <Group Id="g" Name="INNER">
+        <GeometryOptions FlowChildrenAlignment="Center" Direction="YMinus"/>
+      </Group>
+    `));
+    const g = roots[0] as W3DGroupData;
+    expect(g.flow?.children).toBe(false);
+    expect(g.flow?.alignment).toBe("Center");
+    expect(g.flow?.direction).toBe("YMinus");
+  });
+
   test("Phase 2A: Group without GeometryOptions → flow undefined", () => {
     const { roots } = parseNodes(wrapInScene(`<Group Id="g" Name="x"/>`));
     expect((roots[0] as W3DGroupData).flow).toBeUndefined();

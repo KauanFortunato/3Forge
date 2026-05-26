@@ -564,6 +564,9 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
           {report.flow.parentFlowDirection
             ? <><dt>Direction</dt><dd>{report.flow.parentFlowDirection}</dd></>
             : null}
+          {report.flow.parentFlowAlignment
+            ? <><dt>Alignment</dt><dd>{report.flow.parentFlowAlignment}</dd></>
+            : null}
         </dl>
       </details>
     </aside>

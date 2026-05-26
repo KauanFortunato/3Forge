@@ -1065,36 +1065,125 @@ describe("builder — BuildContext", () => {
     expect(players.flow!.leadingSpace).toBe(-1.26);
   });
 
-  test("Phase 2A gate: non-PLAYERS group with flow.children=true is NOT distributed", () => {
-    // BENCH_LIST has the same flow attrs in the scene, but Phase 2A scope is
-    // intentionally limited to the PLAYERS group. Other named groups stay at
-    // their authored child positions until Phase 2F.
-    const c1 = groupData({ id: "c1", name: "CHILD_01" });
-    const c2 = groupData({ id: "c2", name: "CHILD_02" });
+  test("Phase G: flow is applied generically regardless of group name (no PLAYERS gate)", () => {
+    // BENCH_LIST authors FlowChildren=True Direction=YMinus LeadingSpace=-0.084
+    // FlowChildrenAlignment=Trailing in the real fixture. Phase G removes the
+    // PLAYERS-only gate so any flow-flagged group is laid out.
+    const mk = (i: number) => quadData({
+      id: `b${i}`, name: `BENCH_PLAYER_0${i}`, geometry: { size: { x: 2, y: 0.4 } },
+      transform: { position: { x: 9, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
     const bench = groupData({
       id: "bench", name: "BENCH_LIST",
-      flow: { children: true, leadingSpace: -0.084, direction: "YMinus" },
-      children: [c1, c2],
+      flow: { children: true, leadingSpace: -0.084, direction: "YMinus", alignment: "Trailing" },
+      children: [mk(1), mk(2), mk(3)],
     });
     const root = buildNodeTree([bench]);
     const g = root.children[0] as Group;
-    expect(g.children[0].position.x).toBe(0);
-    expect(g.children[1].position.x).toBe(0);
-    expect(g.children[0].position.y).toBe(0);
-    expect(g.children[1].position.y).toBe(0);
+    // YMinus: cursor advances -Y by (childHeight + leadingSpace) per child.
+    // Height = 0.4, LeadingSpace = -0.084 → stride = -(0.4 + (-0.084)) = -0.316.
+    const stride = -(0.4 + (-0.084)); // -0.316
+    expect(g.children[0].position.y).toBeCloseTo(0, 5);
+    expect(g.children[1].position.y).toBeCloseTo(stride, 5);
+    expect(g.children[2].position.y).toBeCloseTo(2 * stride, 5);
+    // FlowChildrenAlignment="Trailing" is parsed but NOT applied as a transform
+    // (see applyFlowLayout doc-comment + BENCH_LIST evidence). Each child keeps
+    // its authored X=9, which is what makes the bench rows land inside the
+    // BASE_TEAM panel in the real fixture.
+    expect(g.children[0].position.x).toBeCloseTo(9, 5);
+    expect(g.children[1].position.x).toBeCloseTo(9, 5);
+    expect(g.children[2].position.x).toBeCloseTo(9, 5);
   });
 
-  test("Phase 2A: PLAYERS group without flow set is unchanged", () => {
-    const c1 = groupData({ id: "c1", name: "PLAYER_01" });
-    const c2 = groupData({ id: "c2", name: "PLAYER_02" });
-    const players = groupData({
-      id: "players", name: "PLAYERS",
-      children: [c1, c2], // no flow
+  test("Phase G: YMinus without alignment leaves cross-axis untouched (positive LeadingSpace = gap)", () => {
+    const mk = (i: number) => quadData({ id: `r${i}`, name: `ROW_0${i}`, geometry: { size: { x: 2, y: 0.4 } } });
+    const stack = groupData({
+      id: "stack", name: "STACK",
+      flow: { children: true, leadingSpace: 0.1, direction: "YMinus" },
+      children: [mk(1), mk(2)],
     });
-    const root = buildNodeTree([players]);
+    const root = buildNodeTree([stack]);
     const g = root.children[0] as Group;
+    // stride = -(0.4 + 0.1) = -0.5
+    expect(g.children[0].position.y).toBeCloseTo(0, 5);
+    expect(g.children[1].position.y).toBeCloseTo(-0.5, 5);
+    // Cross-axis untouched (no alignment): authored X=0 preserved.
     expect(g.children[0].position.x).toBe(0);
     expect(g.children[1].position.x).toBe(0);
+  });
+
+  test("Phase G: FlowChildrenAlignment is parsed onto userData but does not move children", () => {
+    // R3's FlowChildrenAlignment semantics are not yet validated against a
+    // second corpus template. Until then we preserve authored positions and
+    // only expose the parsed value on userData for the DEV inspector.
+    const c1 = quadData({
+      id: "c1", name: "C1", geometry: { alignmentX: "Left", size: { x: 2, y: 0.4 } },
+      transform: { position: { x: 0.5, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const c2 = quadData({
+      id: "c2", name: "C2", geometry: { alignmentX: "Left", size: { x: 1, y: 0.4 } },
+      transform: { position: { x: 0.5, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const stack = groupData({
+      id: "stack", name: "STACK",
+      flow: { children: true, leadingSpace: 0, direction: "YMinus", alignment: "Center" },
+      children: [c1, c2],
+    });
+    const root = buildNodeTree([stack]);
+    const g = root.children[0] as Group;
+    // Center alignment is parsed but not applied: authored cross-axis (X=0.5) preserved.
+    expect(g.children[0].position.x).toBeCloseTo(0.5, 5);
+    expect(g.children[1].position.x).toBeCloseTo(0.5, 5);
+    // userData carries the authored alignment for inspector exposure.
+    expect((g.userData.w3d as { flow?: { alignment?: string } } | undefined)?.flow?.alignment).toBe("Center");
+  });
+
+  test("Phase G: XMinus reverses cursor sign (right→left)", () => {
+    const mk = (i: number) => quadData({ id: `p${i}`, name: `P_${i}`, geometry: { size: { x: 2, y: 1 } } });
+    const row = groupData({
+      id: "row", name: "ROW",
+      flow: { children: true, leadingSpace: 0, direction: "XMinus" },
+      children: [mk(1), mk(2), mk(3)],
+    });
+    const root = buildNodeTree([row]);
+    const g = root.children[0] as Group;
+    // stride = -(2 + 0) = -2; first child at origin, others at -2, -4.
+    expect(g.children[0].position.x).toBeCloseTo(0, 5);
+    expect(g.children[1].position.x).toBeCloseTo(-2, 5);
+    expect(g.children[2].position.x).toBeCloseTo(-4, 5);
+  });
+
+  test("Phase G: flow.children=false group is not distributed (FlowChildren must be true)", () => {
+    // GeometryOptions present with Direction/Alignment but FlowChildren absent or False.
+    const c1 = quadData({ id: "c1", name: "C1", geometry: { size: { x: 1, y: 1 } } });
+    const c2 = quadData({ id: "c2", name: "C2", geometry: { size: { x: 1, y: 1 } } });
+    const g = groupData({
+      id: "g", name: "G",
+      flow: { children: false, direction: "YMinus", alignment: "Center" },
+      children: [c1, c2],
+    });
+    const root = buildNodeTree([g]);
+    const built = root.children[0] as Group;
+    // No flow distribution applied.
+    expect(built.children[0].position.x).toBe(0);
+    expect(built.children[0].position.y).toBe(0);
+    expect(built.children[1].position.x).toBe(0);
+    expect(built.children[1].position.y).toBe(0);
+  });
+
+  test("Phase G: group without flow attribute is unchanged (no layout pass runs)", () => {
+    const c1 = quadData({ id: "c1", name: "C1", geometry: { size: { x: 1, y: 1 } } });
+    const c2 = quadData({ id: "c2", name: "C2", geometry: { size: { x: 1, y: 1 } } });
+    const g = groupData({
+      id: "g", name: "ANY_GROUP",
+      children: [c1, c2], // no flow
+    });
+    const root = buildNodeTree([g]);
+    const built = root.children[0] as Group;
+    expect(built.children[0].position.x).toBe(0);
+    expect(built.children[1].position.x).toBe(0);
+    expect(built.children[0].position.y).toBe(0);
+    expect(built.children[1].position.y).toBe(0);
   });
 
   test("Phase 2A regression: PHOTO_MASK_05 keeps authored Size.X=1.55 (not normalized)", () => {

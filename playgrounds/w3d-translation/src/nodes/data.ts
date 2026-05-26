@@ -25,10 +25,16 @@ export type W3DMaskProperties = {
 export type W3DGroupFlow = {
   /** R3 GeometryOptions.FlowChildren — when true, R3 distributes the children along the flow axis. */
   children: boolean;
-  /** R3 GeometryOptions.LeadingSpace — signed step between consecutive children. */
+  /** R3 GeometryOptions.LeadingSpace — signed gap between consecutive children (negative = overlap). */
   leadingSpace?: number;
-  /** R3 GeometryOptions.Direction (e.g. "YMinus") — flow axis hint when present. */
+  /** R3 GeometryOptions.Direction (e.g. "XPlus", "YMinus") — flow axis hint when present. Default is "XPlus" when omitted. */
   direction?: string;
+  /**
+   * R3 GeometryOptions.FlowChildrenAlignment (e.g. "Center", "Trailing", "Leading") — cross-axis
+   * alignment applied to each child relative to the container origin. Stored verbatim from XML; the
+   * builder interprets known values and treats unknown/missing as "Leading" (no cross-axis shift).
+   */
+  alignment?: string;
 };
 
 export type W3DGroupData = {
@@ -193,12 +199,21 @@ function readGroupFlow(el: Element): W3DGroupFlow | undefined {
   const flowAttr = go.getAttribute("FlowChildren");
   const leadingSpaceAttr = go.getAttribute("LeadingSpace");
   const directionAttr = go.getAttribute("Direction");
-  if (flowAttr === null && leadingSpaceAttr === null && directionAttr === null) return undefined;
+  const alignmentAttr = go.getAttribute("FlowChildrenAlignment");
+  if (
+    flowAttr === null &&
+    leadingSpaceAttr === null &&
+    directionAttr === null &&
+    alignmentAttr === null
+  ) {
+    return undefined;
+  }
   const flow: W3DGroupFlow = {
     children: parseBoolAttr(flowAttr ?? undefined, false),
   };
   if (leadingSpaceAttr !== null) flow.leadingSpace = parseNumberAttr(leadingSpaceAttr, 0);
   if (directionAttr !== null) flow.direction = directionAttr;
+  if (alignmentAttr !== null) flow.alignment = alignmentAttr;
   return flow;
 }
 

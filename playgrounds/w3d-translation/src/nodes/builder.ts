@@ -347,60 +347,78 @@ function isColoredMask(node: W3DQuadData): boolean {
 }
 
 /**
- * Phase 2F-flow — R3 FlowChildren horizontal distribution for the PLAYERS group.
+ * Phase G — R3 FlowChildren distribution, generic over any Group.
  *
- * Rollout guard: still intentionally scoped by node name to PLAYERS only. The
- * W3D <GeometryOptions FlowChildren/LeadingSpace/Direction> is parsed
- * generically on every Group, but the runtime layout below stays restricted to
- * PLAYERS until other axes (Direction="YMinus" used by BENCH_LIST) are
- * validated.
+ * R3 lays flow children sequentially from the container origin along the main
+ * axis: the FIRST child stays at the origin and each subsequent child advances
+ * by the PREVIOUS child's MEASURED EXTENT along the main axis plus
+ * LeadingSpace. LeadingSpace is a signed gap (negative = overlap), NOT the
+ * whole stride:
  *
- * R3 lays flow children sequentially from the container origin: the FIRST
- * child stays at the origin and each subsequent child advances by the PREVIOUS
- * child's MEASURED WIDTH plus LeadingSpace. LeadingSpace is a gap (negative =
- * overlap), NOT the whole stride:
+ *     stride_i = measuredMainExtent(child_i) + leadingSpace
+ *     position_i = sum_{j<i} stride_j * sign(direction)
  *
- *     stride_i = measuredWidth(child_i) + leadingSpace
+ * Main axis and sign come from Direction:
+ *   XPlus  (default) → main=x, sign=+1   (PLAYERS row, left→right)
+ *   XMinus           → main=x, sign=-1
+ *   YPlus            → main=y, sign=+1
+ *   YMinus           → main=y, sign=-1   (BENCH_LIST stack, top→bottom)
  *
- * This matches the R3 render (LINEUP_LEFT thumbnail), where the five ~2.2-wide
- * player cards sit shoulder-to-shoulder filling the panel left → right. The
- * earlier `(n-1-i)*leadingSpace` form treated LeadingSpace as the entire stride
- * (ignoring child width, stride 1.26), which pushed four of five players off
- * the left edge of the 16:9 frame.
+ * FlowChildrenAlignment (Leading / Center / Trailing): PARSED but currently
+ * NOT applied as a position transform. The corpus has exactly one example —
+ * BENCH_LIST with Trailing — and the authored composition already places
+ * BENCH_PLAYER content (Group.Position.X=2 + content.Position.X=7.15) so that
+ * the right edge naturally lands inside the BASE_TEAM panel. Treating
+ * Trailing as a cross-axis shift (snap right edge to parent local origin)
+ * dragged the bench content off-panel; treating it as a main-axis end-
+ * justification (CSS-flex `justify-content: flex-end`) is the more likely R3
+ * semantic, but we have no second corpus fixture (e.g. PERMANENT_CLOCK
+ * Center) to confirm. Until a second template is added, alignment is
+ * preserved on userData for the inspector but applied as a no-op so authored
+ * positions stay intact.
  *
  * Notes:
- *  - LeadingSpace value is read as-authored and NEVER mutated (node data is
- *    untouched; only the built Object3D positions change).
- *  - Width is measured from each child's built subtree as a world-space AABB.
- *    PLAYERS carries no scale/rotation, so the X-extent equals the parent-space
- *    width and is invariant to the flow translation we add.
- *  - Additive: any X already authored on a child is preserved.
+ *  - LeadingSpace, Direction, FlowChildrenAlignment are read as-authored and
+ *    NEVER mutated. Only the built Object3D positions change.
+ *  - Main-axis extent is measured from each child's built subtree as a
+ *    world-space AABB. The flow parent in the 2D corpus carries no
+ *    rotation/scale, so the world AABB extent equals the parent-local extent
+ *    (extents are translation-invariant either way).
+ *  - Additive: any axis offset already authored on a child is preserved.
  *  - Pivot Formula B is untouched — it runs per child before this and only
  *    shifts content by (1-S)*pivot, which rides along with the slot.
  */
-function applyFlowLayout(group: Group, node: W3DGroupData): void {
-  if (node.name !== "PLAYERS") return; // TEMP gate
-  if (!node.flow?.children) return;
-  const leadingSpace = node.flow.leadingSpace ?? 0;
-  let cursor = 0;
-  for (const child of group.children) {
-    child.position.x += cursor;
-    cursor += measuredWidthX(child) + leadingSpace;
+type FlowAxis = "x" | "y";
+
+function flowAxisFromDirection(direction: string | undefined): { axis: FlowAxis; sign: 1 | -1 } {
+  switch (direction) {
+    case "YMinus": return { axis: "y", sign: -1 };
+    case "YPlus":  return { axis: "y", sign: 1 };
+    case "XMinus": return { axis: "x", sign: -1 };
+    case "XPlus":
+    case undefined:
+    default:       return { axis: "x", sign: 1 };
   }
 }
 
-/**
- * Axis-aligned X-extent (width) of a built Object3D's subtree. Used by
- * applyFlowLayout to advance the flow cursor by each child's measured width.
- * PLAYERS has no scale/rotation, so this world-space width equals the width in
- * the flow's coordinate space and is invariant to the translation we apply.
- * Returns 0 for an empty/degenerate subtree.
- */
-function measuredWidthX(obj: Object3D): number {
+function applyFlowLayout(group: Group, node: W3DGroupData): void {
+  if (!node.flow?.children) return;
+  if (group.children.length === 0) return;
+  const { axis: mainAxis, sign } = flowAxisFromDirection(node.flow.direction);
+  const leadingSpace = node.flow.leadingSpace ?? 0;
+
+  let cursor = 0;
+  for (const child of group.children) {
+    child.position[mainAxis] += cursor;
+    cursor += sign * (measuredAlongAxis(child, mainAxis) + leadingSpace);
+  }
+}
+
+function measuredAlongAxis(obj: Object3D, axis: FlowAxis): number {
   obj.updateWorldMatrix(true, true);
   const box = new Box3().setFromObject(obj);
-  if (!isFinite(box.min.x) || !isFinite(box.max.x)) return 0;
-  return box.max.x - box.min.x;
+  if (!isFinite(box.min[axis]) || !isFinite(box.max[axis])) return 0;
+  return box.max[axis] - box.min[axis];
 }
 
 function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {

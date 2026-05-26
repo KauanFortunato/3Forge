@@ -99,6 +99,7 @@ export interface InspectorReport {
     slotIndex?: number;
     parentLeadingSpace?: number;
     parentFlowDirection?: string;
+    parentFlowAlignment?: string;
   };
 }
 
@@ -143,6 +144,7 @@ interface W3DUserDataNode {
     children: boolean;
     leadingSpace?: number;
     direction?: string;
+    alignment?: string;
   };
   // Phase TextureText — populated by buildTextureText.
   text?: string;
@@ -211,6 +213,7 @@ function flowContextOf(o: Object3D): InspectorReport["flow"] {
         slotIndex,
         ...(parentW.flow?.leadingSpace !== undefined ? { parentLeadingSpace: parentW.flow.leadingSpace } : {}),
         ...(parentW.flow?.direction !== undefined ? { parentFlowDirection: parentW.flow.direction } : {}),
+        ...(parentW.flow?.alignment !== undefined ? { parentFlowAlignment: parentW.flow.alignment } : {}),
       };
     }
     cur = cur.parent;
