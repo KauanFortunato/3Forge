@@ -157,13 +157,32 @@ export function parseResources(xml: string): ParseResourcesResult {
         };
       }
 
-      // Parse UV metadata elements — preserved, not applied this phase
-      const findChild = (tag: string) => Array.from(el.children).find(c => c.tagName === tag);
-      const readXY = (e: Element | undefined): { x: number; y: number } | undefined =>
+      // Phase UV — parse UV metadata elements from inside <TextureMappingOption>.
+      // The previous implementation searched el.children (the <TextureLayer> level)
+      // but every <Offset>, <Scale>, <Rotation>, <OffsetKey>, <ScaleKey>, <RotationKey>
+      // actually lives inside <TextureMappingOption> in the W3D corpus. The bad
+      // scope silently dropped every TextureLayer UV transform — most visibly
+      // INVERTED_GRADIENT's <Scale X="-1"/> (purple panel fade direction) and
+      // PHOTO_NN's <Offset> / <OffsetKey> / <ScaleKey> (player photo crop).
+      const findChild = (tag: string): Element | undefined =>
+        tmoEl ? Array.from(tmoEl.children).find((c) => c.tagName === tag) : undefined;
+      // <Offset> missing axes default to 0 (no shift). <Scale> missing axes
+      // default to 1 (no scale change). E.g. <Scale X="-1"/> must parse as
+      // { x: -1, y: 1 } so a horizontal flip doesn't collapse the texture
+      // vertically.
+      const readOffsetXY = (e: Element | undefined): { x: number; y: number } | undefined =>
         e ? {
           x: parseNum(e.getAttribute("X") ?? undefined, 0),
           y: parseNum(e.getAttribute("Y") ?? undefined, 0),
         } : undefined;
+      const readScaleXY = (e: Element | undefined): { x: number; y: number } | undefined =>
+        e ? {
+          x: parseNum(e.getAttribute("X") ?? undefined, 1),
+          y: parseNum(e.getAttribute("Y") ?? undefined, 1),
+        } : undefined;
+      // OffsetKey / ScaleKey keep the existing partial-axis behaviour: only
+      // explicitly authored axes appear. materialResolver pairs them with its
+      // own ?? 0 (offset) / ?? 1 (scale) defaults at consumption time.
       const readXYopt = (e: Element | undefined): { x?: number; y?: number } | undefined =>
         e ? {
           ...(e.getAttribute("X") !== null ? { x: parseNum(e.getAttribute("X") ?? undefined, 0) } : {}),
@@ -183,8 +202,8 @@ export function parseResources(xml: string): ParseResourcesResult {
         name: attrs.Name ?? "",
         textureBlending: attrs.TextureBlending ?? "Normal",
         mapping,
-        offset: readXY(offsetEl),
-        scale: readXY(scaleEl),
+        offset: readOffsetXY(offsetEl),
+        scale: readScaleXY(scaleEl),
         rotationDeg: rotEl ? parseNum(rotEl.getAttribute("Z") ?? undefined, 0) : undefined,
         offsetKey: readXYopt(offsetKeyEl),
         scaleKey: readXYopt(scaleKeyEl),

@@ -194,16 +194,17 @@ describe("parseResources — TextureLayer", () => {
     expect(warnings).toEqual([]);
   });
 
-  test("Scale and Rotation preserved as metadata", () => {
+  test("Phase UV: Scale and Rotation preserved as metadata (inside <TextureMappingOption>)", () => {
     const { registry } = parseResources(wrapResources(`
       <Resources>
         <TextureLayer Name="FF_MAIN" Id="ff-main-id" TextureBlending="Normal" Lock="False" FolderPath="">
           <TextureMappingOption IsEmissive="False" UseMipMapping="False"
             ColorShaping="Shaped" Interlaced="False" PremultiplyColor="0" Reflectivity="0"
             ReleaseVideoOnFillTag="False" TextureAddressModeU="Clamp" TextureAddressModeV="Clamp"
-            TextureStretchOption="Fill" Type="2" WrappingMethod="1"/>
-          <Scale X="2.0" Y="1.5"/>
-          <Rotation Z="45"/>
+            TextureStretchOption="Fill" Type="2" WrappingMethod="1">
+            <Scale X="2.0" Y="1.5"/>
+            <Rotation Z="45"/>
+          </TextureMappingOption>
         </TextureLayer>
       </Resources>
     `));
@@ -212,17 +213,18 @@ describe("parseResources — TextureLayer", () => {
     expect(tl.rotationDeg).toBe(45);
   });
 
-  test("Offset, OffsetKey, ScaleKey preserved as metadata", () => {
+  test("Phase UV: Offset, OffsetKey, ScaleKey preserved as metadata (inside <TextureMappingOption>)", () => {
     const { registry } = parseResources(wrapResources(`
       <Resources>
         <TextureLayer Name="PHOTO_TEST" Id="photo-test-id" TextureBlending="Normal" Lock="False" FolderPath="">
           <TextureMappingOption IsEmissive="False" UseMipMapping="False"
             ColorShaping="Shaped" Interlaced="False" PremultiplyColor="0" Reflectivity="0"
             ReleaseVideoOnFillTag="False" TextureAddressModeU="Clamp" TextureAddressModeV="Clamp"
-            TextureStretchOption="Fill" Type="2" WrappingMethod="1"/>
-          <Offset X="0.1" Y="0.2"/>
-          <OffsetKey X="0.05" Y="0.0"/>
-          <ScaleKey X="1.1" Y="1.0"/>
+            TextureStretchOption="Fill" Type="2" WrappingMethod="1">
+            <Offset X="0.1" Y="0.2"/>
+            <OffsetKey X="0.05" Y="0.0"/>
+            <ScaleKey X="1.1" Y="1.0"/>
+          </TextureMappingOption>
         </TextureLayer>
       </Resources>
     `));
@@ -230,6 +232,100 @@ describe("parseResources — TextureLayer", () => {
     expect(tl.offset).toEqual({ x: 0.1, y: 0.2 });
     expect(tl.offsetKey).toEqual({ x: 0.05, y: 0 });
     expect(tl.scaleKey).toEqual({ x: 1.1, y: 1 });
+  });
+
+  test("Phase UV: <Scale X=\"-1\"/> with missing Y parses as { x: -1, y: 1 } (no zero-collapse)", () => {
+    // The single most important regression this phase fixes: INVERTED_GRADIENT
+    // authors <Scale X="-1"/> for a horizontal flip. The missing Y must default
+    // to 1 (no scale change), not 0 (which would collapse the texture
+    // vertically). Without this fix, the purple panel gradient was rendering
+    // un-flipped because the parser was looking in the wrong XML scope.
+    const { registry } = parseResources(wrapResources(`
+      <Resources>
+        <TextureLayer Name="INVERTED_GRADIENT" Id="inv-grad-id" TextureBlending="Multiply" Lock="False" FolderPath="">
+          <TextureMappingOption IsEmissive="True" UseMipMapping="True"
+            TextureAddressModeU="Clamp" TextureAddressModeV="Clamp"
+            TextureStretchOption="Fill" Type="2" WrappingMethod="1">
+            <Scale X="-1"/>
+          </TextureMappingOption>
+        </TextureLayer>
+      </Resources>
+    `));
+    const tl = registry.textureLayers.get("inv-grad-id")!;
+    expect(tl.scale).toEqual({ x: -1, y: 1 });
+  });
+
+  test("Phase UV: <Offset X=\"-0.07\"/> with missing Y parses as { x: -0.07, y: 0 }", () => {
+    // PHOTO_NN layers author <Offset X="-0.07"/> to shift the player photo
+    // horizontally inside the mask. Missing Y must default to 0 (no shift).
+    const { registry } = parseResources(wrapResources(`
+      <Resources>
+        <TextureLayer Name="PHOTO_01" Id="photo-01-id" TextureBlending="Multiply" Lock="False" FolderPath="">
+          <TextureMappingOption IsEmissive="True" UseMipMapping="True"
+            TextureAddressModeU="Clamp" TextureAddressModeV="Clamp"
+            TextureStretchOption="Fill" Type="2" WrappingMethod="1">
+            <Offset X="-0.07"/>
+          </TextureMappingOption>
+        </TextureLayer>
+      </Resources>
+    `));
+    const tl = registry.textureLayers.get("photo-01-id")!;
+    expect(tl.offset).toEqual({ x: -0.07, y: 0 });
+  });
+
+  test("Phase UV: <Rotation Z=\"-1\"/> parses as rotationDeg = -1", () => {
+    // FF_MAIN / FF_MAIN_BENCH author <Rotation Z="-1"/>. Previously parsed
+    // as 0 because the scope-bug made Rotation invisible.
+    const { registry } = parseResources(wrapResources(`
+      <Resources>
+        <TextureLayer Name="FF_MAIN" Id="ff-main-rot-id" TextureBlending="Multiply" Lock="False" FolderPath="">
+          <TextureMappingOption TextureAddressModeU="Wrap" TextureAddressModeV="Wrap"
+            TextureStretchOption="Fill" Type="2" WrappingMethod="1">
+            <Rotation Z="-1"/>
+          </TextureMappingOption>
+        </TextureLayer>
+      </Resources>
+    `));
+    const tl = registry.textureLayers.get("ff-main-rot-id")!;
+    expect(tl.rotationDeg).toBe(-1);
+  });
+
+  test("Phase UV: <OffsetKey Y=\"-0.2\"/> + <ScaleKey Y=\"0.5\"/> preserved with partial-axis behaviour", () => {
+    // PHOTO_NN authors VERTICAL_RAMP alphaMap offset/scale with Y-only values.
+    // The OffsetKey/ScaleKey readers keep partial-axis behaviour: only the
+    // explicitly authored axes appear. materialResolver pairs them with its
+    // own ?? 0 (offset) / ?? 1 (scale) defaults at consumption time.
+    const { registry } = parseResources(wrapResources(`
+      <Resources>
+        <TextureLayer Name="PHOTO_01" Id="photo-01-key-id" TextureBlending="Multiply" Lock="False" FolderPath="">
+          <TextureMappingOption TextureAddressModeU="Clamp" TextureAddressModeV="Clamp"
+            TextureStretchOption="Fill" Type="2" WrappingMethod="1">
+            <OffsetKey Y="-0.2"/>
+            <ScaleKey Y="0.5"/>
+          </TextureMappingOption>
+        </TextureLayer>
+      </Resources>
+    `));
+    const tl = registry.textureLayers.get("photo-01-key-id")!;
+    expect(tl.offsetKey).toEqual({ y: -0.2 });
+    expect(tl.scaleKey).toEqual({ y: 0.5 });
+  });
+
+  test("Phase UV: transform elements as direct <TextureLayer> children (wrong scope) are NOT picked up", () => {
+    // Regression guard against the old bug: the parser must NOT find <Scale>
+    // when it's misplaced as a direct child of <TextureLayer>. R3 always
+    // nests transforms inside <TextureMappingOption>.
+    const { registry } = parseResources(wrapResources(`
+      <Resources>
+        <TextureLayer Name="BAD_SHAPE" Id="bad-id" TextureBlending="Normal" Lock="False" FolderPath="">
+          <TextureMappingOption TextureAddressModeU="Clamp" TextureAddressModeV="Clamp"
+            TextureStretchOption="Fill" Type="2" WrappingMethod="1"/>
+          <Scale X="-1"/>
+        </TextureLayer>
+      </Resources>
+    `));
+    const tl = registry.textureLayers.get("bad-id")!;
+    expect(tl.scale).toBeUndefined();
   });
 
   test("TextureLayer without TextureMappingOption → mapping undefined, no crash", () => {
