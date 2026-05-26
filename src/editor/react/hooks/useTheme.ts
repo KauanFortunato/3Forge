@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-export type ThemeId = "dark" | "light" | "midnight";
+export type ThemeId = "dark" | "light" | "midnight" | "r3-theme";
 
 export interface ThemeMeta {
   id: ThemeId;
@@ -28,6 +28,12 @@ export const THEME_PRESETS: ThemeMeta[] = [
     description: "Deep blue night mode",
     preview: { bg: "#0a0d18", surface: "#141a2c", text: "#e6ecff", accent: "#8b5cf6" },
   },
+  {
+    id: "r3-theme",
+    label: "R3 Theme",
+    description: "Flat graphite workspace",
+    preview: { bg: "#171717", surface: "#1f1f1f", text: "#ededed", accent: "#8b5cf6" },
+  },
 ];
 
 const THEME_KEY = "3forge-theme";
@@ -42,7 +48,7 @@ function readStoredTheme(): ThemeId {
     return DEFAULT_THEME;
   }
   const raw = window.localStorage.getItem(THEME_KEY);
-  if (raw === "dark" || raw === "light" || raw === "midnight") {
+  if (raw === "dark" || raw === "light" || raw === "midnight" || raw === "r3-theme") {
     return raw;
   }
   return DEFAULT_THEME;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuAction } from "../ui-types";
 import { MenuList } from "./ContextMenu";
-import { SettingsIcon } from "./icons";
+import { GeometryIcon, SettingsIcon, TimelineIcon } from "./icons";
 
 interface TopMenu {
   id: string;
@@ -13,11 +13,23 @@ interface MenuBarProps {
   menus: TopMenu[];
   appVersion?: string;
   hasNewReleaseNotes?: boolean;
+  isTimelineVisible?: boolean;
   onOpenReleaseNotes?: () => void;
   onOpenSettings?: () => void;
+  onGenerateWithAI?: () => void;
+  onToggleTimeline?: () => void;
 }
 
-export function MenuBar({ menus, appVersion, hasNewReleaseNotes = false, onOpenReleaseNotes, onOpenSettings }: MenuBarProps) {
+export function MenuBar({
+  menus,
+  appVersion,
+  hasNewReleaseNotes = false,
+  isTimelineVisible = false,
+  onOpenReleaseNotes,
+  onOpenSettings,
+  onGenerateWithAI,
+  onToggleTimeline,
+}: MenuBarProps) {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -87,6 +99,31 @@ export function MenuBar({ menus, appVersion, hasNewReleaseNotes = false, onOpenR
 
       {appVersion ? (
         <div className="menubar__right">
+          {onGenerateWithAI ? (
+            <button
+              type="button"
+              className="menubar__tool"
+              onClick={onGenerateWithAI}
+              aria-label="Generate with AI"
+              title="Generate with AI"
+            >
+              <GeometryIcon width={12} height={12} />
+              <span>AI</span>
+            </button>
+          ) : null}
+          {onToggleTimeline ? (
+            <button
+              type="button"
+              className={`menubar__tool${isTimelineVisible ? " is-active" : ""}`}
+              onClick={onToggleTimeline}
+              aria-pressed={isTimelineVisible}
+              aria-label={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
+              title={`Timeline ${isTimelineVisible ? "On" : "Off"}`}
+            >
+              <TimelineIcon width={12} height={12} />
+              <span>Timeline</span>
+            </button>
+          ) : null}
           <span className="menubar__chip">
             <span className="menubar__dot" aria-hidden="true" />
             auto-save

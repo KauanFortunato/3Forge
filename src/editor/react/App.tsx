@@ -58,6 +58,7 @@ import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
 import { AnimationTimeline } from "./components/AnimationTimeline";
 import { AIGenerateDialog } from "./components/AIGenerateDialog";
 import type { AIGenerationMode, AiChangeKind, AiChangeSummaryInput, AiChatGenerationResult } from "./components/AIGenerateDialog";
+import { BufferedInput } from "./components/BufferedInput";
 import { ContextMenu } from "./components/ContextMenu";
 import { FieldsPanel } from "./components/FieldsPanel";
 import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
@@ -69,6 +70,7 @@ import type { PieMenuItem } from "./components/PieMenu";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
+  BoxIcon,
   CopyIcon,
   CursorIcon,
   DownloadIcon,
@@ -90,7 +92,6 @@ import {
   RotateIcon,
   ScaleIcon,
   TextPropertyIcon,
-  TimelineIcon,
   UndoIcon,
   RedoIcon,
   ViewSolidIcon,
@@ -102,7 +103,6 @@ import { MenuBar } from "./components/MenuBar";
 import { Modal } from "./components/Modal";
 import { PhonePlaybackBar, PhoneViewerHeader } from "./components/PhoneViewerChrome";
 import { SceneGraphPanel } from "./components/SceneGraphPanel";
-import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
 import { SettingsDialog } from "./components/SettingsDialog";
@@ -234,7 +234,7 @@ function toSceneAnimationPreviewOverrides(overrides: TemporaryAnimationOverrideM
   });
 }
 
-type RuntimePanelTab = "animations" | "images" | "materials";
+type RuntimePanelTab = "images" | "materials";
 type TemporaryAnimationOverride = { frame: number; value: number };
 type TemporaryAnimationOverrideMap = Record<string, TemporaryAnimationOverride>;
 
@@ -749,7 +749,7 @@ export function App() {
   const [isStarted, setIsStarted] = useState(bootState.shouldOpenEditor);
   const storeView = useEditorStoreSnapshot(store);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("properties");
-  const [runtimePanelTab, setRuntimePanelTab] = useState<RuntimePanelTab>("animations");
+  const [runtimePanelTab, setRuntimePanelTab] = useState<RuntimePanelTab>("images");
   const [isAssetsPanelCollapsed, setIsAssetsPanelCollapsed] = useState(false);
   const [isFieldsPanelCollapsed, setIsFieldsPanelCollapsed] = useState(true);
   const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(null);
@@ -964,6 +964,15 @@ export function App() {
 
     window.localStorage.setItem(TIMELINE_VISIBLE_KEY, isTimelineVisible ? "true" : "false");
   }, [isTimelineVisible]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const projectName = storeView.blueprintComponentName.trim();
+    document.title = projectName ? `${projectName} - 3Forge` : "3Forge";
+  }, [storeView.blueprintComponentName]);
 
   useEffect(() => {
     if (!shouldPersistWorkspace) {
@@ -1849,16 +1858,6 @@ export function App() {
       { id: "add-text", label: "Text", icon: <TextPropertyIcon {...iconSize} />, onSelect: createNodeAction("text") },
     ];
   }, [requestImageImport, setTransientStatus, store]);
-
-  const handleToolbarAddNode = useCallback((type: Exclude<EditorNodeType, "image">) => {
-    const target = resolveSelectionInsertTarget();
-    store.insertNode(type, target.parentId, target.index);
-    setTransientStatus(`Added ${type}.`);
-  }, [resolveSelectionInsertTarget, setTransientStatus, store]);
-
-  const handleToolbarAddImage = useCallback(() => {
-    requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() });
-  }, [requestImageImport, resolveSelectionInsertTarget]);
 
   const syncRecentProject = useCallback(async (
     blueprint: ComponentBlueprint,
@@ -3454,54 +3453,15 @@ export function App() {
           menus={menus}
           appVersion={APP_VERSION}
           hasNewReleaseNotes={hasNewReleaseNotes}
+          isTimelineVisible={isTimelineVisible}
           onOpenReleaseNotes={openReleaseNotesDialog}
           onOpenSettings={() => setIsSettingsDialogOpen(true)}
+          onGenerateWithAI={() => setIsAiDialogOpen(true)}
+          onToggleTimeline={toggleTimelineVisibility}
         />
       ) : null}
 
-      {!isPhoneLayout ? (
-        <SecondaryToolbar
-          componentName={storeView.blueprintComponentName}
-          selectedLabel={selectedNodeCount > 1
-            ? `${selectedNodeCount} selected`
-            : selectedNode
-              ? `${selectedNode.name} | ${selectedNode.type === "group" ? "Group" : "Mesh"}`
-              : "No selection"}
-          nodeCount={storeView.blueprintNodes.length}
-          canUndo={storeView.canUndo}
-          canRedo={storeView.canRedo}
-          currentTool={currentTool}
-          viewMode={storeView.viewMode}
-          onToolChange={handleToolChange}
-          onFrameSelection={handleFrameSelection}
-          onViewModeChange={(mode) => store.setViewMode(mode)}
-          playback={activeClip ? {
-            isPlaying: isAnimationPlaying,
-            currentFrame,
-            durationFrames: activeClip.durationFrames,
-            onPlayToggle: handleAnimationPlayToggle,
-            onStop: handleAnimationStop,
-            onRewind: handleAnimationRewind,
-            onFastForward: handleAnimationFastForward,
-            onSkipBack: handleAnimationSkipBack,
-            onSkipForward: handleAnimationSkipForward,
-          } : null}
-          onComponentNameChange={(value) => store.updateComponentName(value)}
-          onUndo={() => { if (store.undo()) setTransientStatus("Undo."); }}
-          onRedo={() => { if (store.redo()) setTransientStatus("Redo."); }}
-          onAddNode={handleToolbarAddNode}
-          onAddImage={handleToolbarAddImage}
-          onGroupSelection={() => handleGroupSelection()}
-          canGroupSelection={canGroupNodeIds(selectedRootIds)}
-          isTimelineVisible={isTimelineVisible}
-          onToggleTimeline={toggleTimelineVisibility}
-          onSave={() => { void handleSaveProject(); }}
-          onShortcuts={() => setIsShortcutDialogOpen(true)}
-          onGenerateWithAI={() => {
-            setIsAiDialogOpen(true);
-          }}
-        />
-      ) : (
+      {isPhoneLayout ? (
         <PhoneViewerHeader
           projectName={activeProjectLabel}
           sourceLabel={getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)}
@@ -3510,7 +3470,7 @@ export function App() {
           onViewModeChange={(mode) => store.setViewMode(mode)}
           onExit={handleExitProject}
         />
-      )}
+      ) : null}
 
       <div className={shellBodyClassName}>
         {isPhoneLayout ? (
@@ -3549,6 +3509,22 @@ export function App() {
             <aside
               className="app__col app__col--left"
             >
+              <section className="left-project-panel">
+                <span className="left-project-panel__icon" aria-hidden="true">
+                  <BoxIcon width={11} height={11} />
+                </span>
+                <span className="left-project-panel__meta">
+                  <BufferedInput
+                    className="left-project-panel__name"
+                    type="text"
+                    value={storeView.blueprintComponentName}
+                    onCommit={(value) => store.updateComponentName(value)}
+                    aria-label="Project name"
+                  />
+                  <span className="left-project-panel__sub">{`blueprint / ${storeView.blueprintNodes.length} nodes`}</span>
+                </span>
+              </section>
+
               <section className="panel">
                 <div className="panel__hd">
                   <span className="panel__hd-icon"><GroupIcon width={12} height={12} /></span>
@@ -3653,26 +3629,13 @@ export function App() {
                   <span className="panel__hd-meta">
                     {runtimePanelTab === "materials"
                       ? storeView.materials.length
-                      : runtimePanelTab === "images"
-                        ? imageAssets.length
-                        : storeView.animation.clips.length}
+                      : imageAssets.length}
                   </span>
                   <div className="panel__hd-spacer" />
                 </div>
 
                 {!isAssetsPanelCollapsed ? (
                   <div className="panel__subhd" role="tablist" aria-label="Assets panel tabs">
-                    <button
-                      type="button"
-                      className={`panel__subhd-tab${runtimePanelTab === "animations" ? " is-active" : ""}`}
-                      onClick={() => setRuntimePanelTab("animations")}
-                      role="tab"
-                      aria-selected={runtimePanelTab === "animations"}
-                      title="Animations"
-                    >
-                      <TimelineIcon width={12} height={12} />
-                      <span>Animations</span>
-                    </button>
                     <button
                       type="button"
                       className={`panel__subhd-tab${runtimePanelTab === "images" ? " is-active" : ""}`}
@@ -3700,41 +3663,7 @@ export function App() {
 
                 {!isAssetsPanelCollapsed ? (
                   <div className="panel__bd panel__bd--fields">
-                    {runtimePanelTab === "animations" ? (
-                      <div className="runtime-animations">
-                        <div className="runtime-animations__head">
-                          <span>Timelines</span>
-                          <button
-                            type="button"
-                            className="ibtn"
-                            onClick={handleCreateAnimationClip}
-                            aria-label="New animation"
-                            title="New animation"
-                          >
-                            <PlusIcon width={11} height={11} />
-                          </button>
-                        </div>
-                        <div className="runtime-animations__list">
-                          {storeView.animation.clips.map((clip) => (
-                            <button
-                              key={clip.id}
-                              type="button"
-                              className={`runtime-animation${activeClip?.id === clip.id ? " is-active" : ""}`}
-                              onClick={() => handleSelectAnimationClip(clip.id)}
-                            >
-                              <span className="runtime-animation__icon">
-                                <TimelineIcon width={12} height={12} />
-                              </span>
-                              <span className="runtime-animation__meta">
-                                <span className="runtime-animation__name">{clip.name}</span>
-                                <span className="runtime-animation__sub">{`0-${clip.durationFrames}f / ${clip.tracks.length} channels`}</span>
-                              </span>
-                              <span className="runtime-animation__fps">{clip.fps}fps</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ) : runtimePanelTab === "images" ? (
+                    {runtimePanelTab === "images" ? (
                       <ImageAssetsPanel
                         images={imageAssets}
                         selectedImageId={selectedImageId}
@@ -3828,6 +3757,17 @@ export function App() {
                     currentFrame={currentFrame}
                     selectedTrackId={selectedTrackId}
                     selectedKeyframeId={selectedKeyframeId}
+                    playback={activeClip ? {
+                      isPlaying: isAnimationPlaying,
+                      currentFrame,
+                      durationFrames: activeClip.durationFrames,
+                      onPlayToggle: handleAnimationPlayToggle,
+                      onStop: handleAnimationStop,
+                      onRewind: handleAnimationRewind,
+                      onFastForward: handleAnimationFastForward,
+                      onSkipBack: handleAnimationSkipBack,
+                      onSkipForward: handleAnimationSkipForward,
+                    } : null}
                     onFrameChange={handleTimelineFrameChange}
                     onAnimationConfigChange={(patch) => store.updateAnimationConfig(patch)}
                     onCreateClip={handleCreateAnimationClip}

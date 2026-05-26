@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
   ANIMATION_EASE_OPTIONS,
   ANIMATION_PROPERTIES,
@@ -20,7 +20,8 @@ import type {
 } from "../../types";
 import { BufferedInput } from "./BufferedInput";
 import { CustomSelect } from "./CustomSelect";
-import { CopyIcon, EyeIcon, MoveIcon, PlusIcon, RotateIcon, ScaleIcon, TimelineIcon, TrashIcon } from "./icons";
+import { CopyIcon, EyeIcon, MoveIcon, PlusIcon, RotateIcon, ScaleIcon, TextPropertyIcon, TimelineIcon, TrashIcon } from "./icons";
+import { PlaybarGroup, type PlaybackToolbarProps } from "./PlaybackControls";
 
 function framePercent(frame: number, durationFrames: number): string {
   const safeDuration = Math.max(durationFrames, 1);
@@ -55,6 +56,7 @@ interface AnimationTimelineProps {
   onRemoveKeyframes: (trackId: string, keyframeIds: string[]) => void;
   onShiftKeyframes: (trackId: string, keyframeIds: string[], frameDelta: number) => void;
   onPasteKeyframes: (keyframes: KeyframeClipboardEntry[], frame: number) => SelectedKeyframeRef[];
+  playback?: PlaybackToolbarProps | null;
 }
 
 interface DragState {
@@ -101,6 +103,8 @@ const MIN_TIMELINE_PIXELS_PER_FRAME = 4;
 const MAX_TIMELINE_PIXELS_PER_FRAME = 80;
 const TARGET_RULER_TICK_SPACING = 72;
 const RULER_STEPS = [1, 2, 5, 10, 20, 50, 100, 200, 500];
+const MIN_ANIMATION_SIDEBAR_WIDTH = 170;
+const MAX_ANIMATION_SIDEBAR_WIDTH = 360;
 
 export function AnimationTimeline(props: AnimationTimelineProps) {
   const {
@@ -128,6 +132,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     onRemoveKeyframes,
     onShiftKeyframes,
     onPasteKeyframes,
+    playback,
   } = props;
 
   const [propertyToAdd, setPropertyToAdd] = useState<AnimationPropertyPath>("transform.position.x");
@@ -137,7 +142,10 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   const [areaSelectState, setAreaSelectState] = useState<AreaSelectState | null>(null);
   const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<Set<string>>(() => new Set());
   const [timelinePixelsPerFrame, setTimelinePixelsPerFrame] = useState(12);
+  const [animationSidebarWidth, setAnimationSidebarWidth] = useState(220);
+  const [isAnimationSidebarResizing, setIsAnimationSidebarResizing] = useState(false);
   const timelineRootRef = useRef<HTMLElement | null>(null);
+  const clipNameToolbarRef = useRef<HTMLSpanElement | null>(null);
   const rulerScrollRef = useRef<HTMLDivElement | null>(null);
   const tracksScrollRef = useRef<HTMLDivElement | null>(null);
   const lanesScrollRef = useRef<HTMLDivElement | null>(null);
@@ -600,6 +608,7 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
   }
   const timelineContentWidth = Math.max(480, durationFrames * timelinePixelsPerFrame);
   const timelineContentStyle = { minWidth: "100%", width: `${timelineContentWidth}px` };
+  const timelineStyle = { "--tl-animations-w": `${animationSidebarWidth}px` } as CSSProperties;
   const handleTimelineWheel = useCallback((event: WheelEvent) => {
     const lanes = lanesScrollRef.current;
     const ruler = rulerScrollRef.current;
@@ -666,8 +675,38 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
     return () => timelineRoot.removeEventListener("wheel", handleTimelineWheel);
   }, [handleTimelineWheel]);
 
+  useEffect(() => {
+    if (!isAnimationSidebarResizing) {
+      return;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const root = timelineRootRef.current;
+      if (!root) {
+        return;
+      }
+      const rect = root.getBoundingClientRect();
+      const nextWidth = event.clientX - rect.left;
+      setAnimationSidebarWidth(Math.max(
+        MIN_ANIMATION_SIDEBAR_WIDTH,
+        Math.min(MAX_ANIMATION_SIDEBAR_WIDTH, nextWidth),
+      ));
+    };
+
+    const handlePointerUp = () => {
+      setIsAnimationSidebarResizing(false);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [isAnimationSidebarResizing]);
+
   return (
-    <section className="tl" ref={timelineRootRef}>
+    <section className="tl" ref={timelineRootRef} style={timelineStyle}>
       <div className="panel__hd">
         <span className="panel__hd-icon"><TimelineIcon width={12} height={12} /></span>
         <span className="panel__hd-title">Timeline</span>
@@ -751,270 +790,345 @@ export function AnimationTimeline(props: AnimationTimelineProps) {
             </button>
           ) : null}
 
-          {activeClip && animation.clips.length > 1 ? (
+        </div>
+      </div>
+
+      <div className="tl__work">
+        <aside className="tl__animations" aria-label="Animations">
+          <div className="tl__animations-title">
+            <span>Animations</span>
+          </div>
+          <div className="tl__animations-toolbar" aria-label="Animation clip tools">
             <button
               type="button"
               className="ibtn"
-              onClick={() => onRemoveClip(activeClip.id)}
-              aria-label="Delete clip"
-              title="Delete clip"
+              onClick={props.onCreateClip}
+              aria-label="New animation"
+              title="New animation"
             >
-              <TrashIcon width={12} height={12} />
+              <PlusIcon width={11} height={11} />
             </button>
-          ) : null}
-
-          {activeClip ? (
-            <span className="text" style={{ width: 120 }} title="Clip name">
+            <button
+              type="button"
+              className="ibtn"
+              disabled={!activeClip}
+              onClick={() => {
+                const input = clipNameToolbarRef.current?.querySelector("input");
+                input?.focus();
+                input?.select();
+              }}
+              aria-label="Rename selected clip"
+              title="Rename selected clip"
+            >
+              <TextPropertyIcon width={11} height={11} />
+            </button>
+            <button
+              type="button"
+              className="ibtn"
+              disabled={!activeClip || animation.clips.length <= 1}
+              onClick={() => {
+                if (activeClip) {
+                  onRemoveClip(activeClip.id);
+                }
+              }}
+              aria-label="Delete selected clip"
+              title="Delete selected clip"
+            >
+              <TrashIcon width={11} height={11} />
+            </button>
+            <span className="text tl__clip-name" ref={clipNameToolbarRef} title="Selected clip name">
               <BufferedInput
                 type="text"
-                value={activeClip.name}
-                onCommit={(value) => onRenameClip(activeClip.id, value)}
-                aria-label="Clip name"
+                value={activeClip?.name ?? ""}
+                disabled={!activeClip}
+                onCommit={(value) => {
+                  if (activeClip) {
+                    onRenameClip(activeClip.id, value);
+                  }
+                }}
+                aria-label="Selected clip name"
               />
             </span>
+          </div>
+          <div className="runtime-animations runtime-animations--timeline">
+            <div className="runtime-animations__list">
+              {animation.clips.map((clip) => (
+                <button
+                  key={clip.id}
+                  type="button"
+                  className={`runtime-animation${activeClip?.id === clip.id ? " is-active" : ""}`}
+                  onClick={() => props.onSelectClip(clip.id)}
+                >
+                  <span className="runtime-animation__icon">
+                    <TimelineIcon width={12} height={12} />
+                  </span>
+                  <span className="runtime-animation__meta">
+                    <span className="runtime-animation__name">{clip.name}</span>
+                    <span className="runtime-animation__sub">{`0-${clip.durationFrames}f / ${clip.tracks.length} channels`}</span>
+                  </span>
+                  <span className="runtime-animation__fps">{clip.fps}fps</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="tl__animations-footer">
+            {playback ? <PlaybarGroup {...playback} /> : null}
+          </div>
+        </aside>
+
+        <div
+          className={`tl__animations-resizer${isAnimationSidebarResizing ? " is-active" : ""}`}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            setIsAnimationSidebarResizing(true);
+          }}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize animations panel"
+        />
+
+        <div className="tl__sheet">
+          <div className="tl__ruler-row">
+            <div className="tl__ruler-spacer">
+              <span>Channels</span>
+            </div>
+            <div className="tl__ruler" ref={rulerScrollRef}>
+              <div
+                className="tl__ruler-inner"
+                style={timelineContentStyle}
+                onPointerDown={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const laneLeft = rect.left;
+                  const laneWidth = rect.width;
+                  onFrameChange(positionToFrame(event.clientX, laneLeft, laneWidth, durationFrames));
+                  setScrubState({ laneLeft, laneWidth });
+                }}
+              >
+                {rulerTicks.map(({ frame, isMajor }) => (
+                  <div
+                    key={frame}
+                    className={`tl__ruler-tick${isMajor ? " is-major" : " is-minor"}`}
+                    style={{ left: framePercent(frame, durationFrames) }}
+                  />
+                ))}
+                {rulerTicks.filter((tick) => tick.isMajor).map(({ frame }) => (
+                  <div
+                    key={`lbl-${frame}`}
+                    className="tl__ruler-line"
+                    style={{ left: framePercent(frame, durationFrames) }}
+                  >
+                    {frame}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="tl__body">
+            <div className="tl__tracks" ref={tracksScrollRef}>
+              <div className="tl__tracks-inner">
+                <div className="tl-track tl-track--add">
+                  <CustomSelect
+                    value={propertyToAdd}
+                    onChange={(value) => setPropertyToAdd(value as AnimationPropertyPath)}
+                    disabled={!selectedNode || availableProperties.length === 0}
+                    ariaLabel="Channel to add"
+                    style={{ width: "100%" }}
+                    options={availableProperties.length > 0
+                      ? availableProperties.map((entry) => ({ value: entry.path, label: entry.label }))
+                      : [{ value: propertyToAdd, label: "No transform channels left" }]}
+                  />
+                  <button
+                    type="button"
+                    className="tl-track__ibtn"
+                    disabled={!selectedNode || availableProperties.length === 0}
+                    onClick={() => onAddTrack(propertyToAdd)}
+                    aria-label="Add channel"
+                    title="Add channel"
+                  >
+                    <PlusIcon width={11} height={11} />
+                  </button>
+                </div>
+
+                {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
+                  <div key={node.id}>
+                    <div className="tl-track tl-track--group">
+                      <span className="tl-track__ico"><TimelineIcon width={11} height={11} /></span>
+                      <span className="tl-track__name">{node.name}</span>
+                      <span className="tl-track__prop">{node.type}</span>
+                      <span className="tl-track__kf-count">{tracks.length}ch</span>
+                    </div>
+                    {tracks.map((track) => {
+                      const muted = isTrackMuted(track);
+                      const trackSelected = selectedTrackId === track.id;
+                      return (
+                        <div
+                          key={track.id}
+                          className={`tl-track is-child${trackSelected ? " is-selected" : ""}${muted ? " is-muted" : ""}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => onSelectTrack(track.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              onSelectTrack(track.id);
+                            }
+                          }}
+                        >
+                          <span className={`tl-track__ico ${getTrackIconClass(track.property)}`}>
+                            <TrackPropertyIcon property={track.property} />
+                          </span>
+                          <span className="tl-track__name">{getAnimationPropertyLabel(track.property)}</span>
+                          <span className="tl-track__prop">{getTrackCategoryLabel(track.property)}</span>
+                          <span className="tl-track__kf-count">{track.keyframes.length}</span>
+                          <span className="tl-track__actions">
+                            {activeClip ? (
+                              <button
+                                type="button"
+                                className={`tl-track__ibtn${muted ? " is-off" : ""}`}
+                                aria-pressed={muted}
+                                aria-label={muted ? "Unmute channel" : "Mute channel"}
+                                title={muted ? "Unmute channel" : "Mute channel"}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onSetTrackMuted(activeClip.id, track.id, !muted);
+                                }}
+                              >
+                                M
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="tl-track__ibtn"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onAddKeyframe(track.id);
+                              }}
+                              aria-label="Add key"
+                              title="Add key"
+                            >
+                              <PlusIcon width={10} height={10} />
+                            </button>
+                            <button
+                              type="button"
+                              className="tl-track__ibtn"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onRemoveTrack(track.id);
+                              }}
+                              aria-label="Remove track"
+                              title="Remove track"
+                            >
+                              <TrashIcon width={10} height={10} />
+                            </button>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )) : (
+                  <div className="tl__empty">
+                    {viewMode === "all"
+                      ? "No animated channels in this clip yet."
+                      : selectedNode
+                        ? "Add channels to the selected object."
+                        : "Select an object to inspect its channels."}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div
+              className="tl__lanes"
+              ref={lanesScrollRef}
+              onPointerDown={handleAreaSelectStart}
+            >
+              <div
+                className="tl__lanes-inner"
+                style={timelineContentStyle}
+              >
+                {/* Spacer lane matching the property-selector track */}
+                <div className="tl-lane" />
+
+                {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
+                  <div key={node.id}>
+                    <div className="tl-lane" />
+                    {tracks.map((track) => {
+                      const trackIsSelected = selectedTrackId === track.id;
+                      return (
+                        <TrackLane
+                          key={track.id}
+                          track={track}
+                          durationFrames={durationFrames}
+                          currentFrame={currentFrame}
+                          isSelected={trackIsSelected}
+                          isMuted={isTrackMuted(track)}
+                          selectedKeyframeIds={selectedKeyframeIds}
+                          onSelectTrack={() => onSelectTrack(track.id)}
+                          onPickKeyframe={(keyframeId, additive) => handleKeyframePick(track.id, keyframeId, additive)}
+                          onFrameChange={onFrameChange}
+                          onStartKeyframeDrag={(event, keyframeId) => {
+                            onBeginKeyframeDrag();
+                            const laneElement = event.currentTarget.parentElement;
+                            const rect = laneElement?.getBoundingClientRect();
+                            const laneLeft = rect?.left ?? 0;
+                            const laneWidth = rect?.width ?? 0;
+                            const keySelection = getSelectionKey(track.id, keyframeId);
+                            const batchKeyframes = selectedKeyframeIds.has(keySelection) && selectedKeyframeIds.size > 1
+                              ? Array.from(selectedKeyframeIds).map(parseSelectionKey)
+                              : [{ trackId: track.id, keyframeId }];
+                            const originMap = new Map<string, number>();
+                            for (const selection of batchKeyframes) {
+                              const batchTrack = visibleTracks.find((entry) => entry.id === selection.trackId);
+                              const match = batchTrack?.keyframes.find((entry) => entry.id === selection.keyframeId);
+                              if (match) {
+                                originMap.set(getSelectionKey(selection.trackId, selection.keyframeId), match.frame);
+                              }
+                            }
+                            const primaryOrigin = originMap.get(keySelection) ?? track.keyframes.find((entry) => entry.id === keyframeId)?.frame ?? 0;
+                            setDragState({
+                              trackId: track.id,
+                              keyframeId,
+                              laneLeft,
+                              laneWidth,
+                              originFrame: primaryOrigin,
+                              batchKeyframes,
+                              batchOriginFrames: originMap,
+                              lastDelta: 0,
+                            });
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                )) : null}
+
+                <div
+                  className="tl__playhead"
+                  style={{ left: framePercent(currentFrame, durationFrames) }}
+                />
+                {areaSelectState ? (
+                  <div
+                    className="tl__marquee"
+                    style={getMarqueeStyle(areaSelectState, lanesScrollRef.current)}
+                  />
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          {visibleSelectedTrack && visibleSelectedKeyframe ? (
+            <KeyframeEditorStrip
+              track={visibleSelectedTrack}
+              keyframe={visibleSelectedKeyframe}
+              nodes={nodes}
+              durationFrames={durationFrames}
+              onUpdateKeyframe={onUpdateKeyframe}
+              onRemoveKeyframe={onRemoveKeyframe}
+            />
           ) : null}
         </div>
       </div>
-
-      <div className="tl__ruler-row">
-        <div className="tl__ruler-spacer">
-          <span>Channels</span>
-        </div>
-        <div className="tl__ruler" ref={rulerScrollRef}>
-          <div
-            className="tl__ruler-inner"
-            style={timelineContentStyle}
-            onPointerDown={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              const laneLeft = rect.left;
-              const laneWidth = rect.width;
-              onFrameChange(positionToFrame(event.clientX, laneLeft, laneWidth, durationFrames));
-              setScrubState({ laneLeft, laneWidth });
-            }}
-          >
-            {rulerTicks.map(({ frame, isMajor }) => (
-              <div
-                key={frame}
-                className={`tl__ruler-tick${isMajor ? " is-major" : " is-minor"}`}
-                style={{ left: framePercent(frame, durationFrames) }}
-              />
-            ))}
-            {rulerTicks.filter((tick) => tick.isMajor).map(({ frame }) => (
-              <div
-                key={`lbl-${frame}`}
-                className="tl__ruler-line"
-                style={{ left: framePercent(frame, durationFrames) }}
-              >
-                {frame}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="tl__body">
-        <div className="tl__tracks" ref={tracksScrollRef}>
-          <div className="tl__tracks-inner">
-            <div className="tl-track tl-track--add">
-              <CustomSelect
-                value={propertyToAdd}
-                onChange={(value) => setPropertyToAdd(value as AnimationPropertyPath)}
-                disabled={!selectedNode || availableProperties.length === 0}
-                ariaLabel="Channel to add"
-                style={{ width: "100%" }}
-                options={availableProperties.length > 0
-                  ? availableProperties.map((entry) => ({ value: entry.path, label: entry.label }))
-                  : [{ value: propertyToAdd, label: "No transform channels left" }]}
-              />
-              <button
-                type="button"
-                className="tl-track__ibtn"
-                disabled={!selectedNode || availableProperties.length === 0}
-                onClick={() => onAddTrack(propertyToAdd)}
-                aria-label="Add channel"
-                title="Add channel"
-              >
-                <PlusIcon width={11} height={11} />
-              </button>
-            </div>
-
-            {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
-              <div key={node.id}>
-                <div className="tl-track tl-track--group">
-                  <span className="tl-track__ico"><TimelineIcon width={11} height={11} /></span>
-                  <span className="tl-track__name">{node.name}</span>
-                  <span className="tl-track__prop">{node.type}</span>
-                  <span className="tl-track__kf-count">{tracks.length}ch</span>
-                </div>
-                {tracks.map((track) => {
-                  const muted = isTrackMuted(track);
-                  const trackSelected = selectedTrackId === track.id;
-                  return (
-                    <div
-                      key={track.id}
-                      className={`tl-track is-child${trackSelected ? " is-selected" : ""}${muted ? " is-muted" : ""}`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => onSelectTrack(track.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          onSelectTrack(track.id);
-                        }
-                      }}
-                    >
-                      <span className={`tl-track__ico ${getTrackIconClass(track.property)}`}>
-                        <TrackPropertyIcon property={track.property} />
-                      </span>
-                      <span className="tl-track__name">{getAnimationPropertyLabel(track.property)}</span>
-                      <span className="tl-track__prop">{getTrackCategoryLabel(track.property)}</span>
-                      <span className="tl-track__kf-count">{track.keyframes.length}</span>
-                      <span className="tl-track__actions">
-                        {activeClip ? (
-                          <button
-                            type="button"
-                            className={`tl-track__ibtn${muted ? " is-off" : ""}`}
-                            aria-pressed={muted}
-                            aria-label={muted ? "Unmute channel" : "Mute channel"}
-                            title={muted ? "Unmute channel" : "Mute channel"}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onSetTrackMuted(activeClip.id, track.id, !muted);
-                            }}
-                          >
-                            M
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="tl-track__ibtn"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onAddKeyframe(track.id);
-                          }}
-                          aria-label="Add key"
-                          title="Add key"
-                        >
-                          <PlusIcon width={10} height={10} />
-                        </button>
-                        <button
-                          type="button"
-                          className="tl-track__ibtn"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onRemoveTrack(track.id);
-                          }}
-                          aria-label="Remove track"
-                          title="Remove track"
-                        >
-                          <TrashIcon width={10} height={10} />
-                        </button>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )) : (
-              <div className="tl__empty">
-                {viewMode === "all"
-                  ? "No animated channels in this clip yet."
-                  : selectedNode
-                    ? "Add channels to the selected object."
-                    : "Select an object to inspect its channels."}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div
-          className="tl__lanes"
-          ref={lanesScrollRef}
-          onPointerDown={handleAreaSelectStart}
-        >
-          <div
-            className="tl__lanes-inner"
-            style={timelineContentStyle}
-          >
-            {/* Spacer lane matching the property-selector track */}
-            <div className="tl-lane" />
-
-            {visibleGroupedTracks.length > 0 ? visibleGroupedTracks.map(({ node, tracks }) => (
-              <div key={node.id}>
-                <div className="tl-lane" />
-                {tracks.map((track) => {
-                  const trackIsSelected = selectedTrackId === track.id;
-                  return (
-                    <TrackLane
-                      key={track.id}
-                      track={track}
-                      durationFrames={durationFrames}
-                      currentFrame={currentFrame}
-                      isSelected={trackIsSelected}
-                      isMuted={isTrackMuted(track)}
-                      selectedKeyframeIds={selectedKeyframeIds}
-                      onSelectTrack={() => onSelectTrack(track.id)}
-                      onPickKeyframe={(keyframeId, additive) => handleKeyframePick(track.id, keyframeId, additive)}
-                      onFrameChange={onFrameChange}
-                      onStartKeyframeDrag={(event, keyframeId) => {
-                        onBeginKeyframeDrag();
-                        const laneElement = event.currentTarget.parentElement;
-                        const rect = laneElement?.getBoundingClientRect();
-                        const laneLeft = rect?.left ?? 0;
-                        const laneWidth = rect?.width ?? 0;
-                        const keySelection = getSelectionKey(track.id, keyframeId);
-                        const batchKeyframes = selectedKeyframeIds.has(keySelection) && selectedKeyframeIds.size > 1
-                          ? Array.from(selectedKeyframeIds).map(parseSelectionKey)
-                          : [{ trackId: track.id, keyframeId }];
-                        const originMap = new Map<string, number>();
-                        for (const selection of batchKeyframes) {
-                          const batchTrack = visibleTracks.find((entry) => entry.id === selection.trackId);
-                          const match = batchTrack?.keyframes.find((entry) => entry.id === selection.keyframeId);
-                          if (match) {
-                            originMap.set(getSelectionKey(selection.trackId, selection.keyframeId), match.frame);
-                          }
-                        }
-                        const primaryOrigin = originMap.get(keySelection) ?? track.keyframes.find((entry) => entry.id === keyframeId)?.frame ?? 0;
-                        setDragState({
-                          trackId: track.id,
-                          keyframeId,
-                          laneLeft,
-                          laneWidth,
-                          originFrame: primaryOrigin,
-                          batchKeyframes,
-                          batchOriginFrames: originMap,
-                          lastDelta: 0,
-                        });
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            )) : null}
-
-            <div
-              className="tl__playhead"
-              style={{ left: framePercent(currentFrame, durationFrames) }}
-            />
-            {areaSelectState ? (
-              <div
-                className="tl__marquee"
-                style={getMarqueeStyle(areaSelectState, lanesScrollRef.current)}
-              />
-            ) : null}
-          </div>
-        </div>
-      </div>
-
-      {visibleSelectedTrack && visibleSelectedKeyframe ? (
-        <KeyframeEditorStrip
-          track={visibleSelectedTrack}
-          keyframe={visibleSelectedKeyframe}
-          nodes={nodes}
-          durationFrames={durationFrames}
-          onUpdateKeyframe={onUpdateKeyframe}
-          onRemoveKeyframe={onRemoveKeyframe}
-        />
-      ) : null}
     </section>
   );
 }

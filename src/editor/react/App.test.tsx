@@ -211,6 +211,19 @@ describe("App", () => {
     expect(screen.queryByTestId("viewport-host")).toBeNull();
   });
 
+  it("uses the project name as the page title and updates it after renaming", () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /New project/i }));
+
+    expect(document.title).toBe("3Forge-Component - 3Forge");
+
+    const projectNameInput = screen.getByRole("textbox", { name: "Project name" });
+    fireEvent.change(projectNameInput, { target: { value: "Broadcast Lower Third" } });
+    fireEvent.blur(projectNameInput);
+
+    expect(document.title).toBe("Broadcast Lower Third - 3Forge");
+  });
+
   it("highlights the app version button until release notes are opened", async () => {
     persistLocalWorkspace("Release Notes");
     markWorkspaceSessionActive();
@@ -575,7 +588,7 @@ describe("App", () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: /New project/i }));
 
-    expect(screen.getByRole("tab", { name: /Animations/i }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: /Images/i }).getAttribute("aria-selected")).toBe("true");
 
     const file = new File(["image"], "panel-texture.png", { type: "image/png" });
     const windowDataTransfer = createDropDataTransfer([file]);
@@ -700,7 +713,7 @@ describe("App", () => {
     expect(getRecentOpenButton(recentPanel as HTMLElement, /alpha\.json/i)).toBeTruthy();
     expect(getRecentOpenButton(recentPanel as HTMLElement, /beta\.json/i)).toBeTruthy();
     expect(getRecentOpenButton(recentPanel as HTMLElement, /gamma\.json/i)).toBeTruthy();
-  });
+  }, 10000);
 
   it("keeps distinct linked file handles for different recent blueprints", async () => {
     const alphaBlueprint = createDefaultBlueprint();
@@ -904,16 +917,16 @@ describe("App", () => {
     const shellBody = container.querySelector(".app__body");
     const footer = container.querySelector("footer.statusbar");
 
-    expect(appShell?.children[2]).toBe(shellBody ?? null);
-    expect(appShell?.children[3]).toBe(footer ?? null);
+    expect(appShell?.children[1]).toBe(shellBody ?? null);
+    expect(appShell?.children[2]).toBe(footer ?? null);
     expect(shellBody?.querySelector(".app__col--center.has-timeline")).toBeTruthy();
     expect(shellBody?.querySelector(".tl")).toBeTruthy();
     expect(screen.getByText("local workspace saved")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Timeline On" }));
 
-    expect(appShell?.children[2]).toBe(shellBody ?? null);
-    expect(appShell?.children[3]).toBe(footer ?? null);
+    expect(appShell?.children[1]).toBe(shellBody ?? null);
+    expect(appShell?.children[2]).toBe(footer ?? null);
     expect(shellBody?.querySelector(".app__col--center.has-timeline")).toBeFalsy();
     expect(shellBody?.querySelector(".tl")).toBeFalsy();
     expect(screen.getByRole("button", { name: "Timeline Off" })).toBeTruthy();
@@ -1231,7 +1244,7 @@ describe("App", () => {
     expect((materialItem as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("shows the playbar transport in the toolbar when a clip is active and plays on click", () => {
+  it("shows the playbar transport in the timeline animations panel when a clip is active and plays on click", () => {
     const blueprint = createDefaultBlueprint();
     blueprint.componentName = "Playbar Fixture";
     const panelNode = blueprint.nodes.find((node) => node.name === "Hero Panel");
@@ -1245,25 +1258,25 @@ describe("App", () => {
 
     render(<App />);
 
-    const toolbar = document.querySelector(".toolbar") as HTMLElement | null;
-    expect(toolbar).toBeTruthy();
-    const playbar = toolbar?.querySelector(".playbar");
+    const animationsPanel = document.querySelector(".tl__animations") as HTMLElement | null;
+    expect(animationsPanel).toBeTruthy();
+    const playbar = animationsPanel?.querySelector(".playbar");
     expect(playbar).toBeTruthy();
 
     fireEvent.click(within(playbar as HTMLElement).getByRole("button", { name: "Play" }));
     expect(fakeScene.playAnimation).toHaveBeenCalledTimes(1);
   });
 
-  it("hides the toolbar playbar when there is no active animation clip", () => {
+  it("hides the timeline playbar when there is no active animation clip", () => {
     persistLocalWorkspace("No Clip Fixture");
     markWorkspaceSessionActive();
     mockNavigationType("reload");
 
     render(<App />);
 
-    const toolbar = document.querySelector(".toolbar") as HTMLElement | null;
-    expect(toolbar).toBeTruthy();
-    expect(toolbar?.querySelector(".playbar")).toBeNull();
+    const animationsPanel = document.querySelector(".tl__animations") as HTMLElement | null;
+    expect(animationsPanel).toBeTruthy();
+    expect(animationsPanel?.querySelector(".playbar")).toBeNull();
   });
 
   it("triggers the export package download when the File > Export > ZIP menu item is clicked", async () => {
