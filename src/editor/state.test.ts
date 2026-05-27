@@ -2,6 +2,7 @@ import { Object3D } from "three";
 import { describe, expect, it } from "vitest";
 import { createDefaultFontAsset, getFontData } from "./fonts";
 import { createTransparentImageAsset } from "./images";
+import { createMaterialSpec } from "./materials";
 import { exportBlueprintToJson } from "./exports";
 import { computeGroupContentBounds, computeNodeWorldBounds, computeNodeWorldPosition } from "./spatial";
 import {
@@ -637,6 +638,53 @@ describe("EditorStore", () => {
     expect(prop.transform.rotation).toEqual({ x: 0, y: 0.5, z: 0 });
   });
 
+  it("preserves partPath on mesh nodes from a glTF explode import plan", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const modelId = store.addModelAsset({
+      id: "gltf-explode-model",
+      name: "Robot.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,cm9ib3Q=",
+      format: "glb",
+      source: "imported",
+    });
+
+    const rootId = store.insertModelImportPlan(modelId, [
+      {
+        name: "Head",
+        kind: "mesh",
+        partPath: "0",
+        position: { x: 0, y: 2, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        material: createMaterialSpec("#abcdef"),
+        children: [],
+      },
+      {
+        name: "Arm",
+        kind: "mesh",
+        partPath: "1.0",
+        position: { x: 1, y: 1, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        children: [],
+      },
+    ], ROOT_NODE_ID);
+
+    expect(rootId).toBeTruthy();
+    const parts = store.blueprint.nodes.filter((n) => n.parentId === rootId);
+    const head = parts.find((n) => n.name === "Head");
+    if (!head || head.type !== "model") throw new Error("Expected Head model node");
+    // The bug this guards: partPath must survive into the blueprint node, else
+    // the renderer falls back to drawing the whole model once per part.
+    expect(head.partPath).toBe("0");
+    expect(head.material.color).toBe("#abcdef");
+
+    const arm = parts.find((n) => n.name === "Arm");
+    if (!arm || arm.type !== "model") throw new Error("Expected Arm model node");
+    expect(arm.partPath).toBe("1.0");
+  });
+
   it("wraps multi-root USDZ import plans in a synthetic group named after the asset", () => {
     const store = new EditorStore(createDefaultBlueprint());
     const modelId = store.addModelAsset({
@@ -675,6 +723,135 @@ describe("EditorStore", () => {
     expect(wrapper.name).toBe("City Scene");
     const children = store.blueprint.nodes.filter((n) => n.parentId === rootId);
     expect(children.map((n) => n.name)).toEqual(["Tower", "Ground"]);
+  });
+
+  it("explodes a glTF model node into editable per-part nodes in place", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const modelId = store.addModelAsset({
+      id: "car-model",
+      name: "Car.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,Y2Fy",
+      format: "glb",
+      source: "imported",
+    });
+
+    const modelNodeId = store.insertModelAssetNode(modelId, ROOT_NODE_ID);
+    if (!modelNodeId) throw new Error("Expected model node");
+    // Place the whole-model node so we can assert the wrapper inherits it.
+    const original = store.getNode(modelNodeId);
+    if (!original || original.type !== "model") throw new Error("Expected model node");
+    original.transform.position = { x: 2, y: 0, z: -3 };
+
+    const redSpec = createMaterialSpec("#ff0000");
+    const blueSpec = createMaterialSpec("#0000ff");
+
+    const wrapperId = store.explodeModelNode(modelNodeId, [
+      {
+        name: "Body",
+        kind: "xform",
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        children: [
+          {
+            name: "Chassis",
+            kind: "mesh",
+            partPath: "0.0",
+            position: { x: 0, y: 0.5, z: 0 },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            material: redSpec,
+            children: [],
+          },
+          {
+            name: "WheelFL",
+            kind: "mesh",
+            partPath: "0.1",
+            position: { x: 0.4, y: 0, z: 0.4 },
+            rotation: { x: 0, y: 0, z: 0 },
+            scale: { x: 1, y: 1, z: 1 },
+            material: blueSpec,
+            children: [],
+          },
+        ],
+      },
+    ]);
+
+    expect(wrapperId).toBeTruthy();
+    // Original whole-model node is gone.
+    expect(store.getNode(modelNodeId)).toBeUndefined();
+
+    const wrapper = store.getNode(wrapperId!);
+    if (!wrapper || wrapper.type !== "group") throw new Error("Expected wrapper group");
+    expect(wrapper.transform.position).toEqual({ x: 2, y: 0, z: -3 });
+
+    const body = store.blueprint.nodes.find((n) => n.parentId === wrapperId);
+    if (!body || body.type !== "group") throw new Error("Expected Body group");
+
+    const parts = store.blueprint.nodes.filter((n) => n.parentId === body.id);
+    expect(parts.map((n) => n.name)).toEqual(["Chassis", "WheelFL"]);
+
+    const chassis = parts.find((n) => n.name === "Chassis");
+    if (!chassis || chassis.type !== "model") throw new Error("Expected Chassis model node");
+    expect(chassis.modelId).toBe(modelId);
+    expect(chassis.partPath).toBe("0.0");
+    expect(chassis.material.color).toBe("#ff0000");
+    expect(chassis.transform.position).toEqual({ x: 0, y: 0.5, z: 0 });
+
+    const wheel = parts.find((n) => n.name === "WheelFL");
+    if (!wheel || wheel.type !== "model") throw new Error("Expected WheelFL model node");
+    expect(wheel.partPath).toBe("0.1");
+    expect(wheel.material.color).toBe("#0000ff");
+
+    // The shared asset survives because the part nodes still reference it.
+    expect(store.getModelAsset(modelId)).toBeTruthy();
+  });
+
+  it("refuses to explode an already-exploded part node or an empty plan", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const modelId = store.addModelAsset({
+      id: "part-model",
+      name: "Part.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,cGFydA==",
+      format: "glb",
+      source: "imported",
+    });
+    const modelNodeId = store.insertModelAssetNode(modelId, ROOT_NODE_ID);
+    if (!modelNodeId) throw new Error("Expected model node");
+
+    expect(store.explodeModelNode(modelNodeId, [])).toBeNull();
+
+    const node = store.getNode(modelNodeId);
+    if (!node || node.type !== "model") throw new Error("Expected model node");
+    node.partPath = "0";
+    expect(store.explodeModelNode(modelNodeId, [
+      { name: "X", kind: "mesh", partPath: "0", position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, children: [] },
+    ])).toBeNull();
+  });
+
+  it("round-trips partPath on model nodes through blueprint serialization", () => {
+    const store = new EditorStore(createDefaultBlueprint());
+    const modelId = store.addModelAsset({
+      id: "rt-model",
+      name: "Rt.glb",
+      mimeType: "model/gltf-binary",
+      src: "data:model/gltf-binary;base64,cnQ=",
+      format: "glb",
+      source: "imported",
+    });
+    const modelNodeId = store.insertModelAssetNode(modelId, ROOT_NODE_ID);
+    if (!modelNodeId) throw new Error("Expected model node");
+    const node = store.getNode(modelNodeId);
+    if (!node || node.type !== "model") throw new Error("Expected model node");
+    node.partPath = "0.2.1";
+
+    const json = JSON.parse(exportBlueprintToJson(store.blueprint));
+    const reopened = new EditorStore(json);
+    const restored = reopened.blueprint.nodes.find((n) => n.type === "model");
+    if (!restored || restored.type !== "model") throw new Error("Expected restored model node");
+    expect(restored.partPath).toBe("0.2.1");
   });
 
   it("creates and activates an imported animation clip from a model import plan", () => {

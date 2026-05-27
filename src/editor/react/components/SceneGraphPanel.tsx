@@ -341,7 +341,9 @@ function flattenBranches(
     }
 
     // Append synthetic part rows from the model's structure when expanded.
-    if (branch.node.type === "model" && !isCollapsed) {
+    // Exploded part nodes (those pinned to a single `partPath`) render just
+    // one part, so they don't re-expand the whole model's structure tree.
+    if (branch.node.type === "model" && !isCollapsed && (branch.node as ModelNode).partPath == null) {
       const modelNode = branch.node as ModelNode;
       const asset = modelsById.get(modelNode.modelId);
       const structureRoots = asset?.structure?.roots;
@@ -428,7 +430,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
   const isModel = branch.node.type === "model";
   // A model node is "expandable" when its imported structure has parts —
   // chevron + collapse work the same way as groups in that case.
-  const modelStructure = isModel
+  const modelStructure = isModel && (branch.node as ModelNode).partPath == null
     ? props.modelsById.get((branch.node as ModelNode).modelId)?.structure
     : undefined;
   const modelHasParts = (modelStructure?.roots.length ?? 0) > 0;

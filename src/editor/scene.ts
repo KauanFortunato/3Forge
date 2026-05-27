@@ -83,6 +83,7 @@ import {
   isTrackMuted,
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
+import { buildInlineExplodePlan } from "./gltfImport";
 import { tryDecodeDataUrl } from "./modelBuffer";
 import { buildStructureFromGroup, findObjectByIndexPath, findObjectByUsdPath } from "./modelStructure";
 import { runTask } from "./react/hooks/useAsyncTask";
@@ -96,6 +97,7 @@ import type {
   ImageNode,
   MaterialSpec,
   ModelAsset,
+  ModelImportPlanNode,
   ModelNode,
   NodeOriginSpec,
   TextNode,
@@ -232,6 +234,7 @@ function applyMaterialSpecOverrides(material: Material, spec: MaterialSpec): voi
   material.side = resolveMaterialSide(spec.side);
   material.needsUpdate = true;
 }
+
 
 /**
  * Texture slots stripped while the editor is in "solid" view. Covers
@@ -736,6 +739,35 @@ export class SceneEditor {
     }
 
     return null;
+  }
+
+  /**
+   * Build an "explode plan" for a glTF/GLB ModelAsset from its already-parsed
+   * (cached) Group, so {@link EditorStore.explodeModelNode} can split the model
+   * into a tree of independently editable blueprint nodes — one per mesh, each
+   * carrying its own local transform and a MaterialSpec lifted from the source
+   * mesh. Returns `null` if the asset isn't loaded yet or has no parts.
+   *
+   * Mirrors {@link buildStructureFromGroup}'s index-path convention (the cached
+   * group's children are the roots: "0", "1", … nested as "<parent>.<index>")
+   * so the resulting `partPath`s resolve via {@link findObjectByIndexPath}.
+   */
+  async getModelPartPlan(modelId: string): Promise<ModelImportPlanNode[] | null> {
+    const cacheEntry = this.modelGroupCache.get(modelId);
+    if (!cacheEntry) {
+      return null;
+    }
+    let cached: Group;
+    try {
+      cached = await cacheEntry.promise;
+    } catch {
+      return null;
+    }
+    if (cached.children.length === 0) {
+      return null;
+    }
+    const plan = buildInlineExplodePlan(cached);
+    return plan.length > 0 ? plan : null;
   }
 
   frameSelection(): void {
@@ -1692,6 +1724,54 @@ export class SceneEditor {
           // Async model loads finish AFTER rebuildScene's updateViewMode pass,
           // so the freshly-attached materials still carry textures. Re-run
           // updateViewMode so solid mode strips them immediately.
+          this.updateViewMode();
+          return;
+        }
+
+        // partPath path (glTF/GLB analogue of primPath): this ModelNode renders
+        // ONLY the geometry of the single part at `node.partPath` (its index
+        // path in the cached group). The part's descendants are rendered by
+        // child ModelNodes, and the part's local transform was baked into this
+        // node's `transform` at explode time, so the geometry renders at
+        // identity inside the wrapper.
+        if (node.partPath != null) {
+          const target = findObjectByIndexPath(cached, node.partPath);
+          wrapper.clear();
+          const meshContainer = new Group();
+          meshContainer.userData.nodeId = node.id;
+          meshContainer.userData.nodeType = node.type;
+          if (target instanceof Mesh) {
+            // Shallow clone keeps geometry + material but drops children (they
+            // are separate part nodes) and we reset the local transform since
+            // the node carries it.
+            const clonedMesh = target.clone(false) as Mesh;
+            clonedMesh.position.set(0, 0, 0);
+            clonedMesh.quaternion.identity();
+            clonedMesh.scale.set(1, 1, 1);
+            // Clone the material so Inspector edits don't bleed across other
+            // parts that share the same parsed material reference. Textures
+            // baked onto the source material are preserved on the clone.
+            const sourceMaterial = clonedMesh.material;
+            if (Array.isArray(sourceMaterial)) {
+              clonedMesh.material = sourceMaterial.map((m) => {
+                const c = m.clone();
+                c.userData = { ...c.userData, isClonedForNode: true };
+                applyMaterialSpecOverrides(c, node.material);
+                return c;
+              });
+            } else if (sourceMaterial) {
+              const c = sourceMaterial.clone();
+              c.userData = { ...c.userData, isClonedForNode: true };
+              applyMaterialSpecOverrides(c, node.material);
+              clonedMesh.material = c;
+            }
+            clonedMesh.userData.nodeId = node.id;
+            clonedMesh.userData.nodeType = node.type;
+            clonedMesh.castShadow = true;
+            clonedMesh.receiveShadow = true;
+            meshContainer.add(clonedMesh);
+          }
+          wrapper.add(meshContainer);
           this.updateViewMode();
           return;
         }

@@ -223,7 +223,19 @@ export interface ModelImportPlanNode {
    * the prim's mesh children by this to clone just that subset.
    */
   subsetName?: string;
+  /**
+   * Index-path render target for glTF/GLB explodes (see {@link ModelNode.partPath}).
+   * Mutually exclusive with {@link primPath}.
+   */
+  partPath?: string;
   materialId?: string;
+  /**
+   * Inline material spec captured from the source mesh's material (glTF/GLB
+   * explode only). Used in place of {@link materialId} so each exploded part
+   * starts bound to "Inline" with the real colour/roughness/metalness of the
+   * imported mesh rather than the editor's default white material.
+   */
+  material?: MaterialSpec;
   animation?: ImportedNodeAnimation;
   children: ModelImportPlanNode[];
 }
@@ -512,6 +524,20 @@ export interface ModelNode extends BaseEditorNode {
    * own MaterialAsset without bleeding into siblings.
    */
   subsetName?: string;
+  /**
+   * The glTF/GLB analogue of {@link primPath}: an index-path (e.g. "0.1.2"
+   * — see {@link buildStructureFromGroup}) identifying the single part of
+   * the referenced model this node renders. The part's own geometry is
+   * cloned at identity (its local transform is baked into this node's
+   * `transform` at explode time) while its descendant parts are rendered
+   * by sibling/child ModelNodes that share the same `modelId`. Produced by
+   * {@link EditorStore.explodeModelNode} so each mesh of an imported glTF
+   * model becomes an independently editable blueprint node.
+   *
+   * Only meaningful for glTF/GLB ModelAssets; ignored for USDZ (use
+   * {@link primPath} there instead).
+   */
+  partPath?: string;
 }
 
 export type EditorNode =

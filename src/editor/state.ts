@@ -1327,6 +1327,9 @@ function normalizeImportedNode(rawNode: unknown): EditorNode | null {
     if (typeof source.subsetName === "string" && source.subsetName.trim()) {
       node.subsetName = source.subsetName.trim();
     }
+    if (typeof source.partPath === "string" && source.partPath.trim()) {
+      node.partPath = source.partPath.trim();
+    }
     if (source.partVisibility && typeof source.partVisibility === "object") {
       const overrides: Record<string, boolean> = {};
       for (const [partId, visible] of Object.entries(source.partVisibility as Record<string, unknown>)) {
@@ -2831,12 +2834,17 @@ export class EditorStore extends EventTarget {
         if (planNode.subsetName) {
           node.subsetName = planNode.subsetName;
         }
+        if (planNode.partPath) {
+          node.partPath = planNode.partPath;
+        }
         if (planNode.materialId) {
           const linked = this.getMaterial(planNode.materialId);
           if (linked) {
             node.materialId = linked.id;
             node.material = cloneMaterialSpec(linked.spec);
           }
+        } else if (planNode.material) {
+          node.material = cloneMaterialSpec(planNode.material);
         }
         return node;
       }
@@ -2892,6 +2900,119 @@ export class EditorStore extends EventTarget {
     this._selectedNodeIds = [rootNodeId];
     this.notify({ reason: "structure", source, nodeId: rootNodeId });
     return rootNodeId;
+  }
+
+  /**
+   * "Explode" a single glTF/GLB ModelNode into a tree of independently editable
+   * blueprint nodes — one `group` per container and one `model` (pinned to a
+   * `partPath`) per mesh — so each part gets its own Transform + Material in the
+   * Inspector. The original node is replaced in place: a wrapper `group`
+   * inherits its name, transform and visibility so the model stays exactly
+   * where it was, and the per-part nodes carry the local transforms + materials
+   * captured from the parsed model (see {@link SceneEditor.getModelPartPlan}).
+   *
+   * Returns the wrapper node id, or `null` when the node isn't an
+   * un-exploded glTF/GLB model or the plan is empty.
+   */
+  explodeModelNode(
+    nodeId: string,
+    plan: ModelImportPlanNode[],
+    source: EditorStoreChange["source"] = "ui",
+  ): string | null {
+    const node = this.getNode(nodeId);
+    if (!node || node.type !== "model" || node.partPath != null || node.primPath != null) {
+      return null;
+    }
+    if (plan.length === 0) {
+      return null;
+    }
+    const modelAssetId = node.modelId;
+    if (!this.getModelAsset(modelAssetId)) {
+      return null;
+    }
+
+    const parentId = node.parentId;
+    const siblings = this._blueprint.nodes.filter((entry) => entry.parentId === parentId);
+    const siblingIndex = siblings.findIndex((entry) => entry.id === nodeId);
+
+    const flatNodes: EditorNode[] = [];
+
+    const buildNode = (planNode: ModelImportPlanNode, blueprintParentId: string | null): EditorNode => {
+      const baseName = planNode.name.trim() || (planNode.kind === "mesh" ? "Part" : "Group");
+      if (planNode.kind === "mesh") {
+        const part = createNode("model", blueprintParentId);
+        part.modelId = modelAssetId;
+        part.name = baseName;
+        part.transform = {
+          position: { x: planNode.position.x, y: planNode.position.y, z: planNode.position.z },
+          rotation: { x: planNode.rotation.x, y: planNode.rotation.y, z: planNode.rotation.z },
+          scale: { x: planNode.scale.x, y: planNode.scale.y, z: planNode.scale.z },
+        };
+        if (planNode.partPath) {
+          part.partPath = planNode.partPath;
+        }
+        if (planNode.material) {
+          part.material = cloneMaterialSpec(planNode.material);
+        } else if (planNode.materialId) {
+          const linked = this.getMaterial(planNode.materialId);
+          if (linked) {
+            part.materialId = linked.id;
+            part.material = cloneMaterialSpec(linked.spec);
+          }
+        }
+        return part;
+      }
+      const group = createNode("group", blueprintParentId);
+      group.name = baseName;
+      group.transform = {
+        position: { x: planNode.position.x, y: planNode.position.y, z: planNode.position.z },
+        rotation: { x: planNode.rotation.x, y: planNode.rotation.y, z: planNode.rotation.z },
+        scale: { x: planNode.scale.x, y: planNode.scale.y, z: planNode.scale.z },
+      };
+      return group;
+    };
+
+    const walk = (planNodes: ModelImportPlanNode[], blueprintParentId: string | null): void => {
+      for (const planNode of planNodes) {
+        const built = buildNode(planNode, blueprintParentId);
+        flatNodes.push(built);
+        if (planNode.children.length > 0) {
+          walk(planNode.children, built.id);
+        }
+      }
+    };
+
+    // Wrapper group takes the original node's place so the exploded model keeps
+    // its world transform and remains a single handle in the hierarchy.
+    const wrapper = createNode("group", parentId);
+    wrapper.name = node.name;
+    wrapper.transform = {
+      position: { ...node.transform.position },
+      rotation: { ...node.transform.rotation },
+      scale: { ...node.transform.scale },
+    };
+    wrapper.visible = node.visible;
+    flatNodes.push(wrapper);
+    walk(plan, wrapper.id);
+
+    this.recordHistorySnapshot();
+    const idsToRemove = new Set([nodeId, ...this.getDescendantIds(nodeId)]);
+    const remaining = this._blueprint.nodes.filter((entry) => !idsToRemove.has(entry.id));
+    this._blueprint.animation.clips = this._blueprint.animation.clips.map((clip) => ({
+      ...clip,
+      tracks: clip.tracks.filter((track) => !idsToRemove.has(track.nodeId)),
+    }));
+    this._blueprint.nodes = insertSubtreeIntoBlueprint(
+      remaining,
+      flatNodes,
+      parentId,
+      siblingIndex >= 0 ? siblingIndex : undefined,
+    );
+    this._selectedNodeId = wrapper.id;
+    this._selectedNodeIds = [wrapper.id];
+    this._selectedPartId = null;
+    this.notify({ reason: "structure", source, nodeId: wrapper.id });
+    return wrapper.id;
   }
 
   addImportedAnimationClip(

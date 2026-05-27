@@ -20,6 +20,7 @@ import {
 import { fontFileToAsset } from "../fonts";
 import { hdrFileToAsset, isHdrFile } from "../hdr";
 import { imageFileToAsset } from "../images";
+import { buildGltfImportData, remapGltfPlanMaterialIds } from "../gltfImport";
 import { isModelFile, modelFileToAsset } from "../models";
 import { readRecentFileHandle, removeRecentFileHandle, saveRecentFileHandle } from "../recentFileHandles";
 import { SceneEditor } from "../scene";
@@ -85,6 +86,7 @@ import {
   SettingsIcon,
   GroupIcon,
   MeshIcon,
+  ModelIcon,
   ImagePropertyIcon,
   MaterialIcon,
   MoveIcon,
@@ -1821,6 +1823,26 @@ export function App() {
       : `Grouped ${targetRootIds.length} objects.`);
   }, [canGroupNodeIds, resolveContextSelectionRootIds, setTransientStatus, store]);
 
+  const handleExplodeModel = useCallback(async (nodeId?: string | null) => {
+    const targetId = nodeId ?? storeView.selectedNodeId;
+    if (!targetId) {
+      return;
+    }
+    const node = store.getNode(targetId);
+    if (!node || node.type !== "model") {
+      return;
+    }
+    const plan = await sceneRef.current?.getModelPartPlan(node.modelId);
+    if (!plan || plan.length === 0) {
+      setTransientStatus("This model isn't ready or has no separable parts to explode.");
+      return;
+    }
+    const wrapperId = store.explodeModelNode(targetId, plan);
+    setTransientStatus(wrapperId
+      ? `Exploded "${node.name}" into editable parts.`
+      : "Couldn't explode this model.");
+  }, [setTransientStatus, store, storeView.selectedNodeId]);
+
   const createAddMenuActions = useCallback((resolveTarget: () => InsertTarget): MenuAction[] => {
     const createNodeAction = (type: Exclude<EditorNodeType, "image">) => () => {
       const target = resolveTarget();
@@ -2085,8 +2107,73 @@ export function App() {
           }
         }
 
-        // Non-USDZ formats (or USDZ that failed hierarchical parse) get the
-        // legacy single-ModelNode treatment.
+        // glTF/GLB: parse once at import time and "explode" the model into a
+        // tree of editable blueprint nodes (one per mesh), extracting every
+        // material into a shared MaterialAsset and every base-colour texture
+        // into a linked ImageAsset. This is what makes an imported GLB fully
+        // editable — move/recolour/retexture each part — and surfaces its
+        // materials + textures in the Materials and Images panels.
+        // Size floor: a real binary GLB header is 12 bytes and a minimal GLTF
+        // is well over 20; test fixtures pass tiny stubs ("glb", "{}") that
+        // make GLTFLoader throw, so skip the parse for those (the fallback
+        // single-ModelNode path below handles them).
+        if (!insertedNodeId && (asset.format === "glb" || asset.format === "gltf") && file.size >= 20) {
+          try {
+            const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+            const gltfData = asset.format === "gltf" ? await file.text() : await file.arrayBuffer();
+            const gltf = await runTask(`Reading ${file.name} hierarchy...`, () => new GLTFLoader().parseAsync(gltfData, ""), { blocking: true });
+            const importData = buildGltfImportData(gltf.scene);
+            if (importData.plan.length > 0) {
+              const assetStem = stripFileExtension(asset.name ?? "asset");
+              // One ImageAsset per unique texture, then one MaterialAsset per
+              // unique material (with its texture wired via mapImageId).
+              const imageIdByTextureKey = new Map<string, string>();
+              const materialIdByKey = new Map<string, string>();
+              for (const material of importData.materials) {
+                let mapImageId: string | undefined;
+                if (material.texture) {
+                  mapImageId = imageIdByTextureKey.get(material.texture.key);
+                  if (!mapImageId) {
+                    mapImageId = store.addImageAsset({
+                      name: `${assetStem} · ${material.texture.name}`,
+                      mimeType: material.texture.mimeType,
+                      src: material.texture.dataUrl,
+                      width: material.texture.width,
+                      height: material.texture.height,
+                    });
+                    imageIdByTextureKey.set(material.texture.key, mapImageId);
+                  }
+                }
+                const spec = { ...material.spec, mapImageId };
+                const materialId = store.createMaterial({
+                  name: `${assetStem} · ${material.name}`,
+                  spec,
+                });
+                materialIdByKey.set(material.key, materialId);
+              }
+              const enrichedPlan = remapGltfPlanMaterialIds(importData.plan, materialIdByKey);
+              insertedNodeId = store.insertModelImportPlan(modelId, enrichedPlan, target.parentId, insertionIndex);
+              // Whole-model (root) animations apply to the wrapper group so the
+              // exploded model still plays its imported clips as a unit.
+              if (insertedNodeId && gltf.animations.length > 0) {
+                try {
+                  const { convertRootGltfAnimations } = await import("../gltfAnimationImport");
+                  for (const clip of convertRootGltfAnimations(gltf.animations, gltf.scene)) {
+                    const tracks = store.createImportedAnimationTracks(insertedNodeId, clip.tracks);
+                    store.addImportedAnimationClip(clip.name, tracks, clip.fps, clip.durationFrames);
+                  }
+                } catch (err) {
+                  console.warn("Failed to import GLTF root animation tracks:", err);
+                }
+              }
+            }
+          } catch (err) {
+            console.warn("glTF explode failed; falling back to single ModelNode:", err);
+          }
+        }
+
+        // Non-USDZ formats (or USDZ/glTF that failed hierarchical parse) get
+        // the legacy single-ModelNode treatment.
         if (!insertedNodeId) {
           insertedNodeId = store.insertModelAssetNode(modelId, target.parentId, insertionIndex);
           // For skinned USDZ, the bones deform via SkelAnimation rather than
@@ -2937,6 +3024,13 @@ export function App() {
     const propertyTargetIds = contextRootIds;
     const primaryForCopy = contextTargetId ? store.getNode(contextTargetId) : null;
     const canCopyProperties = Boolean(primaryForCopy);
+    const explodeTargetNode = primaryForCopy?.type === "model" ? primaryForCopy : null;
+    const explodeAsset = explodeTargetNode ? store.getModelAsset(explodeTargetNode.modelId) : undefined;
+    const canExplodeModel = Boolean(explodeTargetNode)
+      && explodeTargetNode?.partPath == null
+      && explodeTargetNode?.primPath == null
+      && (explodeAsset?.format === "glb" || explodeAsset?.format === "gltf")
+      && contextRootIds.length <= 1;
     const hasClipboard = Boolean(store.propertyClipboard);
     const canPasteAny = hasClipboard
       && propertyTargetIds.length > 0
@@ -3011,12 +3105,21 @@ export function App() {
         : { id: "ctx-paste-special", label: "Paste Special", icon: <FileIcon width={14} height={14} />, disabled: true },
       { id: "ctx-divider-2", separator: true },
       { id: "ctx-duplicate", label: "Duplicate", icon: <CopyIcon width={14} height={14} />, shortcut: "Ctrl+C / Ctrl+V", disabled: !contextTargetId || contextRootIds.length > 1, onSelect: () => handleDuplicate(contextTargetId) },
+      ...(explodeTargetNode ? [
+        {
+          id: "ctx-explode-model",
+          label: "Explode into editable parts",
+          icon: <ModelIcon width={14} height={14} />,
+          disabled: !canExplodeModel,
+          onSelect: () => { void handleExplodeModel(contextTargetId); },
+        } satisfies MenuAction,
+      ] : []),
       { id: "ctx-frame", label: "Frame", icon: <FrameIcon width={14} height={14} />, shortcut: "F", disabled: contextRootIds.length === 0 && !targetNode, onSelect: () => { if (nodeId && !shouldUseExistingSelection) store.selectNode(nodeId); handleFrameSelection(); } },
       { id: "ctx-delete", label: contextRootIds.length > 1 ? "Delete Selected" : "Delete", icon: <TrashIcon width={14} height={14} />, shortcut: "Delete", danger: true, disabled: contextRootIds.length === 0, onSelect: () => handleDelete(nodeId ?? undefined) },
     ];
 
     setContextMenu({ x: event.clientX, y: event.clientY, items });
-  }, [canGroupNodeIds, createAddMenuActions, handleCopyProperties, handleDelete, handleDuplicate, handleFrameSelection, handleGroupSelection, handlePaste, handlePasteProperties, resolveContextInsertTarget, selectedNodeIdsSet, selectedRootIds, store, storeView]);
+  }, [canGroupNodeIds, createAddMenuActions, handleCopyProperties, handleDelete, handleDuplicate, handleExplodeModel, handleFrameSelection, handleGroupSelection, handlePaste, handlePasteProperties, resolveContextInsertTarget, selectedNodeIdsSet, selectedRootIds, store, storeView]);
 
   const openViewportContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
