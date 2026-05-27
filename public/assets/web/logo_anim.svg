@@ -1,4 +1,4 @@
-<svg width="479" height="498" viewBox="-100 -100 680 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="520" height="498" viewBox="-100 -100 760 700" fill="none" xmlns="http://www.w3.org/2000/svg">
   <title>3Forge App Splash Intro - Absolute Flawless Mask Overlay</title>
   
   <style>
@@ -18,18 +18,35 @@
     .rod.r { transform-origin: 0% 0%; transform: scaleX(0); animation: growRight .2s cubic-bezier(0.34, 1.56, 0.64, 1) .15s forwards; }
 
     /* --- RIBBONS: REVELACAO SIMULTANEA --- */
-    /* Assentamento global de todo o logotipo */
     #logoAll { transform-box: fill-box; transform-origin: center; animation: logoSettle 0.8s ease-out 1.0s forwards; }
     
-    /* Sem transformacoes CSS nas faixas para preservar as cordenadas originais impecaveis */
-
     /* --- SHADING: BRILHO COORDENADO --- */
     .shine { opacity: 0; mix-blend-mode: screen; animation-fill-mode: forwards; }
     .s1, .s2, .s3, .s4, .s5, .s6, .s1o { 
       animation: shineIn .2s ease-out 0.6s forwards, shineOut .2s ease-in 0.8s forwards; 
     }
 
-    /* --- KEYFRAMES --- */
+    /* --- WORDMARK FINAL: LOGO ARRASTA PARA A ESQUERDA E REVELA 3FORGE --- */
+    #brandMark {
+      transform-box: view-box;
+      transform-origin: 240px 260px;
+      animation: markSlideLeft 0.85s cubic-bezier(0.16, 1, 0.3, 1) 1.65s forwards;
+    }
+
+    #wordmark {
+      opacity: 0;
+      animation: wordmarkAppear 0.12s ease-out 1.68s forwards;
+    }
+
+    #wordmarkText {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 94px;
+      font-weight: 800;
+      letter-spacing: -4px;
+      dominant-baseline: middle;
+      fill: #9258F3;
+    }
+
     @keyframes logoSettle { 0%{transform:translateY(0px);} 30%{transform:translateY(-2px);} 100%{transform:translateY(0px);} }
 
     @keyframes popCenter { 
@@ -53,9 +70,22 @@
     @keyframes growRight { 0%{transform:scaleX(0);} 100%{transform:scaleX(1);} }
     @keyframes shineIn { from{opacity:0;} to{opacity:0.4;} }
     @keyframes shineOut { from{opacity:0.4;} to{opacity:0;} }
+    @keyframes markSlideLeft {
+      0% { transform: translateX(0px); }
+      68% { transform: translateX(-142px); }
+      84% { transform: translateX(-126px); }
+      100% { transform: translateX(-132px); }
+    }
+
+    @keyframes wordmarkAppear {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
   </style>
 
-  <g id="logoAll">
+  <g id="brandMark">
+    <g id="logoAll">
     <g clip-path="url(#clip0_43_200)">
       
       <mask id="mask0_43_200" style="mask-type:luminance" maskUnits="userSpaceOnUse" x="-71" y="-68" width="705" height="705">
@@ -137,8 +167,19 @@
       </g>
     </g>
   </g>
+  </g>
+
+  <g id="wordmark" mask="url(#wordmarkRevealMask)">
+    <text id="wordmarkText" x="282" y="262">3Forge</text>
+  </g>
 
   <defs>
+    <mask id="wordmarkRevealMask" maskUnits="userSpaceOnUse" x="274" y="190" width="380" height="150">
+      <rect x="274" y="190" width="0" height="150" fill="white">
+        <animate attributeName="width" begin="1.72s" dur="0.72s" values="0;380" keyTimes="0;1" calcMode="spline" keySplines="0.16 1 0.3 1" fill="freeze"/>
+      </rect>
+    </mask>
+
     <linearGradient id="paint0_linear_43_200" x1="177.696" y1="155.698" x2="177.696" y2="402.421" gradientUnits="userSpaceOnUse"><stop stop-color="#9847FE"/><stop offset="1" stop-color="#8D39F5"/></linearGradient>
     <linearGradient id="paint1_linear_43_200" x1="177.696" y1="155.698" x2="177.696" y2="402.421" gradientUnits="userSpaceOnUse"><stop stop-color="#7418E4"/><stop offset="1" stop-color="#400D7E"/></linearGradient>
     <linearGradient id="paint2_linear_43_200" x1="307.619" y1="175.873" x2="307.619" y2="415.836" gradientUnits="userSpaceOnUse"><stop stop-color="#AF64FF"/><stop offset="1" stop-color="#B66DFF"/></linearGradient>

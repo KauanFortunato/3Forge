@@ -6447,3 +6447,57 @@ code {
   from { transform: rotate(0deg); }
   to { transform: rotate(180deg); }
 }
+
+/* --- App-opening splash intro --- */
+.intro-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+  background:
+    radial-gradient(120% 120% at 50% 42%, #15121f 0%, var(--c-bg-0) 60%);
+  opacity: 1;
+  transition: opacity 0.45s ease;
+}
+
+.intro-splash.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.intro-splash__glow {
+  position: absolute;
+  width: 70vmin;
+  height: 70vmin;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.28) 0%, rgba(139, 92, 246, 0) 70%);
+  filter: blur(36px);
+  animation: introGlow 1.9s ease-out both;
+  pointer-events: none;
+}
+
+.intro-splash__logo {
+  position: relative;
+  width: min(44vmin, 300px);
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 12px 40px rgba(139, 92, 246, 0.25));
+}
+
+@keyframes introGlow {
+  0% { opacity: 0; transform: scale(0.65); }
+  45% { opacity: 1; }
+  100% { opacity: 0.6; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intro-splash__glow {
+    animation: none;
+    opacity: 0.5;
+  }
+}

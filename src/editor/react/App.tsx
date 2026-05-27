@@ -106,6 +106,7 @@ import { Modal } from "./components/Modal";
 import { PhonePlaybackBar, PhoneViewerHeader } from "./components/PhoneViewerChrome";
 import { SceneGraphPanel } from "./components/SceneGraphPanel";
 import { ShortcutDialog } from "./components/ShortcutDialog";
+import { IntroSplash } from "./components/IntroSplash";
 import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { runTask } from "./hooks/useAsyncTask";
@@ -764,6 +765,23 @@ export function App() {
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  // App-opening splash: shown once per browser session (so it plays on a real
+  // launch but not on every in-session reload). Falls open if storage is blocked.
+  const [showIntro, setShowIntro] = useState(() => {
+    try {
+      return sessionStorage.getItem("forge:intro-seen") !== "1";
+    } catch {
+      return true;
+    }
+  });
+  const handleIntroFinish = useCallback(() => {
+    try {
+      sessionStorage.setItem("forge:intro-seen", "1");
+    } catch {
+      // Ignore storage failures; the splash simply won't be suppressed next time.
+    }
+    setShowIntro(false);
+  }, []);
   const [statusText, setStatusText] = useState("Ready");
   const [toast, setToast] = useState<{ message: string; tone: "info" | "warning" } | null>(null);
   const [isShortcutDialogOpen, setIsShortcutDialogOpen] = useState(false);
@@ -3499,6 +3517,7 @@ export function App() {
   if (!isStarted) {
     return (
       <>
+        {showIntro ? <IntroSplash onFinish={handleIntroFinish} /> : null}
         <LandingPage
           layoutMode={layoutMode}
           persistedWorkspace={persistedWorkspace}
@@ -4230,6 +4249,7 @@ export function App() {
       {jsonDropImportModal}
 
       <LoadingOverlay />
+      {showIntro ? <IntroSplash onFinish={handleIntroFinish} /> : null}
     </div>
   );
 }
