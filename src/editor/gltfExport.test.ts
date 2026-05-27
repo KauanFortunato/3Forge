@@ -11,6 +11,7 @@ import {
   createBlueprintExportGroup,
   exportBlueprintToGlbBlob,
   exportBlueprintToGltfJson,
+  exportBlueprintToUsdzModelString,
   normalizeTexturesForCanvasExport,
   parseUsdzWithTextures,
 } from "./gltfExport";
@@ -205,6 +206,76 @@ describe("gltfExport", () => {
     const material = converted.material as { isMeshStandardMaterial?: boolean; color: Color };
     expect(material.isMeshStandardMaterial).toBe(true);
     expect(material.color.getHex()).toBe(originalColor.getHex());
+  });
+
+  it("exports transform animation as USDZ timeSamples", async () => {
+    const blueprint = createDefaultBlueprint();
+    const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
+    if (!panel) {
+      throw new Error("Expected panel node.");
+    }
+
+    const positionTrack = createAnimationTrack(panel.id, "transform.position.x");
+    positionTrack.keyframes = [
+      createAnimationKeyframe(0, panel.transform.position.x, "linear"),
+      createAnimationKeyframe(24, panel.transform.position.x + 2, "linear"),
+    ];
+    const clip = createAnimationClip("entrance", {
+      fps: 24,
+      durationFrames: 24,
+      tracks: [positionTrack],
+    });
+    blueprint.animation = { activeClipId: clip.id, clips: [clip] };
+
+    const usda = await exportBlueprintToUsdzModelString(blueprint);
+
+    // Stage-level time metadata in the header.
+    expect(usda).toMatch(/startTimeCode = 0/);
+    expect(usda).toMatch(/endTimeCode = 24/);
+    expect(usda).toMatch(/timeCodesPerSecond = 24/);
+    expect(usda).toMatch(/framesPerSecond = 24/);
+
+    // The animated prim uses timeSamples instead of a static transform.
+    expect(usda).toContain("matrix4d xformOp:transform.timeSamples = {");
+    expect(usda).toMatch(/\n\s*0: \(/);
+    expect(usda).toMatch(/\n\s*24: \(/);
+  });
+
+  it("lays out multiple clips sequentially on the USDZ timeline", async () => {
+    const blueprint = createDefaultBlueprint();
+    const panel = blueprint.nodes.find((node) => node.id !== ROOT_NODE_ID && node.type === "box");
+    if (!panel) {
+      throw new Error("Expected panel node.");
+    }
+
+    const moveTrack = createAnimationTrack(panel.id, "transform.position.x");
+    moveTrack.keyframes = [
+      createAnimationKeyframe(0, 0, "linear"),
+      createAnimationKeyframe(10, 1, "linear"),
+    ];
+    const growTrack = createAnimationTrack(panel.id, "transform.scale.x");
+    growTrack.keyframes = [
+      createAnimationKeyframe(0, 1, "linear"),
+      createAnimationKeyframe(10, 2, "linear"),
+    ];
+    const moveClip = createAnimationClip("move", { fps: 24, durationFrames: 10, tracks: [moveTrack] });
+    const growClip = createAnimationClip("grow", { fps: 24, durationFrames: 10, tracks: [growTrack] });
+    blueprint.animation = { activeClipId: moveClip.id, clips: [moveClip, growClip] };
+
+    const usda = await exportBlueprintToUsdzModelString(blueprint);
+
+    // First clip occupies frames 0..10, gap of one frame, second clip 11..21.
+    expect(usda).toMatch(/endTimeCode = 21/);
+    expect(usda).toMatch(/\n\s*11: \(/);
+    expect(usda).toMatch(/\n\s*21: \(/);
+  });
+
+  it("keeps static USDZ transforms when there is no animation", async () => {
+    const usda = await exportBlueprintToUsdzModelString(createDefaultBlueprint());
+
+    expect(usda).not.toContain("timeSamples");
+    expect(usda).not.toContain("startTimeCode");
+    expect(usda).toContain("matrix4d xformOp:transform = (");
   });
 
   it("plays exported animation at the same key values as the editor timeline", async () => {

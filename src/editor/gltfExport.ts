@@ -15,6 +15,7 @@ import {
   Group,
   IcosahedronGeometry,
   Material,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   MeshDepthMaterial,
@@ -38,10 +39,10 @@ import {
   TextureLoader,
   TorusGeometry,
   TorusKnotGeometry,
+  Vector3,
   VectorKeyframeTrack,
 } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { USDZExporter } from "three/examples/jsm/exporters/USDZExporter.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
@@ -49,6 +50,7 @@ import { evaluateAnimationTrackValue, frameToSeconds, getAnimationValue, isTrack
 import { decodeDataUrl } from "./exportPackage";
 import { DEFAULT_FONT_ID, getAvailableFonts, parseFontAsset } from "./fonts";
 import { awaitTextureLoadsDuring } from "./textureLoadWait";
+import { AnimatedUSDZExporter, type UsdzTransformAnimation, type UsdzTransformSample } from "./usdzAnimatedExporter";
 import type { AnimationClip, AnimationPropertyPath, AnimationTrack, ComponentBlueprint, EditorNode, ImageAsset, ImageNode, MaterialSpec, ModelAsset, NodeOriginSpec, TextNode } from "./types";
 
 type MaterialBaseOptions = Record<string, unknown>;
@@ -78,13 +80,33 @@ export async function exportBlueprintToGlbBlob(blueprint: ComponentBlueprint): P
   return new Blob([result], { type: "model/gltf-binary" });
 }
 
-export async function exportBlueprintToUsdzBlob(blueprint: ComponentBlueprint): Promise<Blob> {
+async function prepareUsdzExport(
+  blueprint: ComponentBlueprint,
+): Promise<{ group: Group; animation: UsdzTransformAnimation | null }> {
   const group = await createBlueprintExportGroup(blueprint);
   group.updateMatrixWorld(true);
   convertMaterialsForUsdz(group);
   normalizeTexturesForCanvasExport(group);
-  const result = await new USDZExporter().parseAsync(group);
+  const animation = createUsdzTransformAnimation(blueprint, group);
+  return { group, animation };
+}
+
+export async function exportBlueprintToUsdzBlob(blueprint: ComponentBlueprint): Promise<Blob> {
+  const { group, animation } = await prepareUsdzExport(blueprint);
+  // onlyVisible:false keeps parity with the GLB exporter (which exports hidden
+  // nodes too) and ensures animated nodes that start hidden are still emitted.
+  const result = await new AnimatedUSDZExporter().parseAsync(group, { animation, onlyVisible: false });
   return new Blob([result as BlobPart], { type: "model/vnd.usdz+zip" });
+}
+
+/**
+ * Returns the exported `model.usda` document text (the USD root layer) without
+ * packaging it into a zip. Same scene/animation pipeline as
+ * {@link exportBlueprintToUsdzBlob}; used by tests to assert on authored USD.
+ */
+export async function exportBlueprintToUsdzModelString(blueprint: ComponentBlueprint): Promise<string> {
+  const { group, animation } = await prepareUsdzExport(blueprint);
+  return new AnimatedUSDZExporter().buildModelUsda(group, { animation, onlyVisible: false });
 }
 
 export function convertMaterialsForUsdz(group: Group): void {
@@ -470,6 +492,126 @@ function evaluateAxisValueAtFrame(
 }
 
 const AXES: TransformAxis[] = ["x", "y", "z"];
+
+type AxisTrackMap = Partial<Record<TransformAxis, AnimationTrack>>;
+type FamilyTrackMap = Partial<Record<TransformTrackFamily, AxisTrackMap>>;
+
+/**
+ * Bakes every editor animation clip into a single USD stage timeline of local
+ * transform matrices, ready for {@link AnimatedUSDZExporter}.
+ *
+ * USDZ/AR Quick Look plays one timeline, so the clips are laid out
+ * **sequentially** (one after another with a one-frame gap) rather than
+ * overlaid — this guarantees no two clips fight over the same node at the same
+ * timeCode. Each frame is baked as a full local matrix so USD's linear
+ * timeSample interpolation reproduces the editor's eased curves.
+ *
+ * Returns `null` when there is nothing to animate.
+ */
+function createUsdzTransformAnimation(blueprint: ComponentBlueprint, root: Group): UsdzTransformAnimation | null {
+  const clips = blueprint.animation.clips;
+  if (clips.length === 0) {
+    return null;
+  }
+
+  const nodesById = new Map(blueprint.nodes.map((node) => [node.id, node]));
+  const objectsByNodeId = collectExportObjectsByNodeId(root);
+  const clipFpsOf = (clip: AnimationClip): number => (clip.fps > 0 ? clip.fps : 24);
+  const stageFps = Math.max(1, ...clips.map(clipFpsOf));
+
+  const samplesByObjectUuid = new Map<string, UsdzTransformSample[]>();
+  let cursorTimeCode = 0;
+  let endTimeCode = 0;
+
+  for (const clip of clips) {
+    const grouped = groupTransformTracksByNode(clip);
+    if (grouped.size === 0) {
+      continue;
+    }
+
+    const stride = stageFps / clipFpsOf(clip);
+    const lastFrame = Math.max(0, Math.round(clip.durationFrames));
+
+    for (let frame = 0; frame <= lastFrame; frame += 1) {
+      const timeCode = cursorTimeCode + frame * stride;
+
+      for (const [nodeId, families] of grouped) {
+        const node = nodesById.get(nodeId);
+        const object = objectsByNodeId.get(nodeId);
+        if (!node || !object) {
+          continue;
+        }
+
+        const matrix = composeLocalMatrixAtFrame(node, families, frame);
+        const samples = samplesByObjectUuid.get(object.uuid) ?? [];
+        samples.push({ timeCode, matrix });
+        samplesByObjectUuid.set(object.uuid, samples);
+      }
+
+      endTimeCode = Math.max(endTimeCode, timeCode);
+    }
+
+    // Advance past this clip plus a one-frame gap so the next clip never shares
+    // a boundary timeCode with this one.
+    cursorTimeCode += lastFrame * stride + 1;
+  }
+
+  if (samplesByObjectUuid.size === 0) {
+    return null;
+  }
+
+  return {
+    startTimeCode: 0,
+    endTimeCode,
+    timeCodesPerSecond: stageFps,
+    framesPerSecond: stageFps,
+    samplesByObjectUuid,
+  };
+}
+
+function groupTransformTracksByNode(clip: AnimationClip): Map<string, FamilyTrackMap> {
+  const result = new Map<string, FamilyTrackMap>();
+
+  for (const track of clip.tracks) {
+    if (track.keyframes.length === 0 || isTrackMuted(track)) {
+      continue;
+    }
+
+    const parsed = parseTransformAnimationProperty(track.property);
+    if (!parsed) {
+      continue;
+    }
+
+    const families = result.get(track.nodeId) ?? {};
+    const axes = families[parsed.family] ?? {};
+    axes[parsed.axis] = track;
+    families[parsed.family] = axes;
+    result.set(track.nodeId, families);
+  }
+
+  return result;
+}
+
+function composeLocalMatrixAtFrame(node: EditorNode, families: FamilyTrackMap, frame: number): Matrix4 {
+  const position = new Vector3(
+    evaluateAxisValueAtFrame(node, "position", "x", families.position?.x, frame),
+    evaluateAxisValueAtFrame(node, "position", "y", families.position?.y, frame),
+    evaluateAxisValueAtFrame(node, "position", "z", families.position?.z, frame),
+  );
+  const rotation = new Euler(
+    evaluateAxisValueAtFrame(node, "rotation", "x", families.rotation?.x, frame),
+    evaluateAxisValueAtFrame(node, "rotation", "y", families.rotation?.y, frame),
+    evaluateAxisValueAtFrame(node, "rotation", "z", families.rotation?.z, frame),
+    "XYZ",
+  );
+  const scale = new Vector3(
+    evaluateAxisValueAtFrame(node, "scale", "x", families.scale?.x, frame),
+    evaluateAxisValueAtFrame(node, "scale", "y", families.scale?.y, frame),
+    evaluateAxisValueAtFrame(node, "scale", "z", families.scale?.z, frame),
+  );
+
+  return new Matrix4().compose(position, new Quaternion().setFromEuler(rotation), scale);
+}
 
 /**
  * Parses a USDZ buffer via {@link USDLoader.parse} while ensuring that every
