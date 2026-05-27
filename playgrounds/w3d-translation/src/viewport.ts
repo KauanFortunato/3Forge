@@ -32,6 +32,55 @@ import type { ComponentBlueprint, EditorNode } from "../../../src/editor/types";
 import { buildNodeTree, type BuildContext } from "./nodes/builder";
 import type { W3DNodeData } from "./nodes/data";
 
+/**
+ * Phase V — W3D 2D broadcast frame px-per-world-unit conversion.
+ *
+ * 3Forge stores `sceneSettings.canvas` in PIXEL units (default 1920×1080),
+ * but R3 authors content in world units where the broadcast frame is
+ * 7.363797 × 4.142136. The conversion is fixed at 1080/4.142136 ≈ 260.7349
+ * pixels per world unit — and equivalently 1920/7.363797. Every TextureLayer
+ * / Quad / TextureText size in the 2D corpus implicitly assumes this scale.
+ *
+ * So to map `canvas.height` (in px) onto the ortho frustum half-height (in
+ * world units), divide by this constant. For the default 1080 canvas the
+ * result is 1080/2/260.7349 ≈ 2.071068 — exactly half the W3D 4.142 frame.
+ */
+export const W3D_FRAME_PX_PER_UNIT = 1080 / 4.142136;
+
+/**
+ * Default ortho half-height used for non-2D scenes (e.g. 3D / AR / no
+ * sceneSettings). Matches the previous hardcoded value so existing
+ * non-2D playgrounds keep their framing.
+ */
+export const ORTHO_DEFAULT_HALF_HEIGHT = 5;
+
+/**
+ * Pure helper — extracted so it can be unit-tested without spinning up a
+ * WebGLRenderer / DOM. Returns the world-units half-height to use for the
+ * ortho frustum when rendering this scene.
+ *
+ * - For `mode === "2d"` with a non-degenerate canvas: convert
+ *   `canvas.height / 2` from pixels to world units via
+ *   `W3D_FRAME_PX_PER_UNIT`.
+ * - Otherwise: fall back to `ORTHO_DEFAULT_HALF_HEIGHT`.
+ *
+ * Degenerate canvases (height <= 0) fall back to the default to avoid
+ * collapsing the ortho frustum to zero height.
+ */
+export function computeOrtho2DHalfHeight(
+  sceneSettings:
+    | { mode: "2d" | "3d"; canvas?: { width: number; height: number } }
+    | undefined,
+): number {
+  if (sceneSettings?.mode === "2d") {
+    const h = sceneSettings.canvas?.height;
+    if (typeof h === "number" && h > 0) {
+      return (h / 2) / W3D_FRAME_PX_PER_UNIT;
+    }
+  }
+  return ORTHO_DEFAULT_HALF_HEIGHT;
+}
+
 /** DEV-Inspector callback payload. */
 export type InspectorEvent =
   | { phase: "click"; target: Object3D }
@@ -83,6 +132,12 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   controls.enableDamping = true;
 
   const TARGET_ASPECT = 16 / 9; // 3Forge project default (1920×1080)
+  // Phase V — 2D ortho frustum tracking the authored W3D broadcast canvas.
+  // The active half-height is set by setBlueprint() based on the scene
+  // settings; resize() reads it whenever the ortho camera is active. Default
+  // matches the previous hardcoded halfH=5 so non-2D / no-blueprint paths
+  // remain unchanged.
+  let ortho2DHalfH = ORTHO_DEFAULT_HALF_HEIGHT;
   // Compute the LARGEST 16:9 rectangle that fits inside the host. The canvas
   // is then stretched to that exact pixel size via renderer.setSize (which
   // also updates the inline width/height styles on the canvas). CSS just
@@ -102,7 +157,7 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       activeCam.aspect = TARGET_ASPECT;
       activeCam.updateProjectionMatrix();
     } else {
-      const halfH = 5;
+      const halfH = ortho2DHalfH;
       const halfW = halfH * TARGET_ASPECT;
       activeCam.left = -halfW;
       activeCam.right = halfW;
@@ -224,6 +279,11 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
         activeCam = perspectiveCam;
         if (controls) { controls.enabled = true; }
       }
+
+      // Phase V — fit the ortho frustum to the authored broadcast canvas in
+      // 2D mode. resize() reads ortho2DHalfH on every frame; updating it here
+      // and then calling resize() applies the new framing immediately.
+      ortho2DHalfH = computeOrtho2DHalfHeight(blueprint.sceneSettings);
 
       if (blueprint.sceneSettings?.backgroundColor) {
         scene.background = new Color(blueprint.sceneSettings.backgroundColor);
