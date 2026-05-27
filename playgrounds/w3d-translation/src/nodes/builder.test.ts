@@ -1140,10 +1140,11 @@ describe("builder — BuildContext", () => {
     expect(g.children[0].position.y).toBeCloseTo(0, 5);
     expect(g.children[1].position.y).toBeCloseTo(stride, 5);
     expect(g.children[2].position.y).toBeCloseTo(2 * stride, 5);
-    // FlowChildrenAlignment="Trailing" is parsed but NOT applied as a transform
-    // (see applyFlowLayout doc-comment + BENCH_LIST evidence). Each child keeps
-    // its authored X=9, which is what makes the bench rows land inside the
-    // BASE_TEAM panel in the real fixture.
+    // Phase P2 — FlowChildrenAlignment="Trailing" is applied as a cross-axis
+    // shift. With equal-width siblings (all 2 wide here), the per-child delta
+    // (maxCross - ownCross) is 0 → no shift, authored X=9 preserved. The real
+    // BENCH_LIST in LINEUP_LEFT also uses equal-width slot geometry, so this
+    // matches both the test fixture and the corpus's no-shift outcome.
     expect(g.children[0].position.x).toBeCloseTo(9, 5);
     expect(g.children[1].position.x).toBeCloseTo(9, 5);
     expect(g.children[2].position.x).toBeCloseTo(9, 5);
@@ -1166,10 +1167,10 @@ describe("builder — BuildContext", () => {
     expect(g.children[1].position.x).toBe(0);
   });
 
-  test("Phase G: FlowChildrenAlignment is parsed onto userData but does not move children", () => {
-    // R3's FlowChildrenAlignment semantics are not yet validated against a
-    // second corpus template. Until then we preserve authored positions and
-    // only expose the parsed value on userData for the DEV inspector.
+  test("Phase P2: Center alignment shifts narrower siblings by (maxCross - ownCross)/2", () => {
+    // c1 cross-extent (X) = 2; c2 cross-extent = 1. maxCross = 2.
+    // c1 delta = 0 → no shift, X stays 0.5.
+    // c2 delta = 1 → shift = 0.5 → X moves from 0.5 to 1.0.
     const c1 = quadData({
       id: "c1", name: "C1", geometry: { alignmentX: "Left", size: { x: 2, y: 0.4 } },
       transform: { position: { x: 0.5, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
@@ -1185,11 +1186,125 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([stack]);
     const g = root.children[0] as Group;
-    // Center alignment is parsed but not applied: authored cross-axis (X=0.5) preserved.
+    expect(g.children[0].position.x).toBeCloseTo(0.5, 5);
+    expect(g.children[1].position.x).toBeCloseTo(1.0, 5);
+    expect((g.userData.w3d as { flow?: { alignment?: string } } | undefined)?.flow?.alignment).toBe("Center");
+  });
+
+  test("Phase P2: Trailing alignment shifts narrower siblings by (maxCross - ownCross)", () => {
+    // Three YMinus stack children with mixed cross-extents (X widths 2, 1, 1.5).
+    // maxCross = 2. Per-child deltas: 0, 1, 0.5 → Trailing shifts narrower
+    // children rightward so their trailing edges line up with the widest's.
+    const c1 = quadData({
+      id: "c1", name: "C1", geometry: { alignmentX: "Left", size: { x: 2, y: 0.4 } },
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const c2 = quadData({
+      id: "c2", name: "C2", geometry: { alignmentX: "Left", size: { x: 1, y: 0.4 } },
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const c3 = quadData({
+      id: "c3", name: "C3", geometry: { alignmentX: "Left", size: { x: 1.5, y: 0.4 } },
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const stack = groupData({
+      id: "stack", name: "STACK",
+      flow: { children: true, leadingSpace: 0, direction: "YMinus", alignment: "Trailing" },
+      children: [c1, c2, c3],
+    });
+    const root = buildNodeTree([stack]);
+    const g = root.children[0] as Group;
+    expect(g.children[0].position.x).toBeCloseTo(0, 5);    // widest, delta=0
+    expect(g.children[1].position.x).toBeCloseTo(1, 5);    // delta=1, full shift
+    expect(g.children[2].position.x).toBeCloseTo(0.5, 5);  // delta=0.5, full shift
+  });
+
+  test("Phase P2: Leading (default / unspecified) preserves authored cross-axis positions", () => {
+    const c1 = quadData({
+      id: "c1", name: "C1", geometry: { alignmentX: "Left", size: { x: 2, y: 0.4 } },
+      transform: { position: { x: 0.5, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const c2 = quadData({
+      id: "c2", name: "C2", geometry: { alignmentX: "Left", size: { x: 1, y: 0.4 } },
+      transform: { position: { x: 0.5, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const stack = groupData({
+      id: "stack", name: "STACK",
+      // No alignment authored → defaults to Leading (no-op).
+      flow: { children: true, leadingSpace: 0, direction: "YMinus" },
+      children: [c1, c2],
+    });
+    const root = buildNodeTree([stack]);
+    const g = root.children[0] as Group;
     expect(g.children[0].position.x).toBeCloseTo(0.5, 5);
     expect(g.children[1].position.x).toBeCloseTo(0.5, 5);
-    // userData carries the authored alignment for inspector exposure.
-    expect((g.userData.w3d as { flow?: { alignment?: string } } | undefined)?.flow?.alignment).toBe("Center");
+  });
+
+  test("Phase P2: XPlus + Center uses Y as cross axis", () => {
+    // Row across X: cross axis = Y. Mixed Y heights 1, 0.5 → maxCross=1.
+    // c2 delta = 0.5, Center shift = 0.25 → Y moves from 0 to +0.25.
+    const c1 = quadData({
+      id: "c1", name: "C1", geometry: { alignmentX: "Left", alignmentY: "Bottom", size: { x: 1, y: 1 } },
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const c2 = quadData({
+      id: "c2", name: "C2", geometry: { alignmentX: "Left", alignmentY: "Bottom", size: { x: 1, y: 0.5 } },
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const row = groupData({
+      id: "row", name: "ROW",
+      flow: { children: true, leadingSpace: 0, direction: "XPlus", alignment: "Center" },
+      children: [c1, c2],
+    });
+    const root = buildNodeTree([row]);
+    const g = root.children[0] as Group;
+    // Main axis (X) advances by stride 1+0=1.
+    expect(g.children[0].position.x).toBeCloseTo(0, 5);
+    expect(g.children[1].position.x).toBeCloseTo(1, 5);
+    // Cross axis (Y) center shift on c2: delta=0.5, /2=0.25.
+    expect(g.children[0].position.y).toBeCloseTo(0, 5);
+    expect(g.children[1].position.y).toBeCloseTo(0.25, 5);
+  });
+
+  test("Phase P2: explicit alignment='Leading' is a cross-axis no-op", () => {
+    const c1 = quadData({ id: "c1", name: "C1", geometry: { alignmentX: "Left", size: { x: 2, y: 0.4 } } });
+    const c2 = quadData({ id: "c2", name: "C2", geometry: { alignmentX: "Left", size: { x: 1, y: 0.4 } } });
+    const stack = groupData({
+      id: "stack", name: "STACK",
+      flow: { children: true, leadingSpace: 0, direction: "YMinus", alignment: "Leading" },
+      children: [c1, c2],
+    });
+    const root = buildNodeTree([stack]);
+    const g = root.children[0] as Group;
+    expect(g.children[0].position.x).toBeCloseTo(0, 5);
+    expect(g.children[1].position.x).toBeCloseTo(0, 5);
+  });
+
+  test("Phase P2: BENCH_LIST-shaped fixture — equal-width siblings under Trailing keep X positions (no false shifts)", () => {
+    // Mirrors the real LINEUP_LEFT BENCH_LIST geometry: 10 equal-width slots
+    // (here we use 3 for the test) authored at the same X. With Trailing
+    // alignment and equal extents the per-child delta is 0 — exactly the
+    // BENCH_LIST snapshot's expected outcome.
+    const mk = (i: number) => quadData({
+      id: `b${i}`, name: `BENCH_PLAYER_0${i}`, geometry: { alignmentX: "Left", size: { x: 0.86, y: 0.15 } },
+      transform: { position: { x: 7.15, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+    });
+    const bench = groupData({
+      id: "bench", name: "BENCH_LIST",
+      flow: { children: true, leadingSpace: -0.084, direction: "YMinus", alignment: "Trailing" },
+      children: [mk(1), mk(2), mk(3)],
+    });
+    const root = buildNodeTree([bench]);
+    const g = root.children[0] as Group;
+    // All children share max-X (=7.15+0.86 = 8.01 for AlignmentX=Left at X=7.15).
+    expect(g.children[0].position.x).toBeCloseTo(7.15, 5);
+    expect(g.children[1].position.x).toBeCloseTo(7.15, 5);
+    expect(g.children[2].position.x).toBeCloseTo(7.15, 5);
+    // Main-axis stacking preserved.
+    const stride = -(0.15 + (-0.084));
+    expect(g.children[0].position.y).toBeCloseTo(0, 5);
+    expect(g.children[1].position.y).toBeCloseTo(stride, 5);
+    expect(g.children[2].position.y).toBeCloseTo(2 * stride, 5);
   });
 
   test("Phase G: XMinus reverses cursor sign (right→left)", () => {

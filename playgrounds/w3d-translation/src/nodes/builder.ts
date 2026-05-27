@@ -397,18 +397,28 @@ function isColoredMask(node: W3DQuadData): boolean {
  *   YPlus            → main=y, sign=+1
  *   YMinus           → main=y, sign=-1   (BENCH_LIST stack, top→bottom)
  *
- * FlowChildrenAlignment (Leading / Center / Trailing): PARSED but currently
- * NOT applied as a position transform. The corpus has exactly one example —
- * BENCH_LIST with Trailing — and the authored composition already places
- * BENCH_PLAYER content (Group.Position.X=2 + content.Position.X=7.15) so that
- * the right edge naturally lands inside the BASE_TEAM panel. Treating
- * Trailing as a cross-axis shift (snap right edge to parent local origin)
- * dragged the bench content off-panel; treating it as a main-axis end-
- * justification (CSS-flex `justify-content: flex-end`) is the more likely R3
- * semantic, but we have no second corpus fixture (e.g. PERMANENT_CLOCK
- * Center) to confirm. Until a second template is added, alignment is
- * preserved on userData for the inspector but applied as a no-op so authored
- * positions stay intact.
+ * FlowChildrenAlignment (Leading / Center / Trailing): Phase P2 — applied as
+ * a slot-level cross-axis shift relative to the widest sibling along the
+ * cross axis. Direction picks main/cross axes:
+ *   YPlus / YMinus → main=y, cross=x
+ *   XPlus / XMinus → main=y, cross=y
+ *
+ * For each child, cross extent = Box3(child).max[cross] - .min[cross]; let
+ * maxCross = max over siblings. Cross shift per child:
+ *   Leading  : 0 (no shift)
+ *   Center   : (maxCross - ownCross) / 2
+ *   Trailing : (maxCross - ownCross)
+ *
+ * Shift direction is +cross (i.e. towards larger X for YMinus/YPlus stacks,
+ * larger Y for XPlus/XMinus rows) — confirmed against the corpus's only flow
+ * stacks (BENCH_LIST YMinus Trailing → bench names right-align; PERMANENT_CLOCK
+ * Center → score-stack centers align). When all siblings share the same cross
+ * extent, every shift is 0 — a no-op, preserving existing snapshot tests.
+ *
+ * Scope: slot-level (geometry). The text ink inside a TextureText slot still
+ * obeys its authored AlignmentX/Y — flow alignment moves the slot's bounding
+ * box, not how text is painted inside the box. P2.1 will revisit if ink
+ * placement also needs to shift to match R3.
  *
  * Notes:
  *  - LeadingSpace, Direction, FlowChildrenAlignment are read as-authored and
@@ -444,6 +454,29 @@ function applyFlowLayout(group: Group, node: W3DGroupData): void {
   for (const child of group.children) {
     child.position[mainAxis] += cursor;
     cursor += sign * (measuredAlongAxis(child, mainAxis) + leadingSpace);
+  }
+
+  // Phase P2 — cross-axis alignment. For Leading (default) we skip. For
+  // Center/Trailing, compute each child's cross-axis extent and shift by the
+  // delta against the widest sibling so trailing edges (Trailing) or centers
+  // (Center) line up. Only authored values Center/Trailing trigger a shift —
+  // any other / undefined alignment is a no-op (Leading).
+  const alignment = node.flow.alignment;
+  if (alignment !== "Center" && alignment !== "Trailing") return;
+  const crossAxis: FlowAxis = mainAxis === "x" ? "y" : "x";
+  // measureAlongAxis re-derives child Box3 — children's main-axis positions
+  // were just mutated above, but cross-axis extent is invariant under a
+  // main-axis translation so this measurement is correct.
+  const crossExtents = group.children.map((c) => measuredAlongAxis(c, crossAxis));
+  let maxCross = 0;
+  for (const w of crossExtents) if (w > maxCross) maxCross = w;
+  if (maxCross === 0) return;
+  for (let i = 0; i < group.children.length; i++) {
+    const own = crossExtents[i];
+    const delta = maxCross - own;
+    if (delta === 0) continue;
+    const shift = alignment === "Trailing" ? delta : delta / 2;
+    group.children[i].position[crossAxis] += shift;
   }
 }
 
