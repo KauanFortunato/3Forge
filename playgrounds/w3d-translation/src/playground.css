@@ -63,6 +63,61 @@ body {
   background: var(--panel);
   min-height: 0;
 }
+.playground__project {
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.14);
+}
+.playground__project-head {
+  padding: 9px 10px 7px;
+}
+.playground__project-head strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 650;
+}
+.playground__project-head span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.playground__scene-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 210px;
+  overflow: auto;
+}
+.playground__scene-list button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.035);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.playground__scene-list button:hover {
+  background: rgba(124, 68, 222, 0.10);
+}
+.playground__scene-list button.is-active {
+  background: rgba(124, 68, 222, 0.18);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.playground__scene-list span {
+  font-size: 12px;
+  font-weight: 600;
+}
+.playground__scene-list code {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .playground__tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
