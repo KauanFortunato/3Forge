@@ -261,13 +261,32 @@ function augmentPhotoFillMaskIds(
   return [ownMaskIds[0], maskGuid];
 }
 
-export function buildNode(node: W3DNodeData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {
-  if (node.kind === "Group") return buildGroup(node, ctx, inheritedMaskIds);
-  if (node.kind === "TextureText") return buildTextureText(node, ctx, inheritedMaskIds);
-  return buildQuad(node, ctx, inheritedMaskIds);
+export function buildNode(
+  node: W3DNodeData,
+  ctx?: BuildContext,
+  inheritedMaskIds?: string[],
+  inheritedAlpha?: number,
+): Object3D {
+  if (node.kind === "Group") return buildGroup(node, ctx, inheritedMaskIds, inheritedAlpha);
+  if (node.kind === "TextureText") return buildTextureText(node, ctx, inheritedMaskIds, inheritedAlpha);
+  return buildQuad(node, ctx, inheritedMaskIds, inheritedAlpha);
 }
 
-function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: string[]): Group {
+/**
+ * Phase P1 — cumulative parent-Group Alpha is multiplied into descendant
+ * Quad/TextureText leaf opacity. `inheritedAlpha` defaults to 1 (no parent
+ * contribution). A Group with `alpha=0.7` multiplies what it passes down
+ * by 0.7, so a nested Group(0.5) > Group(0.5) > Quad(1) yields leaf
+ * opacity 0.25. Authored static Group `Alpha` attribute is the only source;
+ * timeline Alpha animation on Groups is not yet propagated here (Phase P1
+ * scope keeps to the static authored value to match BENCH Alpha="0.7").
+ */
+function buildGroup(
+  node: W3DGroupData,
+  ctx?: BuildContext,
+  inheritedMaskIds?: string[],
+  inheritedAlpha?: number,
+): Group {
   const g = new Group();
   g.name = node.name;
   applyTransform(g, node.transform);
@@ -302,7 +321,13 @@ function buildGroup(node: W3DGroupData, ctx?: BuildContext, inheritedMaskIds?: s
     effectiveOwnMaskIds = augmentPhotoFillMaskIds(node.name, effectiveOwnMaskIds, ctx.photoMaskInfoByMaskId);
   }
   const passToChildren = effectiveOwnMaskIds.length > 0 ? effectiveOwnMaskIds : inheritedMaskIds;
-  for (const c of node.children) host.add(buildNode(c, ctx, passToChildren));
+  // Phase P1 — fold this Group's authored Alpha into the inherited alpha that
+  // descendant leaves multiply into their material opacity. `node.alpha` is
+  // undefined for Groups that did not author the attribute (the common case);
+  // we treat undefined as 1, so the recursion is a no-op for those Groups.
+  const incoming = inheritedAlpha ?? 1;
+  const passAlpha = incoming * (node.alpha ?? 1);
+  for (const c of node.children) host.add(buildNode(c, ctx, passToChildren, passAlpha));
   applyFlowLayout(host, node);
   return g;
 }
@@ -429,9 +454,14 @@ function measuredAlongAxis(obj: Object3D, axis: FlowAxis): number {
   return box.max[axis] - box.min[axis];
 }
 
-function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: string[]): Object3D {
+function buildQuad(
+  node: W3DQuadData,
+  ctx?: BuildContext,
+  inheritedMaskIds?: string[],
+  inheritedAlpha?: number,
+): Object3D {
   if (node.children.length === 0) {
-    const mesh = makeQuadMesh(node, ctx);
+    const mesh = makeQuadMesh(node, ctx, inheritedAlpha);
     applyTransform(mesh, node.transform);
     // Phase 2D.1 — isMask quads default to hidden (stencil-only writers like
     // PHOTO_MASK_0X / PHOTO_DUMMY_0X have IsColoredMask=False). When a mask
@@ -471,7 +501,7 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
   // Phase 2B — pivot anchor for Quad-with-children. Mesh and children both
   // sit inside the pivot host so they share the same anchor offset.
   const host = applyPivotAnchor(wrapper, node.transform);
-  const mesh = makeQuadMesh(node, ctx);
+  const mesh = makeQuadMesh(node, ctx, inheritedAlpha);
   // Phase 2D.1 — same colored-mask rule as the leaf-Quad path. Pure stencil
   // masks (IsColoredMask=False) stay hidden; colored masks (IsColoredMask=True)
   // remain visible so the Quad-with-children carrier still renders its band.
@@ -488,7 +518,10 @@ function buildQuad(node: W3DQuadData, ctx?: BuildContext, inheritedMaskIds?: str
   // children-carrier branch.
   applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
   const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
-  for (const c of node.children) host.add(buildNode(c, ctx, passToChildren));
+  // Phase P1 — Quad-with-children carries its inherited alpha to children
+  // unchanged (the Quad's own alpha applies only to its own carrier mesh; a
+  // Quad's Alpha attribute is a leaf concept, not a container concept).
+  for (const c of node.children) host.add(buildNode(c, ctx, passToChildren, inheritedAlpha));
   return wrapper;
 }
 
@@ -544,6 +577,7 @@ function buildTextureText(
   node: W3DTextureTextData,
   ctx?: BuildContext,
   inheritedMaskIds?: string[],
+  inheritedAlpha?: number,
 ): Object3D {
   const geometry = new PlaneGeometry(
     Math.max(node.textBox.x, 0.001),
@@ -575,6 +609,10 @@ function buildTextureText(
   } else if (node.displayColor) {
     textColor = displayColorToHex(node.displayColor);
   }
+  // Phase P1 — multiply cumulative parent-Group alpha into the final opacity.
+  // `inheritedAlpha` is 1 (or undefined) when no ancestor Group authored a
+  // fractional Alpha — common case is a no-op.
+  opacity = opacity * (inheritedAlpha ?? 1);
 
   // Resolve font family / weight / style from the registry FontStyle entry.
   const fontStyle = ctx?.registry.fontStyles.get(node.fontStyleId ?? "");
@@ -738,7 +776,7 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
   return tex;
 }
 
-function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
+function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: number): Mesh {
   const geometry = new PlaneGeometry(node.geometry.size.x, node.geometry.size.y);
   applyAlignment(geometry, node.geometry);
 
@@ -788,6 +826,18 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext): Mesh {
     resolvedColor = displayColorToHex(node.displayColor);
     resolvedOpacity = node.alpha;
     resolvedTransparent = node.alpha < 1;
+  }
+
+  // Phase P1 — multiply cumulative parent-Group alpha into the leaf opacity.
+  // `inheritedAlpha` is 1/undefined for nodes outside any Alpha-bearing Group
+  // (the common case is a no-op). For stencil writers this changes only the
+  // color blending — stencilWrite, stencilRef, and the stencil test itself
+  // are configured independently downstream in applyPhotoMaskStencil and are
+  // not gated by material.opacity.
+  const parentAlpha = inheritedAlpha ?? 1;
+  if (parentAlpha !== 1) {
+    resolvedOpacity = resolvedOpacity * parentAlpha;
+    if (resolvedOpacity < 1) resolvedTransparent = true;
   }
 
   // Phase H2 — `material.blending` is intentionally LEFT AT THE THREE.JS

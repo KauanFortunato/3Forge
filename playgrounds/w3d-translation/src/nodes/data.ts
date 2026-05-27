@@ -46,6 +46,18 @@ export type W3DGroupData = {
   maskIds: string[];
   transform: W3DTransform;
   /**
+   * Phase P1 — optional authored Alpha on a Group, in [0,1]. When present and
+   * less than 1, the builder multiplies it into every descendant Quad/TextureText
+   * leaf opacity (cumulative across nested Groups). `undefined` means no Alpha
+   * attribute was authored — equivalent to 1 for propagation, distinguishable
+   * for diagnostics.
+   *
+   * Only authored on a handful of nodes (e.g. BENCH Alpha="0.7" in LINEUP_LEFT)
+   * — most Groups omit it. Parser stores the value verbatim; the builder is
+   * responsible for the descendant multiplication.
+   */
+  alpha?: number;
+  /**
    * Parsed generically for any Group with <GeometryOptions FlowChildren/LeadingSpace/Direction>.
    * The builder currently applies it only to the PLAYERS group (Phase 2A staging gate);
    * Phase 2F removes that gate and generalises to all groups.
@@ -184,6 +196,11 @@ function parseGroup(el: Element, warnings: string[]): W3DGroupData {
     transform,
     children,
   };
+  // Phase P1 — parse optional Group Alpha attribute. Stored only when authored
+  // (most Groups omit it). Used by builder for descendant opacity multiplication.
+  if (attrs.Alpha !== undefined) {
+    group.alpha = parseNumberAttr(attrs.Alpha, 1);
+  }
   if (flow) group.flow = flow;
   return group;
 }

@@ -3171,3 +3171,123 @@ describe("builder — BuildContext", () => {
     expect(mat.map!.offset.x).toBeCloseTo(0.07, 5); // negated W3D -0.07
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase P1 — parent Group Alpha propagation into descendant leaf opacity.
+// XML evidence: LINEUP_LEFT `<Group Name="BENCH" Alpha="0.7">` — bench/coach
+// text should render at 70% opacity instead of 100%.
+// ---------------------------------------------------------------------------
+describe("builder — Phase P1 parent Group Alpha propagation", () => {
+  test("Group(alpha=0.7) > Quad(alpha=1) → mesh material.opacity ≈ 0.7", () => {
+    const child = quadData({ id: "child", alpha: 1 });
+    const parent = groupData({ id: "parent", alpha: 0.7, children: [child] });
+    const root = buildNode(parent) as Group;
+    const mesh = root.children[0] as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(0.7, 6);
+    expect(mat.transparent).toBe(true);
+  });
+
+  test("nested Group(0.5) > Group(0.5) > Quad(1) multiplies to ≈ 0.25", () => {
+    const leaf = quadData({ id: "leaf", alpha: 1 });
+    const inner = groupData({ id: "inner", alpha: 0.5, children: [leaf] });
+    const outer = groupData({ id: "outer", alpha: 0.5, children: [inner] });
+    const root = buildNode(outer) as Group;
+    const mesh = ((root.children[0] as Group).children[0]) as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(0.25, 6);
+    expect(mat.transparent).toBe(true);
+  });
+
+  test("Group without authored Alpha is a no-op — child alpha preserved verbatim", () => {
+    const child = quadData({ id: "child", alpha: 0.8 });
+    const parent = groupData({ id: "parent", children: [child] }); // no alpha
+    const root = buildNode(parent) as Group;
+    const mat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(0.8, 6);
+  });
+
+  test("Group(alpha=0.7) > Quad(alpha=0.5) → composes to 0.35", () => {
+    const child = quadData({ id: "child", alpha: 0.5 });
+    const parent = groupData({ id: "parent", alpha: 0.7, children: [child] });
+    const root = buildNode(parent) as Group;
+    const mat = ((root.children[0] as Mesh).material) as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(0.35, 6);
+    expect(mat.transparent).toBe(true);
+  });
+
+  test("Group(alpha=0.7) > TextureText → text material.opacity ≈ 0.7", () => {
+    // Minimal TextureText node — builder accepts it without a registry context.
+    const text = {
+      kind: "TextureText" as const,
+      id: "t", name: "T", enable: true, alpha: 1, speedScale: 1, isMask: false,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      textBox: { x: 0.5, y: 0.2 },
+      text: "TEST",
+      fontStyleId: undefined,
+      textQuality: 1,
+      constrainMethod: undefined,
+      alignmentX: "Center" as const,
+      alignmentY: "Center" as const,
+      children: [],
+    };
+    const parent = groupData({ id: "parent", alpha: 0.7, children: [text] });
+    const root = buildNode(parent) as Group;
+    const mesh = root.children[0] as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(0.7, 6);
+  });
+
+  test("regression: Group without alpha and no parent context → child Quad opacity=1, transparent=false", () => {
+    const child = quadData({ id: "child", alpha: 1 });
+    const parent = groupData({ id: "parent", children: [child] });
+    const root = buildNode(parent) as Group;
+    const mat = ((root.children[0] as Mesh).material) as MeshBasicMaterial;
+    expect(mat.opacity).toBe(1);
+    expect(mat.transparent).toBe(false);
+  });
+
+  test("stencil writer inside Alpha Group keeps stencilWrite=true (no stencil regression)", () => {
+    // Replicates the corpus shape: a generic colored mask quad embedded under
+    // a Group with fractional Alpha. Phase P1 must reduce its color opacity
+    // but never disable the stencil write path that downstream readers depend on.
+    const baseMaterial: W3DBaseMaterialData = {
+      kind: "BaseMaterial", id: "M1", name: "M",
+      hasEmissive: true, hasDiffuse: false, emissive: "ff0000", diffuse: "ffffff", alpha: 1,
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map([[baseMaterial.id, baseMaterial]]),
+      textures: new Map(),
+      textureLayers: new Map(),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx: BuildContext = {
+      registry,
+      textureUrlsByFilename: new Map(),
+      textureCache: new Map(),
+      warnings: [],
+    };
+    const mask = quadData({
+      id: "BASE_GENERIC", name: "BASE_GENERIC", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+      faceMapping: { surfaceName: "All", materialId: "M1", textureLayerId: "Standard", baseMaterialInherited: false, textureInherited: false },
+    });
+    // collectGenericMaskInfo skips masks no client references — add a reader
+    // sibling that points its maskIds at BASE_GENERIC, mirroring the
+    // BASE_TEAM ⇄ TEXTURE_FULLFRAME_BENCH coupling in the real corpus.
+    const reader = quadData({ id: "reader", name: "READER", maskIds: ["BASE_GENERIC"] });
+    const parent = groupData({ id: "parent", alpha: 0.7, children: [mask, reader] });
+    const root = buildNodeTree([parent], ctx);
+    const parentGroup = root.children[0] as Group;
+    const maskMesh = parentGroup.children[0] as Mesh;
+    const mat = maskMesh.material as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(0.7, 6);
+    expect(mat.stencilWrite).toBe(true);
+  });
+});
