@@ -105,6 +105,7 @@ import { SecondaryToolbar } from "./components/SecondaryToolbar";
 import { ShortcutDialog } from "./components/ShortcutDialog";
 import { LoadingOverlay, StatusBarProgress } from "./components/LoadingOverlay";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { TimelineViewportToolbar } from "./components/TimelineViewportToolbar";
 import { runTask } from "./hooks/useAsyncTask";
 import { useTheme } from "./hooks/useTheme";
 import { ViewportHost } from "./components/ViewportHost";
@@ -114,6 +115,8 @@ declare const __APP_VERSION__: string;
 
 const APP_VERSION = __APP_VERSION__;
 const RELEASE_NOTES_SEEN_VERSION_KEY = "3forge-release-notes-seen-version";
+const VIEWPORT_GRID_OVERLAY_KEY = "3forge-viewport-grid-overlay";
+const VIEWPORT_SAFE_AREA_KEY = "3forge-viewport-safe-area";
 
 interface NodeClipboard {
   sourceNodeIds: string[];
@@ -742,6 +745,8 @@ export function App() {
   const [rightPanelWidth, setRightPanelWidth] = useState(() => Math.max(320, Math.min(readStoredNumberPreference(RIGHT_PANEL_WIDTH_KEY, 320), 620)));
   const [timelineHeight, setTimelineHeight] = useState(() => readStoredNumberPreference(TIMELINE_HEIGHT_KEY, 300));
   const [isTimelineVisible, setIsTimelineVisible] = useState(() => readStoredBooleanPreference(TIMELINE_VISIBLE_KEY, true));
+  const [showViewportGridOverlay, setShowViewportGridOverlay] = useState(() => readStoredBooleanPreference(VIEWPORT_GRID_OVERLAY_KEY, false));
+  const [showViewportSafeArea, setShowViewportSafeArea] = useState(() => readStoredBooleanPreference(VIEWPORT_SAFE_AREA_KEY, false));
   const [resizeMode, setResizeMode] = useState<"hierarchy" | "left-sidebar" | "right-sidebar" | "timeline" | "fields" | null>(null);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => (
     typeof window === "undefined" ? "desktop" : resolveLayoutMode(window.innerWidth)
@@ -772,8 +777,10 @@ export function App() {
   const isCompactLayout = layoutMode !== "desktop";
   const effectiveToolMode = isPhoneLayout ? "select" : currentTool;
   const showEditingTimeline = isTimelineVisible && !isPhoneLayout;
+  const show2dViewportGridOverlay = storeView.sceneSettings.mode === "2d" && showViewportGridOverlay;
+  const show2dViewportSafeArea = storeView.sceneSettings.mode === "2d" && showViewportSafeArea;
   const shellBodyClassName = `app__body${isPhoneLayout ? " app__body--phone" : ""}`;
-  const centerColClassName = `app__col app__col--center${showEditingTimeline ? " has-timeline" : ""}`;
+  const centerColClassName = `app__col app__col--center has-viewport-toolbar${showEditingTimeline ? " has-timeline" : ""}`;
   const shellStyle = useMemo(
     () => ({
       "--right-w": `${rightPanelWidth}px`,
@@ -783,6 +790,13 @@ export function App() {
       "--fields-h": `${fieldsHeight}px`,
     }) as CSSProperties,
     [leftPanelWidth, rightPanelWidth, timelineHeight, hierarchyHeight, fieldsHeight],
+  );
+  const viewportOverlayFrameStyle = useMemo(
+    () => ({
+      aspectRatio: `${storeView.sceneSettings.canvas.width} / ${storeView.sceneSettings.canvas.height}`,
+      "--viewport-aspect": String(storeView.sceneSettings.canvas.width / storeView.sceneSettings.canvas.height),
+    }) as CSSProperties,
+    [storeView.sceneSettings.canvas.height, storeView.sceneSettings.canvas.width],
   );
   const selectedNodeIds = storeView.selectedNodeIds;
   const selectedNodeIdsSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
@@ -921,6 +935,22 @@ export function App() {
 
     window.localStorage.setItem(TIMELINE_VISIBLE_KEY, isTimelineVisible ? "true" : "false");
   }, [isTimelineVisible]);
+
+  useEffect(() => {
+    if (!canUseLocalStorage()) {
+      return;
+    }
+
+    window.localStorage.setItem(VIEWPORT_GRID_OVERLAY_KEY, showViewportGridOverlay ? "true" : "false");
+  }, [showViewportGridOverlay]);
+
+  useEffect(() => {
+    if (!canUseLocalStorage()) {
+      return;
+    }
+
+    window.localStorage.setItem(VIEWPORT_SAFE_AREA_KEY, showViewportSafeArea ? "true" : "false");
+  }, [showViewportSafeArea]);
 
   useEffect(() => {
     if (!shouldPersistWorkspace) {
@@ -2978,7 +3008,7 @@ export function App() {
   const toolPieItems = useMemo<PieMenuItem[]>(() => [
     {
       id: "select",
-      label: "Select",
+      label: "Select (1)",
       description: "Pick objects",
       icon: <CursorIcon width={16} height={16} />,
       isActive: currentTool === "select",
@@ -2986,7 +3016,7 @@ export function App() {
     },
     {
       id: "translate",
-      label: "Move",
+      label: "Move (2)",
       description: "Translate position",
       icon: <MoveIcon width={16} height={16} />,
       isActive: currentTool === "translate",
@@ -2994,7 +3024,7 @@ export function App() {
     },
     {
       id: "rotate",
-      label: "Rotate",
+      label: "Rotate (3)",
       description: "Rotate around axis",
       icon: <RotateIcon width={16} height={16} />,
       isActive: currentTool === "rotate",
@@ -3002,7 +3032,7 @@ export function App() {
     },
     {
       id: "scale",
-      label: "Scale",
+      label: "Scale (4)",
       description: "Resize uniformly",
       icon: <ScaleIcon width={16} height={16} />,
       isActive: currentTool === "scale",
@@ -3626,7 +3656,7 @@ export function App() {
 
             {/* Center column — Viewport + timeline */}
             <div className={centerColClassName}>
-              <div style={{ position: "relative", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+              <div className="viewport-stage">
                 <ViewportHost
                   store={store}
                   onTransformObjectChange={handleViewportTransformChange}
@@ -3645,14 +3675,57 @@ export function App() {
                   }}
                   onContextMenu={openViewportContextMenu}
                 />
+                {show2dViewportGridOverlay || show2dViewportSafeArea ? (
+                  <div className="viewport-overlay-frame" style={viewportOverlayFrameStyle} aria-hidden="true">
+                    {show2dViewportGridOverlay ? (
+                      <div className="viewport-overlay-grid">
+                        {Array.from({ length: 7 }, (_, index) => (
+                          <span
+                            key={`grid-column-${index}`}
+                            className="viewport-overlay-grid__line viewport-overlay-grid__line--vertical"
+                            style={{ left: `${((index + 1) / 8) * 100}%` }}
+                          />
+                        ))}
+                        {Array.from({ length: 4 }, (_, index) => (
+                          <span
+                            key={`grid-row-${index}`}
+                            className="viewport-overlay-grid__line viewport-overlay-grid__line--horizontal"
+                            style={{ top: `${((index + 1) / 5) * 100}%` }}
+                          />
+                        ))}
+                      </div>
+                    ) : null}
+                    {show2dViewportSafeArea ? (
+                      <div className="viewport-safe-area">
+                        <div className="viewport-safe-area__action" />
+                        <div className="viewport-safe-area__title" />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               {showEditingTimeline ? (
+                <div
+                  className={`app__sep app__sep--row${resizeMode === "timeline" ? " is-active" : ""}`}
+                  onPointerDown={startTimelineResizing}
+                />
+              ) : null}
+
+              <TimelineViewportToolbar
+                currentTool={currentTool}
+                sceneMode={storeView.sceneSettings.mode}
+                showGridOverlay={showViewportGridOverlay}
+                showSafeArea={showViewportSafeArea}
+                backgroundColor={storeView.sceneSettings.backgroundColor}
+                onToolChange={handleToolChange}
+                onToggleGridOverlay={() => setShowViewportGridOverlay((value) => !value)}
+                onToggleSafeArea={() => setShowViewportSafeArea((value) => !value)}
+                onBackgroundColorChange={(backgroundColor) => store.updateSceneSettings({ backgroundColor })}
+              />
+
+              {showEditingTimeline ? (
                 <>
-                  <div
-                    className={`app__sep app__sep--row${resizeMode === "timeline" ? " is-active" : ""}`}
-                    onPointerDown={startTimelineResizing}
-                  />
                   <AnimationTimeline
                     animation={storeView.animation}
                     nodes={storeView.blueprintNodes}
