@@ -2172,6 +2172,89 @@ describe("builder — BuildContext", () => {
     expect(mat.map!.rotation).toBeCloseTo(Math.PI / 4, 5);
   });
 
+  test("Phase UV.2b: negative repeat.x (mirror) pivots around texture center (0.5, 0.5)", () => {
+    // INVERTED_GRADIENT-shape: Scale X=-1 + Clamp wrap. Center=(0, 0) would
+    // collapse to sample the leftmost column under Clamp; center=(0.5, 0.5)
+    // produces a real horizontal mirror around the image centre. Used for
+    // the BASE_TEAM purple panel fade direction.
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "BASE_GRADIENT.png", filename: "BASE_GRADIENT.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "INV", name: "INVERTED_GRADIENT", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: true, useMipMapping: true,
+        textureAddressModeU: "Clamp", textureAddressModeV: "Clamp" },
+      scale: { x: -1, y: 1 },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["INV", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["BASE_GRADIENT.png", "blob:BG"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "INV", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    expect(mat.map!.repeat.x).toBe(-1);
+    expect(mat.map!.center.x).toBeCloseTo(0.5, 5);
+    expect(mat.map!.center.y).toBeCloseTo(0.5, 5);
+  });
+
+  test("Phase UV.2b: rotation alone (positive repeat) keeps center at default corner (0, 0)", () => {
+    // FF_MAIN / FF_MAIN_BENCH-shape: small authored rotation, positive
+    // repeat. Centre pivot would introduce a symmetric edge-clamp band on
+    // both sides (visible "duplicated" pattern). The default corner pivot
+    // matches what the user expected — a single-edge clamp band (subtle,
+    // barely visible) instead of a doubled artefact.
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "PATTERN.png", filename: "PATTERN.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "FF", name: "FF_MAIN", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: true, useMipMapping: true,
+        textureAddressModeU: "Clamp", textureAddressModeV: "Clamp" },
+      scale: { x: 1.13, y: 1.13 },
+      rotationDeg: -1,
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["FF", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["PATTERN.png", "blob:P"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "FF", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    expect(mat.map!.repeat.x).toBeCloseTo(1.13, 5);
+    expect(mat.map!.rotation).toBeCloseTo(-Math.PI / 180, 5);
+    expect(mat.map!.center.x).toBe(0); // pivot remains at corner — rotation does NOT trigger centre
+    expect(mat.map!.center.y).toBe(0);
+  });
+
+  test("Phase UV.2b: pure offset (no rotation, positive repeat) keeps center at default (0, 0)", () => {
+    // PHOTO_NN-shape: Offset X=-0.07, no rotation, no scale flip. Centre stays
+    // at default so the existing scaleKey-around-origin behaviour for the
+    // alphaMap layer doesn't regress.
+    const tex: W3DTextureData = { kind: "Texture", id: "t", name: "Player.png", filename: "Player.png", folderPath: "" };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "PHOTO", name: "PHOTO_01", textureBlending: "Multiply",
+      mapping: { textureGuid: "t", isEmissive: true, useMipMapping: true,
+        textureAddressModeU: "Clamp", textureAddressModeV: "Clamp" },
+      offset: { x: -0.07, y: 0 },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["t", tex]]),
+      textureLayers: new Map([["PHOTO", layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx = makeCtx({ registry, textureUrlsByFilename: new Map([["Player.png", "blob:P"]]) });
+    const node = quadData({ faceMapping: { surfaceName: "All", materialId: "", textureLayerId: "PHOTO", baseMaterialInherited: false, textureInherited: false } });
+    const mat = (buildNode(node, ctx) as Mesh).material as MeshBasicMaterial;
+    expect(mat.map!.center.x).toBe(0);
+    expect(mat.map!.center.y).toBe(0);
+    expect(mat.map!.offset.x).toBeCloseTo(0.07, 5);
+  });
+
   test("Phase 2C: OffsetKey Y=-0.2 + ScaleKey Y=0.5 → material.alphaMap independent from map", () => {
     const tex: W3DTextureData = { kind: "Texture", id: "t", name: "T.png", filename: "T.png", folderPath: "" };
     const ramp: W3DTextureData = { kind: "Texture", id: "ramp", name: "VERTICAL_RAMP.png", filename: "VERTICAL_RAMP.png", folderPath: "" };

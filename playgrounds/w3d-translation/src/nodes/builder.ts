@@ -1189,6 +1189,18 @@ function acquireTexture(
   tex.offset.set(transform.offset.x, transform.offset.y);
   tex.repeat.set(transform.repeat.x, transform.repeat.y);
   tex.rotation = degToRad(transform.rotationDeg);
+  // Phase UV.2b — center pivot ONLY for mirror cases (negative repeat). R3
+  // expects a horizontal/vertical flip to mirror around the texture centre;
+  // Three.js default `texture.center = (0, 0)` makes a negative repeat under
+  // Clamp wrap collapse to a single edge column instead of producing a real
+  // mirror (e.g. INVERTED_GRADIENT's Scale.X = -1). Rotations are left at
+  // the default corner pivot — small authored rotations (e.g. FF_MAIN's -1°)
+  // already render correctly that way, and switching them to centre pivot
+  // introduces a symmetric clamp band on both edges that visually duplicates
+  // the pattern.
+  if (transform.repeat.x < 0 || transform.repeat.y < 0) {
+    tex.center.set(0.5, 0.5);
+  }
   tex.wrapS = transform.wrapS;
   tex.wrapT = transform.wrapT;
   tex.needsUpdate = true;
