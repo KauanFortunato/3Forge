@@ -15,6 +15,18 @@ export interface ImportedGltfAnimationClip {
   tracks: ImportedAnimationTrack[];
 }
 
+/**
+ * glTF transform animations grouped by the Object3D each track targets, so an
+ * exploded import can attach every node's tracks to its own blueprint part
+ * (rather than dumping them all on the model root). Skinned/morph tracks are
+ * ignored — only node TRS animation is converted.
+ */
+export interface GltfObjectAnimations {
+  fps: number;
+  durationFrames: number;
+  byObject: Map<Object3D, ImportedAnimationTrack[]>;
+}
+
 const DEFAULT_GLTF_IMPORT_FPS = 24;
 
 export function convertRootGltfAnimations(
@@ -33,6 +45,60 @@ export function convertRootGltfAnimations(
       };
     })
     .filter((clip) => clip.tracks.length > 0);
+}
+
+/**
+ * Convert every node-TRS track across all clips, grouped by the Object3D it
+ * targets. Used by the glTF explode import so each part node receives only its
+ * own animation. Multiple clips are flattened onto a single shared timeline
+ * (matching the single imported-clip model the plan inserter builds).
+ */
+export function convertGltfAnimationsByObject(
+  animations: ThreeAnimationClip[],
+  scene: Object3D,
+  fps = DEFAULT_GLTF_IMPORT_FPS,
+): GltfObjectAnimations {
+  const byObject = new Map<Object3D, ImportedAnimationTrack[]>();
+  let durationFrames = 1;
+
+  for (const clip of animations) {
+    durationFrames = Math.max(durationFrames, Math.max(1, Math.round(clip.duration * fps)));
+    for (const track of clip.tracks) {
+      const parsed = PropertyBinding.parseTrackName(track.name);
+      if (!parsed.propertyName) {
+        continue;
+      }
+      const target: Object3D | null = parsed.nodeName
+        ? (PropertyBinding.findNode(scene, parsed.nodeName) as Object3D | null)
+          ?? (parsed.nodeName === scene.name ? scene : null)
+        : scene;
+      if (!target) {
+        continue;
+      }
+      let converted: ImportedAnimationTrack[];
+      switch (parsed.propertyName) {
+        case "position":
+          converted = convertVectorTrack(track.times, track.values, "transform.position", fps);
+          break;
+        case "scale":
+          converted = convertVectorTrack(track.times, track.values, "transform.scale", fps);
+          break;
+        case "quaternion":
+          converted = convertQuaternionTrack(track.times, track.values, fps);
+          break;
+        default:
+          converted = [];
+      }
+      if (converted.length === 0) {
+        continue;
+      }
+      const existing = byObject.get(target) ?? [];
+      existing.push(...converted);
+      byObject.set(target, existing);
+    }
+  }
+
+  return { fps, durationFrames, byObject };
 }
 
 function convertRootGltfTrack(

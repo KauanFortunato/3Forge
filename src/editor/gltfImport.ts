@@ -1,6 +1,8 @@
 import { Color, Euler, Matrix4, Mesh, Object3D, Quaternion, Vector3 } from "three";
-import type { Material, Texture } from "three";
+import type { AnimationClip, Material, Texture } from "three";
 
+import { convertGltfAnimationsByObject } from "./gltfAnimationImport";
+import type { GltfObjectAnimations } from "./gltfAnimationImport";
 import { createMaterialSpec } from "./materials";
 import type { MaterialSpec, ModelImportPlanNode } from "./types";
 
@@ -185,6 +187,7 @@ function buildPlanNodes(
   parentPath: string,
   materials: Map<string, GltfMaterialSnapshot>,
   withMaterialKeys: boolean,
+  animations?: GltfObjectAnimations,
 ): ModelImportPlanNode[] {
   return objects.map((object, index) => {
     const path = parentPath ? `${parentPath}.${index}` : String(index);
@@ -195,8 +198,16 @@ function buildPlanNodes(
       position: { x: object.position.x, y: object.position.y, z: object.position.z },
       rotation: { x: object.rotation.x, y: object.rotation.y, z: object.rotation.z },
       scale: { x: object.scale.x, y: object.scale.y, z: object.scale.z },
-      children: buildPlanNodes(object.children, path, materials, withMaterialKeys),
+      children: buildPlanNodes(object.children, path, materials, withMaterialKeys, animations),
     };
+    const nodeTracks = animations?.byObject.get(object);
+    if (nodeTracks && nodeTracks.length > 0) {
+      planNode.animation = {
+        fps: animations!.fps,
+        durationFrames: animations!.durationFrames,
+        tracks: nodeTracks,
+      };
+    }
     if (isMesh) {
       planNode.partPath = path;
       const mesh = object as Mesh;
@@ -258,7 +269,15 @@ function mergeTransformIntoChild(parent: ModelImportPlanNode, child: ModelImport
 function collapsePassthroughGroups(nodes: ModelImportPlanNode[]): ModelImportPlanNode[] {
   return nodes.map((node) => {
     let current: ModelImportPlanNode = { ...node, children: collapsePassthroughGroups(node.children) };
-    while (current.kind === "xform" && current.children.length === 1) {
+    // Never fold an animated wrapper (or one whose sole child is animated):
+    // its keyframes target that node's own local transform, which the merge
+    // would silently drop or double-apply.
+    while (
+      current.kind === "xform"
+      && current.children.length === 1
+      && !current.animation
+      && !current.children[0].animation
+    ) {
       current = mergeTransformIntoChild(current, current.children[0]);
     }
     return current;
@@ -269,11 +288,12 @@ function buildPlan(
   root: Object3D,
   materials: Map<string, GltfMaterialSnapshot>,
   withMaterialKeys: boolean,
+  animations?: GltfObjectAnimations,
 ): ModelImportPlanNode[] {
   if (hasSkinnedMesh(root)) {
     return [];
   }
-  return collapsePassthroughGroups(buildPlanNodes(root.children, "", materials, withMaterialKeys));
+  return collapsePassthroughGroups(buildPlanNodes(root.children, "", materials, withMaterialKeys, animations));
 }
 
 /**
@@ -282,9 +302,12 @@ function buildPlan(
  * textures). Used by the import pass to surface every part as an independently
  * editable, material-linked node while preserving the model's group hierarchy.
  */
-export function buildGltfImportData(scene: Object3D): GltfImportData {
+export function buildGltfImportData(scene: Object3D, animations: AnimationClip[] = []): GltfImportData {
   const materials = new Map<string, GltfMaterialSnapshot>();
-  const plan = buildPlan(scene, materials, true);
+  const objectAnimations = animations.length > 0
+    ? convertGltfAnimationsByObject(animations, scene)
+    : undefined;
+  const plan = buildPlan(scene, materials, true, objectAnimations);
   return { materials: [...materials.values()], plan };
 }
 

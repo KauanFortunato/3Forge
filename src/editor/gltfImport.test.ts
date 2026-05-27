@@ -1,4 +1,4 @@
-import { BufferGeometry, Group, Mesh, MeshStandardMaterial } from "three";
+import { AnimationClip, BufferGeometry, Group, Mesh, MeshStandardMaterial, VectorKeyframeTrack } from "three";
 import { describe, expect, it } from "vitest";
 
 import { buildGltfImportData, materialSpecFromThreeMaterial, remapGltfPlanMaterialIds } from "./gltfImport";
@@ -109,6 +109,48 @@ describe("gltfImport", () => {
     expect(plan[0].kind).toBe("xform");
     expect(plan[0].name).toBe("Rig");
     expect(plan[0].children.map((c) => c.name)).toEqual(["A", "B"]);
+  });
+
+  it("attaches per-node glTF animations to the matching mesh part", () => {
+    const scene = new Group();
+    const wheel = new Mesh(new BufferGeometry(), new MeshStandardMaterial());
+    wheel.name = "Wheel";
+    const body = new Mesh(new BufferGeometry(), new MeshStandardMaterial());
+    body.name = "Body";
+    scene.add(wheel, body);
+
+    // Animate only the wheel's Y position from 0 -> 5.
+    const track = new VectorKeyframeTrack("Wheel.position", [0, 1], [0, 0, 0, 0, 5, 0]);
+    const clip = new AnimationClip("Spin", 1, [track]);
+
+    const { plan } = buildGltfImportData(scene, [clip]);
+    const wheelPlan = plan.find((n) => n.name === "Wheel");
+    const bodyPlan = plan.find((n) => n.name === "Body");
+    expect(wheelPlan?.animation).toBeDefined();
+    expect(wheelPlan?.animation?.tracks.some((t) => t.property === "transform.position.y")).toBe(true);
+    // The non-animated part gets no tracks.
+    expect(bodyPlan?.animation).toBeUndefined();
+  });
+
+  it("does not collapse an animated single-child wrapper group", () => {
+    const scene = new Group();
+    const hub = new Group();
+    hub.name = "Hub";
+    const mesh = new Mesh(new BufferGeometry(), new MeshStandardMaterial());
+    mesh.name = "Spinner";
+    hub.add(mesh);
+    scene.add(hub);
+
+    const track = new VectorKeyframeTrack("Hub.position", [0, 1], [0, 0, 0, 0, 2, 0]);
+    const clip = new AnimationClip("Move", 1, [track]);
+
+    const { plan } = buildGltfImportData(scene, [clip]);
+    // Hub is animated, so it stays as its own node instead of folding into Spinner.
+    expect(plan).toHaveLength(1);
+    expect(plan[0].name).toBe("Hub");
+    expect(plan[0].kind).toBe("xform");
+    expect(plan[0].animation).toBeDefined();
+    expect(plan[0].children.map((c) => c.name)).toEqual(["Spinner"]);
   });
 
   it("remaps source-material keys to real MaterialAsset ids and clears unknown keys", () => {

@@ -2122,7 +2122,7 @@ export function App() {
             const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
             const gltfData = asset.format === "gltf" ? await file.text() : await file.arrayBuffer();
             const gltf = await runTask(`Reading ${file.name} hierarchy...`, () => new GLTFLoader().parseAsync(gltfData, ""), { blocking: true });
-            const importData = buildGltfImportData(gltf.scene);
+            const importData = buildGltfImportData(gltf.scene, gltf.animations);
             if (importData.plan.length > 0) {
               const assetStem = stripFileExtension(asset.name ?? "asset");
               // One ImageAsset per unique texture, then one MaterialAsset per
@@ -2152,20 +2152,10 @@ export function App() {
                 materialIdByKey.set(material.key, materialId);
               }
               const enrichedPlan = remapGltfPlanMaterialIds(importData.plan, materialIdByKey);
+              // Per-node glTF animations ride on the plan (attached in
+              // buildGltfImportData) and are wired to each part by
+              // insertModelImportPlan, so each animated node keeps its own clip.
               insertedNodeId = store.insertModelImportPlan(modelId, enrichedPlan, target.parentId, insertionIndex);
-              // Whole-model (root) animations apply to the wrapper group so the
-              // exploded model still plays its imported clips as a unit.
-              if (insertedNodeId && gltf.animations.length > 0) {
-                try {
-                  const { convertRootGltfAnimations } = await import("../gltfAnimationImport");
-                  for (const clip of convertRootGltfAnimations(gltf.animations, gltf.scene)) {
-                    const tracks = store.createImportedAnimationTracks(insertedNodeId, clip.tracks);
-                    store.addImportedAnimationClip(clip.name, tracks, clip.fps, clip.durationFrames);
-                  }
-                } catch (err) {
-                  console.warn("Failed to import GLTF root animation tracks:", err);
-                }
-              }
             }
           } catch (err) {
             console.warn("glTF explode failed; falling back to single ModelNode:", err);
