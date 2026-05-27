@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { parseW3DFromFolder } from "../../../src/editor/import/w3dFolder";
 import type { ComponentBlueprint } from "../../../src/editor/types";
 import { analyzeW3dXml, type DocumentStats } from "./analyze";
 import { dumpNodes, type DumpRow } from "./nodes/diagnostics";
@@ -11,6 +10,13 @@ import type { W3DResourceRegistry } from "./nodes/resources";
 import { buildInspectorReport, type InspectorReport } from "./inspector";
 import { buildLoadedFontIndex, loadW3DFontFiles, type FontLoadResult } from "./fonts";
 import type { Texture } from "three";
+import {
+  collectSceneMovFiles,
+  collectSceneTextureFiles,
+  indexW3DProject,
+  type W3DProjectIndex,
+  type W3DProjectScene,
+} from "./projectFiles";
 
 interface LoadedScene {
   sceneFileName: string;
@@ -30,7 +36,13 @@ interface LoadedScene {
   loadedFontIndex: Set<string>;
 }
 
+interface SelectedProject {
+  files: File[];
+  index: W3DProjectIndex;
+}
+
 export function App() {
+  const [project, setProject] = useState<SelectedProject | null>(null);
   const [loaded, setLoaded] = useState<LoadedScene | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<"stats" | "xml" | "blueprint" | "quads">("stats");
@@ -40,6 +52,7 @@ export function App() {
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const viewportHostRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<PlaygroundViewport | null>(null);
+  const loadedRef = useRef<LoadedScene | null>(null);
 
   useEffect(() => {
     const host = viewportHostRef.current;
@@ -100,60 +113,46 @@ export function App() {
   }, [inspectorReport]);
 
   useEffect(() => {
-    return () => {
-      if (loaded) {
-        for (const url of loaded.textureUrlsByFilename.values()) URL.revokeObjectURL(url);
-        for (const tex of loaded.textureCache.values()) tex.dispose();
-      }
-    };
+    loadedRef.current = loaded;
   }, [loaded]);
 
-  const handleFiles = useCallback(async (files: File[]) => {
+  useEffect(() => {
+    return () => {
+      cleanupLoadedScene(loadedRef.current);
+    };
+  }, []);
+
+  const handleProjectFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
-    // Revoke previous blob URLs and dispose textures to avoid memory leaks
-    if (loaded) {
-      for (const url of loaded.textureUrlsByFilename.values()) URL.revokeObjectURL(url);
-      for (const tex of loaded.textureCache.values()) tex.dispose();
-    }
+    cleanupLoadedScene(loaded);
+    viewportRef.current?.clearInspectorSelection();
+    setInspectorReport(null);
+    setLoaded(null);
     setError(null);
-    try {
-      const folder = await parseW3DFromFolder(files);
-      const sceneFile = files.find((f) => relPath(f).endsWith(folder.sceneFileName));
-      const xml = sceneFile ? await sceneFile.text() : "";
-      const stats = analyzeW3dXml(xml);
-      const translated = translateBlueprint(xml);
-      // Build blob URL map from the raster texture files provided by the folder picker
-      const textureUrlsByFilename = new Map<string, string>();
-      for (const f of folder.rasterTextureFiles) {
-        textureUrlsByFilename.set(f.name, URL.createObjectURL(f));
-      }
-      // Phase H3 — register R3 fonts via FontFace so canvas TextureText renders
-      // with the authored family instead of system sans-serif fallback. Failures
-      // are non-fatal; per-file status surfaces in the inspector / summary.
-      const fontLoadResults = await loadW3DFontFiles(folder.fontFiles);
-      const loadedFontIndex = buildLoadedFontIndex(fontLoadResults);
-      setLoaded({
-        sceneFileName: folder.sceneFileName,
-        xml,
-        blueprint: translated.blueprint,
-        nodes: translated.nodes,
-        resources: translated.resources,
-        textureUrlsByFilename,
-        textureCache: new Map(),
-        warnings: [...folder.warnings, ...translated.warnings],
-        stats,
-        movFiles: folder.movFiles.length,
-        rasterTextureFiles: folder.rasterTextureFiles.length,
-        fontLoadResults,
-        loadedFontIndex,
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    const index = indexW3DProject(files);
+    if (index.scenes.length === 0) {
+      setProject(null);
+      setError("No scene.w3d files found. Pick the root folder of an R3/W3D project.");
+      return;
+    }
+    setProject({ files, index });
+    if (index.scenes.length === 1) {
+      await loadScene(files, index.scenes[0], index, setLoaded, setError);
     }
   }, [loaded]);
+
+  const handleSceneSelect = useCallback(async (scene: W3DProjectScene) => {
+    if (!project) return;
+    cleanupLoadedScene(loaded);
+    viewportRef.current?.clearInspectorSelection();
+    setInspectorReport(null);
+    setLoaded(null);
+    await loadScene(project.files, scene, project.index, setLoaded, setError);
+  }, [loaded, project]);
 
   const reTranslate = useCallback(() => {
     if (!loaded) return;
+    setError(null);
     try {
       const translated = translateBlueprint(loaded.xml);
       setLoaded({
@@ -162,7 +161,7 @@ export function App() {
         nodes: translated.nodes,
         resources: translated.resources,
         warnings: translated.warnings,
-        // Preserve existing textureUrlsByFilename and textureCache — do not revoke/recreate
+        // Preserve existing texture/font URLs and texture cache.
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -180,7 +179,7 @@ export function App() {
         <h1>W3D Translation Playground</h1>
         <div className="playground__head-actions">
           <button type="button" onClick={() => folderInputRef.current?.click()}>
-            Open W3D folder…
+            Open W3D project…
           </button>
           {loaded ? (
             <button type="button" onClick={reTranslate} title="Re-run translate.ts against current XML">
@@ -223,12 +222,17 @@ export function App() {
         onChange={async (event) => {
           const files = Array.from(event.target.files ?? []);
           event.currentTarget.value = "";
-          await handleFiles(files);
+          await handleProjectFiles(files);
         }}
       />
 
       <div className="playground__body">
         <aside className="playground__panel">
+          <ProjectScenes
+            project={project}
+            loadedSceneFileName={loaded?.sceneFileName ?? null}
+            onSceneSelect={handleSceneSelect}
+          />
           <div className="playground__tabs">
             <button className={activePanel === "stats" ? "is-active" : ""} onClick={() => setActivePanel("stats")}>
               Structure
@@ -247,7 +251,7 @@ export function App() {
             {!loaded ? (
               <div className="playground__placeholder">
                 {error ? <p className="playground__error">{error}</p> : null}
-                <p>Pick a W3D folder containing <code>scene.w3d</code> to begin.</p>
+                <p>Pick an R3/W3D project folder, then choose a scene.</p>
               </div>
             ) : activePanel === "stats" ? (
               <StatsView loaded={loaded} />
@@ -295,6 +299,101 @@ export function App() {
   );
 }
 
+async function loadScene(
+  files: File[],
+  scene: W3DProjectScene,
+  project: W3DProjectIndex,
+  setLoaded: (loaded: LoadedScene | null) => void,
+  setError: (error: string | null) => void,
+): Promise<void> {
+  setError(null);
+
+  const textureUrlsByFilename = new Map<string, string>();
+  const textureCache = new Map<string, Texture>();
+
+  try {
+    const xml = await scene.file.text();
+    const stats = analyzeW3dXml(xml);
+    const translated = translateBlueprint(xml);
+
+    for (const file of collectSceneTextureFiles(files, scene)) {
+      textureUrlsByFilename.set(file.name, URL.createObjectURL(file));
+    }
+
+    // Phase H3 — register R3 fonts via FontFace so canvas TextureText renders
+    // with the authored family instead of system sans-serif fallback. Failures
+    // are non-fatal; per-file status surfaces in the inspector / summary.
+    const fontLoadResults = await loadW3DFontFiles(project.fontFiles);
+    const loadedFontIndex = buildLoadedFontIndex(fontLoadResults);
+
+    setLoaded({
+      sceneFileName: scene.sceneFileName,
+      xml,
+      blueprint: translated.blueprint,
+      nodes: translated.nodes,
+      resources: translated.resources,
+      textureUrlsByFilename,
+      textureCache,
+      warnings: [...translated.warnings],
+      stats,
+      movFiles: collectSceneMovFiles(files, scene).length,
+      rasterTextureFiles: textureUrlsByFilename.size,
+      fontLoadResults,
+      loadedFontIndex,
+    });
+  } catch (err) {
+    for (const url of textureUrlsByFilename.values()) URL.revokeObjectURL(url);
+    for (const tex of textureCache.values()) tex.dispose();
+    setLoaded(null);
+    setError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+function cleanupLoadedScene(scene: LoadedScene | null): void {
+  if (!scene) return;
+  for (const url of scene.textureUrlsByFilename.values()) URL.revokeObjectURL(url);
+  for (const tex of scene.textureCache.values()) tex.dispose();
+}
+
+function ProjectScenes({
+  project,
+  loadedSceneFileName,
+  onSceneSelect,
+}: {
+  project: SelectedProject | null;
+  loadedSceneFileName: string | null;
+  onSceneSelect: (scene: W3DProjectScene) => void;
+}) {
+  if (!project) {
+    return null;
+  }
+
+  return (
+    <section className="playground__project">
+      <div className="playground__project-head">
+        <div>
+          <strong>{project.index.projectName}</strong>
+          <span>{project.index.scenes.length} scenes · {project.index.fontFiles.length} fonts</span>
+        </div>
+      </div>
+      <div className="playground__scene-list">
+        {project.index.scenes.map((scene) => (
+          <button
+            key={scene.id}
+            type="button"
+            className={scene.sceneFileName === loadedSceneFileName ? "is-active" : ""}
+            onClick={() => onSceneSelect(scene)}
+            title={scene.sceneFileName}
+          >
+            <span>{scene.name}</span>
+            <code>{scene.sceneFileName}</code>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function StatsView({ loaded }: { loaded: LoadedScene }) {
   return (
     <div className="playground__stats">
@@ -321,11 +420,6 @@ function StatsView({ loaded }: { loaded: LoadedScene }) {
       </table>
     </div>
   );
-}
-
-function relPath(file: File): string {
-  const withPath = file as File & { webkitRelativePath?: string };
-  return withPath.webkitRelativePath?.length ? withPath.webkitRelativePath : file.name;
 }
 
 function QuadsView({ loaded }: { loaded: LoadedScene }) {
