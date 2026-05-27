@@ -58,6 +58,13 @@ export type ResolvedMaterial = {
 export function addressModeToWrap(mode: string | undefined): Wrapping {
   if (!mode) return ClampToEdgeWrapping;
   switch (mode.trim().toLowerCase()) {
+    // W3D's address-mode enum uses "Wrap" as the tile/repeat option; the
+    // canonical Three.js name is "Repeat" — they describe the same operation.
+    // Only "Wrap" appears in the 2D corpus (FF_MAIN, FF_MAIN_BENCH, and four
+    // PERMANENT_CLOCK layers). Falling through to ClampToEdge smears the
+    // texture's last edge texel across the visible quad when Scale > 1 or
+    // when a small rotation pushes UVs past 1.0 at the corners.
+    case "wrap":
     case "repeat":
       return RepeatWrapping;
     case "mirror":

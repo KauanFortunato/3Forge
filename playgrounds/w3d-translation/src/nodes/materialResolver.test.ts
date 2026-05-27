@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { resolveMaterial } from "./materialResolver";
+import { addressModeToWrap, resolveMaterial } from "./materialResolver";
 import type { W3DResourceRegistry, W3DBaseMaterialData } from "./resources";
 
 function makeRegistry(mats: W3DBaseMaterialData[] = []): W3DResourceRegistry {
@@ -448,6 +448,23 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
     expect(r.mapTransform!.wrapT).toBe(ClampToEdgeWrapping); // V default
   });
 
+  test('Phase W — TextureAddressModeU="Wrap" (W3D corpus spelling) → wrapS=RepeatWrapping', async () => {
+    // FF_MAIN and FF_MAIN_BENCH in LINEUP_LEFT, plus four PERMANENT_CLOCK
+    // layers — the only non-Clamp values in the 2D corpus — author
+    // `TextureAddressModeU/V="Wrap"` (not "Repeat"). Before this case existed
+    // the value fell through to ClampToEdgeWrapping, smearing the right/top
+    // edges of the yellow/purple panels.
+    const { RepeatWrapping, ClampToEdgeWrapping } = await import("three");
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L", name: "FF_MAIN", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-id", isEmissive: false, useMipMapping: false, textureAddressModeU: "Wrap", textureAddressModeV: "Wrap" },
+    };
+    const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer), []);
+    expect(r.mapTransform!.wrapS).toBe(RepeatWrapping);
+    expect(r.mapTransform!.wrapT).toBe(RepeatWrapping);
+    expect(r.mapTransform!.wrapS).not.toBe(ClampToEdgeWrapping);
+  });
+
   test('TextureAddressModeV="Mirror" → wrapT=MirroredRepeatWrapping', async () => {
     const { MirroredRepeatWrapping, ClampToEdgeWrapping } = await import("three");
     const layer: W3DTextureLayerData = {
@@ -521,6 +538,38 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
     expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.2, 5); // negated -0.2
     expect(r.alphaMapTransform!.repeat.x).toBe(1);
     expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5); // ScaleKey NOT negated
+  });
+});
+
+describe("addressModeToWrap — Phase W (W3D TextureAddressMode → Three.js Wrapping)", () => {
+  test('"Wrap" (W3D corpus spelling) → RepeatWrapping, case-insensitive', async () => {
+    const { RepeatWrapping } = await import("three");
+    expect(addressModeToWrap("Wrap")).toBe(RepeatWrapping);
+    expect(addressModeToWrap("wrap")).toBe(RepeatWrapping);
+    expect(addressModeToWrap("WRAP")).toBe(RepeatWrapping);
+    expect(addressModeToWrap("  Wrap  ")).toBe(RepeatWrapping); // trim
+  });
+
+  test('"Repeat" (Three.js spelling) → RepeatWrapping — regression guard', async () => {
+    const { RepeatWrapping } = await import("three");
+    expect(addressModeToWrap("Repeat")).toBe(RepeatWrapping);
+    expect(addressModeToWrap("repeat")).toBe(RepeatWrapping);
+  });
+
+  test('"Mirror" / "MirrorRepeat" / "MirroredRepeat" → MirroredRepeatWrapping', async () => {
+    const { MirroredRepeatWrapping } = await import("three");
+    expect(addressModeToWrap("Mirror")).toBe(MirroredRepeatWrapping);
+    expect(addressModeToWrap("MirrorRepeat")).toBe(MirroredRepeatWrapping);
+    expect(addressModeToWrap("MirroredRepeat")).toBe(MirroredRepeatWrapping);
+  });
+
+  test('"Clamp" / "ClampToEdge" / missing / unknown → ClampToEdgeWrapping (safe default)', async () => {
+    const { ClampToEdgeWrapping } = await import("three");
+    expect(addressModeToWrap("Clamp")).toBe(ClampToEdgeWrapping);
+    expect(addressModeToWrap("ClampToEdge")).toBe(ClampToEdgeWrapping);
+    expect(addressModeToWrap(undefined)).toBe(ClampToEdgeWrapping);
+    expect(addressModeToWrap("")).toBe(ClampToEdgeWrapping);
+    expect(addressModeToWrap("nonsense")).toBe(ClampToEdgeWrapping);
   });
 });
 
