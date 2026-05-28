@@ -3406,3 +3406,205 @@ describe("builder — Phase P1 parent Group Alpha propagation", () => {
     expect(mat.stencilWrite).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase P4.1 — Generic foreground overlay render-order policy.
+// XML evidence: LINEUP_LEFT LOGO Quad (Id 51199cb6, line 221) is authored
+// AFTER BASE_MAIN (line 41) in the same MAIN/HORIZONTAL_SLIDE branch. LOGO
+// uses IronHawks.png via TextureLayer "LOGO". With three.js default
+// renderOrder=0 and BASE_MAIN at generic-mask lane 11, the colored gradient
+// painted over LOGO's pixels even though XML order and R3 reference put LOGO
+// in front. Rule promotes non-mask, non-reader, textured Quads to overlay
+// lane 19 (above generic mask blocks ≤19, below photo-card stack 20+).
+// ---------------------------------------------------------------------------
+describe("builder — Phase P4.1 foreground overlay render-order", () => {
+  test("textured Quad with no mask, no inherited mask → renderOrder=19 (above colored masks)", () => {
+    // Synthetic minimal setup: colored generic mask + sibling textured overlay
+    // referencing the same registry. After build the overlay quad's renderOrder
+    // must be 19 while the mask writer sits at the generic block lane (11).
+    const baseMaterial: W3DBaseMaterialData = {
+      kind: "BaseMaterial", id: "M1", name: "M",
+      hasEmissive: true, hasDiffuse: false, emissive: "ffff00", diffuse: "ffffff", alpha: 1,
+    };
+    const texture: W3DTextureData = {
+      kind: "Texture", id: "tex-logo", name: "Logo.png", filename: "Logo.png", folderPath: "",
+    };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L1", name: "LOGO", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-logo", isEmissive: true, useMipMapping: true, keyType: "AlphaKey" },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map([[baseMaterial.id, baseMaterial]]),
+      textures: new Map([[texture.id, texture]]),
+      textureLayers: new Map([[layer.id, layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx: BuildContext = {
+      registry,
+      textureUrlsByFilename: new Map([["Logo.png", "blob:logo-url"]]),
+      textureCache: new Map(),
+      warnings: [],
+    };
+    const mask = quadData({
+      id: "mask-id", name: "BASE_PANEL", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+      faceMapping: { surfaceName: "All", materialId: "M1", textureLayerId: "Standard", baseMaterialInherited: false, textureInherited: false },
+    });
+    const overlay = quadData({
+      id: "overlay-id", name: "LOGO",
+      faceMapping: { surfaceName: "All", materialId: "M1", textureLayerId: "L1", baseMaterialInherited: false, textureInherited: false },
+    });
+    // Reader sibling so collectGenericMaskInfo registers the mask
+    const reader = quadData({ id: "reader-id", name: "TEXTURE_FULLFRAME_X", maskIds: ["mask-id"] });
+    const parent = groupData({ id: "g", name: "G", children: [mask, overlay, reader] });
+    const root = buildNodeTree([parent], ctx);
+    const g = root.children[0] as Group;
+    const maskMesh = g.children[0] as Mesh;
+    const overlayMesh = g.children[1] as Mesh;
+    // mask writer at generic block lane 11 (index 1 → genericWriterLane(1)=11)
+    expect(maskMesh.renderOrder).toBe(11);
+    expect(overlayMesh.renderOrder).toBe(19); // overlay above the mask
+    expect(overlayMesh.renderOrder).toBeGreaterThan(maskMesh.renderOrder);
+  });
+
+  test("non-textured Quad (no map) stays at renderOrder=0 (rule guard)", () => {
+    const overlay = quadData({ id: "overlay-id", name: "LOGO" }); // no faceMapping → no texture
+    const root = buildNodeTree([overlay]);
+    const overlayMesh = root.children[0] as Mesh;
+    expect(overlayMesh.renderOrder).toBe(0);
+  });
+
+  test("Quad with own MaskId is left alone (stencil reader path owns renderOrder)", () => {
+    const baseMaterial: W3DBaseMaterialData = {
+      kind: "BaseMaterial", id: "M1", name: "M",
+      hasEmissive: true, hasDiffuse: false, emissive: "ffffff", diffuse: "ffffff", alpha: 1,
+    };
+    const texture: W3DTextureData = {
+      kind: "Texture", id: "tex", name: "x.png", filename: "x.png", folderPath: "",
+    };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L1", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex", isEmissive: false, useMipMapping: true, keyType: "AlphaKey" },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map([[baseMaterial.id, baseMaterial]]),
+      textures: new Map([[texture.id, texture]]),
+      textureLayers: new Map([[layer.id, layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx: BuildContext = {
+      registry,
+      textureUrlsByFilename: new Map([["x.png", "blob:x"]]),
+      textureCache: new Map(),
+      warnings: [],
+    };
+    const mask = quadData({
+      id: "mask-id", name: "BASE_PANEL", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+      faceMapping: { surfaceName: "All", materialId: "M1", textureLayerId: "Standard", baseMaterialInherited: false, textureInherited: false },
+    });
+    // Reader quad with its own maskId — Phase P4.1 should NOT touch it.
+    const reader = quadData({
+      id: "r", name: "TEXTURE_FULLFRAME_X", maskIds: ["mask-id"],
+      faceMapping: { surfaceName: "All", materialId: "M1", textureLayerId: "L1", baseMaterialInherited: false, textureInherited: false },
+    });
+    const parent = groupData({ id: "g", name: "G", children: [mask, reader] });
+    const root = buildNodeTree([parent], ctx);
+    const g = root.children[0] as Group;
+    const readerMesh = g.children[1] as Mesh;
+    // The reader sits in the generic-fill lane (writerLane+1=12), NOT the overlay lane 19.
+    expect(readerMesh.renderOrder).toBe(12);
+    expect(readerMesh.renderOrder).not.toBe(19);
+  });
+
+  test("mask writer Quad is left alone (its own lane allocation owns renderOrder)", () => {
+    const baseMaterial: W3DBaseMaterialData = {
+      kind: "BaseMaterial", id: "M1", name: "M",
+      hasEmissive: true, hasDiffuse: false, emissive: "ffffff", diffuse: "ffffff", alpha: 1,
+    };
+    const texture: W3DTextureData = {
+      kind: "Texture", id: "tex-grad", name: "grad.png", filename: "grad.png", folderPath: "",
+    };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L1", name: "GRADIENT", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex-grad", isEmissive: true, useMipMapping: true, keyType: "AlphaKey" },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map([[baseMaterial.id, baseMaterial]]),
+      textures: new Map([[texture.id, texture]]),
+      textureLayers: new Map([[layer.id, layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx: BuildContext = {
+      registry,
+      textureUrlsByFilename: new Map([["grad.png", "blob:grad"]]),
+      textureCache: new Map(),
+      warnings: [],
+    };
+    // Even though mask carries a texture (GRADIENT.png), it's a mask writer:
+    // Phase P4.1 must NOT overwrite its writer lane.
+    const mask = quadData({
+      id: "mask-id", name: "BASE_MAIN", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+      faceMapping: { surfaceName: "All", materialId: "M1", textureLayerId: "L1", baseMaterialInherited: false, textureInherited: false },
+    });
+    const reader = quadData({ id: "r", name: "TEXTURE_FULLFRAME_X", maskIds: ["mask-id"] });
+    const parent = groupData({ id: "g", name: "G", children: [mask, reader] });
+    const root = buildNodeTree([parent], ctx);
+    const g = root.children[0] as Group;
+    const maskMesh = g.children[0] as Mesh;
+    expect(maskMesh.renderOrder).toBe(11); // genericWriterLane(1)
+    expect(maskMesh.renderOrder).not.toBe(19);
+  });
+
+  test("textured Quad inside a Group with MaskId inherits that mask — rule does NOT promote", () => {
+    const baseMaterial: W3DBaseMaterialData = {
+      kind: "BaseMaterial", id: "M1", name: "M",
+      hasEmissive: true, hasDiffuse: false, emissive: "ffffff", diffuse: "ffffff", alpha: 1,
+    };
+    const texture: W3DTextureData = {
+      kind: "Texture", id: "tex", name: "x.png", filename: "x.png", folderPath: "",
+    };
+    const layer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "L1", name: "L", textureBlending: "Multiply",
+      mapping: { textureGuid: "tex", isEmissive: false, useMipMapping: true, keyType: "AlphaKey" },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map([[baseMaterial.id, baseMaterial]]),
+      textures: new Map([[texture.id, texture]]),
+      textureLayers: new Map([[layer.id, layer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx: BuildContext = {
+      registry,
+      textureUrlsByFilename: new Map([["x.png", "blob:x"]]),
+      textureCache: new Map(),
+      warnings: [],
+    };
+    const mask = quadData({
+      id: "mask-id", name: "BASE_PANEL", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+      faceMapping: { surfaceName: "All", materialId: "M1", textureLayerId: "Standard", baseMaterialInherited: false, textureInherited: false },
+    });
+    // child Quad inside a Group that inherits MaskId — stencil reader path
+    // owns renderOrder; Phase P4.1 must not interfere.
+    const insideMask = quadData({
+      id: "inside", name: "TEXT_OVER_PANEL",
+      faceMapping: { surfaceName: "All", materialId: "M1", textureLayerId: "L1", baseMaterialInherited: false, textureInherited: false },
+    });
+    const wrappedGroup = groupData({
+      id: "w", name: "WRAPPED", maskIds: ["mask-id"], children: [insideMask],
+    });
+    const parent = groupData({ id: "g", name: "G", children: [mask, wrappedGroup] });
+    const root = buildNodeTree([parent], ctx);
+    const g = root.children[0] as Group;
+    const wrapped = g.children[1] as Group;
+    const insideMesh = wrapped.children[0] as Mesh;
+    // Inherits the generic-fill lane (12), NOT overlay lane 19.
+    expect(insideMesh.renderOrder).toBe(12);
+  });
+});

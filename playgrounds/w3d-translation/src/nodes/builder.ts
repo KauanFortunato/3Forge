@@ -506,6 +506,19 @@ function buildQuad(
     // through this rule.
     mesh.visible = node.enable && (!node.isMask || isColoredMask(node));
     applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
+    // Phase P4.1 — Foreground overlay promotion. A textured Quad that is
+    // neither a mask writer nor a stencil reader (no own MaskId, no inherited
+    // MaskId) currently lands at Three.js default renderOrder=0 and would be
+    // overpainted by the colored mask panel sitting at lane 11+ (BASE_MAIN /
+    // BASE_TEAM). When such a Quad carries a resolved texture, lift it to the
+    // overlay lane so authored sibling order (e.g. LOGO authored after
+    // BASE_MAIN in the same parent) is preserved visually. Guard:
+    //   (1) not IsMask (writers handled above)
+    //   (2) no own and no inherited maskIds (stencil readers handled in
+    //       applyPhotoMaskStencil and assigned per-mask lanes there)
+    //   (3) mesh.renderOrder still at default 0 (don't override stencil paths)
+    //   (4) material.map is present (skip pure-color quads)
+    promoteOverlayQuadRenderOrder(mesh, node, inheritedMaskIds);
     // Phase 2B — leaf Quad with pivot: wrap mesh in an outer Group so the
     // pivot anchor applies under the Quad's own transform. Outer carries
     // T(position) × R × S; mesh becomes a child at -pivot with identity
@@ -1218,6 +1231,20 @@ function genericTextLane(maskIndex: number): number {
   return genericWriterLane(maskIndex) + 2;
 }
 
+/**
+ * Phase P4.1 — Foreground overlay lane for textured Quads that aren't
+ * masks, aren't stencil readers, and are authored after the colored mask
+ * panel they sit on top of (e.g. LINEUP_LEFT `LOGO` with IronHawks.png on
+ * the yellow BASE_MAIN panel). With Three.js's default `renderOrder=0`
+ * combined with the colored mask writer at lane 11+, such overlays would
+ * be overpainted by the panel's gradient even though XML document order
+ * places them in front. Lane 19 sits above the highest reserved generic
+ * mask block (text-reader of the 3rd generic mask = 17+2 = 19 in the
+ * theoretical max) but below the photo-card stack (20-22). Applies only
+ * when a texture is actually resolved on the Quad — pure-color quads do
+ * not get promoted.
+ */
+const RENDER_ORDER_OVERLAY = 19;
 const RENDER_ORDER_TEXTURE_PHOTO = 20;   // photo-card pattern fill (was 18)
 const RENDER_ORDER_PHOTO_COLOR = 21;     // photo-card colored block (was 19)
 const RENDER_ORDER_DEFAULT_CLIENT = 22;  // PHOTO_NN and default photo-stencil reader (was 20)
@@ -1240,6 +1267,30 @@ function photoCardRenderOrder(name: string): number {
 
 function isPhotoCardClient(name: string): boolean {
   return PHOTO_CARD_CLIENT_RE.test(name);
+}
+
+/**
+ * Phase P4.1 — see doc-comment on `RENDER_ORDER_OVERLAY`. Promotes a leaf
+ * textured Quad that doesn't interact with any stencil mask to the foreground
+ * overlay lane so authored sibling order (e.g. LINEUP_LEFT LOGO authored
+ * AFTER BASE_MAIN) is preserved visually. No-op if any guard fails:
+ *   - mesh.renderOrder was already set (mask writer/reader handled it)
+ *   - node.isMask true (mask writer path)
+ *   - own or inherited maskIds non-empty (stencil reader path)
+ *   - material has no map (pure-color quad)
+ */
+function promoteOverlayQuadRenderOrder(
+  mesh: Mesh,
+  node: W3DQuadData,
+  inheritedMaskIds?: string[],
+): void {
+  if (mesh.renderOrder !== 0) return;
+  if (node.isMask) return;
+  if (node.maskIds.length > 0) return;
+  if (inheritedMaskIds && inheritedMaskIds.length > 0) return;
+  const mat = mesh.material as MeshBasicMaterial;
+  if (!mat || !mat.map) return;
+  mesh.renderOrder = RENDER_ORDER_OVERLAY;
 }
 
 function loadCachedTexture(url: string, cache: Map<string, Texture>): Texture {
