@@ -3233,6 +3233,126 @@ describe("builder — BuildContext", () => {
     expect(mesh.renderOrder).toBe(24); // Phase A1 — labels lane shifted 22 → 24
   });
 
+  // -----------------------------------------------------------------------
+  // Phase TextureText constrain — explicit "None" / "Height" branches
+  // and unknown-value warning. The actual fontPx shrink runs in
+  // renderTextToCanvas, which is a no-op under jsdom (getContext("2d") →
+  // null), so these tests assert the structural contract: the recognised
+  // value reaches userData.w3d, no warning is emitted, and unknown values
+  // are downgraded to "Width" with a warning.
+  // -----------------------------------------------------------------------
+
+  test('Phase TextureText constrain: "None" is recognised and emits no warning', () => {
+    // BENCH_TITLE in LINEUP_LEFT is the only "None" TextureText.
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "BENCH_TITLE",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "BENCH",
+      textBox: { x: 1, y: 0.3 },
+      textQuality: 2,
+      alignmentX: "Left" as const,
+      alignmentY: "Center" as const,
+      constrainMethod: "None",
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const ctx = makeCtx();
+    const mesh = buildNode(node, ctx) as Mesh;
+    const w = mesh.userData.w3d as Record<string, unknown>;
+    expect(w.constrainMethod).toBe("None");
+    expect(ctx.warnings.filter((m) => m.includes("ConstrainMethod"))).toEqual([]);
+  });
+
+  test('Phase TextureText constrain: "Height" is recognised and emits no warning', () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "TALL_LABEL",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "FIT-HEIGHT",
+      textBox: { x: 0.5, y: 0.5 },
+      textQuality: 1,
+      alignmentX: "Center" as const,
+      alignmentY: "Center" as const,
+      constrainMethod: "Height",
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const ctx = makeCtx();
+    const mesh = buildNode(node, ctx) as Mesh;
+    const w = mesh.userData.w3d as Record<string, unknown>;
+    expect(w.constrainMethod).toBe("Height");
+    expect(ctx.warnings.filter((m) => m.includes("ConstrainMethod"))).toEqual([]);
+  });
+
+  test('Phase TextureText constrain: unknown ConstrainMethod warns and falls back to "Width"', () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "WEIRD_LABEL",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "X",
+      textBox: { x: 0.5, y: 0.5 },
+      textQuality: 1,
+      alignmentX: "Center" as const,
+      alignmentY: "Center" as const,
+      constrainMethod: "FitToParent", // not in the recognised set
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const ctx = makeCtx();
+    const mesh = buildNode(node, ctx) as Mesh;
+    expect(mesh).toBeInstanceOf(Mesh);
+    // userData reflects the AUTHORED value (...rest), not the resolved one —
+    // diagnostic visibility for the inspector. The resolver downgrade only
+    // affects what reaches renderTextToCanvas.
+    const w = mesh.userData.w3d as Record<string, unknown>;
+    expect(w.constrainMethod).toBe("FitToParent");
+    const matches = ctx.warnings.filter((m) =>
+      m.includes("WEIRD_LABEL") && m.includes("FitToParent")
+    );
+    expect(matches.length).toBe(1);
+    expect(matches[0]).toContain("falling back to 'Width'");
+  });
+
+  test('Phase TextureText constrain: "Width" still emits no ConstrainMethod warning (regression guard)', () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "PLAYER_LAST_NAME_01",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "STEPHENS",
+      textBox: { x: 0.38, y: 0.33 },
+      textQuality: 3,
+      alignmentX: "Left" as const,
+      alignmentY: "Center" as const,
+      constrainMethod: "Width",
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 3, y: 3, z: 3 },
+      },
+      children: [],
+    };
+    const ctx = makeCtx();
+    buildNode(node, ctx) as Mesh;
+    expect(ctx.warnings.filter((m) => m.includes("ConstrainMethod"))).toEqual([]);
+  });
+
   test("Phase 2C regression: PHOTO_MASK_05 (no texture layer) is unaffected by UV transform plumbing", () => {
     // PHOTO_MASK_05 uses TextureLayerId="Standard" → no texture lookup, no
     // UV transform path triggered. The Mesh's geometry stays exactly as

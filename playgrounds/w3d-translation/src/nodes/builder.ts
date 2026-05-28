@@ -678,6 +678,13 @@ function buildTextureText(
     ? ctx.loadedFontIndex.has(`${family}|${weight}|${style}`)
     : undefined;
 
+  // Phase TextureText constrain — recognise "Width" / "None" / "Height" as
+  // explicit branches and warn on anything unknown (falling back to "Width"
+  // so the previous default is preserved). LINEUP_LEFT only authors "Width"
+  // (most labels) and "None" (BENCH_TITLE); other R3 scenes carry "Height"
+  // in the corpus.
+  const effectiveConstrain = resolveConstrainMethod(node.constrainMethod, node.name, ctx);
+
   const texture = renderTextToCanvas({
     text: node.text,
     family,
@@ -688,7 +695,7 @@ function buildTextureText(
     alignmentX: node.alignmentX ?? "Center",
     alignmentY: node.alignmentY ?? "Center",
     quality: node.textQuality,
-    constrainMethod: node.constrainMethod,
+    constrainMethod: effectiveConstrain,
   });
 
   const material = new MeshBasicMaterial({
@@ -753,6 +760,36 @@ function fontStyleTypeToCss(type: string): { weight: string; style: string } {
   return { weight, style };
 }
 
+/**
+ * Normalised TextureText ConstrainMethod values. The W3D XML attribute is a
+ * free-form string; this type captures the set the builder recognises:
+ *   - "Width"  — shrink fontPx so measured text fits canvas width.
+ *   - "None"   — render at the natural fontPx with no shrink pass.
+ *   - "Height" — render at the natural fontPx (already fits canvas height
+ *                via the `h * 0.85` glyph-fill ratio). Explicit branch so
+ *                the value is recognised rather than aliased to "Width".
+ */
+type ConstrainMethod = "Width" | "None" | "Height";
+
+/**
+ * Validate the authored ConstrainMethod string. Returns the canonical value
+ * for recognised inputs; falls back to "Width" (the historical default) and
+ * pushes a warning for anything unknown, so corpus drift is observable.
+ * `undefined`/empty falls back to "Width" silently (the previous default).
+ */
+function resolveConstrainMethod(
+  raw: string | undefined,
+  nodeName: string,
+  ctx?: BuildContext,
+): ConstrainMethod {
+  if (raw === undefined || raw === "") return "Width";
+  if (raw === "Width" || raw === "None" || raw === "Height") return raw;
+  ctx?.warnings.push(
+    `TextureText '${nodeName}': unknown ConstrainMethod '${raw}', falling back to 'Width'.`,
+  );
+  return "Width";
+}
+
 interface RenderTextOptions {
   text: string;
   family: string;
@@ -763,8 +800,8 @@ interface RenderTextOptions {
   alignmentX: "Left" | "Right" | "Center";
   alignmentY: "Top" | "Bottom" | "Center";
   quality: number;
-  /** R3 ConstrainMethod hint — "Width" triggers the shrink-to-fit width path. */
-  constrainMethod?: string;
+  /** Normalised R3 ConstrainMethod (Width shrinks; None/Height keep natural fontPx). */
+  constrainMethod?: ConstrainMethod;
 }
 
 /**
@@ -788,19 +825,34 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
     const availableWidth = Math.max(8, w - padX * 2);
 
     // Initial font size — leaves a small inset so descenders fit vertically.
+    // This `h * 0.85` ratio is the implicit "Height" fit (glyph occupies 85%
+    // of canvas height) and is the starting point for every ConstrainMethod
+    // branch below.
     let fontPx = Math.max(4, Math.floor(h * 0.85));
     c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
 
-    // Phase TextureText layout v2 — when R3 authored ConstrainMethod="Width",
-    // shrink the font so the rendered text fits the canvas width minus
-    // padding. Single proportional rescale is enough (no iterative search):
-    // measureText scales linearly with fontPx for a given glyph run.
-    if (opts.constrainMethod === "Width" && opts.text.length > 0) {
-      const measured = c2d.measureText(opts.text).width;
-      if (measured > availableWidth && measured > 0) {
-        fontPx = Math.max(4, Math.floor((fontPx * availableWidth) / measured));
-        c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+    // Phase TextureText constrain — explicit branches per recognised value:
+    //   - "Width":  shrink fontPx so measureText(text) fits availableWidth.
+    //               Single proportional rescale (measureText scales linearly
+    //               with fontPx for a given glyph run).
+    //   - "Height": no extra pass — initial fontPx already fits canvas height.
+    //   - "None":   no shrink — render at the natural fontPx.
+    // Falling through with no branch is deliberate for None/Height.
+    switch (opts.constrainMethod) {
+      case "Width": {
+        if (opts.text.length > 0) {
+          const measured = c2d.measureText(opts.text).width;
+          if (measured > availableWidth && measured > 0) {
+            fontPx = Math.max(4, Math.floor((fontPx * availableWidth) / measured));
+            c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+          }
+        }
+        break;
       }
+      case "Height":
+      case "None":
+      default:
+        break;
     }
 
     c2d.fillStyle = opts.color;
