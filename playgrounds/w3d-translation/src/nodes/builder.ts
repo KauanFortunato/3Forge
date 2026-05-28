@@ -2,7 +2,7 @@
 import {
   AlwaysStencilFunc, Box3, CanvasTexture, ClampToEdgeWrapping, Color, DoubleSide, EqualStencilFunc,
   Group, KeepStencilOp, Mesh, MeshBasicMaterial, NotEqualStencilFunc, Object3D, PlaneGeometry,
-  ReplaceStencilOp, SRGBColorSpace, Texture, TextureLoader,
+  ReplaceStencilOp, SRGBColorSpace, Texture, TextureLoader, Vector3,
 } from "three";
 import type {
   W3DGroupData, W3DMaskProperties, W3DNodeData, W3DQuadData, W3DTextureTextData, W3DTransform,
@@ -480,7 +480,7 @@ function applyFlowLayout(group: Group, node: W3DGroupData): void {
   let cursor = 0;
   for (const child of group.children) {
     child.position[mainAxis] += cursor;
-    cursor += sign * (measuredAlongAxis(child, mainAxis) + leadingSpace);
+    cursor += sign * (flowMainExtent(child, mainAxis) + leadingSpace);
   }
 
   // Phase P2 — cross-axis alignment. For Leading (default) we skip. For
@@ -512,6 +512,57 @@ function measuredAlongAxis(obj: Object3D, axis: FlowAxis): number {
   const box = new Box3().setFromObject(obj);
   if (!isFinite(box.min[axis]) || !isFinite(box.max[axis])) return 0;
   return box.max[axis] - box.min[axis];
+}
+
+/**
+ * Natural font line-spaced height as a multiplier on `TextBoxSize × Scale`.
+ *
+ * R3 reports a child's `Local Measure` along Y for TextureText leaves that
+ * exceeds the authored TextBoxSize plane bounds because the rendered glyph
+ * ascends/descends beyond the rectangle. For FlowChildren stride along Y,
+ * R3 uses this line-spaced extent — not the plane bounds — so adjacent rows
+ * stack with the actual line-height, not the TextBoxSize.
+ *
+ * Calibrated from LINEUP_LEFT R3 reference:
+ *   BENCH_LIST stacks 10 rows on FS_02 ("Obviously Cond" Bold, LineSpacing=1)
+ *   with each row's TextureText authoring TextBoxSize 0.86×0.15, Scale 1.3 and
+ *   LeadingSpace -0.084. R3 reports BENCH_LIST Measure Y = 1.411, back-solving
+ *   to a per-row main extent of 0.2167 = (10/9) × (0.15 × 1.3). Without this
+ *   factor we compute the plane-only stride 0.111 → too-compact 1.194.
+ *
+ * Scope: only the Y main axis. X-axis flows (e.g. PLAYERS card row) are
+ * dominated by mesh width, not font metrics, and stay on the raw Box3 size.
+ */
+const FLOW_TEXT_LINE_HEIGHT_FACTOR = 10 / 9;
+
+/**
+ * Main-axis extent used by `applyFlowLayout` to advance the cursor between
+ * children. Extends the standard Box3 size by the natural line-spaced glyph
+ * overflow for TextureText leaves when the flow direction is Y. For X-axis
+ * flow, or for subtrees with no TextureText leaves, returns the raw Box3
+ * size unchanged.
+ */
+function flowMainExtent(child: Object3D, axis: FlowAxis): number {
+  const baseSize = measuredAlongAxis(child, axis);
+  if (axis !== "y") return baseSize;
+
+  // Find the largest single-leaf glyph overflow contribution along Y. For a
+  // single-text-dominated row this lifts plane bounds to FACTOR × plane;
+  // subtrees with no TextureText leaves contribute zero (baseSize unchanged).
+  let glyphOverflow = 0;
+  const tmpScale = new Vector3();
+  child.traverse((obj) => {
+    const w3d = (obj.userData as Record<string, unknown> | undefined)?.w3d as
+      | { kind?: string; textBox?: { y?: number } }
+      | undefined;
+    if (w3d?.kind !== "TextureText") return;
+    const tby = w3d.textBox?.y;
+    if (typeof tby !== "number" || tby <= 0) return;
+    obj.getWorldScale(tmpScale);
+    const overflow = tby * Math.abs(tmpScale.y) * (FLOW_TEXT_LINE_HEIGHT_FACTOR - 1);
+    if (overflow > glyphOverflow) glyphOverflow = overflow;
+  });
+  return baseSize + glyphOverflow;
 }
 
 function buildQuad(

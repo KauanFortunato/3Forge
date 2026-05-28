@@ -1355,6 +1355,120 @@ describe("builder — BuildContext", () => {
     expect(built.children[1].position.y).toBe(0);
   });
 
+  // -----------------------------------------------------------------------
+  // Phase D: R3-matched line-height for Y-axis FlowChildren stride.
+  // R3 reports per-row main extent for TextureText leaves as the natural
+  // line-spaced glyph height, not the TextBoxSize plane bounds. The flow
+  // stride for a -Y stack of TextureText rows therefore uses
+  //   stride = (textBox.y × scale.y × FLOW_TEXT_LINE_HEIGHT_FACTOR) + LeadingSpace
+  // where FLOW_TEXT_LINE_HEIGHT_FACTOR = 10/9, calibrated from LINEUP_LEFT
+  // BENCH_LIST (R3 Measure 1.411 over 10 rows, LeadingSpace -0.084).
+  // -----------------------------------------------------------------------
+
+  test("Phase D: BENCH-shaped YMinus stack of TextureText rows uses line-spaced extent", () => {
+    // 3 rows mirroring LINEUP_LEFT BENCH_PLAYER_NN structure: each is a Group
+    // wrapping a TextureText leaf with TextBoxSize 0.86×0.15 and Scale 1.3.
+    // R3 expectations:
+    //   plane extent y = 0.15 × 1.3 = 0.195
+    //   line-spaced extent y = 0.195 × (10/9) ≈ 0.21667
+    //   stride per row = 0.21667 + (-0.084) ≈ 0.13267
+    const mkRow = (i: number) => {
+      const text = {
+        kind: "TextureText" as const,
+        id: `bn${i}`, name: `BENCH_NAME_0${i}`,
+        enable: true, alpha: 1, speedScale: 1,
+        text: "ROW",
+        textBox: { x: 0.86, y: 0.15 },
+        textQuality: 1.3,
+        alignmentX: "Left" as const,
+        alignmentY: "Center" as const,
+        constrainMethod: "Width",
+        maskIds: [],
+        transform: {
+          position: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          scale: { x: 1.3, y: 1.3, z: 1.3 },
+        },
+        children: [],
+      };
+      return groupData({
+        id: `bp${i}`, name: `BENCH_PLAYER_0${i}`,
+        children: [text],
+      });
+    };
+    const stack = groupData({
+      id: "blist", name: "BENCH_LIST",
+      flow: { children: true, leadingSpace: -0.084, direction: "YMinus", alignment: "Trailing" },
+      children: [mkRow(1), mkRow(2), mkRow(3)],
+    });
+    const root = buildNodeTree([stack]);
+    const g = root.children[0] as Group;
+    const expectedStride = 0.15 * 1.3 * (10 / 9) + (-0.084);
+    expect(g.children[0].position.y).toBeCloseTo(0, 4);
+    expect(g.children[1].position.y).toBeCloseTo(-expectedStride, 4);
+    expect(g.children[2].position.y).toBeCloseTo(-2 * expectedStride, 4);
+  });
+
+  test("Phase D: PLAYERS-shaped XPlus row of TextureText leaves keeps raw Box3 stride (X axis unaffected)", () => {
+    // X-axis flow with TextureText leaves should NOT receive the line-height
+    // factor — main axis is X, the factor only applies to Y main axis. Each
+    // child here is a Group wrapping a TextureText with TextBoxSize 1.0×0.5
+    // Scale 1. plane X extent = 1.0; with LeadingSpace 0 → stride = 1.0.
+    const mkCol = (i: number) => {
+      const text = {
+        kind: "TextureText" as const,
+        id: `pn${i}`, name: `PLAYER_NAME_0${i}`,
+        enable: true, alpha: 1, speedScale: 1,
+        text: "PLAYER",
+        textBox: { x: 1.0, y: 0.5 },
+        textQuality: 1,
+        alignmentX: "Center" as const,
+        alignmentY: "Center" as const,
+        maskIds: [],
+        transform: {
+          position: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        children: [],
+      };
+      return groupData({
+        id: `pc${i}`, name: `PLAYER_COL_0${i}`,
+        children: [text],
+      });
+    };
+    const row = groupData({
+      id: "prow", name: "PLAYERS",
+      flow: { children: true, leadingSpace: 0, direction: "XPlus" },
+      children: [mkCol(1), mkCol(2), mkCol(3)],
+    });
+    const root = buildNodeTree([row]);
+    const g = root.children[0] as Group;
+    expect(g.children[0].position.x).toBeCloseTo(0, 5);
+    expect(g.children[1].position.x).toBeCloseTo(1.0, 5);
+    expect(g.children[2].position.x).toBeCloseTo(2.0, 5);
+  });
+
+  test("Phase D: YMinus stack of Quad-only rows (no TextureText) keeps raw Box3 stride", () => {
+    // Regression guard: the line-height factor only applies when a
+    // TextureText leaf is present. A Y stack of pure Quads must continue to
+    // use Box3 size, so existing fixtures aren't broken.
+    const mk = (i: number) => quadData({
+      id: `q${i}`, name: `Q_0${i}`, geometry: { size: { x: 1, y: 0.4 } },
+    });
+    const stack = groupData({
+      id: "qs", name: "Q_STACK",
+      flow: { children: true, leadingSpace: -0.1, direction: "YMinus" },
+      children: [mk(1), mk(2), mk(3)],
+    });
+    const root = buildNodeTree([stack]);
+    const g = root.children[0] as Group;
+    // stride = 0.4 + (-0.1) = 0.3, Y direction = -1 → step = -0.3
+    expect(g.children[0].position.y).toBeCloseTo(0, 5);
+    expect(g.children[1].position.y).toBeCloseTo(-0.3, 5);
+    expect(g.children[2].position.y).toBeCloseTo(-0.6, 5);
+  });
+
   test("Phase 2A regression: PHOTO_MASK_05 keeps authored Size.X=1.55 (not normalized)", () => {
     const mask = quadData({
       id: "mask-5", name: "PHOTO_MASK_05", isMask: true,
