@@ -94,6 +94,8 @@ export interface PlaygroundViewport {
   setInspectorEnabled(on: boolean): void;
   /** DEV-Inspector — callback receives click/clear events. */
   setInspectorCallback(cb: ((event: InspectorEvent) => void) | null): void;
+  /** DEV-Inspector — select a built W3D object directly from the node tree. */
+  selectW3DNode(nodeId: string): Object3D | null;
   /** DEV-Inspector — clear the current selection outline. */
   clearInspectorSelection(): void;
   dispose(): void;
@@ -228,6 +230,24 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
     return null;
   }
 
+  function findW3DObjectById(nodeId: string): Object3D | null {
+    if (!mountedNodes) return null;
+    let foundRealNode: Object3D | null = null;
+    let foundHelper: Object3D | null = null;
+    mountedNodes.traverse((obj) => {
+      if (foundRealNode) return;
+      const w3d = (obj.userData as Record<string, unknown> | undefined)?.w3d as
+        | { id?: string; forNodeId?: string }
+        | undefined;
+      if (w3d?.id === nodeId) {
+        foundRealNode = obj;
+      } else if (w3d?.forNodeId === nodeId) {
+        foundHelper = obj;
+      }
+    });
+    return foundRealNode ?? foundHelper;
+  }
+
   const onPointerDown = (e: PointerEvent) => {
     downX = e.clientX;
     downY = e.clientY;
@@ -323,6 +343,11 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
     },
     setInspectorCallback(cb) {
       inspectorCallback = cb;
+    },
+    selectW3DNode(nodeId: string) {
+      const target = findW3DObjectById(nodeId);
+      setSelection(target);
+      return target;
     },
     clearInspectorSelection() {
       clearSelectionHelper();

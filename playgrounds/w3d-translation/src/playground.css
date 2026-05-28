@@ -48,6 +48,21 @@ body {
   cursor: pointer;
 }
 .playground__head button:hover { filter: brightness(1.1); }
+.playground__debug-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.playground__debug-control input[type="range"] {
+  width: 110px;
+}
+.playground__debug-control button {
+  padding: 4px 7px;
+  font-size: 11px;
+}
 
 .playground__body {
   flex: 1;
@@ -192,8 +207,24 @@ body {
      outer letterbox color, regardless of what the scene background is. */
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
+.playground__reference {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.playground__reference img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 .playground__viewport-meta {
   position: absolute;
+  z-index: 3;
   left: 12px;
   bottom: 12px;
   background: rgba(0,0,0,0.6);
@@ -229,6 +260,74 @@ body {
 .playground__quads-table th { color: var(--muted); font-weight: 500; }
 .playground__quads-table tr.is-group td { background: rgba(124, 68, 222, 0.07); }
 .playground__quads-table code { font-size: 11px; }
+
+.playground__tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.playground__tree > input {
+  width: 100%;
+  padding: 7px 8px;
+  background: #11141a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+.playground__tree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.playground__tree-item {
+  display: contents;
+}
+.playground__tree button {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-height: 26px;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+}
+.playground__tree button:hover {
+  background: rgba(124, 68, 222, 0.10);
+}
+.playground__tree button.is-active {
+  background: rgba(124, 68, 222, 0.22);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.playground__tree .kind {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
+}
+.playground__tree .kind--texturetext {
+  color: #c9a6ff;
+}
+.playground__tree .kind--quad {
+  color: #8fd8ff;
+}
+.playground__tree .kind--group {
+  color: #a8d98f;
+}
+.playground__tree .name,
+.playground__tree .text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.playground__tree .text {
+  grid-column: 2;
+  color: var(--muted);
+}
 
 /* DEV-Inspector — floating panel anchored to the viewport area. */
 .playground__inspector {
