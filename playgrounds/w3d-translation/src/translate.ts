@@ -112,6 +112,18 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
       if (pos.x !== undefined) n.transform.position.x = pos.x;
       if (pos.y !== undefined) n.transform.position.y = pos.y;
       if (pos.z !== undefined) n.transform.position.z = pos.z;
+      // Phase P7 — record which axes were animated so the builder's
+      // `applyPivotAnchor` can opt animated axes into the
+      // "Position is where the pivot lands" semantic for PivotType="Absolute"
+      // nodes. Static axes (axes not present in `pos`) keep the legacy Maya
+      // behavior — this preserves PLAYER_02 X-ordering (its Pivot X=1.29
+      // pairs with a STATIC Position X=0 that is never in pos[]).
+      const axes: { x?: boolean; y?: boolean; z?: boolean } =
+        n.transform.positionAnimatedAxes ?? {};
+      if (pos.x !== undefined) axes.x = true;
+      if (pos.y !== undefined) axes.y = true;
+      if (pos.z !== undefined) axes.z = true;
+      n.transform.positionAnimatedAxes = axes;
     }
     // Phase 2D.4 — Scale snapshot applies to all node kinds (Group/Quad/TextureText)
     // because each carries a transform.scale.

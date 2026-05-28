@@ -5,6 +5,25 @@ export type W3DTransform = {
   rotationDeg: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number; lock?: string };
   pivot?: { x: number; y: number; z: number };
+  /**
+   * Phase P7 — `<NodeTransform PivotType="Absolute">` attribute. The corpus
+   * only authors `"Absolute"` (159 occurrences, never `"Relative"`). Used by
+   * builder's pivot decomposition to opt animated axes into the
+   * "animated Position is where the pivot lands" semantic — see
+   * `applyPivotAnchor` in builder.ts and `positionAnimatedAxes` below.
+   */
+  pivotType?: "Absolute" | "Relative";
+  /**
+   * Phase P7 — per-axis flag set by `applyTimelineSnapshot` when a
+   * `Transform.Position.{X|Y|Z}Prop` keyframe controller exists for this
+   * node in the selected timeline. Combined with `pivotType="Absolute"` and
+   * a non-zero `pivot`, the builder treats that axis's authored final
+   * position as the world-space landing point of the pivot (instead of the
+   * additive Maya residual that misplaces PLAYER_0X content too low at
+   * PreviewMarker). Static (non-animated) axes keep the legacy Maya path
+   * so PLAYER_02 X-ordering (Pivot X=1.29, Position X static) stays intact.
+   */
+  positionAnimatedAxes?: { x?: boolean; y?: boolean; z?: boolean };
 };
 
 export type W3DQuadFaceMapping = {
@@ -428,7 +447,18 @@ function readTransform(el: Element): W3DTransform {
   const pivotEl = nt ? findDirectChild(nt, "Pivot") : null;
   const pivot = pivotEl ? readVec3(pivotEl, { x: 0, y: 0, z: 0 }) : undefined;
 
-  return { position, rotationDeg, scale, ...(pivot ? { pivot } : {}) };
+  // Phase P7 — PivotType attribute on <NodeTransform>. Corpus only authors "Absolute".
+  const pivotTypeAttr = nt ? nt.getAttribute("PivotType") : null;
+  const pivotType: W3DTransform["pivotType"] | undefined =
+    pivotTypeAttr === "Absolute" ? "Absolute"
+    : pivotTypeAttr === "Relative" ? "Relative"
+    : undefined;
+
+  return {
+    position, rotationDeg, scale,
+    ...(pivot ? { pivot } : {}),
+    ...(pivotType ? { pivotType } : {}),
+  };
 }
 
 function defaultTransform(): W3DTransform {

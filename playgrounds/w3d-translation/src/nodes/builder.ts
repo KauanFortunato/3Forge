@@ -349,11 +349,38 @@ function buildGroup(
 function applyPivotAnchor(outer: Group, t: W3DTransform): Group {
   if (!hasNonZeroPivot(t.pivot)) return outer;
   const p = t.pivot!;
-  outer.position.x += p.x;
-  outer.position.y += p.y;
-  outer.position.z += p.z;
+  // Phase P7 — for PivotType="Absolute" axes whose authored Position comes
+  // from a timeline `Transform.Position.{X|Y|Z}Prop` keyframe, R3 interprets
+  // the animated value as the world-space LANDING POINT of the pivot. The
+  // standard Maya decomposition `M = T(pos+piv) × R × S × T(-piv)` produces
+  // `pos + (1-S)·piv` for a child at the local origin — it adds an unwanted
+  // `+pivot` shift to `pos`. We DROP only the `+pivot` add on `outer` for
+  // animated axes; the inner `T(-pivot)` layer is kept intact so the
+  // pivot-around-scale behavior remains correct. Per-child origin world
+  // value on an animated axis becomes `pos + S·(-(-pivot)) = pos + S·pivot`,
+  // matching the R3 result.
+  //
+  // Static axes keep the legacy additive Maya path — preserves PLAYER_02
+  // X-ordering (Pivot X=1.29 with STATIC Position X=0, X not in animated set
+  // → still falls through to `outer.x += 1.29`, `inner.x = -1.29`,
+  // `child_x = 1.29 + 0.95·(-1.29) = +0.065`, identical to pre-P7).
+  const absolutePivot = t.pivotType === "Absolute";
+  const animated = t.positionAnimatedAxes;
+  const axisAnimated = (axis: "x" | "y" | "z"): boolean => {
+    if (!absolutePivot || !animated) return false;
+    return axis === "x" ? !!animated.x : axis === "y" ? !!animated.y : !!animated.z;
+  };
+  const outerPx = axisAnimated("x") ? 0 : p.x;
+  const outerPy = axisAnimated("y") ? 0 : p.y;
+  const outerPz = axisAnimated("z") ? 0 : p.z;
+  outer.position.x += outerPx;
+  outer.position.y += outerPy;
+  outer.position.z += outerPz;
   const inner = new Group();
   inner.name = `${outer.name} (pivot)`;
+  // Inner stays at the full -pivot regardless of animated-axis status — this
+  // preserves the rotate/scale-around-pivot behavior and lets the
+  // S·(-(-pivot)) term contribute on the animated axis.
   inner.position.set(-p.x, -p.y, -p.z);
   // DEV-Inspector — mark pivot helpers so the inspector resolves clicks
   // through them up to the real W3D node.

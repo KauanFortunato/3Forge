@@ -1,6 +1,6 @@
 // playgrounds/w3d-translation/src/nodes/builder.test.ts
 import { describe, expect, test } from "vitest";
-import { Group, Mesh, MeshBasicMaterial } from "three";
+import { Group, Mesh, MeshBasicMaterial, Vector3 } from "three";
 import { buildNode, buildNodeTree } from "./builder";
 import type { BuildContext } from "./builder";
 import type { W3DGroupData, W3DQuadData } from "./data";
@@ -3856,5 +3856,137 @@ describe("builder — Phase P6.1 TextureText opacity with DE1A3E3C", () => {
     const material = mesh.material as MeshBasicMaterial;
     // 0.5 × 0.7 × 0.8 = 0.28
     expect(material.opacity).toBeCloseTo(0.28, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase P7 — PivotType="Absolute" + animated-axis Position semantic.
+//
+// For LINEUP_LEFT PLAYER_0X: Pivot Y=-1.4, animated Position.YProp holds at
+// -1.4 at PreviewMarker=799, Scale Y=0.95. The legacy Maya formula
+// (T(pos+piv) × R × S × T(-piv)) leaves a (1-S)·pivot = -0.07 residual that
+// pushes the player slightly too far down. R3 treats the animated value as
+// the pivot's world landing point: skip the `+pivot` add on `outer` for the
+// animated axis only, keep the inner T(-pivot) so scale-around-pivot stays
+// correct. Static axes preserve the legacy formula — PLAYER_02 X-ordering
+// (Pivot X=1.29, Position X static at 0) is untouched.
+// ---------------------------------------------------------------------------
+describe("builder — Phase P7 PivotType=Absolute animated-axis pivot semantic", () => {
+  test('animated Y axis with Pivot Y=-1.4, Position Y=-1.4, Scale 0.95: child origin lands at Y = pos + S·(-(-pivot)) = -1.4 + 1.33 = -0.07', () => {
+    const child = quadData({ id: "c", name: "C" });
+    const parent = groupData({
+      id: "p", name: "PLAYER_LIKE",
+      transform: {
+        position: { x: 0, y: -1.4, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.85 },
+        pivot: { x: 0, y: -1.4, z: 0 },
+        pivotType: "Absolute",
+        positionAnimatedAxes: { y: true },
+      },
+      children: [child],
+    });
+    const root = buildNode(parent) as Group;
+    root.updateWorldMatrix(true, true);
+    // Outer.position.y stays at -1.4 (no +pivot add on animated Y).
+    expect(root.position.y).toBeCloseTo(-1.4, 6);
+    // Inner pivot helper keeps -pivot on Y → +1.4.
+    expect(root.children.length).toBe(1);
+    const inner = root.children[0] as Group;
+    expect(inner.position.y).toBeCloseTo(1.4, 6);
+    // World position of child mesh at local origin: pos + S·(-(-pivot)) on Y.
+    const w = new Vector3();
+    const mesh = inner.children[0] as Mesh;
+    mesh.getWorldPosition(w);
+    expect(w.y).toBeCloseTo(-0.07, 5);  // -1.4 + 0.95·1.4 = -0.07
+  });
+
+  test('PLAYER_02 shape (Pivot X=1.29, STATIC Position X=0, animated Y only) preserves X-ordering math', () => {
+    const child = quadData({ id: "c", name: "C" });
+    const parent = groupData({
+      id: "p", name: "PLAYER_02_LIKE",
+      transform: {
+        position: { x: 0, y: -1.4, z: -5 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.85 },
+        pivot: { x: 1.29, y: -1.4, z: 0 },
+        pivotType: "Absolute",
+        positionAnimatedAxes: { y: true }, // Y is animated; X is NOT
+      },
+      children: [child],
+    });
+    const root = buildNode(parent) as Group;
+    // X is static → Maya path → outer.x = 0 + 1.29 = +1.29
+    expect(root.position.x).toBeCloseTo(1.29, 6);
+    // Y is animated → no +pivot add → outer.y stays at -1.4
+    expect(root.position.y).toBeCloseTo(-1.4, 6);
+    // Inner at -pivot on all axes (always).
+    const inner = root.children[0] as Group;
+    expect(inner.position.x).toBeCloseTo(-1.29, 6);
+    expect(inner.position.y).toBeCloseTo(1.4, 6);
+    // For child at local origin:
+    //   x = +1.29 + 0.95·(-1.29) = 0.0645  (legacy Maya residual on static X)
+    //   y = -1.4 + 0.95·(+1.4)  = -0.07    (P7 path on animated Y)
+    const w = new Vector3();
+    root.updateWorldMatrix(true, true);
+    (inner.children[0] as Mesh).getWorldPosition(w);
+    expect(w.x).toBeCloseTo(0.0645, 5);
+    expect(w.y).toBeCloseTo(-0.07, 5);
+  });
+
+  test('non-Absolute (legacy) Pivot keeps the existing Maya formula on all axes — regression guard', () => {
+    const child = quadData({ id: "c", name: "C" });
+    const parent = groupData({
+      id: "p", name: "LEGACY",
+      transform: {
+        position: { x: 0, y: -1.4, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.95 },
+        pivot: { x: 0, y: -1.4, z: 0 },
+        // pivotType undefined → not Absolute → legacy Maya path
+        positionAnimatedAxes: { y: true }, // animated flag is ignored when not Absolute
+      },
+      children: [child],
+    });
+    const root = buildNode(parent) as Group;
+    // Maya: outer.y = -1.4 + -1.4 = -2.8
+    expect(root.position.y).toBeCloseTo(-2.8, 6);
+  });
+
+  test('PivotType=Absolute WITHOUT animated axes uses full legacy Maya — regression guard', () => {
+    const child = quadData({ id: "c", name: "C" });
+    const parent = groupData({
+      id: "p", name: "ABS_STATIC_ONLY",
+      transform: {
+        position: { x: 0, y: -1.4, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 0.95, y: 0.95, z: 0.95 },
+        pivot: { x: 0, y: -1.4, z: 0 },
+        pivotType: "Absolute",
+        // positionAnimatedAxes undefined → no axes opt-in
+      },
+      children: [child],
+    });
+    const root = buildNode(parent) as Group;
+    expect(root.position.y).toBeCloseTo(-2.8, 6); // unchanged from legacy
+  });
+
+  test('PivotType=Absolute + animated axis but ZERO pivot → applyPivotAnchor early-returns (no-op)', () => {
+    const child = quadData({ id: "c", name: "C" });
+    const parent = groupData({
+      id: "p", name: "ABS_NO_PIVOT",
+      transform: {
+        position: { x: 0, y: 0.983, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        // no pivot — equivalent to (0,0,0) → hasNonZeroPivot returns false
+        pivotType: "Absolute",
+        positionAnimatedAxes: { y: true },
+      },
+      children: [child],
+    });
+    const root = buildNode(parent) as Group;
+    // BENCH_LIST-like: position passes through unchanged.
+    expect(root.position.y).toBeCloseTo(0.983, 6);
   });
 });

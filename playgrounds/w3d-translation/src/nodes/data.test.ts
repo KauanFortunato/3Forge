@@ -162,6 +162,38 @@ describe("parseQuad transform", () => {
     expect(t.scale).toEqual({ x: 1, y: 1, z: 1 });
     expect(t.pivot).toBeUndefined();
   });
+
+  test('Phase P7: PivotType="Absolute" attribute is captured on W3DTransform', () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <Quad Id="q" Name="x">
+        <NodeTransform PivotType="Absolute">
+          <Pivot Y="-1.4"/>
+          <Position Y="-1.4"/>
+        </NodeTransform>
+      </Quad>
+    `));
+    const t = (roots[0] as W3DQuadData).transform;
+    expect(t.pivotType).toBe("Absolute");
+    expect(t.pivot).toEqual({ x: 0, y: -1.4, z: 0 });
+  });
+
+  test('Phase P7: PivotType="Relative" is captured (forward-compatible, never authored in corpus)', () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <Quad Id="q" Name="x">
+        <NodeTransform PivotType="Relative"><Pivot Y="1"/></NodeTransform>
+      </Quad>
+    `));
+    expect((roots[0] as W3DQuadData).transform.pivotType).toBe("Relative");
+  });
+
+  test("Phase P7: missing PivotType leaves field undefined", () => {
+    const { roots } = parseNodes(wrapInScene(`
+      <Quad Id="q" Name="x">
+        <NodeTransform><Pivot Y="-1.4"/></NodeTransform>
+      </Quad>
+    `));
+    expect((roots[0] as W3DQuadData).transform.pivotType).toBeUndefined();
+  });
 });
 
 describe("parseQuad FaceMapping and MaskProperties", () => {
