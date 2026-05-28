@@ -483,6 +483,36 @@ function applyFlowLayout(group: Group, node: W3DGroupData): void {
     cursor += sign * (flowMainExtent(child, mainAxis) + leadingSpace);
   }
 
+  // Phase D2 — main-axis "Trailing" anchor for YMinus flow.
+  //
+  // Default cursor loop above anchors the first child's transform origin at
+  // cursor=0, so the rendered top edge of the stack sits above the group
+  // origin by (first child's content top extent in main-axis frame). For
+  // BENCH_LIST-style stacks where R3 authors FlowChildrenAlignment="Trailing"
+  // alongside FlowOrder="-Y", R3 instead anchors the rendered top edge at
+  // the group origin and stacks downward (so the stack sits inside its
+  // parent — e.g. inside the BASE_TEAM mask). Shift every child by minus
+  // the stack's top edge in group-local Y so the rendered top sits at y=0.
+  //
+  // Strictly scoped: applied only when mainAxis="y", sign=-1 (YMinus), and
+  // alignment="Trailing". XPlus / YPlus / XMinus / Leading / Center are
+  // untouched.
+  if (mainAxis === "y" && sign === -1 && node.flow.alignment === "Trailing") {
+    let stackTopLocalY = -Infinity;
+    const groupWorldPos = new Vector3();
+    group.getWorldPosition(groupWorldPos);
+    for (const c of group.children) {
+      c.updateWorldMatrix(true, true);
+      const cb = new Box3().setFromObject(c);
+      if (!isFinite(cb.max.y)) continue;
+      const topLocal = cb.max.y - groupWorldPos.y;
+      if (topLocal > stackTopLocalY) stackTopLocalY = topLocal;
+    }
+    if (isFinite(stackTopLocalY)) {
+      for (const c of group.children) c.position.y -= stackTopLocalY;
+    }
+  }
+
   // Phase P2 — cross-axis alignment. For Leading (default) we skip. For
   // Center/Trailing, compute each child's cross-axis extent and shift by the
   // delta against the widest sibling so trailing edges (Trailing) or centers

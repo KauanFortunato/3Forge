@@ -1,6 +1,6 @@
 // playgrounds/w3d-translation/src/nodes/builder.test.ts
 import { describe, expect, test } from "vitest";
-import { Group, Mesh, MeshBasicMaterial, Vector3 } from "three";
+import { Box3, Group, Mesh, MeshBasicMaterial, Vector3 } from "three";
 import { buildNode, buildNodeTree } from "./builder";
 import type { BuildContext } from "./builder";
 import type { W3DGroupData, W3DQuadData } from "./data";
@@ -1136,10 +1136,13 @@ describe("builder — BuildContext", () => {
     const g = root.children[0] as Group;
     // YMinus: cursor advances -Y by (childHeight + leadingSpace) per child.
     // Height = 0.4, LeadingSpace = -0.084 → stride = -(0.4 + (-0.084)) = -0.316.
+    // Phase D2 — YMinus + Trailing additionally anchors the top of the
+    // stack at the group origin; Quad size y=0.4 → plane half = 0.2 → shift = -0.2.
     const stride = -(0.4 + (-0.084)); // -0.316
-    expect(g.children[0].position.y).toBeCloseTo(0, 5);
-    expect(g.children[1].position.y).toBeCloseTo(stride, 5);
-    expect(g.children[2].position.y).toBeCloseTo(2 * stride, 5);
+    const trailingShift = -0.2; // top of first Quad's plane (y=0.4/2) anchored to group origin
+    expect(g.children[0].position.y).toBeCloseTo(0 + trailingShift, 5);
+    expect(g.children[1].position.y).toBeCloseTo(stride + trailingShift, 5);
+    expect(g.children[2].position.y).toBeCloseTo(2 * stride + trailingShift, 5);
     // Phase P2 — FlowChildrenAlignment="Trailing" is applied as a cross-axis
     // shift. With equal-width siblings (all 2 wide here), the per-child delta
     // (maxCross - ownCross) is 0 → no shift, authored X=9 preserved. The real
@@ -1300,11 +1303,14 @@ describe("builder — BuildContext", () => {
     expect(g.children[0].position.x).toBeCloseTo(7.15, 5);
     expect(g.children[1].position.x).toBeCloseTo(7.15, 5);
     expect(g.children[2].position.x).toBeCloseTo(7.15, 5);
-    // Main-axis stacking preserved.
+    // Main-axis stacking preserved. Phase D2 also anchors the top of the
+    // stack at the group origin: each Quad has size.y=0.15 → plane half = 0.075
+    // → trailing shift = -0.075 applied to every child.
     const stride = -(0.15 + (-0.084));
-    expect(g.children[0].position.y).toBeCloseTo(0, 5);
-    expect(g.children[1].position.y).toBeCloseTo(stride, 5);
-    expect(g.children[2].position.y).toBeCloseTo(2 * stride, 5);
+    const trailingShift = -0.075;
+    expect(g.children[0].position.y).toBeCloseTo(0 + trailingShift, 5);
+    expect(g.children[1].position.y).toBeCloseTo(stride + trailingShift, 5);
+    expect(g.children[2].position.y).toBeCloseTo(2 * stride + trailingShift, 5);
   });
 
   test("Phase G: XMinus reverses cursor sign (right→left)", () => {
@@ -1404,9 +1410,14 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([stack]);
     const g = root.children[0] as Group;
     const expectedStride = 0.15 * 1.3 * (10 / 9) + (-0.084);
-    expect(g.children[0].position.y).toBeCloseTo(0, 4);
-    expect(g.children[1].position.y).toBeCloseTo(-expectedStride, 4);
-    expect(g.children[2].position.y).toBeCloseTo(-2 * expectedStride, 4);
+    // Phase D2 — YMinus + Trailing anchors the top of the rendered stack at
+    // the group origin. The TextureText leaf sits at its parent group's
+    // origin (y=0) with plane half-extent = 0.15 × 1.3 / 2 = 0.0975, so the
+    // trailing shift is -0.0975 applied to every row.
+    const trailingShift = -(0.15 * 1.3) / 2;
+    expect(g.children[0].position.y).toBeCloseTo(0 + trailingShift, 4);
+    expect(g.children[1].position.y).toBeCloseTo(-expectedStride + trailingShift, 4);
+    expect(g.children[2].position.y).toBeCloseTo(-2 * expectedStride + trailingShift, 4);
   });
 
   test("Phase D: PLAYERS-shaped XPlus row of TextureText leaves keeps raw Box3 stride (X axis unaffected)", () => {
@@ -1447,6 +1458,100 @@ describe("builder — BuildContext", () => {
     expect(g.children[0].position.x).toBeCloseTo(0, 5);
     expect(g.children[1].position.x).toBeCloseTo(1.0, 5);
     expect(g.children[2].position.x).toBeCloseTo(2.0, 5);
+  });
+
+  test("Phase D2: YMinus + Trailing with TextureText inner Y offset anchors stack top at group origin", () => {
+    // Mirrors real BENCH_LIST: each BENCH_PLAYER_NN wraps a BENCH_NAME_NN
+    // TextureText positioned at local Y=+0.69. Without the Phase D2 anchor,
+    // the first row's content top sits +0.7875 above the BENCH_LIST origin
+    // (= +0.69 inner offset + 0.0975 plane half), spilling above the parent
+    // mask. With the anchor, the stack top is dragged down so the rendered
+    // content top sits exactly at the BENCH_LIST origin (y=0 in group local).
+    const mkRow = (i: number) => {
+      const text = {
+        kind: "TextureText" as const,
+        id: `bn${i}`, name: `BENCH_NAME_0${i}`,
+        enable: true, alpha: 1, speedScale: 1,
+        text: "ROW",
+        textBox: { x: 0.86, y: 0.15 },
+        textQuality: 1.3,
+        alignmentX: "Left" as const,
+        alignmentY: "Center" as const,
+        constrainMethod: "Width",
+        maskIds: [],
+        transform: {
+          position: { x: 0, y: 0.69, z: 0 },           // inner Y offset
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          scale: { x: 1.3, y: 1.3, z: 1.3 },
+        },
+        children: [],
+      };
+      return groupData({
+        id: `bp${i}`, name: `BENCH_PLAYER_0${i}`,
+        children: [text],
+      });
+    };
+    const stack = groupData({
+      id: "blist", name: "BENCH_LIST",
+      flow: { children: true, leadingSpace: -0.084, direction: "YMinus", alignment: "Trailing" },
+      children: [mkRow(1), mkRow(2), mkRow(3)],
+    });
+    const root = buildNodeTree([stack]);
+    const g = root.children[0] as Group;
+    // Content top of first row in group local = inner offset (0.69) +
+    // (textBox.y × scale.y / 2) (0.0975) = +0.7875. Trailing shift drags
+    // every row by -0.7875.
+    const expectedStride = 0.15 * 1.3 * (10 / 9) + (-0.084);
+    const trailingShift = -(0.69 + (0.15 * 1.3) / 2); // = -0.7875
+    expect(g.children[0].position.y).toBeCloseTo(0 + trailingShift, 4);
+    expect(g.children[1].position.y).toBeCloseTo(-expectedStride + trailingShift, 4);
+    expect(g.children[2].position.y).toBeCloseTo(-2 * expectedStride + trailingShift, 4);
+    // Top of first row's content in group local should now sit exactly at 0.
+    const first = g.children[0];
+    first.updateWorldMatrix(true, true);
+    const box = new Box3().setFromObject(first);
+    expect(box.max.y).toBeCloseTo(0, 4);
+  });
+
+  test("Phase D2: YMinus + Leading does NOT anchor (no shift applied)", () => {
+    // Regression guard: only "Trailing" alignment triggers the main-axis
+    // anchor. "Leading" (and default-undefined) keep the first child at
+    // cursor=0, matching the prior cursor-loop behavior.
+    const mk = (i: number) => quadData({
+      id: `r${i}`, name: `R_0${i}`, geometry: { size: { x: 1, y: 0.4 } },
+    });
+    const stack = groupData({
+      id: "ls", name: "LSTACK",
+      flow: { children: true, leadingSpace: 0, direction: "YMinus", alignment: "Leading" },
+      children: [mk(1), mk(2)],
+    });
+    const root = buildNodeTree([stack]);
+    const g = root.children[0] as Group;
+    expect(g.children[0].position.y).toBeCloseTo(0, 5);
+    expect(g.children[1].position.y).toBeCloseTo(-0.4, 5);
+  });
+
+  test("Phase D2: XPlus + Trailing does NOT anchor main axis (X flow unaffected by Y anchor)", () => {
+    // Regression guard: the main-axis Trailing anchor is gated on YMinus
+    // direction. X flows must keep their cursor positions; only the
+    // cross-axis (Y) Trailing-shift kicks in if applicable.
+    const mk = (i: number) => quadData({
+      id: `c${i}`, name: `C_0${i}`, geometry: { size: { x: 1, y: 0.4 } },
+    });
+    const row = groupData({
+      id: "xr", name: "XROW",
+      flow: { children: true, leadingSpace: 0, direction: "XPlus", alignment: "Trailing" },
+      children: [mk(1), mk(2)],
+    });
+    const root = buildNodeTree([row]);
+    const g = root.children[0] as Group;
+    // Main-axis X cursor: 0, 1.
+    expect(g.children[0].position.x).toBeCloseTo(0, 5);
+    expect(g.children[1].position.x).toBeCloseTo(1, 5);
+    // Main-axis (X) anchor must NOT shift — and Y stays at authored 0 because
+    // all siblings share the same cross-axis extent (equal Quad y=0.4).
+    expect(g.children[0].position.y).toBeCloseTo(0, 5);
+    expect(g.children[1].position.y).toBeCloseTo(0, 5);
   });
 
   test("Phase D: YMinus stack of Quad-only rows (no TextureText) keeps raw Box3 stride", () => {
