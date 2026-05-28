@@ -79,6 +79,75 @@ describe("SceneGraphPanel", () => {
     expect(screen.getAllByText("Plane Child")).toHaveLength(2);
   });
 
+  it("renders feature indicators for texture, material, animation and model nodes", () => {
+    const box = createNode("box", null, "box-1");
+    box.name = "Featured Box";
+    box.materialId = "mat-1";
+    box.material.mapImageId = "img-1";
+
+    const model = createNode("model", null, "model-1");
+    model.name = "Imported Mesh";
+
+    render(
+      <SceneGraphPanel
+        nodes={[box, model]}
+        animatedNodeIds={new Set(["box-1"])}
+        selectedNodeId="box-1"
+        selectedNodeIds={["box-1"]}
+        collapsedIds={new Set()}
+        onCollapsedIdsChange={vi.fn()}
+        onSelectNode={vi.fn()}
+        onMoveNode={vi.fn()}
+        onToggleVisibility={vi.fn()}
+        onContextMenu={vi.fn()}
+      />,
+    );
+
+    const boxRow = screen.getByText("Featured Box").closest(".sg-row") as HTMLElement;
+    expect(within(boxRow).getByTitle("Texture map")).toBeTruthy();
+    expect(within(boxRow).getByTitle("Custom material")).toBeTruthy();
+    expect(within(boxRow).getByTitle("Animated")).toBeTruthy();
+    expect(within(boxRow).queryByTitle("Imported model")).toBeNull();
+
+    const modelRow = screen.getByText("Imported Mesh").closest(".sg-row") as HTMLElement;
+    expect(within(modelRow).getByTitle("Imported model")).toBeTruthy();
+    expect(within(modelRow).queryByTitle("Texture map")).toBeNull();
+    expect(within(modelRow).queryByTitle("Animated")).toBeNull();
+  });
+
+  it("toggles solo via the isolate button and reflects the active node", () => {
+    const store = createHierarchyStore();
+    const handleToggleSolo = vi.fn();
+
+    render(
+      <SceneGraphPanel
+        nodes={store.blueprint.nodes}
+        animatedNodeIds={new Set()}
+        selectedNodeId=""
+        selectedNodeIds={[]}
+        collapsedIds={new Set()}
+        soloNodeId="group-1"
+        onCollapsedIdsChange={vi.fn()}
+        onSelectNode={vi.fn()}
+        onMoveNode={vi.fn()}
+        onToggleVisibility={vi.fn()}
+        onToggleSolo={handleToggleSolo}
+        onContextMenu={vi.fn()}
+      />,
+    );
+
+    const groupRow = screen.getByText("Fixture Group").closest(".sg-row") as HTMLElement;
+    const soloButton = within(groupRow).getByRole("button", { name: "Exit isolation" });
+    expect(soloButton.getAttribute("aria-pressed")).toBe("true");
+
+    const planeRow = screen.getByText("Plane Child").closest(".sg-row") as HTMLElement;
+    const planeSolo = within(planeRow).getByRole("button", { name: "Isolate (hide others)" });
+    expect(planeSolo.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(planeSolo);
+    expect(handleToggleSolo).toHaveBeenCalledWith("plane-1");
+  });
+
   it("allows keyboard users to enter the tree when nothing is selected", () => {
     const store = createHierarchyStore();
     const handleSelectNode = vi.fn();

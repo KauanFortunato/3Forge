@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, DragEvent, MouseEvent } from "react";
+import type { CSSProperties, DragEvent, MouseEvent, ReactNode } from "react";
 import type { EditorNode } from "../../types";
 import { ROOT_NODE_ID } from "../../state";
 import type { TreeBranch, TreeDropTarget } from "../ui-types";
@@ -14,9 +14,13 @@ import {
   EyeIcon,
   GroupIcon,
   ImageIcon,
+  KeyframeDiamondIcon,
+  MaterialIcon,
   MeshIcon,
+  ModelIcon,
   PlaneIcon,
   SearchIcon,
+  SpotlightIcon,
   SphereIcon,
   TextPropertyIcon,
   TrashIcon,
@@ -28,10 +32,12 @@ interface SceneGraphPanelProps {
   selectedNodeId: string;
   selectedNodeIds: string[];
   collapsedIds: Set<string>;
+  soloNodeId?: string | null;
   onCollapsedIdsChange: (collapsedIds: Set<string>) => void;
   onSelectNode: (nodeId: string, additive: boolean) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
+  onToggleSolo?: (nodeId: string) => void;
   onDuplicateNode?: (nodeId: string) => void;
   onDeleteNode?: (nodeId: string) => void;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
@@ -44,10 +50,12 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
     selectedNodeId,
     selectedNodeIds,
     collapsedIds,
+    soloNodeId = null,
     onCollapsedIdsChange,
     onSelectNode,
     onMoveNode,
     onToggleVisibility,
+    onToggleSolo = () => {},
     onDuplicateNode = () => {},
     onDeleteNode = () => {},
     onContextMenu,
@@ -206,10 +214,12 @@ export function SceneGraphPanel(props: SceneGraphPanelProps) {
               draggedNodeId={draggedNodeId}
               dropTarget={dropTarget}
               animatedNodeIds={animatedNodeIds}
+              soloNodeId={soloNodeId}
               onToggleNode={toggleNode}
               onSelectNode={onSelectNode}
               onMoveNode={onMoveNode}
               onToggleVisibility={onToggleVisibility}
+              onToggleSolo={onToggleSolo}
               onDuplicateNode={onDuplicateNode}
               onDeleteNode={onDeleteNode}
               onContextMenu={onContextMenu}
@@ -267,10 +277,12 @@ interface SceneGraphRowProps {
   draggedNodeId: string | null;
   dropTarget: TreeDropTarget | null;
   animatedNodeIds: Set<string>;
+  soloNodeId: string | null;
   onToggleNode: (nodeId: string) => void;
   onSelectNode: (nodeId: string, additive: boolean) => void;
   onMoveNode: (nodeId: string, target: TreeDropTarget) => void;
   onToggleVisibility: (nodeId: string) => void;
+  onToggleSolo: (nodeId: string) => void;
   onDuplicateNode: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onContextMenu: (event: MouseEvent, nodeId: string | null) => void;
@@ -288,10 +300,12 @@ function SceneGraphRow(props: SceneGraphRowProps) {
     draggedNodeId,
     dropTarget,
     animatedNodeIds,
+    soloNodeId,
     onToggleNode,
     onSelectNode,
     onMoveNode,
     onToggleVisibility,
+    onToggleSolo,
     onDuplicateNode,
     onDeleteNode,
     onContextMenu,
@@ -310,6 +324,11 @@ function SceneGraphRow(props: SceneGraphRowProps) {
   const isAncestor = !isSelected && selectedPathIds.has(branch.node.id);
   const rowDropState = getDropState(dropTarget, branch.node.id);
   const hasAnimation = animatedNodeIds.has(branch.node.id);
+  const indicators = getNodeIndicators(branch.node, hasAnimation);
+  const childCount = branch.children.length;
+  const isHidden = !branch.node.visible;
+  const isSolo = soloNodeId === branch.node.id;
+  const isLineDrop = rowDropState === "before" || rowDropState === "after";
 
   const indentStyle: CSSProperties = { "--indent": String(depth) } as CSSProperties;
 
@@ -322,6 +341,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
         isAncestor ? "is-ancestor" : "",
         isSceneRootNode ? "is-root" : "",
         isGroup ? "is-group" : "is-mesh",
+        isHidden ? "is-node-hidden" : "",
         rowDropState ? `is-drop-${rowDropState}` : "",
         draggedNodeId === branch.node.id ? "is-dragging" : "",
       ].filter(Boolean).join(" ")}
@@ -384,6 +404,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
         onClearDragState();
       }}
     >
+      {isLineDrop ? <div className={`sg-row__dropline is-${rowDropState}`} aria-hidden="true" /> : null}
       <div className="sg-row__main">
         <button
           type="button"
@@ -398,23 +419,39 @@ function SceneGraphRow(props: SceneGraphRowProps) {
           tabIndex={-1}
         >
           {isGroup ? (
-            isCollapsed ? <ChevronRightIcon width={10} height={10} /> : <ChevronDownIcon width={10} height={10} />
+            isCollapsed ? <ChevronRightIcon width={12} height={12} /> : <ChevronDownIcon width={12} height={12} />
           ) : null}
         </button>
 
         <span className="sg-row__icon">{getNodeTypeIcon(branch.node)}</span>
 
         <span className="sg-row__name">{branch.node.name}</span>
+
+        {isGroup && childCount > 0 ? (
+          <span className="sg-row__badge" title={`${childCount} item${childCount === 1 ? "" : "s"}`}>
+            {childCount}
+          </span>
+        ) : null}
       </div>
 
-      <span className="sg-row__badge">
-        {hasAnimation ? "anim" : isGroup ? `${branch.children.length}` : ""}
+      <span className="sg-row__flags" aria-hidden="true">
+        {indicators
+          .filter((indicator) => indicator.present)
+          .map((indicator) => (
+            <span
+              key={indicator.key}
+              className={`sg-flag ${indicator.className}`}
+              title={indicator.label}
+            >
+              {indicator.icon}
+            </span>
+          ))}
       </span>
 
-      <div className="sg-row__actions">
+      <span className="sg-row__vis">
         <button
           type="button"
-          className={`sg-row__ibtn${!branch.node.visible ? " is-off" : ""}`}
+          className={`sg-row__ibtn sg-row__ibtn--vis${isHidden ? " is-off" : ""}`}
           onClick={(event) => {
             event.stopPropagation();
             onToggleVisibility(branch.node.id);
@@ -422,8 +459,24 @@ function SceneGraphRow(props: SceneGraphRowProps) {
           title={branch.node.visible ? "Hide item" : "Show item"}
           tabIndex={-1}
         >
-          {branch.node.visible ? <EyeIcon width={12} height={12} /> : <ClosedEyeIcon width={12} height={12} />}
+          {branch.node.visible ? <EyeIcon width={14} height={14} /> : <ClosedEyeIcon width={14} height={14} />}
         </button>
+        <button
+          type="button"
+          className={`sg-row__ibtn sg-row__ibtn--solo${isSolo ? " is-active" : ""}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleSolo(branch.node.id);
+          }}
+          title={isSolo ? "Exit isolation" : "Isolate (hide others)"}
+          aria-pressed={isSolo}
+          tabIndex={-1}
+        >
+          <SpotlightIcon width={14} height={14} />
+        </button>
+      </span>
+
+      <div className="sg-row__actions">
         <button
           type="button"
           className="sg-row__ibtn"
@@ -435,7 +488,7 @@ function SceneGraphRow(props: SceneGraphRowProps) {
           tabIndex={-1}
           disabled={isLegacyRootGroup}
         >
-          <CopyIcon width={11} height={11} />
+          <CopyIcon width={13} height={13} />
         </button>
         <button
           type="button"
@@ -448,15 +501,65 @@ function SceneGraphRow(props: SceneGraphRowProps) {
           tabIndex={-1}
           disabled={false}
         >
-          <TrashIcon width={11} height={11} />
+          <TrashIcon width={13} height={13} />
         </button>
       </div>
     </div>
   );
 }
 
+interface NodeIndicator {
+  key: string;
+  label: string;
+  className: string;
+  icon: ReactNode;
+  present: boolean;
+}
+
+/**
+ * Returns the indicators in a fixed order with a fixed slot per type, so each
+ * indicator always lands in the same column across every row; absent ones leave
+ * an empty slot instead of shifting the others left.
+ */
+function getNodeIndicators(node: EditorNode, hasAnimation: boolean): NodeIndicator[] {
+  const iconProps = { width: 13, height: 13 };
+  const hasMaterialId = "materialId" in node && Boolean(node.materialId);
+  const mapImageId = "material" in node ? node.material.mapImageId : undefined;
+
+  return [
+    {
+      key: "material",
+      label: "Custom material",
+      className: "sg-flag--material",
+      icon: <MaterialIcon {...iconProps} />,
+      present: hasMaterialId,
+    },
+    {
+      key: "texture",
+      label: "Texture map",
+      className: "sg-flag--texture",
+      icon: <ImageIcon {...iconProps} />,
+      present: Boolean(mapImageId),
+    },
+    {
+      key: "animation",
+      label: "Animated",
+      className: "sg-flag--anim",
+      icon: <KeyframeDiamondIcon filled {...iconProps} />,
+      present: hasAnimation,
+    },
+    {
+      key: "model",
+      label: "Imported model",
+      className: "sg-flag--model",
+      icon: <ModelIcon {...iconProps} />,
+      present: node.type === "model",
+    },
+  ];
+}
+
 function getNodeTypeIcon(node: EditorNode) {
-  const iconProps = { width: 12, height: 12 };
+  const iconProps = { width: 14, height: 14 };
 
   switch (node.type) {
     case "group":

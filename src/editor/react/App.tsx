@@ -738,6 +738,7 @@ export function App() {
   const [isJsonDropOverlayVisible, setIsJsonDropOverlayVisible] = useState(false);
   const [isAssetImageDropActive, setIsAssetImageDropActive] = useState(false);
   const [collapsedHierarchyIds, setCollapsedHierarchyIds] = useState<Set<string>>(() => new Set());
+  const [soloNodeId, setSoloNodeId] = useState<string | null>(null);
   const [statusTick, setStatusTick] = useState(0);
   const [hierarchyHeight, setHierarchyHeight] = useState(480);
   const [fieldsHeight, setFieldsHeight] = useState(220);
@@ -1019,6 +1020,16 @@ export function App() {
   useEffect(() => {
     sceneRef.current?.setSelectionVisualsSuppressed(Boolean(editingMaterialId));
   }, [editingMaterialId]);
+
+  useEffect(() => {
+    sceneRef.current?.setSoloNode(soloNodeId);
+  }, [soloNodeId]);
+
+  useEffect(() => {
+    if (soloNodeId && !storeView.blueprintNodes.some((node) => node.id === soloNodeId)) {
+      setSoloNodeId(null);
+    }
+  }, [soloNodeId, storeView.blueprintNodes]);
 
   useEffect(() => {
     return () => {
@@ -3474,9 +3485,11 @@ export function App() {
                     selectedNodeIds={storeView.selectedNodeIds}
                     collapsedIds={collapsedHierarchyIds}
                     onCollapsedIdsChange={setCollapsedHierarchyIds}
+                    soloNodeId={soloNodeId}
                     onSelectNode={(nodeId, additive) => store.selectNode(nodeId, "ui", additive)}
                     onMoveNode={handleSceneMove}
                     onToggleVisibility={(nodeId) => store.toggleNodeVisibility(nodeId)}
+                    onToggleSolo={(nodeId) => setSoloNodeId((prev) => (prev === nodeId ? null : nodeId))}
                     onDuplicateNode={(nodeId) => handleDuplicate(nodeId)}
                     onDeleteNode={(nodeId) => handleDelete(nodeId)}
                     onContextMenu={openSceneGraphContextMenu}

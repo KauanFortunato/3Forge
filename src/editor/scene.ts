@@ -274,6 +274,7 @@ export class SceneEditor {
   private ambientLight: AmbientLight | null = null;
   private selectionHelper: Box3Helper | null = null;
   private selectionVisualsSuppressed = false;
+  private soloNodeId: string | null = null;
   private currentMode: ToolMode = "select";
   private currentGizmoMode: GizmoMode = "translate";
   private isTransformDragging = false;
@@ -970,6 +971,7 @@ export class SceneEditor {
     this.updateViewMode();
     this.refreshSelection();
     this.rebuildAnimationTimeline();
+    this.applySoloVisibility();
   }
 
   private createObject(node: EditorNode): Object3D {
@@ -1280,6 +1282,57 @@ export class SceneEditor {
     }
     this.selectionVisualsSuppressed = suppressed;
     this.refreshSelection();
+  }
+
+  /**
+   * Isolate a single node ("solo"): show only it, its ancestors and its
+   * descendants while hiding everything else. Passing null clears the isolation.
+   * This is a transient view override — it never mutates the blueprint's
+   * `visible` flags, so toggling it off restores each node's real visibility.
+   */
+  setSoloNode(nodeId: string | null): void {
+    const next = nodeId && this.objectMap.has(nodeId) ? nodeId : null;
+    if (this.soloNodeId === next) {
+      return;
+    }
+    this.soloNodeId = next;
+    this.applySoloVisibility();
+  }
+
+  private applySoloVisibility(): void {
+    if (this.soloNodeId && !this.objectMap.has(this.soloNodeId)) {
+      this.soloNodeId = null;
+    }
+
+    const soloSet = this.soloNodeId ? this.computeSoloSet(this.soloNodeId) : null;
+    for (const node of this.store.blueprint.nodes) {
+      const object = this.objectMap.get(node.id);
+      if (!object) {
+        continue;
+      }
+
+      const visible = soloSet ? soloSet.has(node.id) : node.visible;
+      object.visible = visible;
+      const mesh = this.getAnimatedVisibilityMeshTarget(object);
+      if (mesh) {
+        mesh.visible = visible;
+      }
+    }
+  }
+
+  private computeSoloSet(soloNodeId: string): Set<string> {
+    const soloSet = new Set<string>();
+    for (const node of this.store.getSubtreeNodes(soloNodeId)) {
+      soloSet.add(node.id);
+    }
+
+    let current = this.store.getNode(soloNodeId);
+    while (current?.parentId) {
+      soloSet.add(current.parentId);
+      current = this.store.getNode(current.parentId);
+    }
+
+    return soloSet;
   }
 
   private applyDragAlignmentSnap(nodeId: string, object: Object3D): void {
@@ -1694,6 +1747,10 @@ export class SceneEditor {
     }
 
     this.applyAnimationPreviewOverrides(normalizedFrame);
+
+    if (this.soloNodeId) {
+      this.applySoloVisibility();
+    }
   }
 
   private applyAnimationPreviewOverrides(frame: number): void {

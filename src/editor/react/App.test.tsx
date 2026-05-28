@@ -14,6 +14,7 @@ import { App } from "./App";
 const fakeScene = {
   setTransformMode: vi.fn(),
   setSelectionVisualsSuppressed: vi.fn(),
+  setSoloNode: vi.fn(),
   seekAnimation: vi.fn(),
   onAnimationFrameChange: vi.fn(() => () => undefined),
   frameSelection: vi.fn(),

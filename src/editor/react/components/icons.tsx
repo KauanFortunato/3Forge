@@ -138,6 +138,15 @@ export function CircleIcon(props: IconProps) {
   );
 }
 
+export function SpotlightIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <circle cx="7" cy="7" r="2.4" />
+      <path d="M7 1v1.7M7 11.3V13M1 7h1.7M11.3 7H13M2.76 2.76l1.2 1.2M10.04 10.04l1.2 1.2M11.24 2.76l-1.2 1.2M3.96 10.04l-1.2 1.2" />
+    </Ico>
+  );
+}
+
 export function CircleFilledIcon(props: IconProps) {
   return (
     <svg
@@ -267,6 +276,17 @@ export function MeshIcon(props: IconProps) {
       <path d="M12.2 9.4V4.6a1.2 1.2 0 0 0-.6-1.04l-4.2-2.4a1.2 1.2 0 0 0-1.2 0l-4.2 2.4A1.2 1.2 0 0 0 1.4 4.6v4.8a1.2 1.2 0 0 0 .6 1.04l4.2 2.4a1.2 1.2 0 0 0 1.2 0l4.2-2.4a1.2 1.2 0 0 0 .6-1.04z" />
       <path d="m1.56 4.18 5.44 3.16 5.44-3.16" />
       <path d="M7 13.24V7.34" />
+    </Ico>
+  );
+}
+
+export function ModelIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M7 1.3 12.5 4.4v5.2L7 12.7 1.5 9.6V4.4z" />
+      <path d="M7 7 12.5 4.4" />
+      <path d="M7 7 1.5 4.4" />
+      <path d="M7 7v5.7" />
     </Ico>
   );
 }

@@ -42,6 +42,13 @@
   --c-warn: #f5a524;
   --c-danger: #e5484d;
 
+  /* Hierarchy node indicators */
+  --c-flag-texture: var(--c-z);
+  --c-flag-material: var(--c-accent);
+  --c-flag-anim: var(--c-y);
+  --c-flag-model: #2dd4bf;
+  --c-sg-guide: var(--c-border-strong);
+
   /* Type */
   --f-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --f-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
@@ -1399,29 +1406,40 @@ code {
 }
 
 .sg-row {
+  --sg-indent-step: 16px;
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
-  gap: var(--sp-3);
-  height: var(--h-row);
-  padding: 0 var(--sp-3) 0 calc(var(--sp-3) + var(--indent, 0) * 12px);
-  font-size: var(--fs-md);
+  gap: var(--sp-2);
+  height: 26px;
+  padding: 0 var(--sp-2) 0 calc(var(--sp-3) + var(--indent, 0) * var(--sg-indent-step));
+  font-size: var(--fs-lg);
   color: var(--c-text-med);
   cursor: default;
   position: relative;
   width: 100%;
-  background: transparent;
   border: 0;
   text-align: left;
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--c-sg-guide) 0,
+    var(--c-sg-guide) 1px,
+    transparent 1px,
+    transparent var(--sg-indent-step)
+  );
+  background-repeat: no-repeat;
+  background-position: calc(var(--sp-3) + 6px) 0;
+  background-size: calc(var(--indent, 0) * var(--sg-indent-step)) 100%;
 }
 
 .sg-row:hover {
-  background: var(--c-bg-3);
+  background-color: var(--c-bg-3);
   color: var(--c-text);
 }
 
 .sg-row.is-selected {
-  background: var(--c-select-soft);
+  background-color: var(--c-select-soft);
   color: var(--c-text);
 }
 
@@ -1446,33 +1464,70 @@ code {
 }
 
 .sg-row.is-dragging {
-  opacity: 0.5;
+  opacity: 0.4;
 }
 
-.sg-row.is-drop-before {
-  box-shadow: inset 0 2px 0 0 var(--c-accent);
-}
-
-.sg-row.is-drop-after {
-  box-shadow: inset 0 -2px 0 0 var(--c-accent);
-}
-
+/* Drop INSIDE a group: highlight the whole row so it reads as "goes in here". */
 .sg-row.is-drop-inside {
-  box-shadow: inset 0 0 0 1px var(--c-accent);
+  background-color: var(--c-accent-bg);
+  box-shadow: inset 0 0 0 1.5px var(--c-accent);
+  border-radius: var(--r-sm);
+}
+
+/* Drop BEFORE / AFTER: an indented insertion line with a leading nub, sitting
+   at the depth the dragged node would land — i.e. reorder as a sibling. */
+.sg-row__dropline {
+  position: absolute;
+  left: calc(var(--sp-3) + 2px + var(--indent, 0) * var(--sg-indent-step));
+  right: var(--sp-3);
+  height: 2px;
+  background: var(--c-accent);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sg-row__dropline.is-before {
+  top: -1px;
+}
+
+.sg-row__dropline.is-after {
+  bottom: -1px;
+}
+
+.sg-row__dropline::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 2px solid var(--c-accent);
+  background: var(--c-bg-1);
+}
+
+.sg-row.is-ancestor {
+  color: var(--c-text);
+}
+
+.sg-row.is-ancestor .sg-row__name {
+  font-weight: 500;
 }
 
 .sg-row__main {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--sp-2);
   min-width: 0;
 }
 
 .sg-row__chev {
   display: grid;
   place-items: center;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   color: var(--c-text-faint);
   flex: 0 0 auto;
   background: transparent;
@@ -1492,10 +1547,19 @@ code {
 .sg-row__icon {
   display: grid;
   place-items: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   color: var(--c-text-dim);
   flex: 0 0 auto;
+  transition: color 100ms ease;
+}
+
+.sg-row.is-group .sg-row__icon {
+  color: var(--c-text-med);
+}
+
+.sg-row:hover .sg-row__icon {
+  color: var(--c-text);
 }
 
 .sg-row.is-selected .sg-row__icon {
@@ -1506,20 +1570,77 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
+.sg-row__vis {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 auto;
+}
+
+.sg-row__flags {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.sg-flag {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-sm);
+  color: var(--c-text-dim);
+  opacity: 0.92;
+}
+
+.sg-flag--texture {
+  color: var(--c-flag-texture);
+}
+
+.sg-flag--material {
+  color: var(--c-flag-material);
+}
+
+.sg-flag--anim {
+  color: var(--c-flag-anim);
+}
+
+.sg-flag--model {
+  color: var(--c-flag-model);
+}
+
 .sg-row__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--c-bg-4);
   font-family: var(--f-mono);
   font-size: var(--fs-xs);
-  color: var(--c-text-faint);
+  line-height: 1;
+  color: var(--c-text-dim);
+}
+
+.sg-row.is-selected .sg-row__badge {
+  background: var(--c-accent-bg);
+  color: var(--c-text-med);
 }
 
 .sg-row__actions {
   display: flex;
   align-items: center;
   gap: 1px;
+  margin-left: var(--sp-3);
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--c-border);
   opacity: 0;
   transition: opacity 100ms;
 }
@@ -1532,9 +1653,9 @@ code {
 .sg-row__ibtn {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-sm);
   color: var(--c-text-dim);
   cursor: pointer;
   background: transparent;
@@ -1545,6 +1666,37 @@ code {
 .sg-row__ibtn:hover {
   color: var(--c-text);
   background: var(--c-bg-4);
+}
+
+/* Visibility eye lives in the always-visible meta cluster, not the hover
+   actions, so hidden nodes are obvious without hovering. */
+.sg-row__ibtn--vis {
+  color: var(--c-text-dim);
+}
+
+.sg-row.is-node-hidden .sg-row__ibtn--vis {
+  color: var(--c-text-med);
+}
+
+/* Solo / isolate lives next to the eye and stays lit while it is the
+   single isolated node. */
+.sg-row__ibtn--solo {
+  color: var(--c-text-dim);
+}
+
+.sg-row__ibtn--solo.is-active {
+  color: var(--c-warn);
+  background: color-mix(in srgb, var(--c-warn) 18%, transparent);
+}
+
+.sg-row__ibtn--solo.is-active:hover {
+  color: var(--c-warn);
+}
+
+.sg-row.is-node-hidden .sg-row__name,
+.sg-row.is-node-hidden .sg-row__icon,
+.sg-row.is-node-hidden .sg-row__flags {
+  opacity: 0.45;
 }
 
 .sg-row__ibtn.is-off {
