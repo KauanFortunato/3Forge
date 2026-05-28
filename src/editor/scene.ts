@@ -91,6 +91,16 @@ interface SceneEditorOptions {
   onTransformObjectChange?: (nodeId: string, object: Object3D) => boolean;
 }
 
+interface ViewportCaptureSessionOptions {
+  transparentBackground?: boolean;
+}
+
+interface ViewportCaptureSession {
+  canvas: HTMLCanvasElement;
+  renderFrame: () => void;
+  dispose: () => void;
+}
+
 interface AnimationPreviewOverride {
   nodeId: string;
   property: AnimationPropertyPath;
@@ -274,6 +284,7 @@ export class SceneEditor {
   private ambientLight: AmbientLight | null = null;
   private selectionHelper: Box3Helper | null = null;
   private selectionVisualsSuppressed = false;
+  private checkerboardBackgroundVisible = false;
   private currentMode: ToolMode = "select";
   private currentGizmoMode: GizmoMode = "translate";
   private isTransformDragging = false;
@@ -439,6 +450,78 @@ export class SceneEditor {
     listener(this.getCurrentAnimationFrame());
     return () => {
       this.animationFrameListeners.delete(listener);
+    };
+  }
+
+  createViewportCaptureSession(
+    width: number,
+    height: number,
+    options: ViewportCaptureSessionOptions = {},
+  ): ViewportCaptureSession {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const renderer = new WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      preserveDrawingBuffer: true,
+    });
+    renderer.setPixelRatio(1);
+    renderer.setSize(width, height, false);
+    renderer.outputColorSpace = this.renderer.outputColorSpace;
+    renderer.shadowMap.enabled = this.renderer.shadowMap.enabled;
+    renderer.shadowMap.type = this.renderer.shadowMap.type;
+    renderer.toneMapping = this.renderer.toneMapping;
+    renderer.toneMappingExposure = this.renderer.toneMappingExposure;
+
+    const renderFrame = () => {
+      const settings = this.store.sceneSettings;
+      const transparentBackground = Boolean(options.transparentBackground);
+      const previousBackground = this.scene.background;
+      const background = new Color(settings.backgroundColor);
+
+      if (transparentBackground) {
+        this.scene.background = null;
+        renderer.setClearColor(0x000000, 0);
+      } else {
+        this.scene.background = background;
+        renderer.setClearColor(background, 1);
+      }
+
+      renderer.setViewport(0, 0, width, height);
+      renderer.setScissorTest(false);
+      renderer.clear();
+
+      if (this.currentSceneMode === "2d") {
+        const captureCamera = this.orthoCamera.clone();
+        const halfHeight = this.ORTHO_VIEW_HEIGHT / 2;
+        const halfWidth = halfHeight * (width / height);
+        captureCamera.left = -halfWidth;
+        captureCamera.right = halfWidth;
+        captureCamera.top = halfHeight;
+        captureCamera.bottom = -halfHeight;
+        captureCamera.updateProjectionMatrix();
+        renderer.render(this.scene, captureCamera);
+      } else {
+        const captureCamera = this.camera.clone();
+        captureCamera.aspect = width / height;
+        captureCamera.updateProjectionMatrix();
+        renderer.render(this.scene, captureCamera);
+      }
+
+      this.scene.background = previousBackground;
+    };
+
+    renderFrame();
+
+    return {
+      canvas,
+      renderFrame,
+      dispose: () => {
+        renderer.dispose();
+      },
     };
   }
 
@@ -709,8 +792,9 @@ export class SceneEditor {
       this.resize();
     }
     const background = new Color(settings.backgroundColor);
-    this.scene.background = background;
-    this.renderer.setClearColor(background, 1);
+    const useTransparentBackground = this.currentSceneMode === "2d" && this.checkerboardBackgroundVisible;
+    this.scene.background = useTransparentBackground ? null : background;
+    this.renderer.setClearColor(background, useTransparentBackground ? 0 : 1);
     this.renderer.toneMapping = settings.toneMapping.type === "acesFilmic"
       ? ACESFilmicToneMapping
       : settings.toneMapping.type === "linear"
@@ -1282,6 +1366,15 @@ export class SceneEditor {
     this.refreshSelection();
   }
 
+  setCheckerboardBackgroundVisible(visible: boolean): void {
+    if (this.checkerboardBackgroundVisible === visible) {
+      return;
+    }
+
+    this.checkerboardBackgroundVisible = visible;
+    this.applySceneSettings();
+  }
+
   private applyDragAlignmentSnap(nodeId: string, object: Object3D): void {
     if (
       !this.isTransformDragging ||
@@ -1533,6 +1626,7 @@ export class SceneEditor {
         const containerHeight = Math.max(this.container.clientHeight, 1);
         const yFromBottom = containerHeight - rect.y - rect.height;
         const background = new Color(this.store.sceneSettings.backgroundColor);
+        const backgroundAlpha = this.checkerboardBackgroundVisible ? 0 : 1;
 
         this.renderer.setScissorTest(true);
         this.renderer.setViewport(0, 0, containerWidth, containerHeight);
@@ -1542,7 +1636,7 @@ export class SceneEditor {
 
         this.renderer.setViewport(rect.x, yFromBottom, rect.width, rect.height);
         this.renderer.setScissor(rect.x, yFromBottom, rect.width, rect.height);
-        this.renderer.setClearColor(background, 1);
+        this.renderer.setClearColor(background, backgroundAlpha);
         this.renderer.clear();
         this.renderer.render(this.scene, this.orthoCamera);
         this.renderer.setScissorTest(false);

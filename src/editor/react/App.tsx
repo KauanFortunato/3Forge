@@ -117,6 +117,9 @@ const APP_VERSION = __APP_VERSION__;
 const RELEASE_NOTES_SEEN_VERSION_KEY = "3forge-release-notes-seen-version";
 const VIEWPORT_GRID_OVERLAY_KEY = "3forge-viewport-grid-overlay";
 const VIEWPORT_SAFE_AREA_KEY = "3forge-viewport-safe-area";
+const VIEWPORT_CHECKERBOARD_BG_KEY = "3forge-viewport-checkerboard-bg";
+const VIEWPORT_CAPTURE_WIDTH = 1920;
+const VIEWPORT_CAPTURE_HEIGHT = 1080;
 
 interface NodeClipboard {
   sourceNodeIds: string[];
@@ -385,6 +388,16 @@ function downloadBlobFile(blob: Blob, fileName: string): void {
   anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function getTimestampedFileName(baseName: string, extension: string): string {
+  const safeBaseName = baseName
+    .trim()
+    .replace(/[^a-z0-9-_]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase() || "viewport";
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${safeBaseName}-${timestamp}.${extension}`;
 }
 
 function formatRecentProjectTime(timestamp: number): string {
@@ -747,12 +760,19 @@ export function App() {
   const [isTimelineVisible, setIsTimelineVisible] = useState(() => readStoredBooleanPreference(TIMELINE_VISIBLE_KEY, true));
   const [showViewportGridOverlay, setShowViewportGridOverlay] = useState(() => readStoredBooleanPreference(VIEWPORT_GRID_OVERLAY_KEY, false));
   const [showViewportSafeArea, setShowViewportSafeArea] = useState(() => readStoredBooleanPreference(VIEWPORT_SAFE_AREA_KEY, false));
+  const [showViewportCheckerboardBg, setShowViewportCheckerboardBg] = useState(() => readStoredBooleanPreference(VIEWPORT_CHECKERBOARD_BG_KEY, false));
+  const [isRecordingViewport, setIsRecordingViewport] = useState(false);
   const [resizeMode, setResizeMode] = useState<"hierarchy" | "left-sidebar" | "right-sidebar" | "timeline" | "fields" | null>(null);
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => (
     typeof window === "undefined" ? "desktop" : resolveLayoutMode(window.innerWidth)
   ));
 
   const sceneRef = useRef<SceneEditor | null>(null);
+  const viewportRecorderRef = useRef<MediaRecorder | null>(null);
+  const viewportRecordingStreamRef = useRef<MediaStream | null>(null);
+  const viewportRecordingFrameRef = useRef<number | null>(null);
+  const viewportRecordingCaptureRef = useRef<ReturnType<SceneEditor["createViewportCaptureSession"]> | null>(null);
+  const viewportRecordingChunksRef = useRef<Blob[]>([]);
   const temporaryAnimationOverridesRef = useRef<TemporaryAnimationOverrideMap>({});
   const clipboardRef = useRef<NodeClipboard | null>(null);
   const pendingImageImportRef = useRef<PendingImageImport | null>(null);
@@ -779,6 +799,7 @@ export function App() {
   const showEditingTimeline = isTimelineVisible && !isPhoneLayout;
   const show2dViewportGridOverlay = storeView.sceneSettings.mode === "2d" && showViewportGridOverlay;
   const show2dViewportSafeArea = storeView.sceneSettings.mode === "2d" && showViewportSafeArea;
+  const show2dViewportCheckerboardBg = storeView.sceneSettings.mode === "2d" && showViewportCheckerboardBg;
   const shellBodyClassName = `app__body${isPhoneLayout ? " app__body--phone" : ""}`;
   const centerColClassName = `app__col app__col--center has-viewport-toolbar${showEditingTimeline ? " has-timeline" : ""}`;
   const shellStyle = useMemo(
@@ -894,6 +915,115 @@ export function App() {
     }, 2500);
   }, []);
 
+  const takeViewportSnapshot = useCallback(() => {
+    const scene = sceneRef.current;
+    if (!scene) {
+      showToast("Viewport is not ready yet.", "warning");
+      return;
+    }
+
+    const capture = scene.createViewportCaptureSession(VIEWPORT_CAPTURE_WIDTH, VIEWPORT_CAPTURE_HEIGHT, {
+      transparentBackground: storeView.sceneSettings.mode === "2d",
+    });
+    capture.canvas.toBlob((blob) => {
+      capture.dispose();
+      if (!blob) {
+        showToast("Could not capture the viewport.", "warning");
+        return;
+      }
+
+      downloadBlobFile(blob, getTimestampedFileName(activeProjectLabel, "png"));
+      setTransientStatus("Viewport snapshot saved at 1920x1080");
+    }, "image/png");
+  }, [activeProjectLabel, setTransientStatus, showToast, storeView.sceneSettings.mode]);
+
+  const toggleViewportRecording = useCallback(() => {
+    const activeRecorder = viewportRecorderRef.current;
+    if (activeRecorder) {
+      if (activeRecorder.state !== "inactive") {
+        activeRecorder.stop();
+      }
+      return;
+    }
+
+    const scene = sceneRef.current;
+    if (!scene) {
+      showToast("Viewport is not ready yet.", "warning");
+      return;
+    }
+
+    const capture = scene.createViewportCaptureSession(VIEWPORT_CAPTURE_WIDTH, VIEWPORT_CAPTURE_HEIGHT);
+    if (typeof capture.canvas.captureStream !== "function") {
+      capture.dispose();
+      showToast("Viewport recording is not supported in this browser.", "warning");
+      return;
+    }
+
+    if (typeof MediaRecorder === "undefined") {
+      capture.dispose();
+      showToast("Video recording is not supported in this browser.", "warning");
+      return;
+    }
+
+    const stream = capture.canvas.captureStream(60);
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+      ? "video/webm;codecs=vp9"
+      : MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
+        ? "video/webm;codecs=vp8"
+        : "video/webm";
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType });
+    } catch {
+      capture.dispose();
+      stream.getTracks().forEach((track) => track.stop());
+      showToast("Viewport recording is not supported in this browser.", "warning");
+      return;
+    }
+    viewportRecorderRef.current = recorder;
+    viewportRecordingStreamRef.current = stream;
+    viewportRecordingCaptureRef.current = capture;
+    viewportRecordingChunksRef.current = [];
+
+    const drawNextFrame = () => {
+      capture.renderFrame();
+      viewportRecordingFrameRef.current = window.requestAnimationFrame(drawNextFrame);
+    };
+    viewportRecordingFrameRef.current = window.requestAnimationFrame(drawNextFrame);
+
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size > 0) {
+        viewportRecordingChunksRef.current.push(event.data);
+      }
+    });
+    recorder.addEventListener("stop", () => {
+      const chunks = viewportRecordingChunksRef.current;
+      viewportRecordingChunksRef.current = [];
+      viewportRecorderRef.current = null;
+      if (viewportRecordingFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewportRecordingFrameRef.current);
+        viewportRecordingFrameRef.current = null;
+      }
+      viewportRecordingCaptureRef.current?.dispose();
+      viewportRecordingCaptureRef.current = null;
+      viewportRecordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      viewportRecordingStreamRef.current = null;
+      setIsRecordingViewport(false);
+
+      if (chunks.length === 0) {
+        showToast("No viewport video data was recorded.", "warning");
+        return;
+      }
+
+      downloadBlobFile(new Blob(chunks, { type: mimeType }), getTimestampedFileName(activeProjectLabel, "webm"));
+      setTransientStatus("Viewport recording saved at 1920x1080");
+    });
+
+    recorder.start();
+    setIsRecordingViewport(true);
+    setTransientStatus("Recording viewport at 1920x1080");
+  }, [activeProjectLabel, setTransientStatus, showToast]);
+
   const closeReleaseNotesDialog = useCallback(() => {
     markReleaseNotesSeen();
     setHasNewReleaseNotes(false);
@@ -951,6 +1081,14 @@ export function App() {
 
     window.localStorage.setItem(VIEWPORT_SAFE_AREA_KEY, showViewportSafeArea ? "true" : "false");
   }, [showViewportSafeArea]);
+
+  useEffect(() => {
+    if (!canUseLocalStorage()) {
+      return;
+    }
+
+    window.localStorage.setItem(VIEWPORT_CHECKERBOARD_BG_KEY, showViewportCheckerboardBg ? "true" : "false");
+  }, [showViewportCheckerboardBg]);
 
   useEffect(() => {
     if (!shouldPersistWorkspace) {
@@ -1028,6 +1166,16 @@ export function App() {
       if (toastTimerRef.current) {
         window.clearTimeout(toastTimerRef.current);
       }
+      if (viewportRecorderRef.current && viewportRecorderRef.current.state !== "inactive") {
+        viewportRecorderRef.current.stop();
+      }
+      if (viewportRecordingFrameRef.current !== null) {
+        window.cancelAnimationFrame(viewportRecordingFrameRef.current);
+        viewportRecordingFrameRef.current = null;
+      }
+      viewportRecordingCaptureRef.current?.dispose();
+      viewportRecordingCaptureRef.current = null;
+      viewportRecordingStreamRef.current?.getTracks().forEach((track) => track.stop());
       animationFrameUnsubscribeRef.current?.();
     };
   }, []);
@@ -3659,6 +3807,7 @@ export function App() {
               <div className="viewport-stage">
                 <ViewportHost
                   store={store}
+                  showCheckerboardBackground={show2dViewportCheckerboardBg}
                   onTransformObjectChange={handleViewportTransformChange}
                   onSceneReady={(scene) => {
                     animationFrameUnsubscribeRef.current?.();
@@ -3699,6 +3848,10 @@ export function App() {
                       <div className="viewport-safe-area">
                         <div className="viewport-safe-area__action" />
                         <div className="viewport-safe-area__title" />
+                        <div className="viewport-safe-area__center">
+                          <div className="viewport-safe-area__center_y" />
+                          <div className="viewport-safe-area__center_x" />
+                        </div>
                       </div>
                     ) : null}
                   </div>
@@ -3717,10 +3870,15 @@ export function App() {
                 sceneMode={storeView.sceneSettings.mode}
                 showGridOverlay={showViewportGridOverlay}
                 showSafeArea={showViewportSafeArea}
+                showCheckerboardBg={showViewportCheckerboardBg}
+                isRecordingViewport={isRecordingViewport}
                 backgroundColor={storeView.sceneSettings.backgroundColor}
+                onTakeSnapshot={takeViewportSnapshot}
+                onToggleRecording={toggleViewportRecording}
                 onToolChange={handleToolChange}
                 onToggleGridOverlay={() => setShowViewportGridOverlay((value) => !value)}
                 onToggleSafeArea={() => setShowViewportSafeArea((value) => !value)}
+                onToggleCheckerboardBg={() => setShowViewportCheckerboardBg((value) => !value)}
                 onBackgroundColorChange={(backgroundColor) => store.updateSceneSettings({ backgroundColor })}
               />
 
