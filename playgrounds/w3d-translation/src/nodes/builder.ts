@@ -733,14 +733,15 @@ function buildTextureText(
   inheritedMaskIds?: string[],
   inheritedAlpha?: number,
 ): Object3D {
+  const renderTextBox = resolveTextureTextRenderBox(node);
   const geometry = new PlaneGeometry(
-    Math.max(node.textBox.x, 0.001),
-    Math.max(node.textBox.y, 0.001),
+    Math.max(renderTextBox.x, 0.001),
+    Math.max(renderTextBox.y, 0.001),
   );
   applyAlignment(geometry, {
     alignmentX: node.alignmentX,
     alignmentY: node.alignmentY,
-    size: node.textBox,
+    size: renderTextBox,
   });
 
   // Resolve color from the assigned BaseMaterial. TextureLayer is always
@@ -799,7 +800,7 @@ function buildTextureText(
     weight,
     style,
     color: textColor,
-    textBox: node.textBox,
+    textBox: renderTextBox,
     alignmentX: node.alignmentX ?? "Center",
     alignmentY: node.alignmentY ?? "Center",
     quality: node.textQuality,
@@ -847,6 +848,22 @@ function buildTextureText(
     return wrapMeshWithPivot(mesh, node);
   }
   return mesh;
+}
+
+function resolveTextureTextRenderBox(node: W3DTextureTextData): { x: number; y: number } {
+  if (!isExtremeTallWidthConstrainedSingleLine(node)) return node.textBox;
+  const lineHeight = (node.textBox.x / node.text.length) * 1.2;
+  return { x: node.textBox.x, y: Math.min(node.textBox.y, lineHeight) };
+}
+
+function isExtremeTallWidthConstrainedSingleLine(node: W3DTextureTextData): boolean {
+  return (
+    node.constrainMethod === "Width" &&
+    node.text.length > 0 &&
+    !/[\r\n]/.test(node.text) &&
+    node.textBox.x > 0 &&
+    node.textBox.y / node.textBox.x >= 3
+  );
 }
 
 /**

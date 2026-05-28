@@ -2818,6 +2818,33 @@ describe("builder — BuildContext", () => {
     expect(params.height).toBeCloseTo(0.23, 5);
   });
 
+  test("Phase TextureText: extreme-tall width-constrained single-line text renders as one caption line", () => {
+    const node = {
+      kind: "TextureText" as const,
+      id: "tt", name: "ROLE_LABEL",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "COACH",
+      textBox: { x: 0.73, y: 2.73 },
+      alignmentX: "Left" as const,
+      alignmentY: "Center" as const,
+      constrainMethod: "Width",
+      textQuality: 2,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      children: [],
+    };
+    const obj = buildNode(node, makeCtx()) as Mesh;
+    const params = (obj.geometry as InstanceType<typeof import("three").PlaneGeometry>).parameters;
+
+    expect(params.width).toBeCloseTo(0.73, 5);
+    expect(params.height).toBeCloseTo(0.1752, 3);
+    expect(obj.userData.w3d.textBox).toEqual({ x: 0.73, y: 2.73 });
+  });
+
   test("Phase TextureText: mesh.userData.w3d carries kind, text, textBox", () => {
     const node = {
       kind: "TextureText" as const,
