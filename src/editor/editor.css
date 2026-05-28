@@ -2472,6 +2472,17 @@ code {
   outline: none;
 }
 
+.vp.is-checkerboard-bg {
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(45deg, #c8ccd3 25%, transparent 25%),
+    linear-gradient(-45deg, #c8ccd3 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #c8ccd3 75%),
+    linear-gradient(-45deg, transparent 75%, #c8ccd3 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
 .vp:focus,
 .vp:focus-visible {
   outline: none;
@@ -2501,12 +2512,12 @@ code {
 }
 
 .viewport-overlay-grid {
-  border: 1px solid rgba(64, 156, 255, 0.85);
+  border: 1px solid rgba(128, 128, 128, 0.85);
 }
 
 .viewport-overlay-grid__line {
   position: absolute;
-  background: rgba(64, 156, 255, 0.72);
+  background: rgba(128, 128, 128, 0.72);
 }
 
 .viewport-overlay-grid__line--vertical {
@@ -2524,11 +2535,13 @@ code {
 }
 
 .viewport-safe-area {
-  color: rgba(139, 92, 246, 0.88);
+  color: rgba(244, 243, 245, 0.88);
 }
 
 .viewport-safe-area__action,
-.viewport-safe-area__title {
+.viewport-safe-area__title,
+.viewport-safe-area__center_x,
+.viewport-safe-area__center_y {
   position: absolute;
   border: 1px solid currentColor;
 }
@@ -2542,10 +2555,33 @@ code {
   border-style: dashed;
 }
 
+.viewport-safe-area__center {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border: 1px solid currentColor;
+}
+
+.viewport-safe-area__center_x {
+  width: 100%;
+  top: 50%;
+  border-style: dotted;
+}
+
+.viewport-safe-area__center_y {
+  height: 100%;
+  left: 50%;
+  border-style: dotted;
+}
+
 .viewport-safe-area__action::before,
 .viewport-safe-area__action::after,
 .viewport-safe-area__title::before,
-.viewport-safe-area__title::after {
+.viewport-safe-area__title::after,
+.viewport-safe-area__center_x::before,
+.viewport-safe-area__center_x::after,
+.viewport-safe-area__center_y::before,
+.viewport-safe-area__center_y::after {
   content: "";
   position: absolute;
   width: 14px;
@@ -2704,9 +2740,9 @@ code {
    ============================================================= */
 .timeline-toolbar {
   min-height: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-4);
   padding: 4px var(--sp-4);
   border-bottom: 1px solid var(--c-border);
@@ -2714,6 +2750,7 @@ code {
 }
 
 .timeline-toolbar__left,
+.timeline-toolbar__center,
 .timeline-toolbar__right,
 .timeline-toolbar__group {
   display: flex;
@@ -2725,8 +2762,13 @@ code {
   gap: var(--sp-3);
 }
 
+.timeline-toolbar__center {
+  justify-content: center;
+}
+
 .timeline-toolbar__right {
   justify-content: flex-end;
+  gap: var(--sp-3);
 }
 
 .timeline-toolbar__group {

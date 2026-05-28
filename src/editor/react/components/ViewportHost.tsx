@@ -8,13 +8,21 @@ const CONTEXT_MENU_DRAG_THRESHOLD = 5;
 
 interface ViewportHostProps {
   store: EditorStore;
+  showCheckerboardBackground?: boolean;
   onSceneReady: (scene: SceneEditor | null) => void;
   onContextMenu: (event: MouseEvent<HTMLDivElement>) => void;
   onTransformObjectChange?: (nodeId: string, object: Object3D) => boolean;
 }
 
-export function ViewportHost({ store, onSceneReady, onContextMenu, onTransformObjectChange }: ViewportHostProps) {
+export function ViewportHost({
+  store,
+  showCheckerboardBackground = false,
+  onSceneReady,
+  onContextMenu,
+  onTransformObjectChange,
+}: ViewportHostProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const sceneRef = useRef<SceneEditor | null>(null);
   const onSceneReadyRef = useRef(onSceneReady);
   const onTransformObjectChangeRef = useRef(onTransformObjectChange);
   const rightPointerStateRef = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
@@ -39,13 +47,20 @@ export function ViewportHost({ store, onSceneReady, onContextMenu, onTransformOb
       onTransformObjectChange: (nodeId, object) =>
         onTransformObjectChangeRef.current?.(nodeId, object) ?? false,
     });
+    sceneRef.current = scene;
+    scene.setCheckerboardBackgroundVisible(showCheckerboardBackground);
     onSceneReadyRef.current(scene);
 
     return () => {
       onSceneReadyRef.current(null);
+      sceneRef.current = null;
       scene.dispose();
     };
   }, [store]);
+
+  useEffect(() => {
+    sceneRef.current?.setCheckerboardBackgroundVisible(showCheckerboardBackground);
+  }, [showCheckerboardBackground]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -103,7 +118,7 @@ export function ViewportHost({ store, onSceneReady, onContextMenu, onTransformOb
   return (
     <div
       ref={containerRef}
-      className="vp"
+      className={`vp${showCheckerboardBackground ? " is-checkerboard-bg" : ""}`}
       tabIndex={0}
       onPointerDown={(event) => {
         const activeElement = document.activeElement;
