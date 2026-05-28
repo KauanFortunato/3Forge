@@ -929,6 +929,34 @@ interface RenderTextOptions {
   constrainMethod?: ConstrainMethod;
 }
 
+function finiteMetric(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function textMetricInkWidth(metrics: TextMetrics): number {
+  const left = finiteMetric(metrics.actualBoundingBoxLeft);
+  const right = finiteMetric(metrics.actualBoundingBoxRight);
+  if (left !== undefined && right !== undefined && left + right > 0) {
+    return left + right;
+  }
+  return metrics.width;
+}
+
+function textMetricInkHeight(metrics: TextMetrics): { ascent: number; descent: number } | undefined {
+  const ascent = finiteMetric(metrics.actualBoundingBoxAscent);
+  const descent = finiteMetric(metrics.actualBoundingBoxDescent);
+  if (ascent === undefined || descent === undefined || ascent + descent <= 0) return undefined;
+  return { ascent, descent };
+}
+
+function applyCanvasFont(
+  c2d: CanvasRenderingContext2D,
+  opts: Pick<RenderTextOptions, "style" | "weight" | "family">,
+  fontPx: number,
+): void {
+  c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+}
+
 /**
  * Rasterize `text` into a CanvasTexture sized roughly proportional to the
  * authored TextBoxSize × quality. In jsdom (test env) the 2D context is null;
@@ -954,22 +982,22 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
     // of canvas height) and is the starting point for every ConstrainMethod
     // branch below.
     let fontPx = Math.max(4, Math.floor(h * 0.85));
-    c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+    applyCanvasFont(c2d, opts, fontPx);
 
     // Phase TextureText constrain — explicit branches per recognised value:
-    //   - "Width":  shrink fontPx so measureText(text) fits availableWidth.
-    //               Single proportional rescale (measureText scales linearly
-    //               with fontPx for a given glyph run).
+    //   - "Width":  shrink fontPx so the actual glyph ink bounds fit
+    //               availableWidth. Canvas advance width can miss italic/bold
+    //               overhangs, which produces R3-inaccurate edge clipping.
     //   - "Height": no extra pass — initial fontPx already fits canvas height.
     //   - "None":   no shrink — render at the natural fontPx.
     // Falling through with no branch is deliberate for None/Height.
     switch (opts.constrainMethod) {
       case "Width": {
         if (opts.text.length > 0) {
-          const measured = c2d.measureText(opts.text).width;
+          const measured = textMetricInkWidth(c2d.measureText(opts.text));
           if (measured > availableWidth && measured > 0) {
             fontPx = Math.max(4, Math.floor((fontPx * availableWidth) / measured));
-            c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+            applyCanvasFont(c2d, opts, fontPx);
           }
         }
         break;
@@ -997,7 +1025,28 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
       opts.alignmentY === "Top" ? 0
       : opts.alignmentY === "Bottom" ? h
       : h / 2;
-    c2d.fillText(opts.text, tx, ty);
+    const finalMetrics = c2d.measureText(opts.text);
+    const inkLeft = finiteMetric(finalMetrics.actualBoundingBoxLeft);
+    const inkRight = finiteMetric(finalMetrics.actualBoundingBoxRight);
+    let inkTx = tx;
+    if (inkLeft !== undefined && inkRight !== undefined && inkLeft + inkRight > 0) {
+      c2d.textAlign = "left";
+      inkTx =
+        opts.alignmentX === "Left" ? padX + inkLeft
+        : opts.alignmentX === "Right" ? w - padX - inkRight
+        : w / 2 + (inkLeft - inkRight) / 2;
+    }
+    const inkHeight = textMetricInkHeight(finalMetrics);
+    let inkTy = ty;
+    if (inkHeight) {
+      const padY = Math.max(1, Math.round(h * 0.03));
+      c2d.textBaseline = "alphabetic";
+      inkTy =
+        opts.alignmentY === "Top" ? padY + inkHeight.ascent
+        : opts.alignmentY === "Bottom" ? h - padY - inkHeight.descent
+        : h / 2 + (inkHeight.ascent - inkHeight.descent) / 2;
+    }
+    c2d.fillText(opts.text, inkTx, inkTy);
   }
   const tex = new CanvasTexture(canvas);
   tex.colorSpace = SRGBColorSpace;

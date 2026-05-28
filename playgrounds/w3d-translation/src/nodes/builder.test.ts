@@ -1,5 +1,5 @@
 // playgrounds/w3d-translation/src/nodes/builder.test.ts
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { Box3, Group, Mesh, MeshBasicMaterial, Vector3 } from "three";
 import { buildNode, buildNodeTree } from "./builder";
 import type { BuildContext } from "./builder";
@@ -2843,6 +2843,76 @@ describe("builder — BuildContext", () => {
     expect(params.width).toBeCloseTo(0.73, 5);
     expect(params.height).toBeCloseTo(0.1752, 3);
     expect(obj.userData.w3d.textBox).toEqual({ x: 0.73, y: 2.73 });
+  });
+
+  test("Phase TextureText: Width fitting uses actual glyph bounds when available", () => {
+    const fontCalls: string[] = [];
+    const fillTextCalls: Array<{ text: string; x: number; y: number }> = [];
+    let currentFont = "";
+    const context = {
+      clearRect: vi.fn(),
+      fillText: vi.fn((text: string, x: number, y: number) => {
+        fillTextCalls.push({ text, x, y });
+      }),
+      measureText: vi.fn(() => {
+        const match = /(\d+)px/.exec(currentFont);
+        const px = match ? Number(match[1]) : 85;
+        const scale = px / 85;
+        return {
+          width: 180 * scale,
+          actualBoundingBoxLeft: 20 * scale,
+          actualBoundingBoxRight: 200 * scale,
+          actualBoundingBoxAscent: 50 * scale,
+          actualBoundingBoxDescent: 10 * scale,
+        };
+      }),
+      get font() {
+        return currentFont;
+      },
+      set font(value: string) {
+        currentFont = value;
+        fontCalls.push(value);
+      },
+      fillStyle: "",
+      textAlign: "left" as CanvasTextAlign,
+      textBaseline: "alphabetic" as CanvasTextBaseline,
+    };
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => context),
+    } as unknown as HTMLCanvasElement;
+    const originalCreateElement = document.createElement.bind(document);
+    const createElement = vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
+      if (tagName === "canvas") return canvas;
+      return originalCreateElement(tagName);
+    });
+    try {
+      buildNode({
+        kind: "TextureText" as const,
+        id: "tt", name: "WIDE_LABEL",
+        enable: true, alpha: 1, speedScale: 1,
+        text: "WIDE",
+        textBox: { x: 1, y: 0.5 },
+        alignmentX: "Left" as const,
+        alignmentY: "Center" as const,
+        constrainMethod: "Width",
+        textQuality: 1,
+        maskIds: [],
+        transform: {
+          position: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        children: [],
+      }, makeCtx());
+    } finally {
+      createElement.mockRestore();
+    }
+
+    expect(fontCalls[0]).toContain("85px");
+    expect(fontCalls.at(-1)).toContain("72px");
+    expect(fillTextCalls[0]?.x).toBeGreaterThan(6);
   });
 
   test("Phase TextureText: mesh.userData.w3d carries kind, text, textBox", () => {
