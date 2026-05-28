@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentBlueprint } from "../../../src/editor/types";
 import { analyzeW3dXml, type DocumentStats } from "./analyze";
-import { dumpNodes, type DumpRow } from "./nodes/diagnostics";
 import type { W3DNodeData } from "./nodes/data";
 import { translateBlueprint } from "./translate";
 import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
@@ -45,11 +44,14 @@ export function App() {
   const [project, setProject] = useState<SelectedProject | null>(null);
   const [loaded, setLoaded] = useState<LoadedScene | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activePanel, setActivePanel] = useState<"stats" | "xml" | "blueprint" | "quads">("stats");
+  const [activePanel, setActivePanel] = useState<"stats" | "tree">("stats");
   const [stencilDebugShowMask, setStencilDebugShowMask] = useState(false);
   const [inspectorEnabled, setInspectorEnabled] = useState(false);
   const [inspectorReport, setInspectorReport] = useState<InspectorReport | null>(null);
+  const [referenceImageUrl, setReferenceImageUrl] = useState<string | null>(null);
+  const [referenceOpacity, setReferenceOpacity] = useState(0.45);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const referenceInputRef = useRef<HTMLInputElement | null>(null);
   const viewportHostRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<PlaygroundViewport | null>(null);
   const loadedRef = useRef<LoadedScene | null>(null);
@@ -122,6 +124,12 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (referenceImageUrl) URL.revokeObjectURL(referenceImageUrl);
+    };
+  }, [referenceImageUrl]);
+
   const handleProjectFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
     cleanupLoadedScene(loaded);
@@ -168,9 +176,26 @@ export function App() {
     }
   }, [loaded]);
 
-  const blueprintPreview = useMemo(() => {
-    if (!loaded) return "";
-    return JSON.stringify(loaded.blueprint, null, 2);
+  const handleReferenceImage = useCallback((file: File | undefined) => {
+    if (!file) return;
+    const nextUrl = URL.createObjectURL(file);
+    setReferenceImageUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return nextUrl;
+    });
+  }, []);
+
+  const clearReferenceImage = useCallback(() => {
+    setReferenceImageUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  }, []);
+
+  const selectTreeNode = useCallback((node: W3DNodeData) => {
+    const target = viewportRef.current?.selectW3DNode(node.id);
+    const report = target ? buildInspectorReport(target, loaded?.resources) : null;
+    setInspectorReport(report);
   }, [loaded]);
 
   return (
@@ -181,10 +206,27 @@ export function App() {
           <button type="button" onClick={() => folderInputRef.current?.click()}>
             Open W3D project…
           </button>
+          <button type="button" onClick={() => referenceInputRef.current?.click()}>
+            Reference image…
+          </button>
           {loaded ? (
             <button type="button" onClick={reTranslate} title="Re-run translate.ts against current XML">
               Re-translate
             </button>
+          ) : null}
+          {referenceImageUrl ? (
+            <label className="playground__debug-control" title="Fade the reference screenshot over the viewport">
+              ref fade
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={referenceOpacity}
+                onChange={(e) => setReferenceOpacity(Number(e.target.value))}
+              />
+              <button type="button" onClick={clearReferenceImage}>clear</button>
+            </label>
           ) : null}
           <label style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }} title="Debug: paint PHOTO_MASK_0X red 50% so the mask shape is visible">
             <input
@@ -226,6 +268,17 @@ export function App() {
         }}
       />
 
+      <input
+        ref={referenceInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        style={{ display: "none" }}
+        onChange={(event) => {
+          handleReferenceImage(event.target.files?.[0]);
+          event.currentTarget.value = "";
+        }}
+      />
+
       <div className="playground__body">
         <aside className="playground__panel">
           <ProjectScenes
@@ -237,14 +290,8 @@ export function App() {
             <button className={activePanel === "stats" ? "is-active" : ""} onClick={() => setActivePanel("stats")}>
               Structure
             </button>
-            <button className={activePanel === "xml" ? "is-active" : ""} onClick={() => setActivePanel("xml")}>
-              Raw XML
-            </button>
-            <button className={activePanel === "blueprint" ? "is-active" : ""} onClick={() => setActivePanel("blueprint")}>
-              Blueprint
-            </button>
-            <button className={activePanel === "quads" ? "is-active" : ""} onClick={() => setActivePanel("quads")}>
-              Quads
+            <button className={activePanel === "tree" ? "is-active" : ""} onClick={() => setActivePanel("tree")}>
+              Tree
             </button>
           </div>
           <div className="playground__panel-body">
@@ -255,12 +302,12 @@ export function App() {
               </div>
             ) : activePanel === "stats" ? (
               <StatsView loaded={loaded} />
-            ) : activePanel === "xml" ? (
-              <pre className="playground__code">{loaded.xml}</pre>
-            ) : activePanel === "blueprint" ? (
-              <pre className="playground__code">{blueprintPreview}</pre>
-            ) : activePanel === "quads" ? (
-              <QuadsView loaded={loaded} />
+            ) : activePanel === "tree" ? (
+              <NodeTreeView
+                nodes={loaded.nodes}
+                activeNodeId={inspectorReport?.identity.id ?? null}
+                onSelect={selectTreeNode}
+              />
             ) : (
               <StatsView loaded={loaded} />
             )}
@@ -269,6 +316,11 @@ export function App() {
 
         <main className="playground__viewport">
           <div ref={viewportHostRef} className="playground__viewport-host" />
+          {referenceImageUrl ? (
+            <div className="playground__reference" style={{ opacity: referenceOpacity }}>
+              <img src={referenceImageUrl} alt="" />
+            </div>
+          ) : null}
           {loaded ? (
             <div className="playground__viewport-meta">
               <span>{loaded.sceneFileName}</span>
@@ -394,6 +446,114 @@ function ProjectScenes({
   );
 }
 
+function NodeTreeView({
+  nodes,
+  activeNodeId,
+  onSelect,
+}: {
+  nodes: W3DNodeData[];
+  activeNodeId: string | null;
+  onSelect: (node: W3DNodeData) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleNodes = useMemo(
+    () => filterNodeTree(nodes, normalizedQuery),
+    [nodes, normalizedQuery],
+  );
+
+  return (
+    <div className="playground__tree">
+      <input
+        type="search"
+        placeholder="Filter nodes"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      <div className="playground__tree-list">
+        {visibleNodes.map((node) => (
+          <TreeNodeRow
+            key={node.id || node.name}
+            node={node}
+            depth={0}
+            activeNodeId={activeNodeId}
+            onSelect={onSelect}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TreeNodeRow({
+  node,
+  depth,
+  activeNodeId,
+  onSelect,
+}: {
+  node: W3DNodeData;
+  depth: number;
+  activeNodeId: string | null;
+  onSelect: (node: W3DNodeData) => void;
+}) {
+  return (
+    <div className="playground__tree-item">
+      <button
+        type="button"
+        className={node.id === activeNodeId ? "is-active" : ""}
+        style={{ paddingLeft: depth * 12 + 8 }}
+        onClick={() => onSelect(node)}
+        title={nodePathTitle(node)}
+      >
+        <span className={`kind kind--${node.kind.toLowerCase()}`}>{node.kind}</span>
+        <span className="name">{node.name || "(unnamed)"}</span>
+        {node.kind === "TextureText" ? <span className="text">{node.text}</span> : null}
+      </button>
+      {node.children.map((child) => (
+        <TreeNodeRow
+          key={child.id || child.name}
+          node={child}
+          depth={depth + 1}
+          activeNodeId={activeNodeId}
+          onSelect={onSelect}
+        />
+      ))}
+    </div>
+  );
+}
+
+function filterNodeTree(nodes: W3DNodeData[], query: string): W3DNodeData[] {
+  if (!query) return nodes;
+  const out: W3DNodeData[] = [];
+  for (const node of nodes) {
+    const children = filterNodeTree(node.children, query);
+    if (nodeMatchesQuery(node, query) || children.length > 0) {
+      out.push({ ...node, children });
+    }
+  }
+  return out;
+}
+
+function nodeMatchesQuery(node: W3DNodeData, query: string): boolean {
+  const haystack = [
+    node.kind,
+    node.name,
+    node.id,
+    "text" in node ? node.text : "",
+  ].join(" ").toLowerCase();
+  return haystack.includes(query);
+}
+
+function nodePathTitle(node: W3DNodeData): string {
+  if (node.kind === "Quad") {
+    return `${node.name} | ${node.kind} | size ${fmtVec2(node.geometry.size)} | pos ${fmtVec3(node.transform.position)}`;
+  }
+  if (node.kind === "TextureText") {
+    return `${node.name} | ${node.kind} | "${node.text}" | box ${fmtVec2(node.textBox)} | pos ${fmtVec3(node.transform.position)}`;
+  }
+  return `${node.name} | ${node.kind} | pos ${fmtVec3(node.transform.position)}`;
+}
+
 function StatsView({ loaded }: { loaded: LoadedScene }) {
   return (
     <div className="playground__stats">
@@ -420,58 +580,6 @@ function StatsView({ loaded }: { loaded: LoadedScene }) {
       </table>
     </div>
   );
-}
-
-function QuadsView({ loaded }: { loaded: LoadedScene }) {
-  const rows: DumpRow[] = dumpNodes(loaded.nodes, loaded.resources, loaded.textureUrlsByFilename);
-  const quadRows = rows.filter((r) => r.kind === "Quad");
-  const summary = {
-    quads: quadRows.length,
-    masks: quadRows.filter((r) => r.isMask).length,
-    disabled: quadRows.filter((r) => r.disabledByEnable).length,
-    alphaZero: quadRows.filter((r) => r.transparentByAlpha0).length,
-    groups: rows.filter((r) => r.kind === "Group").length,
-  };
-  return (
-    <div className="playground__quads">
-      <div className="playground__quads-summary">
-        {summary.quads} quads · {summary.masks} masks · {summary.disabled} disabled · {summary.alphaZero} alpha-zero · {summary.groups} groups
-        {" · "}{rows.filter(r => r.kind === "Quad" && r.hasMaterialResolved).length} mat-resolved
-        {" · "}{rows.filter(r => r.kind === "Quad" && r.hasTextureLayerResolved).length} tex-resolved
-      </div>
-      <table className="playground__quads-table">
-        <thead>
-          <tr>
-            <th>Kind</th><th>Name</th><th>Size</th><th>Pos</th><th>Scale</th><th>Rot</th>
-            <th>α</th><th>Vis</th><th>Mask</th><th>Material</th><th>Texture</th><th>#kids</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id + ":" + r.path} className={r.kind === "Group" ? "is-group" : ""}>
-              <td>{r.kind}</td>
-              <td style={{ paddingLeft: r.depth * 10 + 6 }}><code>{r.name}</code></td>
-              <td>{r.size}</td>
-              <td><code>{r.position}</code></td>
-              <td><code>{r.scale}</code></td>
-              <td><code>{r.rotation}</code></td>
-              <td>{r.alpha}</td>
-              <td title={r.disabledByEnable ? "Enable=False" : r.transparentByAlpha0 ? "Alpha=0" : ""}>{r.effectiveVisible ? "✓" : "—"}</td>
-              <td>{r.isMask ? `mask(${r.maskProperties})` : r.maskIds.length > 0 ? `→ ${r.maskIds.join(",")}` : "—"}</td>
-              <td><code title={r.materialId}>{shortId(r.materialId)}</code></td>
-              <td><code title={r.textureLayerId}>{shortId(r.textureLayerId)}</code></td>
-              <td>{r.childrenCount}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function shortId(s: string): string {
-  if (s === "—" || s === "Standard") return s;
-  return s.length > 12 ? s.slice(0, 8) + "…" : s;
 }
 
 // ---------------------------------------------------------------------------
