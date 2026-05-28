@@ -139,6 +139,24 @@ export type ResolverContext = {
  */
 const KNOWN_TEXTURE_BLENDING_VALUES: ReadonlySet<string> = new Set(["Multiply", "Normal"]);
 
+/**
+ * Phase P6.1 — caller-side hint that the caller will provide its own runtime
+ * `material.map` after resolveMaterial returns (e.g. TextureText synthesises a
+ * canvas-rendered glyph texture in `buildTextureText` AFTER this function runs).
+ * When set, the DE1A3E3C-without-mapUrl forced-opacity-0 rule is skipped — that
+ * rule exists only to hide Quads that resolve to the project-default transparent
+ * material with no real texture, but TextureText nodes routinely use DE1A3E3C
+ * as a neutral base and would be wrongly forced invisible.
+ *
+ * The flag does NOT affect any other behaviour: color/material resolution,
+ * opacity multiplication, transparent flag, mapUrl/alphaMapUrl pass-through, and
+ * the DE1A3E3C "transparent label" remain untouched.
+ */
+export interface ResolveMaterialOptions {
+  /** True when the caller (e.g. buildTextureText) will assign its own map. */
+  expectsCallerMap?: boolean;
+}
+
 export function resolveMaterial(
   materialId: string | undefined,
   textureLayerId: string | undefined,
@@ -146,6 +164,7 @@ export function resolveMaterial(
   quadAlpha: number,
   ctx: ResolverContext,
   warnings: string[],
+  options?: ResolveMaterialOptions,
 ): ResolvedMaterial {
   // --- 1. Colour from BaseMaterial ---
   let color = "#ff00ff";
@@ -272,7 +291,16 @@ export function resolveMaterial(
 
   // DE1A3E3C without a resolved texture → fully transparent at runtime.
   // If a texture was resolved (mapUrl exists), let the texture/opacity flow normally.
-  if (materialId?.toUpperCase() === W3D_DEFAULT_TRANSPARENT && !mapUrl) {
+  // Phase P6.1 — TextureText callers set `options.expectsCallerMap=true` because
+  // they synthesise a canvas-rendered glyph texture AFTER this returns; for
+  // those callers the "no map => invisible" forcing is incorrect (the glyph
+  // map will be present at render time). Quad callers omit the flag and keep
+  // the existing invisibility for unmapped DE1A3E3C placeholders.
+  if (
+    materialId?.toUpperCase() === W3D_DEFAULT_TRANSPARENT
+    && !mapUrl
+    && !options?.expectsCallerMap
+  ) {
     opacity = 0;
     transparent = true;
   }

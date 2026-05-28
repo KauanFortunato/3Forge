@@ -3608,3 +3608,133 @@ describe("builder — Phase P4.1 foreground overlay render-order", () => {
     expect(insideMesh.renderOrder).toBe(12);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase P6.1 — TextureText opacity when MaterialId = DE1A3E3C (project default
+// transparent). The resolver's "DE1A3E3C without mapUrl → opacity 0" rule was
+// designed for Quads but TextureText synthesises its own canvas glyph map AFTER
+// resolveMaterial returns, so the rule wrongly hid PLAYER_FIRST_NAME /
+// PLAYER_LAST_NAME / COACH text in LINEUP_LEFT. buildTextureText now passes
+// `expectsCallerMap: true` so the rule is skipped only for TextureText.
+// Quad behavior is unchanged.
+// ---------------------------------------------------------------------------
+describe("builder — Phase P6.1 TextureText opacity with DE1A3E3C", () => {
+  const DE1A3E3C = "DE1A3E3C-AE85-4B7B-BA86-056463611630";
+
+  // Minimal TextureText node helper for these tests.
+  function textNode(overrides: {
+    id?: string; name?: string; alpha?: number;
+    materialId?: string; textureLayerId?: string;
+  } = {}) {
+    return {
+      kind: "TextureText" as const,
+      id: overrides.id ?? "t",
+      name: overrides.name ?? "T",
+      enable: true,
+      alpha: overrides.alpha ?? 1,
+      speedScale: 1,
+      isMask: false,
+      maskIds: [],
+      transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+      textBox: { x: 0.5, y: 0.2 },
+      text: "X",
+      fontStyleId: undefined,
+      textQuality: 1,
+      constrainMethod: undefined,
+      alignmentX: "Center" as const,
+      alignmentY: "Center" as const,
+      faceMapping: overrides.materialId !== undefined ? {
+        surfaceName: "All",
+        materialId: overrides.materialId,
+        textureLayerId: overrides.textureLayerId ?? "Standard",
+        baseMaterialInherited: false,
+        textureInherited: false,
+      } : undefined,
+      children: [],
+    };
+  }
+
+  function ctxWith(): BuildContext {
+    return {
+      registry: {
+        baseMaterials: new Map(),
+        textures: new Map(),
+        textureLayers: new Map(),
+        dynamicTextureFilenameByLayerId: new Map(),
+        fontStyles: new Map(),
+      },
+      textureUrlsByFilename: new Map(),
+      textureCache: new Map(),
+      warnings: [],
+    };
+  }
+
+  test("TextureText with MaterialId=DE1A3E3C + Standard TextureLayer → material.opacity = node.alpha (not forced 0)", () => {
+    const text = textNode({ materialId: DE1A3E3C, alpha: 1 });
+    const root = buildNode(text, ctxWith()) as Mesh;
+    const mat = root.material as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(1, 6);
+  });
+
+  test("TextureText with DE1A3E3C and node.alpha=0.5 under Group alpha=0.7 → opacity ≈ 0.35 (P1 propagation preserved)", () => {
+    const text = textNode({ materialId: DE1A3E3C, alpha: 0.5 });
+    const parent = groupData({ id: "g", alpha: 0.7, children: [text] });
+    const root = buildNode(parent, ctxWith()) as Group;
+    const mesh = root.children[0] as Mesh;
+    const mat = mesh.material as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(0.35, 6);
+  });
+
+  test("TextureText with no faceMapping (default ctx) → opacity 1, no DE1A3E3C interaction", () => {
+    const text = textNode({}); // no materialId at all
+    const root = buildNode(text, ctxWith()) as Mesh;
+    const mat = root.material as MeshBasicMaterial;
+    expect(mat.opacity).toBeCloseTo(1, 6);
+  });
+
+  test("Phase P6.1 regression — Quad with MaterialId=DE1A3E3C + no map STILL has material.opacity=0", () => {
+    // The Quad path does NOT pass expectsCallerMap, so DE1A3E3C-without-mapUrl
+    // forces invisibility as before. This guards against accidental scope creep.
+    const q = quadData({
+      id: "q", name: "Q",
+      faceMapping: {
+        surfaceName: "All", materialId: DE1A3E3C, textureLayerId: "Standard",
+        baseMaterialInherited: false, textureInherited: false,
+      },
+    });
+    const root = buildNode(q, ctxWith()) as Mesh;
+    const mat = root.material as MeshBasicMaterial;
+    expect(mat.opacity).toBe(0);
+  });
+
+  test("TextureText with a real BaseMaterial alpha → opacity = node.alpha × matAlpha × parentAlpha (no regression)", () => {
+    const mat: W3DBaseMaterialData = {
+      kind: "BaseMaterial", id: "real", name: "REAL",
+      hasEmissive: true, hasDiffuse: false, emissive: "ffffff", diffuse: "ffffff", alpha: 0.7,
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map([[mat.id, mat]]),
+      textures: new Map(),
+      textureLayers: new Map(),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    const ctx: BuildContext = {
+      registry,
+      textureUrlsByFilename: new Map(),
+      textureCache: new Map(),
+      warnings: [],
+    };
+    const text = textNode({ materialId: "real", alpha: 0.5 });
+    const parent = groupData({ id: "g", alpha: 0.8, children: [text] });
+    const root = buildNode(parent, ctx) as Group;
+    const mesh = root.children[0] as Mesh;
+    const material = mesh.material as MeshBasicMaterial;
+    // 0.5 × 0.7 × 0.8 = 0.28
+    expect(material.opacity).toBeCloseTo(0.28, 6);
+  });
+});

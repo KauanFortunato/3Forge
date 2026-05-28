@@ -243,6 +243,51 @@ describe("resolveMaterial — DE1A3E3C project-default-transparent", () => {
     expect(r.opacity).toBeGreaterThan(0);
     expect(r.transparent).toBe(true); // true because PNG has alpha
   });
+
+  test("Phase P6.1: DE1A3E3C + Standard + expectsCallerMap=true → opacity NOT forced to 0", () => {
+    // TextureText callers synthesise their own canvas glyph map AFTER resolveMaterial
+    // returns. The "DE1A3E3C without mapUrl → opacity=0" rule must be skipped for them.
+    // With opacity=1, transparent also stays at its natural value (false) — the
+    // forced-0 branch was the only thing that set transparent=true here, so
+    // skipping it leaves transparent=false. TextureText's own material constructor
+    // sets `transparent: true` independently when building the mesh.
+    const warnings: string[] = [];
+    const ctx = { registry: makeFullRegistry(), textureUrlsByFilename: new Map() };
+    const r = resolveMaterial(DE1A3E3C, "Standard", undefined, 1, ctx, warnings, { expectsCallerMap: true });
+    expect(r.opacity).toBe(1); // quadAlpha=1, no map → resolved.opacity stays 1
+    expect(r.transparent).toBe(false); // not forced; consumers set their own transparency
+    expect(r.materialName).toBe("(project-default-transparent)");
+    expect(warnings).toEqual([]);
+  });
+
+  test("Phase P6.1: DE1A3E3C + Standard + expectsCallerMap=true preserves quadAlpha", () => {
+    const ctx = { registry: makeFullRegistry(), textureUrlsByFilename: new Map() };
+    const r = resolveMaterial(DE1A3E3C, "Standard", undefined, 0.5, ctx, [], { expectsCallerMap: true });
+    expect(r.opacity).toBeCloseTo(0.5, 6);
+  });
+
+  test("Phase P6.1 regression: DE1A3E3C + Standard WITHOUT expectsCallerMap still forces opacity=0", () => {
+    // Quad callers (default — no options arg) must keep current invisibility behavior.
+    const ctx = { registry: makeFullRegistry(), textureUrlsByFilename: new Map() };
+    const r = resolveMaterial(DE1A3E3C, "Standard", undefined, 1, ctx, []);
+    expect(r.opacity).toBe(0);
+    expect(r.transparent).toBe(true);
+  });
+
+  test("Phase P6.1: expectsCallerMap=true is a no-op for real BaseMaterials", () => {
+    // expectsCallerMap should never affect material resolution outside the
+    // DE1A3E3C-without-mapUrl rule. Verify with a real BaseMaterial.
+    const mat: W3DBaseMaterialData = {
+      kind: "BaseMaterial", id: "real-id", name: "REAL",
+      hasEmissive: true, hasDiffuse: false, emissive: "abcdef", diffuse: "ffffff", alpha: 0.7,
+    };
+    const ctx = { registry: makeFullRegistry([mat]), textureUrlsByFilename: new Map() };
+    const r1 = resolveMaterial("real-id", "Standard", undefined, 0.8, ctx, [], { expectsCallerMap: true });
+    const r2 = resolveMaterial("real-id", "Standard", undefined, 0.8, ctx, []);
+    expect(r1.opacity).toBeCloseTo(r2.opacity, 6); // identical: 0.8 × 0.7
+    expect(r1.color).toBe(r2.color);
+    expect(r1.opacity).toBeCloseTo(0.56, 6);
+  });
 });
 
 describe("resolveMaterial — dynamic texture binding (Phase H)", () => {

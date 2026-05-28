@@ -636,7 +636,12 @@ function buildTextureText(
   });
 
   // Resolve color from the assigned BaseMaterial. TextureLayer is always
-  // "Standard" for TextureText — no map/alphaMap path runs.
+  // "Standard" for TextureText — no map/alphaMap path runs through the
+  // resolver. Phase P6.1 — pass `expectsCallerMap: true` so resolveMaterial
+  // skips the "DE1A3E3C without mapUrl → opacity=0" rule: TextureText
+  // synthesises its own canvas glyph texture below and would otherwise be
+  // wrongly hidden (PLAYER_LAST_NAME / PLAYER_FIRST_NAME, COACH text, etc.
+  // all use MaterialId=DE1A3E3C as a neutral base).
   let textColor = "#ffffff";
   let opacity = node.alpha;
   if (ctx) {
@@ -648,6 +653,7 @@ function buildTextureText(
       node.alpha,
       ctx,
       warnings,
+      { expectsCallerMap: true },
     );
     ctx.warnings.push(...warnings);
     textColor = resolved.color;
