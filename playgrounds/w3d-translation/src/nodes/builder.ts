@@ -733,7 +733,15 @@ function buildTextureText(
   inheritedMaskIds?: string[],
   inheritedAlpha?: number,
 ): Object3D {
-  const renderTextBox = resolveTextureTextRenderBox(node);
+  // Preserve the authored TextBox verbatim as the PlaneGeometry / layout
+  // bounds. R3 keeps the (sometimes very tall or very long) authored TextBox
+  // and renders a COMPACT glyph-ink line *inside* it — the glyph is sized by
+  // the metric height-fit + ConstrainMethod width-fit and placed by alignment
+  // (see renderTextToCanvas). We must NOT resize the box as a shortcut: e.g.
+  // COACH_FUNCTION's 0.73×2.73 box stays tall and the small "COACH" caption
+  // sits inside it; SMALL_TEAM_NAME's 6.39-wide box stays long and the small
+  // right-aligned "DETROIT IRONHAWKS" sits at its right edge.
+  const renderTextBox = node.textBox;
   const geometry = new PlaneGeometry(
     Math.max(renderTextBox.x, 0.001),
     Math.max(renderTextBox.y, 0.001),
@@ -850,22 +858,6 @@ function buildTextureText(
   return mesh;
 }
 
-function resolveTextureTextRenderBox(node: W3DTextureTextData): { x: number; y: number } {
-  if (!isExtremeTallWidthConstrainedSingleLine(node)) return node.textBox;
-  const lineHeight = (node.textBox.x / node.text.length) * 1.2;
-  return { x: node.textBox.x, y: Math.min(node.textBox.y, lineHeight) };
-}
-
-function isExtremeTallWidthConstrainedSingleLine(node: W3DTextureTextData): boolean {
-  return (
-    node.constrainMethod === "Width" &&
-    node.text.length > 0 &&
-    !/[\r\n]/.test(node.text) &&
-    node.textBox.x > 0 &&
-    node.textBox.y / node.textBox.x >= 3
-  );
-}
-
 /**
  * Map a W3D FontStyle `Type` string (e.g. "Light", "Bold", "Italic",
  * "Black Italic") to CSS weight + style. Unknown values fall back to
@@ -958,6 +950,38 @@ function applyCanvasFont(
 }
 
 /**
+ * Glyph layout height (in authored-TextBox units) used ONLY to choose the font
+ * size — it is kept strictly separate from the authored TextBoxSize, which
+ * always remains the PlaneGeometry / layout / mask / userData box. This mirrors
+ * the R3 debug model: the yellow authored TextBox and the green rendered glyph
+ * ink are different rectangles; the glyph is compact INSIDE the box.
+ *
+ * For a single-line, Width-constrained TextureText whose authored box is very
+ * tall (`TextBoxSize.Y / TextBoxSize.X >= 3`, e.g. COACH_FUNCTION 0.73×2.73),
+ * the glyph must render as a compact caption line — NOT fill the tall box. We
+ * derive a small layout height from the box WIDTH and text length so a short
+ * label gets a short line:
+ *   glyphLayoutHeight = min(TextBoxSize.Y, TextBoxSize.X / text.length * 1.2)
+ * For all other text the layout height is simply the authored box height (the
+ * glyph still ends up smaller than the box because caps fill ~0.6-0.85 of the
+ * em — green stays inside yellow). This controls glyph SIZING/PLACEMENT only;
+ * the PlaneGeometry stays at the authored TextBoxSize (see buildTextureText).
+ */
+function glyphLayoutHeightUnits(opts: RenderTextOptions): number {
+  const { textBox, text, constrainMethod } = opts;
+  const isTallSingleLineWidth =
+    constrainMethod === "Width" &&
+    text.length > 0 &&
+    !/[\r\n]/.test(text) &&
+    textBox.x > 0 &&
+    textBox.y / textBox.x >= 3;
+  if (isTallSingleLineWidth) {
+    return Math.min(textBox.y, (textBox.x / text.length) * 1.2);
+  }
+  return textBox.y;
+}
+
+/**
  * Rasterize `text` into a CanvasTexture sized roughly proportional to the
  * authored TextBoxSize × quality. In jsdom (test env) the 2D context is null;
  * the helper returns a valid empty CanvasTexture in that case so structural
@@ -965,8 +989,14 @@ function applyCanvasFont(
  */
 function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
   const pxPerUnit = 200 * Math.max(opts.quality, 0.5);
+  // Canvas == authored TextBox (the yellow box). Used for PlaneGeometry/layout.
   const w = Math.max(8, Math.round(opts.textBox.x * pxPerUnit));
   const h = Math.max(8, Math.round(opts.textBox.y * pxPerUnit));
+  // Glyph layout height (the green-box sizing reference) — separate from the
+  // canvas/TextBox height. For tall single-line Width text this is a compact
+  // caption height so the glyph stays small inside the tall box; otherwise it
+  // equals the canvas height. NEVER changes `h`/`w` (the authored box).
+  const hGlyph = Math.max(8, Math.round(glyphLayoutHeightUnits(opts) * pxPerUnit));
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
@@ -977,11 +1007,11 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
     const padX = Math.max(2, Math.round(w * 0.03));
     const availableWidth = Math.max(8, w - padX * 2);
 
-    // Initial font size — leaves a small inset so descenders fit vertically.
-    // This `h * 0.85` ratio is the implicit "Height" fit (glyph occupies 85%
-    // of canvas height) and is the starting point for every ConstrainMethod
-    // branch below.
-    let fontPx = Math.max(4, Math.floor(h * 0.85));
+    // Initial font size from the GLYPH layout height (compact for tall boxes),
+    // NOT the authored canvas height — this is what keeps COACH a small caption
+    // inside its tall 2.73 TextBox. Leaves a small inset so descenders fit. This
+    // is the starting fontPx for every ConstrainMethod branch below.
+    let fontPx = Math.max(4, Math.floor(hGlyph * 0.85));
     applyCanvasFont(c2d, opts, fontPx);
 
     // Phase TextureText constrain — explicit branches per recognised value:

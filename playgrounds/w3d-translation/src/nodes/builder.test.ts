@@ -2818,7 +2818,11 @@ describe("builder — BuildContext", () => {
     expect(params.height).toBeCloseTo(0.23, 5);
   });
 
-  test("Phase TextureText: extreme-tall width-constrained single-line text renders as one caption line", () => {
+  test("Phase TextureText: extreme-tall TextBox is preserved verbatim as the PlaneGeometry", () => {
+    // R3 keeps the authored (very tall) TextBox and renders a compact glyph
+    // line INSIDE it via the width-fit + alignment passes — it does NOT resize
+    // the box. The PlaneGeometry must therefore equal the authored TextBoxSize
+    // exactly (0.73 × 2.73), not a compacted caption height.
     const node = {
       kind: "TextureText" as const,
       id: "tt", name: "ROLE_LABEL",
@@ -2841,7 +2845,7 @@ describe("builder — BuildContext", () => {
     const params = (obj.geometry as InstanceType<typeof import("three").PlaneGeometry>).parameters;
 
     expect(params.width).toBeCloseTo(0.73, 5);
-    expect(params.height).toBeCloseTo(0.1752, 3);
+    expect(params.height).toBeCloseTo(2.73, 5);
     expect(obj.userData.w3d.textBox).toEqual({ x: 0.73, y: 2.73 });
   });
 
@@ -2913,6 +2917,83 @@ describe("builder — BuildContext", () => {
     expect(fontCalls[0]).toContain("85px");
     expect(fontCalls.at(-1)).toContain("72px");
     expect(fillTextCalls[0]?.x).toBeGreaterThan(6);
+  });
+
+  test("Phase TextureText: tall single-line Width box sizes the glyph from a compact caption height, not the box height", () => {
+    // COACH_FUNCTION-shaped: authored TextBox is very tall (0.73 × 2.73). The
+    // PlaneGeometry stays tall (asserted in the preserved-TextBox test); the
+    // glyph must be sized from a COMPACT caption height so "COACH" is a small
+    // line INSIDE the box — never a giant glyph derived from the 2.73 height.
+    const fontCalls: string[] = [];
+    let currentFont = "";
+    const context = {
+      clearRect: vi.fn(),
+      fillText: vi.fn(),
+      measureText: vi.fn(() => {
+        const match = /(\d+)px/.exec(currentFont);
+        const px = match ? Number(match[1]) : 85;
+        const scale = px / 85;
+        return {
+          width: 180 * scale,
+          actualBoundingBoxLeft: 20 * scale,
+          actualBoundingBoxRight: 200 * scale,
+          actualBoundingBoxAscent: 50 * scale,
+          actualBoundingBoxDescent: 10 * scale,
+        };
+      }),
+      get font() {
+        return currentFont;
+      },
+      set font(value: string) {
+        currentFont = value;
+        fontCalls.push(value);
+      },
+      fillStyle: "",
+      textAlign: "left" as CanvasTextAlign,
+      textBaseline: "alphabetic" as CanvasTextBaseline,
+    };
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => context),
+    } as unknown as HTMLCanvasElement;
+    const originalCreateElement = document.createElement.bind(document);
+    const createElement = vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
+      if (tagName === "canvas") return canvas;
+      return originalCreateElement(tagName);
+    });
+    try {
+      buildNode({
+        kind: "TextureText" as const,
+        id: "tt", name: "ROLE_LABEL",
+        enable: true, alpha: 1, speedScale: 1,
+        text: "COACH",
+        textBox: { x: 0.73, y: 2.73 },
+        alignmentX: "Left" as const,
+        alignmentY: "Center" as const,
+        constrainMethod: "Width",
+        textQuality: 2,
+        maskIds: [],
+        transform: {
+          position: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+        children: [],
+      }, makeCtx());
+    } finally {
+      createElement.mockRestore();
+    }
+
+    const pxPerUnit = 200 * 2; // quality 2
+    const compactUnits = Math.min(2.73, (0.73 / "COACH".length) * 1.2);
+    const expectedFontPx = Math.floor(Math.round(compactUnits * pxPerUnit) * 0.85);
+    const fullHeightFontPx = Math.floor(Math.round(2.73 * pxPerUnit) * 0.85);
+    const finalPx = Number(/(\d+)px/.exec(fontCalls.at(-1) ?? "")?.[1]);
+    // Glyph sized from the compact caption height (the mock text fits width, so
+    // no Width shrink), NOT from the tall 2.73 authored box.
+    expect(finalPx).toBe(expectedFontPx);
+    expect(finalPx).toBeLessThan(fullHeightFontPx);
   });
 
   test("Phase TextureText: mesh.userData.w3d carries kind, text, textBox", () => {
