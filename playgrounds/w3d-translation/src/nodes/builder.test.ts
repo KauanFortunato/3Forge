@@ -1070,10 +1070,13 @@ describe("builder — BuildContext", () => {
     expect((root.children[1] as Mesh).renderOrder).toBe(10);
   });
 
-  test("Phase 2F-flow: PLAYERS lays children +X by measuredWidth+leadingSpace, first child at origin", () => {
+  test("Phase 2F-flow: PLAYERS centers each child in its slot (cursor + half-extent), order left→right", () => {
     // R3 FlowChildren: stride = childWidth + leadingSpace. Equal-width cards
-    // (size 2) with leadingSpace -1.26 → stride 0.74. PLAYER_01 anchored at the
-    // origin, PLAYER_05 rightmost — visual order left→right preserved.
+    // (size 2) with leadingSpace -1.26 → stride 0.74. Each child's MEASURED box
+    // is centered in its slot: slot i spans [i·stride, i·stride+extent], so the
+    // child center lands at i·stride + extent/2. (Leading-edge anchoring, the R3
+    // behavior proven against the LINEUP_LEFT thumb — origin-anchoring left the
+    // row half a card too far left.) PLAYER_05 rightmost, order preserved.
     const mk = (i: number) => quadData({ id: `p${i}`, name: `PLAYER_0${i}`, geometry: { size: { x: 2, y: 1 } } });
     const players = groupData({
       id: "players", name: "PLAYERS",
@@ -1083,17 +1086,18 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([players]);
     const playersGroup = root.children[0] as Group;
     const stride = 2 + (-1.26); // 0.74
-    expect(playersGroup.children[0].position.x).toBeCloseTo(0, 5);          // PLAYER_01 at origin
-    expect(playersGroup.children[1].position.x).toBeCloseTo(stride, 5);     // 0.74
-    expect(playersGroup.children[2].position.x).toBeCloseTo(2 * stride, 5); // 1.48
-    expect(playersGroup.children[3].position.x).toBeCloseTo(3 * stride, 5); // 2.22
-    expect(playersGroup.children[4].position.x).toBeCloseTo(4 * stride, 5); // 2.96
+    const half = 2 / 2; // extent/2 = 1
+    expect(playersGroup.children[0].position.x).toBeCloseTo(0 * stride + half, 5); // 1.00
+    expect(playersGroup.children[1].position.x).toBeCloseTo(1 * stride + half, 5); // 1.74
+    expect(playersGroup.children[2].position.x).toBeCloseTo(2 * stride + half, 5); // 2.48
+    expect(playersGroup.children[3].position.x).toBeCloseTo(3 * stride + half, 5); // 3.22
+    expect(playersGroup.children[4].position.x).toBeCloseTo(4 * stride + half, 5); // 3.96
     // Visual order strictly left→right.
     const xs = playersGroup.children.map((c) => c.position.x);
     for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThan(xs[i - 1]);
   });
 
-  test("Phase 2F-flow: PLAYERS flow is additive on authored child X; node data and leadingSpace not mutated", () => {
+  test("Phase 2F-flow: PLAYERS main axis is slot-centered (authored main offset absorbed); node data + leadingSpace not mutated", () => {
     const transform = () => ({
       position: { x: 0.5, y: 0, z: 0 },
       rotationDeg: { x: 0, y: 0, z: 0 },
@@ -1109,9 +1113,13 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([players]);
     const g = root.children[0] as Group;
     const stride = 2 + (-1.26); // 0.74
-    // child[0] = authored 0.5 + cursor 0; child[1] = authored 0.5 + stride.
-    expect(g.children[0].position.x).toBeCloseTo(0.5, 5);
-    expect(g.children[1].position.x).toBeCloseTo(0.5 + stride, 5);
+    const half = 2 / 2; // extent/2 = 1
+    // Center-in-slot anchors the child's MEASURED box center at slot center, so
+    // the authored main-axis (X) offset is absorbed into the layout: child[i]
+    // lands at i·stride + extent/2 regardless of authored X. (Cross-axis authored
+    // offsets — Y here — are still preserved; only the flow axis is re-anchored.)
+    expect(g.children[0].position.x).toBeCloseTo(0 * stride + half, 5); // 1.00
+    expect(g.children[1].position.x).toBeCloseTo(1 * stride + half, 5); // 1.74
     // Node data is never mutated by layout (only the built Object3D moves).
     expect(p1.transform.position.x).toBe(0.5);
     expect(p2.transform.position.x).toBe(0.5);
@@ -1162,9 +1170,10 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([stack]);
     const g = root.children[0] as Group;
-    // stride = -(0.4 + 0.1) = -0.5
-    expect(g.children[0].position.y).toBeCloseTo(0, 5);
-    expect(g.children[1].position.y).toBeCloseTo(-0.5, 5);
+    // stride = -(0.4 + 0.1) = -0.5; slot-center anchors each box center at
+    // cursor + sign·extent/2 = cursor - 0.2 (extent 0.4).
+    expect(g.children[0].position.y).toBeCloseTo(-0.2, 5);  // 0·stride - 0.2
+    expect(g.children[1].position.y).toBeCloseTo(-0.7, 5);  // -0.5 - 0.2
     // Cross-axis untouched (no alignment): authored X=0 preserved.
     expect(g.children[0].position.x).toBe(0);
     expect(g.children[1].position.x).toBe(0);
@@ -1322,10 +1331,11 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([row]);
     const g = root.children[0] as Group;
-    // stride = -(2 + 0) = -2; first child at origin, others at -2, -4.
-    expect(g.children[0].position.x).toBeCloseTo(0, 5);
-    expect(g.children[1].position.x).toBeCloseTo(-2, 5);
-    expect(g.children[2].position.x).toBeCloseTo(-4, 5);
+    // stride = -(2 + 0) = -2; slot-center anchors each box center at
+    // cursor + sign·extent/2 = cursor - 1 (extent 2).
+    expect(g.children[0].position.x).toBeCloseTo(-1, 5);  // 0 - 1
+    expect(g.children[1].position.x).toBeCloseTo(-3, 5);  // -2 - 1
+    expect(g.children[2].position.x).toBeCloseTo(-5, 5);  // -4 - 1
   });
 
   test("Phase G: flow.children=false group is not distributed (FlowChildren must be true)", () => {
@@ -1455,9 +1465,12 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([row]);
     const g = root.children[0] as Group;
-    expect(g.children[0].position.x).toBeCloseTo(0, 5);
-    expect(g.children[1].position.x).toBeCloseTo(1.0, 5);
-    expect(g.children[2].position.x).toBeCloseTo(2.0, 5);
+    // Leading-edge anchoring: plane X extent 1.0 (no line-height factor on X),
+    // stride 1.0, each child's box left edge at its cursor → center at
+    // cursor + 0.5.
+    expect(g.children[0].position.x).toBeCloseTo(0.5, 5);
+    expect(g.children[1].position.x).toBeCloseTo(1.5, 5);
+    expect(g.children[2].position.x).toBeCloseTo(2.5, 5);
   });
 
   test("Phase D2: YMinus + Trailing with TextureText inner Y offset anchors stack top at group origin", () => {
@@ -1513,10 +1526,10 @@ describe("builder — BuildContext", () => {
     expect(box.max.y).toBeCloseTo(0, 4);
   });
 
-  test("Phase D2: YMinus + Leading does NOT anchor (no shift applied)", () => {
-    // Regression guard: only "Trailing" alignment triggers the main-axis
-    // anchor. "Leading" (and default-undefined) keep the first child at
-    // cursor=0, matching the prior cursor-loop behavior.
+  test("Phase D2: YMinus + Leading anchors each row's top edge at its cursor (leading-edge, alignment-independent)", () => {
+    // Leading-edge anchoring applies to every flow regardless of alignment: for
+    // YMinus the leading edge is the box top (max-Y), so each row's top sits at
+    // its cursor. Quad y=0.4 → box.max=+0.2 → first row shifts -0.2.
     const mk = (i: number) => quadData({
       id: `r${i}`, name: `R_0${i}`, geometry: { size: { x: 1, y: 0.4 } },
     });
@@ -1527,14 +1540,15 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([stack]);
     const g = root.children[0] as Group;
-    expect(g.children[0].position.y).toBeCloseTo(0, 5);
-    expect(g.children[1].position.y).toBeCloseTo(-0.4, 5);
+    expect(g.children[0].position.y).toBeCloseTo(-0.2, 5);  // 0 - 0.2
+    expect(g.children[1].position.y).toBeCloseTo(-0.6, 5);  // -0.4 - 0.2
   });
 
-  test("Phase D2: XPlus + Trailing does NOT anchor main axis (X flow unaffected by Y anchor)", () => {
-    // Regression guard: the main-axis Trailing anchor is gated on YMinus
-    // direction. X flows must keep their cursor positions; only the
-    // cross-axis (Y) Trailing-shift kicks in if applicable.
+  test("Phase D2: XPlus + Trailing — main axis leading-edge anchored, cross axis (Y) unaffected by equal extents", () => {
+    // X flow: leading edge is the box left (min-X). Quad x=1 → box.min=-0.5 →
+    // each child's left edge at its cursor → center at cursor + 0.5. The
+    // FlowChildrenAlignment="Trailing" cross-axis shift is a no-op here because
+    // all siblings share the same cross-axis (Y) extent (equal Quad y=0.4).
     const mk = (i: number) => quadData({
       id: `c${i}`, name: `C_0${i}`, geometry: { size: { x: 1, y: 0.4 } },
     });
@@ -1545,11 +1559,11 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([row]);
     const g = root.children[0] as Group;
-    // Main-axis X cursor: 0, 1.
-    expect(g.children[0].position.x).toBeCloseTo(0, 5);
-    expect(g.children[1].position.x).toBeCloseTo(1, 5);
-    // Main-axis (X) anchor must NOT shift — and Y stays at authored 0 because
-    // all siblings share the same cross-axis extent (equal Quad y=0.4).
+    // Main-axis X leading edge at cursor 0, 1 → center 0.5, 1.5.
+    expect(g.children[0].position.x).toBeCloseTo(0.5, 5);
+    expect(g.children[1].position.x).toBeCloseTo(1.5, 5);
+    // Y stays at authored 0 because all siblings share the same cross-axis
+    // extent (equal Quad y=0.4 → Trailing delta 0).
     expect(g.children[0].position.y).toBeCloseTo(0, 5);
     expect(g.children[1].position.y).toBeCloseTo(0, 5);
   });
@@ -1568,10 +1582,11 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([stack]);
     const g = root.children[0] as Group;
-    // stride = 0.4 + (-0.1) = 0.3, Y direction = -1 → step = -0.3
-    expect(g.children[0].position.y).toBeCloseTo(0, 5);
-    expect(g.children[1].position.y).toBeCloseTo(-0.3, 5);
-    expect(g.children[2].position.y).toBeCloseTo(-0.6, 5);
+    // stride = 0.4 + (-0.1) = 0.3, Y direction = -1 → step = -0.3. Leading-edge
+    // anchors each box top (max-Y = +0.2) at its cursor → shift -0.2 per row.
+    expect(g.children[0].position.y).toBeCloseTo(-0.2, 5);  // 0 - 0.2
+    expect(g.children[1].position.y).toBeCloseTo(-0.5, 5);  // -0.3 - 0.2
+    expect(g.children[2].position.y).toBeCloseTo(-0.8, 5);  // -0.6 - 0.2
   });
 
   test("Phase 2A regression: PHOTO_MASK_05 keeps authored Size.X=1.55 (not normalized)", () => {
@@ -1766,11 +1781,13 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([players]);
     const playersGroup = root.children[0] as Group;
     expect(playersGroup.children).toHaveLength(5);
-    // First child at origin; subsequent advance by stride = width(2) + (-1.26).
+    // Leading-edge anchoring: each card's left edge sits at its cursor, so the
+    // outer Group lands at cursor + half-width (card 2, scale 1 → +1).
     const stride = 2 + (-1.26); // 0.74 (player scale 1)
+    const half = 1; // card half-width
     const xs = playersGroup.children.map((c) => c.position.x);
-    expect(xs[0]).toBeCloseTo(0, 5);
-    expect(xs[4]).toBeCloseTo(4 * stride, 5);
+    expect(xs[0]).toBeCloseTo(0 * stride + half, 5); // 1.00
+    expect(xs[4]).toBeCloseTo(4 * stride + half, 5); // 3.96
     for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThan(xs[i - 1]); // left→right
     // Each PLAYER outer must contain its own pivot inner.
     for (const playerOuter of playersGroup.children) {
@@ -1816,11 +1833,13 @@ describe("builder — BuildContext", () => {
     expect(Math.abs(world.y)).toBeLessThan(0.1);
   });
 
-  test("Phase 2F-flow: PLAYER_02 pivot X=1.29 stays in its own slot, not overlapping PLAYER_01", async () => {
+  test("Phase 2F-flow: PLAYER_02 pivot X=1.29 stays in its own slot, exactly one stride from PLAYER_01", async () => {
     // Stride = measuredWidth (card 2 × player scale 0.95 = 1.9) + leadingSpace
-    // (-1.26) = 0.64. PLAYER_02 content lands at stride + Formula-B shift
-    // (1-0.95)×1.29 ≈ +0.0645 → dx ≈ 0.7045 from PLAYER_01. Pivot must not
-    // collapse the slot.
+    // (-1.26) = 0.64. Leading-edge anchoring places each card's measured left
+    // edge at its cursor, so PLAYER_02's Formula-B pivot displacement
+    // ((1-0.95)×1.29 ≈ +0.0645) is ABSORBED into the anchor — the two card
+    // centers end up exactly one stride apart (dx = 0.64), matching the R3 thumb
+    // where PLAYER_02 sits on the same uniform grid as its siblings.
     const mk = (i: number, pivotX: number) => groupData({
       id: `p${i}`, name: `PLAYER_0${i}`,
       transform: {
@@ -1846,13 +1865,16 @@ describe("builder — BuildContext", () => {
     const dx = w2.x - w1.x;
     const stride = 1.9 + (-1.26); // measuredWidth (2×0.95) + leadingSpace = 0.64
     expect(dx).toBeGreaterThan(0.5); // Player 02 must not land on top of Player 01
-    expect(dx).toBeCloseTo(stride + 0.05 * 1.29, 5); // slot stride + Formula B X shift
+    expect(dx).toBeCloseTo(stride, 5); // leading-edge anchor absorbs the pivot → exactly one stride
   });
 
-  test("Phase 2F-flow: FlowChildren + Pivot — each PLAYER stays in its own slot", async () => {
-    // All 5 players, each must remain at the X position FlowChildren assigned
-    // (first at origin, +X by stride 0.64), and PLAYER_02 (pivot.x = 1.29) must
-    // only deviate by the (1-S)×pivot.x = 0.0645 amount predicted by Formula B.
+  test("Phase 2F-flow: FlowChildren + Pivot — each PLAYER card centers on the uniform grid", async () => {
+    // All 5 players land on a uniform grid: leading-edge anchoring puts each
+    // card's left edge at i·stride, so the card center sits at i·stride + half
+    // (half = card 2 × scale 0.95 / 2 = 0.95). PLAYER_02 (pivot.x = 1.29) carries
+    // a Formula-B displacement inside its own subtree, but the anchor measures
+    // the displaced card's real edge, so its center lands on the grid like the
+    // rest — no per-player deviation.
     const mk = (i: number, pivotX: number) => groupData({
       id: `p${i}`, name: `PLAYER_0${i}`,
       transform: {
@@ -1872,13 +1894,13 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([players]);
     root.updateMatrixWorld(true);
     const stride = 1.9 + (-1.26); // 0.64
-    const slotX = (i: number) => i * stride; // first child at origin, extending +X
-    const expectedShift = [0, 0.05 * 1.29, 0, 0, 0]; // (1-S)×pivot.x for each
+    const half = (2 * 0.95) / 2; // card half-width = 0.95
+    const cardCenter = (i: number) => i * stride + half; // leading edge at i·stride
     for (let i = 0; i < 5; i++) {
       const inner = ((root.children[0] as Group).children[i] as Group).children[0] as Group;
       const child = inner.children[0];
       const w = child.getWorldPosition(new Vector3());
-      expect(w.x).toBeCloseTo(slotX(i) + expectedShift[i], 5);
+      expect(w.x).toBeCloseTo(cardCenter(i), 5); // pivot absorbed → all on the grid
     }
   });
 

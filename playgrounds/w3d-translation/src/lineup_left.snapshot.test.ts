@@ -202,4 +202,35 @@ describe("LINEUP_LEFT PreviewMarker snapshot fidelity (real scene.w3d)", () => {
     expect(rowMax).toBeGreaterThan(baseTeam.min);
     expect(rowMin).toBeLessThan(baseTeam.max);
   });
+
+  // ---------------------------------------------------------------------------
+  // R3 GROUND-TRUTH CALIBRATION — the durable guard for FlowChildren fidelity.
+  //
+  // The five player NUMBER_0N labels' world-X centers, pixel-measured from the
+  // committed R3 render LINEUP_LEFT/thumb.png (231 px wide; the BACKGROUND quad
+  // is the full 16:9 frame, so px→worldX = (px/231 − 0.5) × 7.363797). The
+  // numbers are the cleanest per-player feature to localise in the thumb. Stated
+  // tolerance 0.07 ≈ ±2 px of thumb resolution (1 px ≈ 0.032 world units).
+  //
+  // This is what proved the flow bug: origin-anchoring put these ~1.09 (half a
+  // card) too far left; leading-edge anchoring lands them on R3's grid. If this
+  // regresses, the PLAYERS row has drifted off the R3 layout again — re-measure
+  // the thumb before "fixing" the numbers here.
+  const R3_NUMBER_X = [-2.099, -1.181, -0.239, 0.66, 1.59];
+
+  test("R3 calibration: PLAYER NUMBER_0N world-X centers match the thumb within 0.07", () => {
+    const root = buildWorldRoot();
+    for (let i = 0; i < 5; i++) {
+      const center = boundsX(root, `NUMBER_0${i + 1}`).center;
+      expect(center, `NUMBER_0${i + 1} X drifted from R3 thumb`).toBeCloseTo(R3_NUMBER_X[i], 1);
+      expect(Math.abs(center - R3_NUMBER_X[i])).toBeLessThan(0.07);
+    }
+  });
+
+  test("R3 calibration: player numbers keep a uniform ~0.925 stride (no per-player drift)", () => {
+    const root = buildWorldRoot();
+    const xs = [1, 2, 3, 4, 5].map((i) => boundsX(root, `NUMBER_0${i}`).center);
+    const deltas = xs.slice(1).map((x, i) => x - xs[i]);
+    for (const d of deltas) expect(d).toBeCloseTo(0.925, 1); // incl. PLAYER_02's pivot, absorbed
+  });
 });

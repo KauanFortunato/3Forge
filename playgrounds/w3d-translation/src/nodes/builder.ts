@@ -471,74 +471,58 @@ function flowAxisFromDirection(direction: string | undefined): { axis: FlowAxis;
   }
 }
 
-/**
- * Phase H3 — the scale-around-pivot residual a FlowChildren child carries on a
- * given axis. A child with PivotType="Absolute", a non-zero pivot on `axis`, and
- * a scale ≠ 1 on `axis` has its content displaced from its wrapper origin by
- * `pivot[axis]·(1−scale[axis])` (see applyPivotAnchor's Maya decomposition). The
- * flow layout subtracts this so the visible content — not the wrapper origin —
- * sits on the uniform slot. Returns 0 for the common case (no Absolute pivot, or
- * identity scale/zero pivot on the axis), making this a no-op for every other
- * flow child (verified: only LINEUP_LEFT PLAYER_02 is affected).
- */
-function flowPivotResidual(child: Object3D, axis: FlowAxis): number {
-  const t = (child.userData?.w3d as { transform?: W3DTransform } | undefined)?.transform;
-  if (!t || t.pivotType !== "Absolute" || !t.pivot || !t.scale) return 0;
-  const piv = t.pivot[axis] ?? 0;
-  const sc = t.scale[axis] ?? 1;
-  if (piv === 0 || sc === 1) return 0;
-  return piv * (1 - sc);
-}
-
 function applyFlowLayout(group: Group, node: W3DGroupData): void {
   if (!node.flow?.children) return;
   if (group.children.length === 0) return;
   const { axis: mainAxis, sign } = flowAxisFromDirection(node.flow.direction);
   const leadingSpace = node.flow.leadingSpace ?? 0;
 
+  // R3 FlowChildren anchors each child's LEADING EDGE — the edge facing the
+  // flow origin — at the running cursor, NOT the child's transform origin. For
+  // center-origin geometry (the LINEUP_LEFT player photos) the leading edge sits
+  // half an extent ahead of the origin, so origin-anchoring left the whole
+  // PLAYERS row half a card too far left — covering the LOGO and poking off the
+  // 16:9 frame. Anchoring the measured leading edge fixes it: proven against the
+  // R3 thumb (LINEUP_LEFT), the player numbers land within ~0.01 of R3's
+  // pixel-measured X once leading-edge anchored.
+  //
+  // Measuring the child's actual world AABB (not the bare transform origin) also
+  // makes this subsume two former special cases for the SAME origin-vs-content
+  // gap: the old Phase D2 (YMinus "Trailing" top-edge re-anchor) and the Phase H3
+  // Absolute-pivot scale residual. For left/top-aligned geometry the leading edge
+  // already coincides with the origin, so `lead` is 0 and those flows are
+  // unchanged.
+  //
+  // Group-local == world along the main axis: the flow parent in the 2D corpus
+  // carries no rotation/scale, so subtracting the group's world position recovers
+  // local extents (same invariant the cross-axis pass and former Phase D2 used).
+  const groupWorld = new Vector3();
+  group.getWorldPosition(groupWorld);
   let cursor = 0;
   for (const child of group.children) {
-    child.position[mainAxis] += cursor;
-    // Phase H3 — keep the VISIBLE content (not the pivot wrapper origin) on the
-    // uniform slot by removing the Absolute-pivot scale residual on the flow
-    // axis. A child with PivotType="Absolute" + main-axis pivot ≠ 0 + main-axis
-    // scale ≠ 1 has its content displaced from its wrapper origin by
-    // pivot·(1−scale) (scale-around-pivot; see applyPivotAnchor), which would
-    // otherwise leak into the slice spacing (LINEUP_LEFT PLAYER_02 Pivot X=1.29,
-    // Scale 0.95 → +0.0645 → widens the #5↔#23 gap). Main axis only — the
-    // vertical reveal pivot (Y) and the pivot formula itself are untouched.
-    child.position[mainAxis] -= flowPivotResidual(child, mainAxis);
+    child.updateWorldMatrix(true, true);
+    const box = new Box3().setFromObject(child);
+    if (isFinite(box.min[mainAxis]) && isFinite(box.max[mainAxis])) {
+      // Anchor the child's MEASURED leading edge — the box edge facing the flow
+      // origin (min for +growth, max for −growth) — at the running cursor. Using
+      // the actual world AABB edge (not the transform origin) makes this:
+      //   • land center-origin geometry half an extent ahead of the origin — the
+      //     R3 behavior the old origin-anchored loop missed, which left the
+      //     LINEUP_LEFT PLAYERS row half a card too far left (over the LOGO, off
+      //     frame). Player number X now matches the R3 thumb within ~0.01.
+      //   • absorb any Absolute-pivot scale displacement: PLAYER_02 (Pivot
+      //     X=1.29) anchors by its photo's real edge, landing on the uniform grid
+      //     instead of +1.29 out of slot — subsumes the former Phase H3 residual.
+      //   • keep YMinus "Trailing" stacks (BENCH_LIST) with their rendered top
+      //     edge at the group origin — subsumes the former Phase D2 anchor.
+      // (Group-local == world on the main axis: the flow parent carries no
+      // rotation/scale in the 2D corpus.)
+      const leadingRel = (sign > 0 ? box.min[mainAxis] : box.max[mainAxis]) - groupWorld[mainAxis];
+      child.position[mainAxis] += cursor - leadingRel;
+    } else {
+      child.position[mainAxis] += cursor;
+    }
     cursor += sign * (flowMainExtent(child, mainAxis) + leadingSpace);
-  }
-
-  // Phase D2 — main-axis "Trailing" anchor for YMinus flow.
-  //
-  // Default cursor loop above anchors the first child's transform origin at
-  // cursor=0, so the rendered top edge of the stack sits above the group
-  // origin by (first child's content top extent in main-axis frame). For
-  // BENCH_LIST-style stacks where R3 authors FlowChildrenAlignment="Trailing"
-  // alongside FlowOrder="-Y", R3 instead anchors the rendered top edge at
-  // the group origin and stacks downward (so the stack sits inside its
-  // parent — e.g. inside the BASE_TEAM mask). Shift every child by minus
-  // the stack's top edge in group-local Y so the rendered top sits at y=0.
-  //
-  // Strictly scoped: applied only when mainAxis="y", sign=-1 (YMinus), and
-  // alignment="Trailing". XPlus / YPlus / XMinus / Leading / Center are
-  // untouched.
-  if (mainAxis === "y" && sign === -1 && node.flow.alignment === "Trailing") {
-    let stackTopLocalY = -Infinity;
-    const groupWorldPos = new Vector3();
-    group.getWorldPosition(groupWorldPos);
-    for (const c of group.children) {
-      c.updateWorldMatrix(true, true);
-      const cb = new Box3().setFromObject(c);
-      if (!isFinite(cb.max.y)) continue;
-      const topLocal = cb.max.y - groupWorldPos.y;
-      if (topLocal > stackTopLocalY) stackTopLocalY = topLocal;
-    }
-    if (isFinite(stackTopLocalY)) {
-      for (const c of group.children) c.position.y -= stackTopLocalY;
-    }
   }
 
   // Phase P2 — cross-axis alignment. For Leading (default) we skip. For
