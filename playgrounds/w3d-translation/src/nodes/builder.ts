@@ -471,6 +471,25 @@ function flowAxisFromDirection(direction: string | undefined): { axis: FlowAxis;
   }
 }
 
+/**
+ * Phase H3 — the scale-around-pivot residual a FlowChildren child carries on a
+ * given axis. A child with PivotType="Absolute", a non-zero pivot on `axis`, and
+ * a scale ≠ 1 on `axis` has its content displaced from its wrapper origin by
+ * `pivot[axis]·(1−scale[axis])` (see applyPivotAnchor's Maya decomposition). The
+ * flow layout subtracts this so the visible content — not the wrapper origin —
+ * sits on the uniform slot. Returns 0 for the common case (no Absolute pivot, or
+ * identity scale/zero pivot on the axis), making this a no-op for every other
+ * flow child (verified: only LINEUP_LEFT PLAYER_02 is affected).
+ */
+function flowPivotResidual(child: Object3D, axis: FlowAxis): number {
+  const t = (child.userData?.w3d as { transform?: W3DTransform } | undefined)?.transform;
+  if (!t || t.pivotType !== "Absolute" || !t.pivot || !t.scale) return 0;
+  const piv = t.pivot[axis] ?? 0;
+  const sc = t.scale[axis] ?? 1;
+  if (piv === 0 || sc === 1) return 0;
+  return piv * (1 - sc);
+}
+
 function applyFlowLayout(group: Group, node: W3DGroupData): void {
   if (!node.flow?.children) return;
   if (group.children.length === 0) return;
@@ -480,6 +499,15 @@ function applyFlowLayout(group: Group, node: W3DGroupData): void {
   let cursor = 0;
   for (const child of group.children) {
     child.position[mainAxis] += cursor;
+    // Phase H3 — keep the VISIBLE content (not the pivot wrapper origin) on the
+    // uniform slot by removing the Absolute-pivot scale residual on the flow
+    // axis. A child with PivotType="Absolute" + main-axis pivot ≠ 0 + main-axis
+    // scale ≠ 1 has its content displaced from its wrapper origin by
+    // pivot·(1−scale) (scale-around-pivot; see applyPivotAnchor), which would
+    // otherwise leak into the slice spacing (LINEUP_LEFT PLAYER_02 Pivot X=1.29,
+    // Scale 0.95 → +0.0645 → widens the #5↔#23 gap). Main axis only — the
+    // vertical reveal pivot (Y) and the pivot formula itself are untouched.
+    child.position[mainAxis] -= flowPivotResidual(child, mainAxis);
     cursor += sign * (flowMainExtent(child, mainAxis) + leadingSpace);
   }
 
