@@ -655,6 +655,9 @@ function buildQuad(
     //   (3) mesh.renderOrder still at default 0 (don't override stencil paths)
     //   (4) material.map is present (skip pure-color quads)
     promoteOverlayQuadRenderOrder(mesh, node, inheritedMaskIds);
+    // Phase H4 (experiment) — lift SPLITTER glow-stick dividers above the photo
+    // stack so one shows between every player (overrides the overlay lane).
+    applySplitterOverlay(mesh, node);
     // Phase 2B — leaf Quad with pivot: wrap mesh in an outer Group so the
     // pivot anchor applies under the Quad's own transform. Outer carries
     // T(position) × R × S; mesh becomes a child at -pivot with identity
@@ -1546,6 +1549,11 @@ const RENDER_ORDER_DEFAULT_CLIENT = 22;  // PHOTO_NN and default photo-stencil r
  * which overrides this value with the appropriate stencil-reader renderOrder.
  */
 const RENDER_ORDER_TEXT = 24;
+// Phase H4 (experiment) — player divider "glow stick" SPLITTER quads render
+// ABOVE the photo-card stack (20-22) but below the text labels (24). They are
+// no-mask textured Quads, so promoteOverlayQuadRenderOrder would otherwise leave
+// them at the overlay lane (19), BEHIND the transparent photos.
+const RENDER_ORDER_SPLITTER = 23;
 
 const PHOTO_CARD_CLIENT_RE = /^(TEXTURE_PHOTO_\d+|PHOTO_COLOR_\d+|PHOTO_\d+)$/;
 
@@ -1581,6 +1589,32 @@ function promoteOverlayQuadRenderOrder(
   const mat = mesh.material as MeshBasicMaterial;
   if (!mat || !mat.map) return;
   mesh.renderOrder = RENDER_ORDER_OVERLAY;
+}
+
+/**
+ * Phase H4 (experiment) — lift the player divider "glow sticks" (SPLITTER_NN)
+ * ABOVE the photo-card stack. They are no-mask textured Quads, so
+ * promoteOverlayQuadRenderOrder lands them at the overlay lane (19), which is
+ * BEHIND the transparent photo readers (20-22): the inner dividers get
+ * overpainted by the overlapping player photos (only the rightmost, uncovered,
+ * survives). Promote them to a transparent overlay just above the photos so a
+ * divider shows between every player. Scoped to SPLITTER quads only — does NOT
+ * touch photos, masks/stencil, pivot, flow, or text.
+ *
+ * NOTE: gated by the SPLITTER_NN name — a fixture-specific role, mirroring the
+ * existing photoCardRenderOrder name roles (PHOTO_NN / TEXTURE_PHOTO_NN /
+ * PHOTO_COLOR_NN). Flagged temporary pending a more generic divider signal
+ * (e.g. thin-aspect quads) before this is generalised.
+ */
+const SPLITTER_NAME_RE = /^SPLITTER_\d+$/;
+function applySplitterOverlay(mesh: Mesh, node: W3DQuadData): void {
+  if (node.isMask || !SPLITTER_NAME_RE.test(node.name)) return;
+  const mat = mesh.material as MeshBasicMaterial | undefined;
+  if (!mat) return;
+  mesh.renderOrder = RENDER_ORDER_SPLITTER;
+  mat.transparent = true;
+  mat.depthTest = false;
+  mat.depthWrite = false;
 }
 
 function loadCachedTexture(url: string, cache: Map<string, Texture>): Texture {
