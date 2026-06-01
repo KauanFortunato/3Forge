@@ -75,6 +75,10 @@ const PROP_SIZE_Y = "Size.YProp";
 const PROP_POS_X = "Transform.Position.XProp";
 const PROP_POS_Y = "Transform.Position.YProp";
 const PROP_POS_Z = "Transform.Position.ZProp";
+// Phase H6 — Transform.Position also appears as a vec3 string Value="x,y,z"
+// (e.g. NUMBER_0N player number/position groups, LOGO). Handled like the scale
+// vec3 path; per-axis .{X,Y,Z}Prop overrides take precedence (merged below).
+const PROP_POS_VEC3 = "Transform.Position";
 // Phase 2D.4 — Transform.Scale uses a vec3 string Value="x,y,z" in LINEUP_LEFT.
 // The per-axis variants are accepted defensively for scenes that may use them.
 const PROP_SCALE_VEC3 = "Transform.Scale";
@@ -90,7 +94,7 @@ const PROP_ENABLED = "Enabled";
 
 const SUPPORTED_PROPS = new Set<string>([
   PROP_ALPHA, PROP_SIZE_X, PROP_SIZE_Y,
-  PROP_POS_X, PROP_POS_Y, PROP_POS_Z,
+  PROP_POS_VEC3, PROP_POS_X, PROP_POS_Y, PROP_POS_Z,
   PROP_SCALE_VEC3, PROP_SCALE_X, PROP_SCALE_Y, PROP_SCALE_Z,
   PROP_SKEW_X, PROP_SKEW_Y,
   PROP_ENABLED,
@@ -145,6 +149,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
   const alphaByControllableId = new Map<string, number>();
   const sizeByControllableId = new Map<string, { x?: number; y?: number }>();
   const positionByControllableId = new Map<string, { x?: number; y?: number; z?: number }>();
+  const positionVec3ById = new Map<string, { x: number; y: number; z: number }>();
   const scaleByControllableId = new Map<string, { x?: number; y?: number; z?: number }>();
   const skewByControllableId = new Map<string, { x?: number; y?: number }>();
   const enabledByControllableId = new Map<string, boolean>();
@@ -164,6 +169,22 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
       if (Number.isFinite(frame) && Number.isFinite(value)) {
         keyframes.push({ frame, value });
       }
+    }
+    // Phase H6 — Transform.Position vec3 string Value="x,y,z". Sampled like the
+    // scale-vec3 path; stored separately and merged UNDER per-axis props below.
+    if (prop === PROP_POS_VEC3) {
+      const vec3KFs: { frame: number; value: { x: number; y: number; z: number } }[] = [];
+      for (const kf of Array.from(ctrl.children)) {
+        if (kf.tagName !== "KeyFrame") continue;
+        const frame = Number(kf.getAttribute("FrameNumber"));
+        const value = parseVec3String(kf.getAttribute("Value"));
+        if (Number.isFinite(frame) && value) vec3KFs.push({ frame, value });
+      }
+      if (vec3KFs.length === 0) continue;
+      vec3KFs.sort((a, b) => a.frame - b.frame);
+      const v = evaluateVec3At(vec3KFs, previewMarker);
+      positionVec3ById.set(controllableId, { x: v.x, y: v.y, z: v.z });
+      continue;
     }
     // Phase 2D.4 — Transform.Scale uses a vec3 string Value; handle it before
     // the scalar parser path so we don't drop perfectly-good controllers.
@@ -249,6 +270,18 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
       cur.y = v;
       skewByControllableId.set(controllableId, cur);
     }
+  }
+
+  // Phase H6 — merge the vec3 Transform.Position base UNDER any per-axis
+  // .{X,Y,Z}Prop overrides (axis props take precedence, order-independent).
+  // NUMBER_0N uses only the vec3 form → it supplies all three axes.
+  for (const [id, vec] of positionVec3ById) {
+    const axis = positionByControllableId.get(id) ?? {};
+    positionByControllableId.set(id, {
+      x: axis.x ?? vec.x,
+      y: axis.y ?? vec.y,
+      z: axis.z ?? vec.z,
+    });
   }
 
   return {

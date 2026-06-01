@@ -71,6 +71,38 @@ describe("parseTimelinePreviewSnapshot", () => {
     expect(sk?.x).toBeCloseTo(3, 5);
   });
 
+  test("Transform.Position vec3 is sampled at the marker (held past last keyframe)", () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Position" ControllableId="num-1">
+          <KeyFrame FrameNumber="539" Value="0,0,0"/>
+          <KeyFrame FrameNumber="575" Value="0,0.15,0"/>
+        </KeyFrameAnimationController>
+      </Timeline>
+    `));
+    const p = snap.positionByControllableId.get("num-1");
+    expect(p?.x).toBeCloseTo(0, 5);
+    expect(p?.y).toBeCloseTo(0.15, 5);
+    expect(p?.z).toBeCloseTo(0, 5);
+  });
+
+  test("per-axis Position props take precedence over the vec3 form (merge rule)", () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Position" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="1,2,3"/>
+        </KeyFrameAnimationController>
+        <KeyFrameAnimationController AnimatedProperty="Transform.Position.YProp" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="9"/>
+        </KeyFrameAnimationController>
+      </Timeline>
+    `));
+    const p = snap.positionByControllableId.get("n");
+    expect(p?.x).toBeCloseTo(1, 5); // from the vec3 base
+    expect(p?.y).toBeCloseTo(9, 5); // per-axis prop wins
+    expect(p?.z).toBeCloseTo(3, 5); // from the vec3 base
+  });
+
   test("fallback to first Timeline when SelectedTimelineId is absent", () => {
     const snap = parseTimelinePreviewSnapshot(wrapWithAttr(``, `
       <Timeline Name="First" Id="t1" PreviewMarker="100">

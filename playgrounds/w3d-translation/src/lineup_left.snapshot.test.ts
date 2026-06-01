@@ -75,6 +75,19 @@ describe("LINEUP_LEFT PreviewMarker snapshot fidelity (real scene.w3d)", () => {
     expect(quad("MASK_01_PLAYER_01").transform.skew?.y).toBeCloseTo(6, 2);
   });
 
+  test("NUMBER_01.position.y rises to ~0.15 at PreviewMarker (Transform.Position vec3)", () => {
+    // NUMBER_0N (player number/position group) authors only the vec3 form; before
+    // Phase H6 it was dropped, leaving the labels ~0.15 too low.
+    expect(group("NUMBER_01").transform.position.y).toBeCloseTo(0.15, 2);
+  });
+
+  test("LOGO position stays at authored (1.7, 0, -5) — vec3 matches static, no regression", () => {
+    const p = quad("LOGO").transform.position;
+    expect(p.x).toBeCloseTo(1.7, 2);
+    expect(p.y).toBeCloseTo(0, 2);
+    expect(p.z).toBeCloseTo(-5, 2);
+  });
+
   test("VERTICAL_REPOS_02.position.y becomes ~0.3 (Transform.Position.YProp)", () => {
     expect(group("VERTICAL_REPOS_02").transform.position.y).toBeCloseTo(0.3, 2);
   });
