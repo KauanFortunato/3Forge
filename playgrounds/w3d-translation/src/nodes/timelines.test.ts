@@ -52,6 +52,25 @@ describe("parseTimelinePreviewSnapshot", () => {
     expect(snap.alphaByControllableId.get("photo-1")).toBeCloseTo(1, 5);
   });
 
+  test("Transform.Skew.XProp / YProp populate skewByControllableId at the marker", () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Skew.YProp" ControllableId="mask-1">
+          <KeyFrame FrameNumber="140" Value="0"/>
+          <KeyFrame FrameNumber="155" Value="6"/>
+        </KeyFrameAnimationController>
+        <KeyFrameAnimationController AnimatedProperty="Transform.Skew.XProp" ControllableId="mask-1">
+          <KeyFrame FrameNumber="140" Value="0"/>
+          <KeyFrame FrameNumber="155" Value="3"/>
+        </KeyFrameAnimationController>
+      </Timeline>
+    `));
+    // Held past the last keyframe (frame 799 > 155) → settles to the final value.
+    const sk = snap.skewByControllableId.get("mask-1");
+    expect(sk?.y).toBeCloseTo(6, 5);
+    expect(sk?.x).toBeCloseTo(3, 5);
+  });
+
   test("fallback to first Timeline when SelectedTimelineId is absent", () => {
     const snap = parseTimelinePreviewSnapshot(wrapWithAttr(``, `
       <Timeline Name="First" Id="t1" PreviewMarker="100">

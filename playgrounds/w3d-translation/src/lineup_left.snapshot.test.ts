@@ -68,6 +68,13 @@ describe("LINEUP_LEFT PreviewMarker snapshot fidelity (real scene.w3d)", () => {
     expect(s.z).toBeCloseTo(0.85, 2);
   });
 
+  test("MASK_01_PLAYER_01.skew.y settles to ~6 at PreviewMarker (Transform.Skew.YProp)", () => {
+    // The skewed player masks collapse (Size.Y→0) by frame 799, so this is a
+    // no-op visually at the hero — but the generic Skew translation must still
+    // land the value on the node's transform.
+    expect(quad("MASK_01_PLAYER_01").transform.skew?.y).toBeCloseTo(6, 2);
+  });
+
   test("VERTICAL_REPOS_02.position.y becomes ~0.3 (Transform.Position.YProp)", () => {
     expect(group("VERTICAL_REPOS_02").transform.position.y).toBeCloseTo(0.3, 2);
   });

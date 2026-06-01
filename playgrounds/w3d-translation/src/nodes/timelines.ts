@@ -49,6 +49,13 @@ export interface TimelinePreviewSnapshot {
    */
   scaleByControllableId: Map<string, { x?: number; y?: number; z?: number }>;
   /**
+   * Phase H5 — partial Skew override per ControllableId, per-axis, in DEGREES.
+   * Populated from `Transform.Skew.XProp` / `Transform.Skew.YProp` controllers.
+   * Applied to `W3DTransform.skew.{x,y}`; the builder shears the node's
+   * PlaneGeometry by these angles.
+   */
+  skewByControllableId: Map<string, { x?: number; y?: number }>;
+  /**
    * Phase 2D.5 — Enabled snapshot per ControllableId. R3 stores visibility as
    * an `Enabled` track whose KeyFrame Value is the string "True"/"False".
    * Evaluated as a STEP (hold-last) — no interpolation — so the preview marker
@@ -74,6 +81,10 @@ const PROP_SCALE_VEC3 = "Transform.Scale";
 const PROP_SCALE_X = "Transform.Scale.XProp";
 const PROP_SCALE_Y = "Transform.Scale.YProp";
 const PROP_SCALE_Z = "Transform.Scale.ZProp";
+// Phase H5 — Transform.Skew per-axis (DEGREES). Generic; LINEUP_LEFT only uses
+// Skew.YProp (on the player photo-card masks), but X is accepted symmetrically.
+const PROP_SKEW_X = "Transform.Skew.XProp";
+const PROP_SKEW_Y = "Transform.Skew.YProp";
 // Phase 2D.5 — visibility track. KeyFrame Value is "True"/"False" (string).
 const PROP_ENABLED = "Enabled";
 
@@ -81,6 +92,7 @@ const SUPPORTED_PROPS = new Set<string>([
   PROP_ALPHA, PROP_SIZE_X, PROP_SIZE_Y,
   PROP_POS_X, PROP_POS_Y, PROP_POS_Z,
   PROP_SCALE_VEC3, PROP_SCALE_X, PROP_SCALE_Y, PROP_SCALE_Z,
+  PROP_SKEW_X, PROP_SKEW_Y,
   PROP_ENABLED,
 ]);
 
@@ -90,6 +102,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
     sizeByControllableId: new Map(),
     positionByControllableId: new Map(),
     scaleByControllableId: new Map(),
+    skewByControllableId: new Map(),
     enabledByControllableId: new Map(),
   };
   const parser = new DOMParser();
@@ -124,6 +137,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
       sizeByControllableId: new Map(),
       positionByControllableId: new Map(),
       scaleByControllableId: new Map(),
+      skewByControllableId: new Map(),
       enabledByControllableId: new Map(),
     };
   }
@@ -132,6 +146,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
   const sizeByControllableId = new Map<string, { x?: number; y?: number }>();
   const positionByControllableId = new Map<string, { x?: number; y?: number; z?: number }>();
   const scaleByControllableId = new Map<string, { x?: number; y?: number; z?: number }>();
+  const skewByControllableId = new Map<string, { x?: number; y?: number }>();
   const enabledByControllableId = new Map<string, boolean>();
 
   for (const ctrl of Array.from(selected.children)) {
@@ -225,6 +240,14 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
       const cur = scaleByControllableId.get(controllableId) ?? {};
       cur.z = v;
       scaleByControllableId.set(controllableId, cur);
+    } else if (prop === PROP_SKEW_X) {
+      const cur = skewByControllableId.get(controllableId) ?? {};
+      cur.x = v;
+      skewByControllableId.set(controllableId, cur);
+    } else if (prop === PROP_SKEW_Y) {
+      const cur = skewByControllableId.get(controllableId) ?? {};
+      cur.y = v;
+      skewByControllableId.set(controllableId, cur);
     }
   }
 
@@ -235,6 +258,7 @@ export function parseTimelinePreviewSnapshot(xml: string): TimelinePreviewSnapsh
     sizeByControllableId,
     positionByControllableId,
     scaleByControllableId,
+    skewByControllableId,
     enabledByControllableId,
   };
 }

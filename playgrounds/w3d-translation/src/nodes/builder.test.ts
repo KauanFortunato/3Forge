@@ -1,7 +1,7 @@
 // playgrounds/w3d-translation/src/nodes/builder.test.ts
 import { describe, expect, test, vi } from "vitest";
-import { Box3, Group, Mesh, MeshBasicMaterial, Vector3 } from "three";
-import { buildNode, buildNodeTree } from "./builder";
+import { Box3, Group, Mesh, MeshBasicMaterial, PlaneGeometry, Vector3 } from "three";
+import { applySkew, buildNode, buildNodeTree } from "./builder";
 import type { BuildContext } from "./builder";
 import type { W3DGroupData, W3DQuadData } from "./data";
 import type { W3DResourceRegistry, W3DBaseMaterialData, W3DTextureLayerData, W3DTextureData } from "./resources";
@@ -4385,5 +4385,55 @@ describe("builder — Phase P7 PivotType=Absolute animated-axis pivot semantic",
     const root = buildNode(parent) as Group;
     // BENCH_LIST-like: position passes through unchanged.
     expect(root.position.y).toBeCloseTo(0.983, 6);
+  });
+});
+
+describe("applySkew (Phase H5 — geometry shear)", () => {
+  test("skew Y shears x by y·tan(deg), leaves y unchanged", () => {
+    const g = new PlaneGeometry(2, 2);
+    const p = g.attributes.position;
+    const orig = Array.from({ length: p.count }, (_, i) => ({ x: p.getX(i), y: p.getY(i) }));
+    applySkew(g, 0, 30);
+    const tan = Math.tan((30 * Math.PI) / 180);
+    for (let i = 0; i < p.count; i++) {
+      expect(p.getX(i)).toBeCloseTo(orig[i].x + orig[i].y * tan, 5);
+      expect(p.getY(i)).toBeCloseTo(orig[i].y, 5);
+    }
+  });
+
+  test("skew X shears y by x·tan(deg), leaves x unchanged", () => {
+    const g = new PlaneGeometry(2, 2);
+    const p = g.attributes.position;
+    const orig = Array.from({ length: p.count }, (_, i) => ({ x: p.getX(i), y: p.getY(i) }));
+    applySkew(g, 20, 0);
+    const tan = Math.tan((20 * Math.PI) / 180);
+    for (let i = 0; i < p.count; i++) {
+      expect(p.getY(i)).toBeCloseTo(orig[i].y + orig[i].x * tan, 5);
+      expect(p.getX(i)).toBeCloseTo(orig[i].x, 5);
+    }
+  });
+
+  test("skew = 0 is a no-op (geometry unchanged)", () => {
+    const g = new PlaneGeometry(2, 3);
+    const p = g.attributes.position;
+    const before = Array.from({ length: p.count }, (_, i) => ({ x: p.getX(i), y: p.getY(i) }));
+    applySkew(g, 0, 0);
+    for (let i = 0; i < p.count; i++) {
+      expect(p.getX(i)).toBe(before[i].x);
+      expect(p.getY(i)).toBe(before[i].y);
+    }
+  });
+
+  test("collapsed geometry (Size.Y = 0) stays safe under skew (finite, y stays 0)", () => {
+    // Mirrors LINEUP_LEFT MASK_01_PLAYER_01 at frame 799 (Size.Y animates to 0):
+    // every y = 0, so a Y-skew adds y·tan = 0 — no shift, no NaN.
+    const g = new PlaneGeometry(2.3, 0);
+    const p = g.attributes.position;
+    applySkew(g, 0, 6);
+    for (let i = 0; i < p.count; i++) {
+      expect(Number.isFinite(p.getX(i))).toBe(true);
+      expect(Number.isFinite(p.getY(i))).toBe(true);
+      expect(p.getY(i)).toBeCloseTo(0, 6);
+    }
   });
 });

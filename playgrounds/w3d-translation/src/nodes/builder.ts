@@ -1118,6 +1118,9 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
 function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: number): Mesh {
   const geometry = new PlaneGeometry(node.geometry.size.x, node.geometry.size.y);
   applyAlignment(geometry, node.geometry);
+  // Phase H5 — shear the LOCAL geometry by the snapshot Skew (degrees). No-op
+  // when absent/zero. After alignment, before the mesh transform + pivot wrapper.
+  applySkew(geometry, node.transform.skew?.x ?? 0, node.transform.skew?.y ?? 0);
 
   let resolvedColor: string;
   let resolvedOpacity: number;
@@ -1241,6 +1244,33 @@ function applyAlignment(geometry: PlaneGeometry, geo: W3DQuadData["geometry"]): 
   if (geo.alignmentY === "Top") dy = -halfH;
   else if (geo.alignmentY === "Bottom") dy = +halfH;
   if (dx !== 0 || dy !== 0) geometry.translate(dx, dy, 0);
+}
+
+/**
+ * Phase H5 — shear a PlaneGeometry in place by per-axis skew ANGLES (degrees).
+ * No-op when both are 0. Lead axis hypothesis (to confirm visually):
+ *   Skew.Y → x += y·tan(Yangle)   (vertical edges slant → card parallelogram)
+ *   Skew.X → y += x·tan(Xangle)
+ * Reads the original (x,y) before writing both so a combined X+Y shear is
+ * applied simultaneously. Runs after applyAlignment and BEFORE the mesh's
+ * applyTransform / pivot wrapper — a purely local-geometry shape change, so the
+ * pivot/flow/stencil pipeline is untouched (a sheared mask quad just clips to a
+ * parallelogram). If the slant goes the wrong way, flip the sign/axis here.
+ */
+export function applySkew(geometry: PlaneGeometry, skewXDeg: number, skewYDeg: number): void {
+  if (skewXDeg === 0 && skewYDeg === 0) return;
+  const tanX = Math.tan((skewXDeg * Math.PI) / 180);
+  const tanY = Math.tan((skewYDeg * Math.PI) / 180);
+  const pos = geometry.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    pos.setX(i, x + y * tanY);
+    pos.setY(i, y + x * tanX);
+  }
+  pos.needsUpdate = true;
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
 }
 
 /**

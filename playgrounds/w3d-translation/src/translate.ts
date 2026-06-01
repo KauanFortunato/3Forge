@@ -77,6 +77,7 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
     sizeByControllableId,
     positionByControllableId,
     scaleByControllableId,
+    skewByControllableId,
     enabledByControllableId,
   } = snap;
   if (
@@ -84,6 +85,7 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
     sizeByControllableId.size === 0 &&
     positionByControllableId.size === 0 &&
     scaleByControllableId.size === 0 &&
+    skewByControllableId.size === 0 &&
     enabledByControllableId.size === 0
   ) {
     return;
@@ -132,6 +134,15 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
       if (sc.x !== undefined) n.transform.scale.x = sc.x;
       if (sc.y !== undefined) n.transform.scale.y = sc.y;
       if (sc.z !== undefined) n.transform.scale.z = sc.z;
+    }
+    // Phase H5 — Skew snapshot (degrees), per-axis, all node kinds carry a
+    // transform. Builder shears the PlaneGeometry by these angles.
+    const sk = skewByControllableId.get(n.id);
+    if (sk !== undefined) {
+      const cur = n.transform.skew ?? { x: 0, y: 0 };
+      if (sk.x !== undefined) cur.x = sk.x;
+      if (sk.y !== undefined) cur.y = sk.y;
+      n.transform.skew = cur;
     }
     for (const c of n.children) walk(c);
   };

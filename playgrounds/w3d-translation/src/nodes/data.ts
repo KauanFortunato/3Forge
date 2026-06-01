@@ -4,6 +4,13 @@ export type W3DTransform = {
   position: { x: number; y: number; z: number };
   rotationDeg: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number; lock?: string };
+  /**
+   * Phase H5 — Transform.Skew per-axis, in DEGREES. Populated from the timeline
+   * snapshot (`Transform.Skew.{X,Y}Prop`); no static `<Skew>` exists in the
+   * corpus. Absent = no skew. The builder shears the node's PlaneGeometry by
+   * these angles (after alignment, before the world/pivot transform).
+   */
+  skew?: { x: number; y: number };
   pivot?: { x: number; y: number; z: number };
   /**
    * Phase P7 — `<NodeTransform PivotType="Absolute">` attribute. The corpus
