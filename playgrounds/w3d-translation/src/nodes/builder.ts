@@ -639,9 +639,9 @@ function buildQuad(
     //   (3) mesh.renderOrder still at default 0 (don't override stencil paths)
     //   (4) material.map is present (skip pure-color quads)
     promoteOverlayQuadRenderOrder(mesh, node, inheritedMaskIds);
-    // Phase H4 (experiment) — lift SPLITTER glow-stick dividers above the photo
-    // stack so one shows between every player (overrides the overlay lane).
-    applySplitterOverlay(mesh, node);
+    // Lift thin-sliver divider quads above the photo stack so one shows between
+    // every card (overrides the overlay lane). Keyed on geometry, not name.
+    applyThinDividerOverlay(mesh, node);
     // Phase 2B — leaf Quad with pivot: wrap mesh in an outer Group so the
     // pivot anchor applies under the Quad's own transform. Outer carries
     // T(position) × R × S; mesh becomes a child at -pivot with identity
@@ -1563,11 +1563,11 @@ const RENDER_ORDER_DEFAULT_CLIENT = 22;  // PHOTO_NN and default photo-stencil r
  * which overrides this value with the appropriate stencil-reader renderOrder.
  */
 const RENDER_ORDER_TEXT = 24;
-// Phase H4 (experiment) — player divider "glow stick" SPLITTER quads render
-// ABOVE the photo-card stack (20-22) but below the text labels (24). They are
+// Thin-divider lane — a sliver Quad (e.g. a divider / rule line) renders ABOVE
+// the photo-card stack (20-22) but below the text labels (24). Such quads are
 // no-mask textured Quads, so promoteOverlayQuadRenderOrder would otherwise leave
 // them at the overlay lane (19), BEHIND the transparent photos.
-const RENDER_ORDER_SPLITTER = 23;
+const RENDER_ORDER_DIVIDER = 23;
 
 const PHOTO_CARD_CLIENT_RE = /^(TEXTURE_PHOTO_\d+|PHOTO_COLOR_\d+|PHOTO_\d+)$/;
 
@@ -1606,26 +1606,41 @@ function promoteOverlayQuadRenderOrder(
 }
 
 /**
- * Phase H4 (experiment) — lift the player divider "glow sticks" (SPLITTER_NN)
- * ABOVE the photo-card stack. They are no-mask textured Quads, so
- * promoteOverlayQuadRenderOrder lands them at the overlay lane (19), which is
- * BEHIND the transparent photo readers (20-22): the inner dividers get
- * overpainted by the overlapping player photos (only the rightmost, uncovered,
- * survives). Promote them to a transparent overlay just above the photos so a
- * divider shows between every player. Scoped to SPLITTER quads only — does NOT
- * touch photos, masks/stencil, pivot, flow, or text.
- *
- * NOTE: gated by the SPLITTER_NN name — a fixture-specific role, mirroring the
- * existing photoCardRenderOrder name roles (PHOTO_NN / TEXTURE_PHOTO_NN /
- * PHOTO_COLOR_NN). Flagged temporary pending a more generic divider signal
- * (e.g. thin-aspect quads) before this is generalised.
+ * Aspect ratio below which a Quad's geometry counts as a "thin divider" — a
+ * sliver line such as a rule, separator or the R3 player "glow stick" dividers
+ * (authored Size 0.01 × 2.43 → ratio ≈ 0.004). 1:20 is far below any real
+ * content quad (photos ≈ 1:1, panels ≈ 1:3, logos ≈ 1:1) so this discriminates
+ * dividers from content by GEOMETRY alone — no scene-specific name.
  */
-const SPLITTER_NAME_RE = /^SPLITTER_\d+$/;
-function applySplitterOverlay(mesh: Mesh, node: W3DQuadData): void {
-  if (node.isMask || !SPLITTER_NAME_RE.test(node.name)) return;
+const DIVIDER_ASPECT_MAX = 0.05;
+
+/** A non-mask leaf Quad whose authored geometry is an extreme sliver (thin on
+ * one axis relative to the other), in either orientation (vertical or
+ * horizontal divider). */
+function isThinDivider(node: W3DQuadData): boolean {
+  if (node.isMask) return false;
+  const { x, y } = node.geometry.size;
+  const thin = Math.min(Math.abs(x), Math.abs(y));
+  const long = Math.max(Math.abs(x), Math.abs(y));
+  if (long <= 0) return false;
+  return thin / long < DIVIDER_ASPECT_MAX;
+}
+
+/**
+ * Lift a thin-divider Quad ABOVE the photo-card stack. Such quads are no-mask
+ * textured Quads, so promoteOverlayQuadRenderOrder lands them at the overlay
+ * lane (19), which is BEHIND the transparent photo readers (20-22): an inner
+ * divider gets overpainted by the overlapping photos (only the rightmost,
+ * uncovered, survives). Promote it to a transparent overlay just above the
+ * photos so a divider shows between every card. Keyed on the quad's GEOMETRY
+ * (sliver aspect ratio) — not its name — so it generalises to any R3 scene's
+ * dividers. Does NOT touch photos, masks/stencil, pivot, flow, or text.
+ */
+function applyThinDividerOverlay(mesh: Mesh, node: W3DQuadData): void {
+  if (!isThinDivider(node)) return;
   const mat = mesh.material as MeshBasicMaterial | undefined;
   if (!mat) return;
-  mesh.renderOrder = RENDER_ORDER_SPLITTER;
+  mesh.renderOrder = RENDER_ORDER_DIVIDER;
   mat.transparent = true;
   mat.depthTest = false;
   mat.depthWrite = false;

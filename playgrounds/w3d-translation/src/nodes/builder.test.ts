@@ -1013,6 +1013,35 @@ describe("builder — BuildContext", () => {
     expect(photoMesh.renderOrder).toBe(22); // Phase A1 — PHOTO_NN default (was 20)
   });
 
+  // Thin-divider overlay — keyed on GEOMETRY (sliver aspect ratio), not name, so
+  // it generalises to any R3 scene's divider/rule lines.
+  test("Thin-divider: a sliver Quad lifts above the photo stack (renderOrder 23, transparent, no depth test)", () => {
+    const sliver = buildNode(quadData({ name: "ANYTHING", geometry: { size: { x: 0.01, y: 2.43 } } })) as Mesh;
+    expect(sliver.renderOrder).toBe(23);
+    const mat = sliver.material as MeshBasicMaterial;
+    expect(mat.transparent).toBe(true);
+    expect(mat.depthTest).toBe(false);
+    expect(mat.depthWrite).toBe(false);
+  });
+
+  test("Thin-divider: horizontal sliver also lifts (orientation-agnostic, name-agnostic)", () => {
+    const hbar = buildNode(quadData({ name: "FOO_BAR", geometry: { size: { x: 3.0, y: 0.02 } } })) as Mesh;
+    expect(hbar.renderOrder).toBe(23);
+  });
+
+  test("Thin-divider: a normal-aspect Quad is NOT lifted even if named SPLITTER (geometry decides, not name)", () => {
+    const square = buildNode(quadData({ name: "SPLITTER_99", geometry: { size: { x: 2, y: 2 } } })) as Mesh;
+    expect(square.renderOrder).not.toBe(23);
+  });
+
+  test("Thin-divider: a sliver MASK Quad is NOT lifted (stencil path owns its render order)", () => {
+    const m = buildNode(quadData({
+      name: "M", isMask: true, geometry: { size: { x: 0.01, y: 2.43 } },
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: false },
+    })) as Mesh;
+    expect(m.renderOrder).not.toBe(23);
+  });
+
   test("Patch D2: non-photo-card stencil reader keeps authored transparency (scope guard)", () => {
     // A hypothetical future client that reads PHOTO_MASK/PHOTO_DUMMY but is
     // not a photo-card node (PHOTO/PHOTO_COLOR/TEXTURE_PHOTO) must retain its
