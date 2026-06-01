@@ -187,6 +187,45 @@ export function fontIndexKey(family: string, weight: string, style: string): str
   return `${family}|${weight}|${style}`;
 }
 
+/**
+ * Build human-readable warnings about font coverage for a scene. Pure helper so
+ * it is unit-testable: given the font families the scene's FontStyles reference,
+ * the families that were actually registered, and how many font files were
+ * discovered, it returns guidance — including the "import the project root"
+ * prompt when shared fonts (e.g. `_GRAPHICS/FONTS`) weren't part of the picked
+ * folder. The browser cannot read sibling/parent folders from a single
+ * scene-folder import, so this is the diagnose-and-prompt path.
+ */
+export function buildFontDiagnostics(opts: {
+  sceneFamilies: string[];
+  registeredFamilies: string[];
+  discoveredCount: number;
+}): string[] {
+  const scene = Array.from(new Set(opts.sceneFamilies.map((f) => f.trim()).filter(Boolean)));
+  if (scene.length === 0) return []; // scene uses no TextureText fonts
+  const registeredLower = new Set(
+    opts.registeredFamilies.map((f) => f.trim().toLowerCase()).filter(Boolean),
+  );
+  const missing = scene.filter((f) => !registeredLower.has(f.toLowerCase()));
+  if (missing.length === 0) return [];
+  const loaded = opts.registeredFamilies.length
+    ? Array.from(new Set(opts.registeredFamilies)).join(", ")
+    : "none";
+  if (opts.discoveredCount === 0) {
+    return [
+      `No font files were discovered, so TextureText families [${scene.join(", ")}] ` +
+        `fall back to system sans-serif. The real faces live in a /Fonts/ or _GRAPHICS/FONTS ` +
+        `folder — import the PROJECT ROOT (e.g. 26PT_WTV_BASKETBALL) so shared fonts are ` +
+        `included (the browser cannot read sibling folders from a single scene-folder import).`,
+    ];
+  }
+  return [
+    `Fonts not loaded for FontStyle families [${missing.join(", ")}] (loaded: ${loaded}). ` +
+      `Those labels use fallback sans-serif. Missing faces should be under a /Fonts/ or ` +
+      `_GRAPHICS/FONTS folder; import the project root to include them.`,
+  ];
+}
+
 function extensionOf(name: string): string {
   const idx = name.lastIndexOf(".");
   return idx === -1 ? "" : name.slice(idx).toLowerCase();

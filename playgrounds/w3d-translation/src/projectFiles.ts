@@ -12,7 +12,7 @@ export interface W3DProjectIndex {
   fontFiles: File[];
 }
 
-const FONT_EXTENSIONS = [".ttf", ".otf"];
+const FONT_EXTENSIONS = [".ttf", ".otf", ".woff", ".woff2"];
 const VIDEO_EXTENSIONS = [".mov", ".mp4", ".webm"];
 const RASTER_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".svg"];
 
@@ -79,7 +79,11 @@ function collectSceneFilesByExtensions(
 }
 
 function isProjectFontPath(lowerPath: string, ext: string): boolean {
-  const inFontFolder = lowerPath.includes("/resources/fonts/") || lowerPath.includes("/fonts/");
+  // Match ANY path segment named `fonts` (case-insensitive): `Resources/Fonts/`,
+  // `_GRAPHICS/FONTS/`, mixed-case (`_Graphics/Fonts/`), or a top-level `fonts/`.
+  // `lowerPath` is already lowercased + backslash-normalised by `relPath`, so the
+  // regex handles casing/separators; `(^|/)` also catches a root-level fonts dir.
+  const inFontFolder = /(^|\/)fonts\//.test(lowerPath);
   if (!inFontFolder) {
     return false;
   }

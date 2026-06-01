@@ -7,7 +7,7 @@ import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
 import type { BuildContext } from "./nodes/builder";
 import type { W3DResourceRegistry } from "./nodes/resources";
 import { buildInspectorReport, type InspectorReport } from "./inspector";
-import { buildLoadedFontIndex, loadW3DFontFiles, type FontLoadResult } from "./fonts";
+import { buildFontDiagnostics, buildLoadedFontIndex, loadW3DFontFiles, type FontLoadResult } from "./fonts";
 import type { Texture } from "three";
 import {
   collectSceneMovFiles,
@@ -378,6 +378,21 @@ async function loadScene(
     const fontLoadResults = await loadW3DFontFiles(project.fontFiles);
     const loadedFontIndex = buildLoadedFontIndex(fontLoadResults);
 
+    // Diagnostics — surface font discovery and warn (with a clear "import the
+    // project root" prompt) when the scene's FontStyle families aren't covered
+    // by the discovered fonts, so TextureText doesn't silently fall back.
+    const registeredFamilies = fontLoadResults
+      .filter((r) => r.registered && r.parsed)
+      .map((r) => r.parsed!.family);
+    const sceneFamilies = Array.from(translated.resources.fontStyles.values())
+      .map((fs) => fs.fontName)
+      .filter((n): n is string => !!n && n.trim().length > 0);
+    const fontDiagnostics = buildFontDiagnostics({
+      sceneFamilies,
+      registeredFamilies,
+      discoveredCount: project.fontFiles.length,
+    });
+
     setLoaded({
       sceneFileName: scene.sceneFileName,
       xml,
@@ -386,7 +401,7 @@ async function loadScene(
       resources: translated.resources,
       textureUrlsByFilename,
       textureCache,
-      warnings: [...translated.warnings],
+      warnings: [...translated.warnings, ...fontDiagnostics],
       stats,
       movFiles: collectSceneMovFiles(files, scene).length,
       rasterTextureFiles: textureUrlsByFilename.size,

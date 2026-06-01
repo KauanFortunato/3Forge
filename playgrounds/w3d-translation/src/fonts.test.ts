@@ -1,6 +1,7 @@
 // playgrounds/w3d-translation/src/fonts.test.ts
 import { describe, expect, test } from "vitest";
 import {
+  buildFontDiagnostics,
   buildLoadedFontIndex,
   fontIndexKey,
   loadW3DFontFiles,
@@ -161,5 +162,54 @@ describe("loadW3DFontFiles (Phase H3)", () => {
 
   test("empty input returns empty array", async () => {
     expect(await loadW3DFontFiles([])).toEqual([]);
+  });
+});
+
+describe("buildFontDiagnostics", () => {
+  test("no warning when every scene family is registered", () => {
+    expect(
+      buildFontDiagnostics({
+        sceneFamilies: ["Obviously Cond", "Obviously"],
+        registeredFamilies: ["Obviously", "Obviously Cond"],
+        discoveredCount: 12,
+      }),
+    ).toEqual([]);
+  });
+
+  test("no warning when the scene uses no fonts", () => {
+    expect(
+      buildFontDiagnostics({ sceneFamilies: [], registeredFamilies: [], discoveredCount: 0 }),
+    ).toEqual([]);
+  });
+
+  test("0 discovered → prompts to import the project root and names families", () => {
+    const [msg] = buildFontDiagnostics({
+      sceneFamilies: ["Obviously Cond", "Obviously"],
+      registeredFamilies: [],
+      discoveredCount: 0,
+    });
+    expect(msg).toMatch(/Obviously Cond/);
+    expect(msg).toMatch(/PROJECT ROOT/i);
+    expect(msg).toMatch(/_GRAPHICS\/FONTS/);
+  });
+
+  test("partial coverage → names the missing family and what is loaded", () => {
+    const [msg] = buildFontDiagnostics({
+      sceneFamilies: ["Obviously Cond", "Obviously"],
+      registeredFamilies: ["Obviously"],
+      discoveredCount: 4,
+    });
+    expect(msg).toMatch(/Obviously Cond/);
+    expect(msg).toMatch(/loaded: Obviously/);
+  });
+
+  test("family matching is case-insensitive", () => {
+    expect(
+      buildFontDiagnostics({
+        sceneFamilies: ["Obviously Cond"],
+        registeredFamilies: ["obviously cond"],
+        discoveredCount: 2,
+      }),
+    ).toEqual([]);
   });
 });
