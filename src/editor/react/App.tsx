@@ -73,6 +73,8 @@ import type { PieMenuItem } from "./components/PieMenu";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
+  AiSparkCubeIcon,
+  ArIcon,
   BoxIcon,
   CopyIcon,
   CursorIcon,
@@ -3440,7 +3442,7 @@ export function App() {
       label: "File",
       items: [
         { id: "file-new", label: "New Project", icon: <FileIcon width={14} height={14} />, shortcut: "Ctrl+N", onSelect: handleNewBlueprint },
-        { id: "file-generate-ai", label: "Generate with AI", icon: <GeometryIcon width={14} height={14} />, onSelect: () => setIsAiDialogOpen(true) },
+        { id: "file-generate-ai", label: "Generate with AI", icon: <AiSparkCubeIcon width={16} height={16} />, onSelect: () => setIsAiDialogOpen(true) },
         { id: "file-open", label: "Open File", icon: <DownloadIcon width={14} height={14} />, shortcut: "Ctrl+O", onSelect: handleOpenFile },
         {
           id: "file-open-recent",
@@ -3474,7 +3476,7 @@ export function App() {
           id: "file-export",
           label: "Export",
           children: [
-            { id: "file-export-ar-preview", label: "Local AR Preview Link", icon: <ModelIcon width={14} height={14} />, onSelect: (): void => { void createLocalArPreview(); } },
+            { id: "file-export-ar-preview", label: "Local AR Preview Link", icon: <ArIcon width={14} height={14} />, onSelect: (): void => { void createLocalArPreview(); } },
             { id: "file-export-divider-preview", separator: true },
             { id: "file-export-ts", label: "TypeScript", onSelect: () => downloadExportFile("typescript") },
             { id: "file-export-json", label: "Blueprint", onSelect: () => downloadExportFile("json") },

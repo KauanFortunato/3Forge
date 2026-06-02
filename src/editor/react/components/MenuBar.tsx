@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MenuAction } from "../ui-types";
 import { MenuList } from "./ContextMenu";
-import { GeometryIcon, SettingsIcon, TimelineIcon } from "./icons";
+import { AiSparkCubeIcon, SettingsIcon, TimelineIcon } from "./icons";
 
 interface TopMenu {
   id: string;
@@ -107,8 +107,7 @@ export function MenuBar({
               aria-label="Generate with AI"
               title="Generate with AI"
             >
-              <GeometryIcon width={12} height={12} />
-              <span>AI</span>
+              <AiSparkCubeIcon width={16} height={16} />
             </button>
           ) : null}
           {onToggleTimeline ? (

@@ -130,6 +130,47 @@ export function StarIcon(props: IconProps) {
   );
 }
 
+export function ArIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M2.2 4.4 7 1.8l4.8 2.6v5.2L7 12.2 2.2 9.6Z" />
+      <path d="M2.4 4.5 7 7l4.6-2.5" />
+      <path d="M7 7v5" />
+      <path d="M1.6 2.9V1.6h1.3" />
+      <path d="M11.1 1.6h1.3v1.3" />
+      <path d="M12.4 11.1v1.3h-1.3" />
+      <path d="M2.9 12.4H1.6v-1.3" />
+    </Ico>
+  );
+}
+
+export function AiSparkCubeIcon(props: IconProps) {
+  return (
+    <Ico {...props}>
+      <path d="M1.6 5.9 5.7 3.6 9.8 5.9v4.6l-4.1 2.3-4.1-2.3Z" />
+      <path d="M1.8 6 5.7 8.2 9.6 6" />
+      <path d="M5.7 8.2v4.4" />
+      <g>
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          values="0 11.6 2.4;12 11.6 2.4;0 11.6 2.4"
+          dur="1.8s"
+          repeatCount="indefinite"
+        />
+        <animate
+          attributeName="opacity"
+          values="0.72;1;0.72"
+          dur="1.8s"
+          repeatCount="indefinite"
+        />
+        <path d="M11.6 1v2.8" stroke="var(--c-accent)" />
+        <path d="M10.2 2.4H13" stroke="var(--c-accent)" />
+      </g>
+    </Ico>
+  );
+}
+
 export function CircleIcon(props: IconProps) {
   return (
     <Ico {...props}>
