@@ -62,6 +62,7 @@ import { ArPreviewPage } from "./components/ArPreviewPage";
 import { AIGenerateDialog } from "./components/AIGenerateDialog";
 import type { AIGenerationMode, AiChangeKind, AiChangeSummaryInput, AiChatGenerationResult } from "./components/AIGenerateDialog";
 import { BufferedInput } from "./components/BufferedInput";
+import { SaveStatusIndicator } from "./components/SaveStatusIndicator";
 import { ContextMenu } from "./components/ContextMenu";
 import { FieldsPanel } from "./components/FieldsPanel";
 import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
@@ -888,6 +889,25 @@ export function App() {
   // entire base64 src (100MB+) into a string — running that eagerly on every
   // store revision (including undo/redo) was the dominant heap-churn source.
   // Compute them on-demand in the download handlers instead.
+
+  // Save-state tracking. `store.revision` is a monotonic counter bumped on every
+  // edit, so we can detect "dirty" by comparing revisions instead of stringifying
+  // the (potentially 100MB+) blueprint. We track two independent baselines:
+  //   - localSavedRevisionRef: last revision flushed to browser autosave.
+  //   - diskSavedRevisionRef: last revision written to a file on the machine
+  //     (null when the project only lives in the browser).
+  const currentRevision = store.revision;
+  const localSavedRevisionRef = useRef<number>(store.revision);
+  const diskSavedRevisionRef = useRef<number | null>(
+    initialWorkspace.context.canOverwriteFile ? store.revision : null,
+  );
+  const [lastLocalSaveAt, setLastLocalSaveAt] = useState<number | null>(
+    initialWorkspace.context.canOverwriteFile || bootState.persistedWorkspace ? initialWorkspace.context.updatedAt : null,
+  );
+  const [lastDiskSaveAt, setLastDiskSaveAt] = useState<number | null>(
+    initialWorkspace.context.canOverwriteFile ? initialWorkspace.context.updatedAt : null,
+  );
+
   const isPhoneLayout = layoutMode === "phone";
   const isCompactLayout = layoutMode !== "desktop";
   const effectiveToolMode = isPhoneLayout ? "select" : currentTool;
@@ -963,6 +983,18 @@ export function App() {
     [activeClip],
   );
   const activeProjectLabel = projectContext.fileName ?? storeView.blueprintComponentName;
+  const hasDiskFile = projectContext.canOverwriteFile;
+  const isLocalDirty = currentRevision !== localSavedRevisionRef.current;
+  const isDiskDirty = hasDiskFile
+    && (diskSavedRevisionRef.current === null || currentRevision !== diskSavedRevisionRef.current);
+  const saveStatusData = {
+    isLocalDirty,
+    hasDiskFile,
+    isDiskDirty,
+    fileName: projectContext.fileName,
+    lastLocalSaveAt,
+    lastDiskSaveAt,
+  };
   const animatedNodeIds = useMemo(
     () => new Set(storeView.animation.clips.flatMap((clip) => clip.tracks.map((track) => track.nodeId))),
     [storeView.animation.clips],
@@ -1061,10 +1093,16 @@ export function App() {
     // Rapid undo/redo bursts used to trigger one serialisation per cycle —
     // the dominant heap churn that crashed the renderer. Now we coalesce
     // bursts into a single save 500ms after the user pauses.
+    const revisionAtSchedule = currentRevision;
     const timeoutId = window.setTimeout(() => {
       const didPersistWorkspace = persistWorkspace(blueprintSnapshot, projectContext);
       if (!didPersistWorkspace) {
         setTransientStatus("Project is too large for browser autosave. Save or export it manually.");
+      } else {
+        // Mark the browser autosave caught up so the save indicator flips from
+        // "Saving…" back to "Saved in browser" once the debounced flush lands.
+        localSavedRevisionRef.current = revisionAtSchedule;
+        setLastLocalSaveAt(Date.now());
       }
       setPersistedWorkspace({
         blueprint: blueprintSnapshot,
@@ -2044,6 +2082,15 @@ export function App() {
       activeFileHandleRef.current = null;
     }
     store.loadBlueprint(rawBlueprint, "ui");
+    // A freshly loaded project starts clean against its origin: the browser
+    // autosave baseline is the just-loaded revision, and the disk baseline is
+    // only "in sync" when the project came from a writable file on the machine.
+    const loadedRevision = store.revision;
+    const loadedAt = Date.now();
+    localSavedRevisionRef.current = loadedRevision;
+    diskSavedRevisionRef.current = context.canOverwriteFile ? loadedRevision : null;
+    setLastLocalSaveAt(loadedAt);
+    setLastDiskSaveAt(context.canOverwriteFile ? (context.updatedAt || loadedAt) : null);
     setProjectContext(context);
     setCurrentFrame(0);
     setIsAnimationPlaying(false);
@@ -2950,6 +2997,9 @@ export function App() {
           fileHandleId,
           canOverwriteFile: true,
         }));
+        diskSavedRevisionRef.current = store.revision;
+        setLastDiskSaveAt(Date.now());
+        setLastLocalSaveAt(Date.now());
         setTransientStatus(`Saved ${result.handle.name}.`);
       }, { blocking: true });
       return;
@@ -3004,6 +3054,9 @@ export function App() {
         fileHandleId,
         canOverwriteFile: true,
       }));
+      diskSavedRevisionRef.current = store.revision;
+      setLastDiskSaveAt(Date.now());
+      setLastLocalSaveAt(Date.now());
       setTransientStatus(`Saved ${linkedHandle.name}.`);
       return;
     }
@@ -3748,6 +3801,13 @@ export function App() {
           appVersion={APP_VERSION}
           hasNewReleaseNotes={hasNewReleaseNotes}
           isTimelineVisible={isTimelineVisible}
+          saveStatus={(
+            <SaveStatusIndicator
+              variant="menubar"
+              {...saveStatusData}
+              onSaveToDisk={handleSaveProject}
+            />
+          )}
           onOpenReleaseNotes={openReleaseNotesDialog}
           onOpenSettings={() => setIsSettingsDialogOpen(true)}
           onGenerateWithAI={() => setIsAiDialogOpen(true)}
@@ -4254,9 +4314,11 @@ export function App() {
             <span className="statusbar__chip">{`${getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)} · ${storeView.blueprintNodes.length} nodes`}</span>
           ) : (
             <>
-              <span className="statusbar__chip">local workspace saved</span>
-              <span className="statusbar__sep">·</span>
-              <span className="statusbar__chip">{getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)}</span>
+              <SaveStatusIndicator
+                variant="statusbar"
+                {...saveStatusData}
+                onSaveToDisk={handleSaveProject}
+              />
               <span className="statusbar__sep">·</span>
               <span className="statusbar__chip">{storeView.blueprintNodes.length} nodes</span>
             </>

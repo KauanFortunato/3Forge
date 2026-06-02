@@ -3365,6 +3365,119 @@ code {
 }
 
 /* =============================================================
+   Save-state indicator (menubar + statusbar)
+   Two truths surfaced at once: whether the in-browser autosave has
+   caught up, and whether the project is mirrored to a file on the
+   user's machine. Tones: green = synced to file, amber = unsaved
+   edits to a linked file, accent = browser-only, pulsing = saving.
+   ============================================================= */
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--f-mono);
+  color: var(--c-text-med);
+}
+
+button.save-status {
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: 1px solid transparent;
+  margin: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.save-status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-text-dim);
+  flex: none;
+}
+
+.save-status__text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.save-status__primary {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.save-status__detail {
+  font-size: var(--fs-xs);
+  color: var(--c-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.save-status--synced .save-status__dot { background: var(--c-y); }
+.save-status--edited .save-status__dot { background: var(--c-warn); }
+.save-status--edited .save-status__primary { color: var(--c-warn); }
+.save-status--browser .save-status__dot { background: var(--c-accent); }
+
+.save-status--saving .save-status__dot {
+  background: var(--c-accent);
+  animation: saveStatusPulse 1s ease-in-out infinite;
+}
+
+@keyframes saveStatusPulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+button.save-status:hover .save-status__primary,
+button.save-status:hover .save-status__detail {
+  color: var(--c-text);
+}
+
+/* Menubar variant — sits as a compact pill among the menubar chips. */
+.save-status--menubar {
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+}
+
+.menubar__right > .save-status--menubar {
+  background: var(--c-bg-3);
+}
+
+.menubar__right > .save-status--browser {
+  background: color-mix(in srgb, var(--c-accent) 14%, var(--c-bg-3));
+}
+
+.menubar__right > .save-status--edited {
+  background: color-mix(in srgb, var(--c-warn) 16%, var(--c-bg-3));
+}
+
+button.save-status--menubar:hover {
+  border-color: var(--c-border-strong);
+}
+
+.save-status--menubar .save-status__detail {
+  max-width: 160px;
+}
+
+/* Statusbar variant — inline, no pill, matches the footer chips. */
+.save-status--statusbar {
+  color: var(--c-text-med);
+}
+
+button.save-status--statusbar:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* =============================================================
    Landing overlay
    ============================================================= */
 .landing-overlay {
