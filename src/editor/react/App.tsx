@@ -104,6 +104,7 @@ import {
   ViewSolidIcon,
   ViewRenderedIcon,
   XIcon,
+  SaveIcon,
 } from "./components/icons";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MenuBar } from "./components/MenuBar";
@@ -907,6 +908,14 @@ export function App() {
   const [lastDiskSaveAt, setLastDiskSaveAt] = useState<number | null>(
     initialWorkspace.context.canOverwriteFile ? initialWorkspace.context.updatedAt : null,
   );
+  // Bumped when a brand-new project is created so the project-name field grabs
+  // focus and selects its text — the user lands ready to name the project
+  // instead of discovering the rename field on their own later.
+  const [projectNameFocusTick, setProjectNameFocusTick] = useState(0);
+  // Recent-project id for which the "save to your computer" nudge was dismissed.
+  // Tracking the id (rather than a boolean) means a fresh project re-arms the
+  // nudge while the current one stays quiet once dismissed.
+  const [dismissedSaveNudgeFor, setDismissedSaveNudgeFor] = useState<string | null>(null);
 
   const isPhoneLayout = layoutMode === "phone";
   const isCompactLayout = layoutMode !== "desktop";
@@ -995,6 +1004,11 @@ export function App() {
     lastLocalSaveAt,
     lastDiskSaveAt,
   };
+  // Browser-only projects are one cache-clear away from being lost. Nudge the
+  // user to mirror the work to a real file — once per project, dismissable.
+  const showSaveToDiskNudge = !isPhoneLayout
+    && !hasDiskFile
+    && projectContext.recentProjectId !== dismissedSaveNudgeFor;
   const animatedNodeIds = useMemo(
     () => new Set(storeView.animation.clips.flatMap((clip) => clip.tracks.map((track) => track.nodeId))),
     [storeView.animation.clips],
@@ -2840,8 +2854,9 @@ export function App() {
         fileHandleId: null,
         canOverwriteFile: false,
       }),
-      "Created new project.",
+      "New project — name it, then save it to your computer.",
     );
+    setProjectNameFocusTick((tick) => tick + 1);
   }, [applyWorkspaceBlueprint]);
 
   const handleContinueWorkspace = useCallback(() => {
@@ -3826,6 +3841,37 @@ export function App() {
         />
       ) : null}
 
+      {showSaveToDiskNudge ? (
+        <div className="save-nudge" role="status">
+          <span className="save-nudge__icon" aria-hidden="true">
+            <SaveIcon width={14} height={14} />
+          </span>
+          <span className="save-nudge__text">
+            <strong className="save-nudge__title">This project lives only in this browser.</strong>
+            <span className="save-nudge__sub">Save a copy to your computer so it can&apos;t be lost and you can share it.</span>
+          </span>
+          <div className="save-nudge__actions">
+            <button
+              type="button"
+              className="save-nudge__save"
+              onClick={() => { void handleSaveProject(); }}
+            >
+              <SaveIcon width={12} height={12} />
+              Save to computer
+            </button>
+            <button
+              type="button"
+              className="save-nudge__dismiss"
+              aria-label="Dismiss"
+              title="Not now"
+              onClick={() => setDismissedSaveNudgeFor(projectContext.recentProjectId)}
+            >
+              <XIcon width={11} height={11} />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <div className={shellBodyClassName}>
         {isPhoneLayout ? (
           <div className="phone-shell">
@@ -3873,6 +3919,10 @@ export function App() {
                     type="text"
                     value={storeView.blueprintComponentName}
                     onCommit={(value) => store.updateComponentName(value)}
+                    focusSignal={projectNameFocusTick}
+                    selectOnFocusSignal
+                    placeholder="Untitled project"
+                    title="Click to rename this project"
                     aria-label="Project name"
                   />
                   <span className="left-project-panel__sub">{`blueprint / ${storeView.blueprintNodes.length} nodes`}</span>

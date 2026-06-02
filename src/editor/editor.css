@@ -505,18 +505,32 @@ code {
 .left-project-panel__name {
   width: 100%;
   min-width: 0;
-  height: 16px;
-  padding: 0;
+  height: 18px;
+  padding: 0 4px;
+  margin: 0 -4px;
   border: 0;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--c-text);
   font-size: var(--fs-md);
   font-weight: 700;
   text-overflow: ellipsis;
+  cursor: text;
+  transition: background 120ms, box-shadow 120ms, color 120ms;
+}
+
+.left-project-panel__name::placeholder {
+  color: var(--c-text-dim);
+  font-weight: 600;
+}
+
+.left-project-panel__name:hover {
+  background: var(--c-bg-3);
 }
 
 .left-project-panel__name:focus {
-  box-shadow: none;
+  background: var(--c-bg-3);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-accent) 55%, var(--c-border));
   color: var(--c-accent);
 }
 
@@ -3475,6 +3489,95 @@ button.save-status--menubar:hover {
 button.save-status--statusbar:hover {
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* =============================================================
+   Save-to-computer nudge — slim, dismissable bar shown below the
+   menubar while a project lives only in the browser.
+   ============================================================= */
+.save-nudge {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 8px var(--sp-4);
+  background: color-mix(in srgb, var(--c-accent) 12%, var(--c-bg-2));
+  border-bottom: 1px solid color-mix(in srgb, var(--c-accent) 40%, var(--c-border));
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+  animation: fadeIn 200ms ease;
+}
+
+.save-nudge__icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--c-accent) 22%, transparent);
+  color: var(--c-accent);
+}
+
+.save-nudge__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.save-nudge__title {
+  font-weight: 700;
+}
+
+.save-nudge__sub {
+  color: var(--c-text-med);
+  font-size: var(--fs-xs);
+}
+
+.save-nudge__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.save-nudge__save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  background: var(--c-accent);
+  border: 1px solid var(--c-accent);
+  color: var(--c-accent-fg);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 120ms;
+}
+
+.save-nudge__save:hover {
+  filter: brightness(1.08);
+}
+
+.save-nudge__dismiss {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--c-text-dim);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.save-nudge__dismiss:hover {
+  background: var(--c-bg-3);
+  color: var(--c-text);
 }
 
 /* =============================================================
