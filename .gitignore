@@ -10,6 +10,7 @@ dist-export-runner
 .codex
 .claude
 .gemini
+.antigravitycli
 graphify-out
 skills-lock.json
 /documents
