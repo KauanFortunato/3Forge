@@ -932,10 +932,13 @@ export function App() {
   const [lastDiskSaveAt, setLastDiskSaveAt] = useState<number | null>(
     initialWorkspace.context.canOverwriteFile ? initialWorkspace.context.updatedAt : null,
   );
-  // Bumped when a brand-new project is created so the project-name field grabs
-  // focus and selects its text — the user lands ready to name the project
-  // instead of discovering the rename field on their own later.
-  const [projectNameFocusTick, setProjectNameFocusTick] = useState(0);
+  // Bumped on every project load so the project-name field remounts with a
+  // fresh draft — loading a different project always shows that project's name,
+  // even if the field happened to be focused. `autoFocusName` additionally
+  // grabs+selects the field for a brand-new project so the user lands ready to
+  // name it instead of discovering the rename field on their own later.
+  const [projectInstanceId, setProjectInstanceId] = useState(0);
+  const [autoFocusName, setAutoFocusName] = useState(false);
   // Recent-project id for which the "save to your computer" nudge was dismissed.
   // Tracking the id (rather than a boolean) means a fresh project re-arms the
   // nudge while the current one stays quiet once dismissed.
@@ -2129,6 +2132,9 @@ export function App() {
     diskSavedRevisionRef.current = context.canOverwriteFile ? loadedRevision : null;
     setLastLocalSaveAt(loadedAt);
     setLastDiskSaveAt(context.canOverwriteFile ? (context.updatedAt || loadedAt) : null);
+    // Remount the project-name field so it always reflects the freshly loaded
+    // project rather than holding a stale draft from the previous one.
+    setProjectInstanceId((id) => id + 1);
     setProjectContext(context);
     setCurrentFrame(0);
     setIsAnimationPlaying(false);
@@ -2880,7 +2886,7 @@ export function App() {
       }),
       "New project — name it, then save it to your computer.",
     );
-    setProjectNameFocusTick((tick) => tick + 1);
+    setAutoFocusName(true);
   }, [applyWorkspaceBlueprint]);
 
   const handleContinueWorkspace = useCallback(() => {
@@ -3866,33 +3872,31 @@ export function App() {
       ) : null}
 
       {showSaveToDiskNudge ? (
-        <div className="save-nudge" role="status">
-          <span className="save-nudge__icon" aria-hidden="true">
-            <SaveIcon width={14} height={14} />
-          </span>
-          <span className="save-nudge__text">
-            <strong className="save-nudge__title">This project lives only in this browser.</strong>
-            <span className="save-nudge__sub">Save a copy to your computer so it can&apos;t be lost and you can share it.</span>
-          </span>
-          <div className="save-nudge__actions">
-            <button
-              type="button"
-              className="save-nudge__save"
-              onClick={() => { void handleSaveProject(); }}
-            >
+        <div className="save-nudge" role="note" aria-label="Save this project to your computer">
+          <button
+            type="button"
+            className="save-nudge__dismiss"
+            aria-label="Dismiss"
+            title="Not now"
+            onClick={() => setDismissedSaveNudgeFor(projectContext.recentProjectId)}
+          >
+            <XIcon width={10} height={10} />
+          </button>
+          <div className="save-nudge__head">
+            <span className="save-nudge__icon" aria-hidden="true">
               <SaveIcon width={12} height={12} />
-              Save to computer
-            </button>
-            <button
-              type="button"
-              className="save-nudge__dismiss"
-              aria-label="Dismiss"
-              title="Not now"
-              onClick={() => setDismissedSaveNudgeFor(projectContext.recentProjectId)}
-            >
-              <XIcon width={11} height={11} />
-            </button>
+            </span>
+            <span className="save-nudge__title">Only saved in this browser</span>
           </div>
+          <p className="save-nudge__sub">Save a copy to your computer so it can&apos;t be lost.</p>
+          <button
+            type="button"
+            className="save-nudge__save"
+            onClick={() => { void handleSaveProject(); }}
+          >
+            <SaveIcon width={12} height={12} />
+            Save to computer
+          </button>
         </div>
       ) : null}
 
@@ -3939,12 +3943,18 @@ export function App() {
                 </span>
                 <span className="left-project-panel__meta">
                   <BufferedInput
+                    key={projectInstanceId}
                     className="left-project-panel__name"
                     type="text"
                     value={storeView.blueprintComponentName}
                     onCommit={(value) => store.updateComponentName(value)}
-                    focusSignal={projectNameFocusTick}
-                    selectOnFocusSignal
+                    autoFocus={autoFocusName}
+                    onFocus={(event) => {
+                      if (autoFocusName) {
+                        event.currentTarget.select();
+                        setAutoFocusName(false);
+                      }
+                    }}
                     placeholder="Untitled project"
                     title="Click to rename this project"
                     aria-label="Project name"
