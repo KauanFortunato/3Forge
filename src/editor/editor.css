@@ -1907,6 +1907,7 @@ code {
 
 .row--wide {
   grid-template-columns: 70px minmax(0, 1fr);
+  container-type: inline-size;
 }
 
 .row--stacked {
@@ -2015,6 +2016,7 @@ code {
   display: flex;
   align-items: center;
   height: var(--h-control);
+  min-width: 0;
   background: var(--c-bg-3);
   padding: 0 4px;
   gap: 3px;
@@ -2054,7 +2056,7 @@ code {
 
 .vec__val {
   flex: 1 1 34px;
-  min-width: 26px;
+  min-width: 0;
   width: 34px;
   font-family: var(--f-mono);
   font-size: var(--fs-xs);
@@ -2093,6 +2095,12 @@ code {
 
 .vec__editable.is-active {
   color: var(--c-accent);
+}
+
+@container (max-width: 220px) {
+  .row--wide .vec {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Scalar controls */
@@ -2835,6 +2843,7 @@ code {
 }
 
 @container (max-width: 205px) {
+
   .tl__animations-footer .playbar__frame,
   .tl__animations-footer .playbar__sep {
     display: none;
@@ -3686,6 +3695,7 @@ code {
   cursor: pointer;
   font-size: 10px;
   line-height: 1;
+  justify-content: center;
 }
 
 .landing-recent__remove:hover {
@@ -3827,7 +3837,7 @@ code {
 }
 
 .ar-preview-link__field span,
-.ar-preview-link__alternates > span,
+.ar-preview-link__alternates>span,
 .ar-preview-link__meta {
   color: var(--c-text-dim);
   font-family: var(--font-mono);
@@ -5379,12 +5389,21 @@ code {
 }
 
 @keyframes imageAssetThumbSpin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes imageAssetThumbBadgeIn {
-  from { opacity: 0; transform: scale(0.6); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5750,12 +5769,10 @@ code {
   height: 100%;
   width: 40%;
   border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    rgba(139, 92, 246, 0) 0%,
-    rgba(139, 92, 246, 0.85) 50%,
-    rgba(139, 92, 246, 0) 100%
-  );
+  background: linear-gradient(90deg,
+      rgba(139, 92, 246, 0) 0%,
+      rgba(139, 92, 246, 0.85) 50%,
+      rgba(139, 92, 246, 0) 100%);
   animation: statusbarProgressSlide 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
@@ -5769,13 +5786,25 @@ code {
 }
 
 @keyframes statusbarProgressSlide {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(280%); }
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(280%);
+  }
 }
 
 @keyframes statusbarProgressFadeIn {
-  from { opacity: 0; transform: translateY(2px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .loading-overlay {
@@ -5851,12 +5880,10 @@ code {
   inset: 0;
   width: 40%;
   border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    rgba(139, 92, 246, 0.1) 0%,
-    var(--c-accent) 50%,
-    rgba(139, 92, 246, 0.1) 100%
-  );
+  background: linear-gradient(90deg,
+      rgba(139, 92, 246, 0.1) 0%,
+      var(--c-accent) 50%,
+      rgba(139, 92, 246, 0.1) 100%);
   animation: loadingOverlayBarSlide 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
 }
 
@@ -5888,30 +5915,51 @@ code {
 }
 
 @keyframes loadingOverlayBarSlide {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(250%); }
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(250%);
+  }
 }
 
 @keyframes loadingOverlaySpin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes loadingOverlayFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes loadingOverlayPop {
-  0% { opacity: 0; transform: scale(0.92); }
-  100% { opacity: 1; transform: scale(1); }
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
+
   .statusbar-progress__pulse-bar,
   .loading-overlay__ring,
   .loading-overlay__bar-fill {
     animation-duration: 2.4s;
   }
+
   .loading-overlay__card {
     animation: none;
   }
@@ -6120,7 +6168,7 @@ code {
   padding: var(--sp-3) 0;
 }
 
-.set-row + .set-row {
+.set-row+.set-row {
   border-top: 1px solid var(--c-border-soft);
 }
 
@@ -6153,7 +6201,7 @@ code {
   font: inherit;
 }
 
-.set-row > .set-input {
+.set-row>.set-input {
   justify-self: end;
 }
 
@@ -6320,11 +6368,11 @@ select.set-input {
   gap: var(--sp-2);
 }
 
-.set-hdr__controls .set-row + .set-row {
+.set-hdr__controls .set-row+.set-row {
   border-top: 0;
 }
 
-.set-hdr__controls .set-row > .set-input {
+.set-hdr__controls .set-row>.set-input {
   justify-self: stretch;
 }
 
@@ -6563,8 +6611,13 @@ select.set-input {
 }
 
 @keyframes settingsTriggerSpin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(180deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(180deg);
+  }
 }
 
 /* --- App-opening splash intro --- */
@@ -6609,9 +6662,19 @@ select.set-input {
 }
 
 @keyframes introGlow {
-  0% { opacity: 0; transform: scale(0.65); }
-  45% { opacity: 1; }
-  100% { opacity: 0.6; transform: scale(1); }
+  0% {
+    opacity: 0;
+    transform: scale(0.65);
+  }
+
+  45% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
