@@ -1099,6 +1099,25 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
   return tex;
 }
 
+// R3 broadcast frame in world units (engine constant, not scene-specific).
+const W3D_FRAME_WIDTH = 7.363797;
+const W3D_FRAME_HEIGHT = 4.142136;
+
+/**
+ * A "full-frame fill" is a textured Quad whose geometry covers (about) the whole
+ * R3 broadcast frame. When such a quad is the client of a colored mask, R3 treats
+ * it as a single screen-space BACKGROUND layer revealed AROUND the panel (the mask
+ * is a hole), with the texture mapped once across the frame. Text / smaller content
+ * clients of the SAME mask are not full-frame fills and keep their normal
+ * inside-the-panel reveal. The threshold uses the authored geometry size, so it
+ * generalises to any R3 scene's full-frame fills (no node-name dependency).
+ */
+function isFullFrameQuadGeometry(geometry: PlaneGeometry): boolean {
+  const p = geometry.parameters as { width?: number; height?: number } | undefined;
+  if (!p || typeof p.width !== "number" || typeof p.height !== "number") return false;
+  return p.width >= W3D_FRAME_WIDTH * 0.98 && p.height >= W3D_FRAME_HEIGHT * 0.98;
+}
+
 function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: number): Mesh {
   const geometry = new PlaneGeometry(node.geometry.size.x, node.geometry.size.y);
   applyAlignment(geometry, node.geometry);
@@ -1182,6 +1201,27 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: nu
   if (resolvedMapUrl && ctx) {
     material.map = acquireTexture(resolvedMapUrl, resolvedMapTransform, ctx.textureCache);
     material.needsUpdate = true;
+  }
+  // R3 fullframe fills are a single screen-space PATTERN layer. R3's TextureLayer
+  // Scale is a ZOOM (the texture covers the frame once), which in three.js is
+  // repeat = 1/Scale, rotated about the CENTRE, and clamped so the small authored
+  // rotation can't expose a tiled seam at the corners. Authored repeat = Scale
+  // would instead tile under Wrap and duplicate the pattern at the corners (the
+  // bug). Scoped to full-frame textured colored-mask clients so per-quad textures
+  // (photos, logos, text) are untouched.
+  if (material.map && ctx?.genericMaskInfoByMaskId && isFullFrameQuadGeometry(geometry)) {
+    const isColoredMaskClient = node.maskIds.some((id) => ctx.genericMaskInfoByMaskId!.has(id));
+    if (isColoredMaskClient) {
+      const t = material.map.clone();
+      const rx = t.repeat.x || 1;
+      const ry = t.repeat.y || 1;
+      t.repeat.set(1 / rx, 1 / ry);
+      t.center.set(0.5, 0.5);
+      t.wrapS = ClampToEdgeWrapping;
+      t.wrapT = ClampToEdgeWrapping;
+      t.needsUpdate = true;
+      material.map = t;
+    }
   }
   if (resolvedAlphaMapUrl && ctx) {
     material.alphaMap = acquireTexture(resolvedAlphaMapUrl, resolvedAlphaMapTransform, ctx.textureCache);

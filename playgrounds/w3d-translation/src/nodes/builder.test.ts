@@ -232,6 +232,76 @@ function makePrimaryMat(): W3DBaseMaterialData {
   };
 }
 
+describe("builder — R3 fullframe fill (colored-mask screen-space background)", () => {
+  function makePatternCtx(): BuildContext {
+    const patternTex: W3DTextureData = {
+      kind: "Texture", id: "pat-id", name: "PATTERN.png", filename: "PATTERN.png", folderPath: "",
+    };
+    const ffLayer: W3DTextureLayerData = {
+      kind: "TextureLayer", id: "ff-layer", name: "FF_MAIN", textureBlending: "Multiply",
+      scale: { x: 1.13, y: 1.13 },
+      mapping: {
+        textureGuid: "pat-id", textureAddressModeU: "Wrap", textureAddressModeV: "Wrap",
+        keyType: "AlphaKey", isEmissive: false, useMipMapping: false,
+      },
+    };
+    const registry: W3DResourceRegistry = {
+      baseMaterials: new Map(),
+      textures: new Map([["pat-id", patternTex]]),
+      textureLayers: new Map([["ff-layer", ffLayer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    };
+    return makeCtx({ registry, textureUrlsByFilename: new Map([["PATTERN.png", "blob:pattern"]]) });
+  }
+  const coloredMask = (): W3DQuadData => quadData({
+    id: "base-main", name: "BASE_MAIN", isMask: true,
+    geometry: { size: { x: 7.7, y: 2.77 } },
+    maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+  });
+  const fillFace = { surfaceName: "All", materialId: "", textureLayerId: "ff-layer", baseMaterialInherited: false, textureInherited: false };
+  function findMesh(root: Group, name: string): Mesh {
+    let found: Mesh | undefined;
+    root.traverse((o) => {
+      if (!found && (o as Mesh).isMesh && (o.userData?.w3d as { name?: string } | undefined)?.name === name) found = o as Mesh;
+    });
+    if (!found) throw new Error(`mesh ${name} not found`);
+    return found;
+  }
+
+  test("full-frame fill → UV repeat 1/Scale, centre pivot, clamp; mask reveal stays INSIDE (Equal, client not background)", async () => {
+    const { EqualStencilFunc, ClampToEdgeWrapping } = await import("three");
+    const ctx = makePatternCtx();
+    const fill = quadData({
+      id: "ff-main", name: "TEXTURE_FULLFRAME_MAIN", maskIds: ["base-main"],
+      geometry: { size: { x: 7.363797, y: 4.142136 } }, faceMapping: fillFace,
+    });
+    const root = buildNodeTree([groupData({ id: "main", name: "MAIN", children: [coloredMask(), fill] })], ctx);
+    const mat = findMesh(root, "TEXTURE_FULLFRAME_MAIN").material as MeshBasicMaterial;
+    expect(mat.map).toBeTruthy();
+    expect(mat.map!.repeat.x).toBeCloseTo(1 / 1.13, 4); // R3 Scale=zoom → repeat=1/Scale, not tiling
+    expect(mat.map!.center.x).toBeCloseTo(0.5, 6);
+    expect(mat.map!.center.y).toBeCloseTo(0.5, 6);
+    expect(mat.map!.wrapS).toBe(ClampToEdgeWrapping);
+    // Mask direction is NOT flipped: the fill is a masked client revealed inside
+    // the panel (inverted colored mask → Equal), not a replacement background.
+    expect(mat.stencilFunc).toBe(EqualStencilFunc);
+  });
+
+  test("small text-sized client of the SAME mask keeps inside reveal (Equal) and authored UV", async () => {
+    const { EqualStencilFunc } = await import("three");
+    const ctx = makePatternCtx();
+    const small = quadData({
+      id: "label", name: "SMALL_TEAM_NAME", maskIds: ["base-main"],
+      geometry: { size: { x: 1.5, y: 0.3 } }, faceMapping: fillFace,
+    });
+    const root = buildNodeTree([groupData({ id: "main", name: "MAIN", children: [coloredMask(), small] })], ctx);
+    const mat = findMesh(root, "SMALL_TEAM_NAME").material as MeshBasicMaterial;
+    expect(mat.stencilFunc).toBe(EqualStencilFunc); // inverted colored mask → inside reveal preserved for content
+    expect(mat.map!.repeat.x).toBeCloseTo(1.13, 4); // not full-frame → authored UV untouched
+  });
+});
+
 describe("builder — BuildContext", () => {
   test("buildNode without ctx falls back to DisplayColor (Phase F behaviour)", () => {
     const node = quadData({ displayColor: undefined });
