@@ -497,6 +497,18 @@ function getProjectSourceLabel(source: WorkspaceProjectContext["source"], canOve
   return "Local workspace";
 }
 
+interface ProjectOriginBadge {
+  label: string;
+  tone: "disk" | "browser";
+}
+
+/** Plain-language "where does this project live" badge used across the launcher. */
+function getProjectOriginBadge(isOnDisk: boolean): ProjectOriginBadge {
+  return isOnDisk
+    ? { label: "On your computer", tone: "disk" }
+    : { label: "Browser only", tone: "browser" };
+}
+
 function countMaterialUsage(nodes: EditorNode[]): Record<string, number> {
   const usage: Record<string, number> = {};
   for (const node of nodes) {
@@ -656,9 +668,7 @@ function LandingPage({
     ?? "Last session";
   const isPhoneLayout = layoutMode === "phone";
   const isTabletLayout = layoutMode === "tablet";
-  const localProjectSourceLabel = persistedWorkspace
-    ? getProjectSourceLabel(persistedWorkspace.context.source, persistedWorkspace.context.canOverwriteFile)
-    : null;
+  const continueOriginBadge = getProjectOriginBadge(persistedWorkspace?.context.canOverwriteFile ?? false);
 
   const heroTitle = isPhoneLayout ? "3Forge" : "3Forge Editor";
   const heroSubtitle = isPhoneLayout
@@ -710,7 +720,11 @@ function LandingPage({
               <span className="landing-action__ico"><FrameIcon width={14} height={14} /></span>
               <span className="landing-action__body">
                 <span className="landing-action__title">Continue where you left off</span>
-                <span className="landing-action__sub">{`${localProjectSourceLabel} · ${localProjectLabel}`}</span>
+                <span className="landing-action__sub">
+                  <span className={`origin-badge origin-badge--${continueOriginBadge.tone}`}>{continueOriginBadge.label}</span>
+                  <span className="origin-badge__sep">·</span>
+                  <span className="landing-action__sub-name">{localProjectLabel}</span>
+                </span>
               </span>
             </button>
           ) : null}
@@ -738,34 +752,44 @@ function LandingPage({
           </div>
 
           {recentProjects.length > 0 ? (
-            <div>
-              {recentProjects.map((entry) => (
-                <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <button
-                    type="button"
-                    className="landing-recent"
-                    onClick={() => onOpenRecent(entry.id)}
-                  >
-                    <span>
-                      <span className="landing-recent__name">{entry.label}</span>
-                      <span className="landing-recent__meta">
-                        <span>{entry.source === "file-handle" ? "Linked file" : "Local snapshot"}</span>
-                        <span>·</span>
-                        <span>{entry.componentName}</span>
+            <div className="landing-recent-list">
+              {recentProjects.map((entry) => {
+                const isOnDisk = entry.source === "file-handle";
+                const originBadge = getProjectOriginBadge(isOnDisk);
+                return (
+                  <div key={entry.id} className="landing-recent-row">
+                    <button
+                      type="button"
+                      className="landing-recent"
+                      onClick={() => onOpenRecent(entry.id)}
+                    >
+                      <span
+                        className={`landing-recent__origin landing-recent__origin--${originBadge.tone}`}
+                        aria-hidden="true"
+                      >
+                        {isOnDisk ? <SaveIcon width={12} height={12} /> : <BoxIcon width={12} height={12} />}
                       </span>
-                    </span>
-                    <span className="landing-recent__time">{formatRecentProjectTime(entry.updatedAt)}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="landing-recent__remove"
-                    aria-label={`Remove ${entry.label} from recents`}
-                    onClick={() => onRemoveRecent(entry.id)}
-                  >
-                    <span aria-hidden="true">x</span>
-                  </button>
-                </div>
-              ))}
+                      <span className="landing-recent__body">
+                        <span className="landing-recent__name">{entry.label}</span>
+                        <span className="landing-recent__meta">
+                          <span className={`origin-badge origin-badge--${originBadge.tone}`}>{originBadge.label}</span>
+                          <span className="origin-badge__sep">·</span>
+                          <span className="landing-recent__component">{entry.componentName}</span>
+                        </span>
+                      </span>
+                      <span className="landing-recent__time">{formatRecentProjectTime(entry.updatedAt)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="landing-recent__remove"
+                      aria-label={`Remove ${entry.label} from recents`}
+                      onClick={() => onRemoveRecent(entry.id)}
+                    >
+                      <XIcon width={10} height={10} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="landing-empty">

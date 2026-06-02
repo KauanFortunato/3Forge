@@ -3832,10 +3832,17 @@ button.save-status--statusbar:hover {
 }
 
 .landing-action__sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: var(--c-text-dim);
   font-family: var(--f-mono);
-  margin-top: 2px;
+  margin-top: 3px;
+  min-width: 0;
+}
+
+.landing-action__sub-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3845,15 +3852,66 @@ button.save-status--statusbar:hover {
   color: rgba(14, 15, 17, 0.65);
 }
 
+/* Origin badge — plain-language "where it lives" pill shared by the launcher
+   continue action and recent-project rows. Tones mirror the editor save state:
+   green = on disk, accent = browser-only. */
+.origin-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-family: var(--f-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex: none;
+}
+
+.origin-badge--disk {
+  background: color-mix(in srgb, var(--c-y) 20%, transparent);
+  color: var(--c-y);
+}
+
+.origin-badge--browser {
+  background: color-mix(in srgb, var(--c-accent) 22%, transparent);
+  color: var(--c-accent);
+}
+
+.landing-action.is-primary .origin-badge--disk,
+.landing-action.is-primary .origin-badge--browser {
+  background: rgba(14, 15, 17, 0.14);
+  color: rgba(14, 15, 17, 0.72);
+}
+
+.origin-badge__sep {
+  color: var(--c-text-faint);
+}
+
+.landing-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.landing-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .landing-recent {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 8px 10px;
   border-radius: var(--r-sm);
   cursor: pointer;
   min-width: 0;
+  flex: 1;
   background: transparent;
   border: 0;
   width: 100%;
@@ -3866,6 +3924,32 @@ button.save-status--statusbar:hover {
   background: var(--c-bg-2);
 }
 
+.landing-recent__origin {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--c-border);
+}
+
+.landing-recent__origin--disk {
+  color: var(--c-y);
+  background: color-mix(in srgb, var(--c-y) 14%, var(--c-bg-2));
+  border-color: color-mix(in srgb, var(--c-y) 30%, var(--c-border));
+}
+
+.landing-recent__origin--browser {
+  color: var(--c-accent);
+  background: color-mix(in srgb, var(--c-accent) 14%, var(--c-bg-2));
+  border-color: color-mix(in srgb, var(--c-accent) 30%, var(--c-border));
+}
+
+.landing-recent__body {
+  min-width: 0;
+}
+
 .landing-recent__name {
   font-size: 12px;
   font-weight: 500;
@@ -3875,13 +3959,21 @@ button.save-status--statusbar:hover {
   color: var(--c-text);
 }
 
+.landing-recent__component {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .landing-recent__meta {
   font-size: 10px;
   font-family: var(--f-mono);
   color: var(--c-text-dim);
   display: flex;
-  gap: 8px;
-  margin-top: 2px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  min-width: 0;
 }
 
 .landing-recent__time {
