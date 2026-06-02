@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent as ReactDragEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import QRCode from "qrcode";
 import type { Object3D } from "three";
 import { createBlueprintFromAiAnimationPatch, createBlueprintFromAiScene, editBlueprintWithAIResult, generateBlueprintResult, isAiAnimationPatch, isAiSceneSpec, parseAiBlueprintJson } from "../aiBlueprint";
 import type { AiChatContext, AiProvider } from "../aiBlueprint";
@@ -57,6 +58,7 @@ import type { ContextMenuState, ExportMode, MenuAction, RightPanelTab, ToolMode,
 import { useEditorStoreSnapshot } from "./hooks/useEditorStoreSnapshot";
 import { useGlobalHotkeys } from "./hooks/useGlobalHotkeys";
 import { AnimationTimeline } from "./components/AnimationTimeline";
+import { ArPreviewPage } from "./components/ArPreviewPage";
 import { AIGenerateDialog } from "./components/AIGenerateDialog";
 import type { AIGenerationMode, AiChangeKind, AiChangeSummaryInput, AiChatGenerationResult } from "./components/AIGenerateDialog";
 import { BufferedInput } from "./components/BufferedInput";
@@ -264,6 +266,16 @@ interface PendingJsonDropImport {
   fileName: string;
 }
 
+interface ArPreviewLink {
+  id: string;
+  name: string;
+  expiresAt: number;
+  viewerUrl: string;
+  viewerUrls?: string[];
+  glbUrl: string;
+  usdzUrl: string;
+}
+
 interface InsertTarget {
   parentId: string | null;
   index?: number;
@@ -386,6 +398,41 @@ function downloadBlobFile(blob: Blob, fileName: string): void {
   anchor.download = fileName;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+function resolveArPreviewRouteId(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const match = window.location.pathname.match(/^\/ar-preview\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Unable to read model blob."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
 }
 
 function stripFileExtension(fileName: string): string {
@@ -734,6 +781,11 @@ function LandingPage({
 }
 
 export function App() {
+  const arPreviewRouteId = resolveArPreviewRouteId();
+  if (arPreviewRouteId) {
+    return <ArPreviewPage previewId={arPreviewRouteId} />;
+  }
+
   const [bootState] = useState(readWorkspaceBootState);
   const [initialWorkspace] = useState(() => {
     const workspace = createWorkspaceFromBootState(bootState);
@@ -788,6 +840,9 @@ export function App() {
   const [isAboutDialogOpen, setIsAboutDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [isReleaseNotesDialogOpen, setIsReleaseNotesDialogOpen] = useState(false);
+  const [arPreviewLink, setArPreviewLink] = useState<ArPreviewLink | null>(null);
+  const [arPreviewQrDataUrl, setArPreviewQrDataUrl] = useState<string | null>(null);
+  const [arPreviewQrError, setArPreviewQrError] = useState<string | null>(null);
   const [hasNewReleaseNotes, setHasNewReleaseNotes] = useState(shouldShowReleaseNotes);
   const { theme, setTheme } = useTheme();
   const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
@@ -1036,6 +1091,41 @@ export function App() {
 
     return () => window.clearTimeout(timeoutId);
   }, [blueprintSnapshot, projectContext, setTransientStatus, shouldPersistWorkspace]);
+
+  useEffect(() => {
+    if (!arPreviewLink) {
+      setArPreviewQrDataUrl(null);
+      setArPreviewQrError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setArPreviewQrDataUrl(null);
+    setArPreviewQrError(null);
+    QRCode.toDataURL(arPreviewLink.viewerUrl, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      scale: 8,
+      color: {
+        dark: "#111116",
+        light: "#ffffff",
+      },
+    })
+      .then((dataUrl) => {
+        if (!cancelled) {
+          setArPreviewQrDataUrl(dataUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setArPreviewQrError("Unable to generate QR code.");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [arPreviewLink]);
 
   useEffect(() => {
     if (isStarted) {
@@ -1997,6 +2087,51 @@ export function App() {
       setTransientStatus(err instanceof Error && err.message ? err.message : `Unable to export ${format.toUpperCase()} model.`);
     }
   }, [blueprintSnapshot, setTransientStatus]);
+
+  const createLocalArPreview = useCallback(async () => {
+    try {
+      const previewName = blueprintSnapshot.componentName || "3forge-component";
+      const [glbBlob, usdzBlob] = await runTask("Preparing local AR preview...", async () => {
+        const glb = await exportBlueprintToGlbBlob(blueprintSnapshot);
+        const usdz = await exportBlueprintToUsdzBlob(blueprintSnapshot);
+        return [glb, usdz] as const;
+      }, { blocking: true });
+
+      const [glb, usdz] = await runTask("Publishing local AR preview...", async () => Promise.all([
+        blobToDataUrl(glbBlob),
+        blobToDataUrl(usdzBlob),
+      ]), { blocking: true });
+
+      const response = await fetch("/__3forge_ar_preview/publish", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: previewName, glb, usdz }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to publish local preview.");
+      }
+
+      const link = await response.json() as ArPreviewLink;
+      setArPreviewLink(link);
+      setTransientStatus("Local AR preview link created.");
+    } catch (err) {
+      setTransientStatus(err instanceof Error && err.message ? err.message : "Unable to create local AR preview.");
+    }
+  }, [blueprintSnapshot, setTransientStatus]);
+
+  const copyArPreviewLink = useCallback(async () => {
+    if (!arPreviewLink) {
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(arPreviewLink.viewerUrl);
+      setTransientStatus("Copied AR preview link.");
+    } catch {
+      setTransientStatus("Unable to copy AR preview link.");
+    }
+  }, [arPreviewLink, setTransientStatus]);
 
   const importJsonFromFile = useCallback(async (file: File) => {
     await runTask(`Importing ${file.name}…`, async () => {
@@ -3339,6 +3474,8 @@ export function App() {
           id: "file-export",
           label: "Export",
           children: [
+            { id: "file-export-ar-preview", label: "Local AR Preview Link", icon: <ModelIcon width={14} height={14} />, onSelect: (): void => { void createLocalArPreview(); } },
+            { id: "file-export-divider-preview", separator: true },
             { id: "file-export-ts", label: "TypeScript", onSelect: () => downloadExportFile("typescript") },
             { id: "file-export-json", label: "Blueprint", onSelect: () => downloadExportFile("json") },
             { id: "file-export-zip", label: "ZIP file", onSelect: () => void downloadExportPackage() },
@@ -3436,6 +3573,7 @@ export function App() {
     },
   ], [
     createAddMenuActions,
+    createLocalArPreview,
     downloadExportFile,
     downloadExportPackage,
     downloadSceneModel,
@@ -3514,6 +3652,47 @@ export function App() {
     </Modal>
   );
 
+  const arPreviewModal = (
+    <Modal title="Local AR Preview" isOpen={arPreviewLink !== null} onClose={() => setArPreviewLink(null)}>
+      <div className="ar-preview-link">
+        <p>
+          Open this link on a phone connected to the same network as this computer. The preview stays available while this local server is running.
+        </p>
+        <div className="ar-preview-link__qr" aria-label="QR code for phone preview link">
+          {arPreviewQrDataUrl ? (
+            <img src={arPreviewQrDataUrl} alt="" />
+          ) : (
+            <span>{arPreviewQrError ?? "Generating QR..."}</span>
+          )}
+        </div>
+        <label className="ar-preview-link__field">
+          <span>Phone link</span>
+          <input readOnly value={arPreviewLink?.viewerUrl ?? ""} onFocus={(event) => event.currentTarget.select()} />
+        </label>
+        {arPreviewLink?.viewerUrls && arPreviewLink.viewerUrls.length > 1 ? (
+          <div className="ar-preview-link__alternates">
+            <span>Alternative links</span>
+            {arPreviewLink.viewerUrls.filter((url) => url !== arPreviewLink.viewerUrl).slice(0, 4).map((url) => (
+              <a key={url} href={url} target="_blank" rel="noreferrer">{url}</a>
+            ))}
+          </div>
+        ) : null}
+        <div className="ar-preview-link__meta">
+          <span>GLB browser preview</span>
+          <span>USDZ iPhone AR</span>
+        </div>
+        <div className="modal__actions">
+          <button type="button" className="tbtn" onClick={() => { void copyArPreviewLink(); }}>
+            Copy link
+          </button>
+          <a className="tbtn is-primary" href={arPreviewLink?.viewerUrl ?? "#"} target="_blank" rel="noreferrer">
+            Open preview
+          </a>
+        </div>
+      </div>
+    </Modal>
+  );
+
   if (!isStarted) {
     return (
       <>
@@ -3538,6 +3717,7 @@ export function App() {
         {jsonDropOverlay}
         {jsonDropImportModal}
         {releaseNotesModal}
+        {arPreviewModal}
         <input
           ref={jsonInputRef}
           className="app__hidden-input"
@@ -4218,6 +4398,7 @@ export function App() {
       </Modal>
 
       {releaseNotesModal}
+      {arPreviewModal}
 
       <SettingsDialog
         isOpen={isSettingsDialogOpen}
