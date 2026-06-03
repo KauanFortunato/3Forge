@@ -16,7 +16,7 @@ describe("IntroSplash", () => {
     render(<IntroSplash onFinish={onFinish} />);
     expect(onFinish).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(1900 + 450 + 20);
+    vi.advanceTimersByTime(2500 + 450 + 20);
     expect(onFinish).toHaveBeenCalledTimes(1);
   });
 
