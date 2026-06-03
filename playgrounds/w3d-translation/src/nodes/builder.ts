@@ -1,14 +1,19 @@
 // playgrounds/w3d-translation/src/nodes/builder.ts
 import {
-  AlwaysStencilFunc, Box3, CanvasTexture, ClampToEdgeWrapping, Color, DoubleSide, EqualStencilFunc,
-  Group, KeepStencilOp, Mesh, MeshBasicMaterial, NotEqualStencilFunc, Object3D, PlaneGeometry,
-  ReplaceStencilOp, SRGBColorSpace, Texture, TextureLoader, Vector3,
+  AlwaysStencilFunc, Box3, CanvasTexture, ClampToEdgeWrapping, Color, DoubleSide,
+  EqualStencilFunc, Group, KeepStencilOp, Mesh, MeshBasicMaterial,
+  NotEqualStencilFunc, Object3D, PlaneGeometry, ReplaceStencilOp, SRGBColorSpace, Texture,
+  TextureLoader, Vector3,
 } from "three";
 import type {
   W3DGroupData, W3DMaskProperties, W3DNodeData, W3DQuadData, W3DTextureTextData, W3DTransform,
 } from "./data";
 import { resolveMaterial, displayColorToHex, type UVTransform } from "./materialResolver";
 import type { W3DResourceRegistry } from "./resources";
+import {
+  inkAnchorOffset, measureTextureText,
+  type AlignmentX, type MetricsProvider, type MeasureResult,
+} from "./textureTextMeasure";
 
 /**
  * Phase 1a + Patch A — stencil clipping for the photo card subtree.
@@ -463,12 +468,36 @@ type FlowAxis = "x" | "y";
 function flowAxisFromDirection(direction: string | undefined): { axis: FlowAxis; sign: 1 | -1 } {
   switch (direction) {
     case "YMinus": return { axis: "y", sign: -1 };
-    case "YPlus":  return { axis: "y", sign: 1 };
+    case "YPlus": return { axis: "y", sign: 1 };
     case "XMinus": return { axis: "x", sign: -1 };
     case "XPlus":
     case undefined:
-    default:       return { axis: "x", sign: 1 };
+    default: return { axis: "x", sign: 1 };
   }
+}
+
+/**
+ * World-space font descent of the TextureText leaf inside a flow child (0 if
+ * none / no measure — e.g. jsdom fallback or a Quad-only row). `measure.descent`
+ * is the descent in world units AT THE EM (pre node scale); the leaf's world
+ * scale brings it to world. Used as the top margin of a Y text stack.
+ */
+function firstRowFontDescent(child: Object3D | undefined): number {
+  if (!child) return 0;
+  child.updateWorldMatrix(true, true);
+  let descent = 0;
+  const tmp = new Vector3();
+  child.traverse((o) => {
+    const w = (o.userData as Record<string, unknown> | undefined)?.w3d as
+      | { kind?: string; measure?: { descent?: number } }
+      | undefined;
+    if (w?.kind === "TextureText" && typeof w.measure?.descent === "number") {
+      o.getWorldScale(tmp);
+      const d = w.measure.descent * Math.abs(tmp.y);
+      if (d > descent) descent = d;
+    }
+  });
+  return descent;
 }
 
 function applyFlowLayout(group: Group, node: W3DGroupData): void {
@@ -498,7 +527,12 @@ function applyFlowLayout(group: Group, node: W3DGroupData): void {
   // local extents (same invariant the cross-axis pass and former Phase D2 used).
   const groupWorld = new Vector3();
   group.getWorldPosition(groupWorld);
-  let cursor = 0;
+  // Top margin for a Y text stack = the first row's font DESCENT (the empty
+  // bottom padding the font carries below the caps, measured per text). This
+  // makes the gap ABOVE the first row (e.g. BENCH title → first name) match the
+  // font's natural bottom padding instead of cramming it flush. Browser-only
+  // (jsdom has no measure → 0). Quad-only stacks have no descent → 0.
+  let cursor = mainAxis === "y" ? sign * firstRowFontDescent(group.children[0]) : 0;
   for (const child of group.children) {
     child.updateWorldMatrix(true, true);
     const box = new Box3().setFromObject(child);
@@ -557,25 +591,24 @@ function measuredAlongAxis(obj: Object3D, axis: FlowAxis): number {
 }
 
 /**
- * Natural font line-spaced height as a multiplier on `TextBoxSize × Scale`.
+ * R3's text MEASURE (line-box) height in world units, at the engine base size.
  *
- * R3 reports a child's `Local Measure` along Y for TextureText leaves that
- * exceeds the authored TextBoxSize plane bounds because the rendered glyph
- * ascends/descends beyond the rectangle. For FlowChildren stride along Y,
- * R3 uses this line-spaced extent — not the plane bounds — so adjacent rows
- * stack with the actual line-height, not the TextBoxSize.
+ * This is the height R3 reports as "Measure" / "Local Measure" for a TextureText
+ * row — the font's LINE BOX, which is TALLER than the visible glyphs. R3 stacks
+ * FlowChildren rows by THIS height, NOT the TextBoxSize and NOT the visible
+ * render em. Observed as a constant (font/weight independent) in the LINEUP_LEFT
+ * R3 panels:
+ *   DARIUS   0.445 / scale 2.5 = 0.178
+ *   STEPHENS 0.536 / scale 3   = 0.179
+ *   BENCH    0.231 / scale 1.3 = 0.178
+ * So a text row's flow extent = R3_TEXT_MEASURE_EM × scale (bench: 0.178×1.3 =
+ * 0.231), and the stride = that + LeadingSpace (bench: 0.231 − 0.084 = 0.147).
  *
- * Calibrated from LINEUP_LEFT R3 reference:
- *   BENCH_LIST stacks 10 rows on FS_02 ("Obviously Cond" Bold, LineSpacing=1)
- *   with each row's TextureText authoring TextBoxSize 0.86×0.15, Scale 1.3 and
- *   LeadingSpace -0.084. R3 reports BENCH_LIST Measure Y = 1.411, back-solving
- *   to a per-row main extent of 0.2167 = (10/9) × (0.15 × 1.3). Without this
- *   factor we compute the plane-only stride 0.111 → too-compact 1.194.
- *
- * Scope: only the Y main axis. X-axis flows (e.g. PLAYERS card row) are
- * dominated by mesh width, not font metrics, and stay on the raw Box3 size.
+ * Distinct from R3_TEXT_BASE_EM (0.12), which is the VISIBLE glyph render height.
+ * R3 carries both: a small visible em and a larger line-box used for layout.
+ * Scope: only the Y main axis; X-axis flows stay on the raw Box3 width.
  */
-const FLOW_TEXT_LINE_HEIGHT_FACTOR = 10 / 9;
+const R3_TEXT_MEASURE_EM = 0.178;
 
 /**
  * Main-axis extent used by `applyFlowLayout` to advance the cursor between
@@ -588,9 +621,14 @@ function flowMainExtent(child: Object3D, axis: FlowAxis): number {
   const baseSize = measuredAlongAxis(child, axis);
   if (axis !== "y") return baseSize;
 
-  // Find the largest single-leaf glyph overflow contribution along Y. For a
-  // single-text-dominated row this lifts plane bounds to FACTOR × plane;
-  // subtrees with no TextureText leaves contribute zero (baseSize unchanged).
+  // For a text row, the stride is the font LINE HEIGHT = textBox.y × scale ×
+  // FACTOR — independent of how tall the rendered ink happens to be. We lift the
+  // measured AABB (baseSize) up to that line height. This is robust to the ink
+  // geometry: with the old TextBox-plane geometry baseSize == textBox.y × scale
+  // so this reduces to the original (FACTOR-1) term; with the ink geometry
+  // baseSize == inkHeight × scale (smaller), and without this lift the rows
+  // would collapse on top of each other (the negative LeadingSpace eats the gap).
+  // Subtrees with no TextureText leaves contribute zero (baseSize unchanged).
   let glyphOverflow = 0;
   const tmpScale = new Vector3();
   child.traverse((obj) => {
@@ -601,7 +639,10 @@ function flowMainExtent(child: Object3D, axis: FlowAxis): number {
     const tby = w3d.textBox?.y;
     if (typeof tby !== "number" || tby <= 0) return;
     obj.getWorldScale(tmpScale);
-    const overflow = tby * Math.abs(tmpScale.y) * (FLOW_TEXT_LINE_HEIGHT_FACTOR - 1);
+    // R3 stacks rows by the line-box MEASURE height (× scale), independent of the
+    // ink geometry or the TextBoxSize. Lift the measured AABB up to that.
+    const lineHeight = R3_TEXT_MEASURE_EM * Math.abs(tmpScale.y);
+    const overflow = lineHeight - baseSize;
     if (overflow > glyphOverflow) glyphOverflow = overflow;
   });
   return baseSize + glyphOverflow;
@@ -730,6 +771,139 @@ function wrapMeshWithPivot(mesh: Mesh, node: PivotCandidate): Group {
 // Phase TextureText — static rendering via canvas-to-texture.
 // ---------------------------------------------------------------------------
 
+// R3 base text size in world units. R3 carries no per-font/per-node point size:
+// text renders at this fixed engine default and the on-screen height is
+// `R3_TEXT_BASE_EM * NodeTransform.Scale`. TextBoxSize is only a width
+// constraint, not a size. This is the single knob for global text size — raise
+// it and all text grows proportionally; lower it and all text shrinks.
+const R3_TEXT_BASE_EM = 0.125;
+
+/** Pixels-per-world-unit used internally when measuring glyph ink. */
+const TEXT_MEASURE_PX_PER_UNIT = 1000;
+
+/**
+ * Set canvas letter spacing in px (the W3D FontStyle.Kerning tracking). The
+ * `letterSpacing` 2D-context property is recent; guarded + cast so older type
+ * libs / engines don't break. No-op for 0 so the common (Kerning=0) path is
+ * untouched. Canvas resize clears 2D state, so callers re-apply after resize.
+ */
+function setCanvasLetterSpacing(c2d: CanvasRenderingContext2D, px: number): void {
+  if (!(px > 0)) return;
+  (c2d as unknown as { letterSpacing?: string }).letterSpacing = `${px}px`;
+}
+
+/**
+ * Canvas-backed glyph-ink metrics provider (browser only). Returns world-unit
+ * ink metrics for `text` at a given em. Returns null when no 2D context is
+ * available (jsdom test env), so the caller falls back to the authored TextBox.
+ */
+function makeInkMetricsProvider(
+  text: string, family: string, weight: string, style: string, letterSpacingEm = 0,
+): MetricsProvider | null {
+  const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
+  const c2d = canvas?.getContext("2d") ?? null;
+  if (!c2d) return null;
+  return (em: number) => {
+    const px = Math.max(1, em * TEXT_MEASURE_PX_PER_UNIT);
+    c2d.font = `${style} ${weight} ${px}px "${family}", sans-serif`;
+    // FontStyle.Kerning × KerningScale = letter spacing as a fraction of the em.
+    setCanvasLetterSpacing(c2d, letterSpacingEm * px);
+    const m = c2d.measureText(text);
+    // R3 measures the text LAYOUT box: advance width × font line height (not the
+    // tight glyph ink). fontBoundingBox is content-independent (matches the
+    // constant ~0.178 height in the R3 prints); advance avoids the italic ink
+    // overhang that made the box too wide.
+    const advance = m.width;
+    const asc = finiteMetric(m.fontBoundingBoxAscent) ?? finiteMetric(m.actualBoundingBoxAscent) ?? px * 0.8;
+    const desc = finiteMetric(m.fontBoundingBoxDescent) ?? finiteMetric(m.actualBoundingBoxDescent) ?? px * 0.2;
+    // Actual ink bounds: left overhang + right extent of the rendered pixels.
+    // For italics the right extent exceeds the advance (slant), and the left
+    // can overhang the pen — using these (not the advance) stops the last
+    // letter being clipped and anchors the visible ink, not the layout box.
+    const inkLeft = finiteMetric(m.actualBoundingBoxLeft);
+    const inkRight = finiteMetric(m.actualBoundingBoxRight);
+    return {
+      advanceWidth: advance / TEXT_MEASURE_PX_PER_UNIT,
+      ascent: asc / TEXT_MEASURE_PX_PER_UNIT,
+      descent: desc / TEXT_MEASURE_PX_PER_UNIT,
+      ...(inkLeft !== undefined ? { inkLeft: inkLeft / TEXT_MEASURE_PX_PER_UNIT } : {}),
+      ...(inkRight !== undefined ? { inkRight: inkRight / TEXT_MEASURE_PX_PER_UNIT } : {}),
+    };
+  };
+}
+
+/**
+ * Rasterize `text` at `fontEm` into a canvas tightly bounding the glyph ink so
+ * the texture maps 1:1 onto the ink-sized PlaneGeometry. Browser only.
+ */
+function renderInkTextToCanvas(opts: {
+  text: string; family: string; weight: string; style: string; color: string;
+  fontEm: number; quality: number; letterSpacingEm?: number;
+}): CanvasTexture | null {
+  const canvas = typeof document !== "undefined" ? document.createElement("canvas") : null;
+  const c2d = canvas?.getContext("2d") ?? null;
+  if (!canvas || !c2d) return null;
+  const raster = 260 * Math.max(opts.quality, 0.5); // px per world unit (sharpness)
+  const fontPx = Math.max(1, opts.fontEm * raster);
+  const setFont = () => {
+    c2d.font = `${opts.style} ${opts.weight} ${fontPx}px "${opts.family}", sans-serif`;
+    setCanvasLetterSpacing(c2d, (opts.letterSpacingEm ?? 0) * fontPx);
+  };
+  setFont();
+  const m = c2d.measureText(opts.text);
+  // Canvas = the actual INK box (ink width × font line height), matching the
+  // measured geometry so the texture maps 1:1. We size to the real ink extent
+  // (not the advance) so italic right-overhang / side bearings are NOT clipped,
+  // and draw the pen at `inkLeft` so the left overhang fits at x=0.
+  const advance = m.width;
+  const asc = finiteMetric(m.fontBoundingBoxAscent) ?? fontPx * 0.8;
+  const desc = finiteMetric(m.fontBoundingBoxDescent) ?? fontPx * 0.2;
+  const inkLeft = finiteMetric(m.actualBoundingBoxLeft) ?? 0;
+  const inkRight = finiteMetric(m.actualBoundingBoxRight) ?? advance;
+  const inkW = inkLeft + inkRight;
+  const w = Math.max(1, Math.ceil(inkW));
+  const h = Math.max(1, Math.ceil(asc + desc));
+  canvas.width = w;
+  canvas.height = h;
+  setFont(); // resizing the canvas clears its 2D state
+  c2d.fillStyle = opts.color;
+  c2d.textAlign = "left";
+  c2d.textBaseline = "alphabetic";
+  c2d.fillText(opts.text, inkLeft, asc);
+  const tex = new CanvasTexture(canvas);
+  tex.colorSpace = SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Anchor the text relative to NodeTransform.Position per the authored alignment.
+ * PlaneGeometry is centred; we translate it so the anchor point lands at the
+ * local origin (0,0), and the mesh position then places that point at the
+ * authored Position.
+ *
+ * AlignmentX picks the horizontal edge that sits on the Position point:
+ *   Left  → left edge on the point  → text extends RIGHT of it
+ *   Right → right edge on the point → text extends LEFT of it
+ *   Center→ centre on the point
+ * Vertically we use the baseline (BaselineAligned FontStyles) or AlignmentY.
+ * The TextBox is only a width constraint, never an anchor.
+ */
+function placeInkAnchor(
+  geometry: PlaneGeometry,
+  measured: MeasureResult,
+  alignmentX: AlignmentX,
+): void {
+  const { dx, dy } = inkAnchorOffset(
+    alignmentX,
+    measured.verticalMode,
+    measured.inkWidth,
+    measured.ascent,
+    measured.descent,
+  );
+  geometry.translate(dx, dy, 0);
+}
+
 /**
  * Build a TextureText node as a PlaneGeometry mesh with a CanvasTexture map.
  * The text content is baked into the texture; the mesh's MeshBasicMaterial
@@ -757,15 +931,6 @@ function buildTextureText(
   // sits inside it; SMALL_TEAM_NAME's 6.39-wide box stays long and the small
   // right-aligned "DETROIT IRONHAWKS" sits at its right edge.
   const renderTextBox = node.textBox;
-  const geometry = new PlaneGeometry(
-    Math.max(renderTextBox.x, 0.001),
-    Math.max(renderTextBox.y, 0.001),
-  );
-  applyAlignment(geometry, {
-    alignmentX: node.alignmentX,
-    alignmentY: node.alignmentY,
-    size: renderTextBox,
-  });
 
   // Resolve color from the assigned BaseMaterial. TextureLayer is always
   // "Standard" for TextureText — no map/alphaMap path runs through the
@@ -817,18 +982,63 @@ function buildTextureText(
   // in the corpus.
   const effectiveConstrain = resolveConstrainMethod(node.constrainMethod, node.name, ctx);
 
-  const texture = renderTextToCanvas({
-    text: node.text,
-    family,
-    weight,
-    style,
-    color: textColor,
-    textBox: renderTextBox,
-    alignmentX: node.alignmentX ?? "Center",
-    alignmentY: node.alignmentY ?? "Center",
-    quality: node.textQuality,
-    constrainMethod: effectiveConstrain,
-  });
+  // R3 measure model: render at the fixed base size and derive the object
+  // geometry from the measured glyph INK — not from TextBoxSize. Browser only;
+  // in jsdom (no canvas) fall back to the authored TextBox so the structural
+  // tests stay stable. The pure measure logic + its tests live in
+  // nodes/textureTextMeasure.ts.
+  const baselineAligned = !!fontStyle?.baselineAligned;
+  // FontStyle.Kerning × KerningScale = letter spacing (tracking) as a fraction
+  // of the em. 0 for most labels; >0 spreads the glyphs (e.g. FS_08 team name).
+  const letterSpacingEm = (fontStyle?.kerning ?? 0) * (fontStyle?.kerningScale ?? 1);
+  const inkProvider = makeInkMetricsProvider(node.text, family, weight, style, letterSpacingEm);
+  let geometry: PlaneGeometry;
+  let texture: CanvasTexture;
+  let measured: MeasureResult | undefined;
+  if (inkProvider && node.text.trim().length > 0) {
+    measured = measureTextureText(
+      {
+        text: node.text,
+        baseEm: R3_TEXT_BASE_EM,
+        hasTextBox: node.hasTextBox ?? (node.textBox.x > 0 && node.textBox.y > 0),
+        textBox: node.textBox,
+        constrainMethod: effectiveConstrain,
+        alignmentY: node.alignmentY ?? "Center",
+        baselineAligned,
+      },
+      inkProvider,
+    );
+    geometry = new PlaneGeometry(Math.max(measured.inkWidth, 0.001), Math.max(measured.inkHeight, 0.001));
+    placeInkAnchor(geometry, measured, (node.alignmentX as AlignmentX) ?? "Left");
+    texture =
+      renderInkTextToCanvas({
+        text: node.text, family, weight, style, color: textColor,
+        fontEm: measured.fontEm, quality: node.textQuality, letterSpacingEm,
+      }) ?? new CanvasTexture(document.createElement("canvas"));
+  } else {
+    // Fallback (jsdom / empty text): authored TextBox geometry + box-fitted glyph.
+    geometry = new PlaneGeometry(
+      Math.max(renderTextBox.x, 0.001),
+      Math.max(renderTextBox.y, 0.001),
+    );
+    applyAlignment(geometry, {
+      alignmentX: node.alignmentX,
+      alignmentY: node.alignmentY,
+      size: renderTextBox,
+    });
+    texture = renderTextToCanvas({
+      text: node.text,
+      family,
+      weight,
+      style,
+      color: textColor,
+      textBox: renderTextBox,
+      alignmentX: node.alignmentX ?? "Center",
+      alignmentY: node.alignmentY ?? "Center",
+      quality: node.textQuality,
+      constrainMethod: effectiveConstrain,
+    });
+  }
 
   const material = new MeshBasicMaterial({
     color: new Color(0xffffff),     // texture carries the color; keep white tint
@@ -850,6 +1060,21 @@ function buildTextureText(
     fontWeight: weight,
     fontStyleName: fontStyle?.name,
     ...(fontLoaded !== undefined ? { fontLoaded } : {}),
+    ...(measured
+      ? {
+        measure: {
+          width: measured.inkWidth,
+          height: measured.inkHeight,
+          fontEm: measured.fontEm,
+          // Font descent in world units (the empty bottom padding below the
+          // caps). Used by the flow to space text rows by the font's natural
+          // bottom padding instead of cramming them edge-to-edge.
+          descent: measured.descent,
+          verticalMode: measured.verticalMode,
+          widthConstrained: measured.widthConstrained,
+        },
+      }
+      : {}),
   };
 
   applyTransform(mesh, node.transform);
@@ -1056,20 +1281,20 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
     c2d.fillStyle = opts.color;
     c2d.textAlign =
       opts.alignmentX === "Left" ? "left"
-      : opts.alignmentX === "Right" ? "right"
-      : "center";
+        : opts.alignmentX === "Right" ? "right"
+          : "center";
     c2d.textBaseline =
       opts.alignmentY === "Top" ? "top"
-      : opts.alignmentY === "Bottom" ? "bottom"
-      : "middle";
+        : opts.alignmentY === "Bottom" ? "bottom"
+          : "middle";
     const tx =
       opts.alignmentX === "Left" ? padX
-      : opts.alignmentX === "Right" ? w - padX
-      : w / 2;
+        : opts.alignmentX === "Right" ? w - padX
+          : w / 2;
     const ty =
       opts.alignmentY === "Top" ? 0
-      : opts.alignmentY === "Bottom" ? h
-      : h / 2;
+        : opts.alignmentY === "Bottom" ? h
+          : h / 2;
     const finalMetrics = c2d.measureText(opts.text);
     const inkLeft = finiteMetric(finalMetrics.actualBoundingBoxLeft);
     const inkRight = finiteMetric(finalMetrics.actualBoundingBoxRight);
@@ -1078,8 +1303,8 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
       c2d.textAlign = "left";
       inkTx =
         opts.alignmentX === "Left" ? padX + inkLeft
-        : opts.alignmentX === "Right" ? w - padX - inkRight
-        : w / 2 + (inkLeft - inkRight) / 2;
+          : opts.alignmentX === "Right" ? w - padX - inkRight
+            : w / 2 + (inkLeft - inkRight) / 2;
     }
     const inkHeight = textMetricInkHeight(finalMetrics);
     let inkTy = ty;
@@ -1088,8 +1313,8 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
       c2d.textBaseline = "alphabetic";
       inkTy =
         opts.alignmentY === "Top" ? padY + inkHeight.ascent
-        : opts.alignmentY === "Bottom" ? h - padY - inkHeight.descent
-        : h / 2 + (inkHeight.ascent - inkHeight.descent) / 2;
+          : opts.alignmentY === "Bottom" ? h - padY - inkHeight.descent
+            : h / 2 + (inkHeight.ascent - inkHeight.descent) / 2;
     }
     c2d.fillText(opts.text, inkTx, inkTy);
   }
@@ -1663,6 +1888,12 @@ function isThinDivider(node: W3DQuadData): boolean {
   const thin = Math.min(Math.abs(x), Math.abs(y));
   const long = Math.max(Math.abs(x), Math.abs(y));
   if (long <= 0) return false;
+  // A real divider is a thin-but-present sliver. A ZERO thin dimension means a
+  // degenerate / animated quad (e.g. BASE_BENCH authors Size X=0, its width
+  // grows via a Size.XProp timeline) — that is a background strip, not a
+  // divider, so it must NOT steal the divider render lane (it would then tie
+  // with the real splitters and win on Z, hiding them).
+  if (thin <= 0) return false;
   return thin / long < DIVIDER_ASPECT_MAX;
 }
 
@@ -1684,6 +1915,11 @@ function applyThinDividerOverlay(mesh: Mesh, node: W3DQuadData): void {
   mat.transparent = true;
   mat.depthTest = false;
   mat.depthWrite = false;
+  // A thin divider inherited the colored mask's stencil clip (e.g. BENCH_SPLITTER
+  // clipped by BASE_TEAM). R3 does NOT hard-clip these — the divider stays
+  // exposed at its full size, drawn over the colored panel. Disable the stencil
+  // test so the line renders un-clipped, matching R3.
+  mat.stencilWrite = false;
 }
 
 function loadCachedTexture(url: string, cache: Map<string, Texture>): Texture {

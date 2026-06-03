@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import { Box3, Group, Mesh, MeshBasicMaterial, PlaneGeometry, Vector3 } from "three";
 import { applySkew, buildNode, buildNodeTree } from "./builder";
 import type { BuildContext } from "./builder";
-import type { W3DGroupData, W3DQuadData } from "./data";
+import type { W3DGroupData, W3DQuadData, W3DTextureTextData } from "./data";
 import type { W3DResourceRegistry, W3DBaseMaterialData, W3DTextureLayerData, W3DTextureData } from "./resources";
 
 function groupData(overrides: Partial<W3DGroupData> = {}): W3DGroupData {
@@ -1472,21 +1472,20 @@ describe("builder — BuildContext", () => {
 
   // -----------------------------------------------------------------------
   // Phase D: R3-matched line-height for Y-axis FlowChildren stride.
-  // R3 reports per-row main extent for TextureText leaves as the natural
-  // line-spaced glyph height, not the TextBoxSize plane bounds. The flow
-  // stride for a -Y stack of TextureText rows therefore uses
-  //   stride = (textBox.y × scale.y × FLOW_TEXT_LINE_HEIGHT_FACTOR) + LeadingSpace
-  // where FLOW_TEXT_LINE_HEIGHT_FACTOR = 10/9, calibrated from LINEUP_LEFT
-  // BENCH_LIST (R3 Measure 1.411 over 10 rows, LeadingSpace -0.084).
+  // R3 stacks TextureText rows by the line-box MEASURE height (R3_TEXT_MEASURE_EM
+  // × scale), NOT the TextBoxSize plane bounds. The flow stride for a -Y stack
+  // therefore uses:
+  //   stride = (R3_TEXT_MEASURE_EM × scale.y) + LeadingSpace
+  // where R3_TEXT_MEASURE_EM = 0.178, observed from the LINEUP_LEFT R3 panels
+  // (BENCH name Measure 0.231 / scale 1.3 = 0.178; LeadingSpace -0.084).
   // -----------------------------------------------------------------------
 
   test("Phase D: BENCH-shaped YMinus stack of TextureText rows uses line-spaced extent", () => {
     // 3 rows mirroring LINEUP_LEFT BENCH_PLAYER_NN structure: each is a Group
     // wrapping a TextureText leaf with TextBoxSize 0.86×0.15 and Scale 1.3.
-    // R3 expectations:
-    //   plane extent y = 0.15 × 1.3 = 0.195
-    //   line-spaced extent y = 0.195 × (10/9) ≈ 0.21667
-    //   stride per row = 0.21667 + (-0.084) ≈ 0.13267
+    // R3 expectations (from panels):
+    //   line-box MEASURE extent y = 0.178 × 1.3 = 0.2314
+    //   stride per row = 0.2314 + (-0.084) ≈ 0.1474
     const mkRow = (i: number) => {
       const text = {
         kind: "TextureText" as const,
@@ -1518,7 +1517,7 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([stack]);
     const g = root.children[0] as Group;
-    const expectedStride = 0.15 * 1.3 * (10 / 9) + (-0.084);
+    const expectedStride = 0.178 * 1.3 + (-0.084); // R3 MEASURE 0.178 × scale − LeadingSpace
     // Phase D2 — YMinus + Trailing anchors the top of the rendered stack at
     // the group origin. The TextureText leaf sits at its parent group's
     // origin (y=0) with plane half-extent = 0.15 × 1.3 / 2 = 0.0975, so the
@@ -1613,7 +1612,7 @@ describe("builder — BuildContext", () => {
     // Content top of first row in group local = inner offset (0.69) +
     // (textBox.y × scale.y / 2) (0.0975) = +0.7875. Trailing shift drags
     // every row by -0.7875.
-    const expectedStride = 0.15 * 1.3 * (10 / 9) + (-0.084);
+    const expectedStride = 0.178 * 1.3 + (-0.084); // R3 MEASURE 0.178 × scale − LeadingSpace
     const trailingShift = -(0.69 + (0.15 * 1.3) / 2); // = -0.7875
     expect(g.children[0].position.y).toBeCloseTo(0 + trailingShift, 4);
     expect(g.children[1].position.y).toBeCloseTo(-expectedStride + trailingShift, 4);
@@ -2970,151 +2969,95 @@ describe("builder — BuildContext", () => {
     expect(obj.userData.w3d.textBox).toEqual({ x: 0.73, y: 2.73 });
   });
 
-  test("Phase TextureText: Width fitting uses actual glyph bounds when available", () => {
-    const fontCalls: string[] = [];
-    const fillTextCalls: Array<{ text: string; x: number; y: number }> = [];
-    let currentFont = "";
-    const context = {
-      clearRect: vi.fn(),
-      fillText: vi.fn((text: string, x: number, y: number) => {
-        fillTextCalls.push({ text, x, y });
-      }),
-      measureText: vi.fn(() => {
-        const match = /(\d+)px/.exec(currentFont);
-        const px = match ? Number(match[1]) : 85;
-        const scale = px / 85;
-        return {
-          width: 180 * scale,
-          actualBoundingBoxLeft: 20 * scale,
-          actualBoundingBoxRight: 200 * scale,
-          actualBoundingBoxAscent: 50 * scale,
-          actualBoundingBoxDescent: 10 * scale,
-        };
-      }),
-      get font() {
-        return currentFont;
-      },
-      set font(value: string) {
-        currentFont = value;
-        fontCalls.push(value);
-      },
-      fillStyle: "",
-      textAlign: "left" as CanvasTextAlign,
-      textBaseline: "alphabetic" as CanvasTextBaseline,
-    };
-    const canvas = {
-      width: 0,
-      height: 0,
-      getContext: vi.fn(() => context),
-    } as unknown as HTMLCanvasElement;
-    const originalCreateElement = document.createElement.bind(document);
-    const createElement = vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
-      if (tagName === "canvas") return canvas;
-      return originalCreateElement(tagName);
-    });
-    try {
-      buildNode({
-        kind: "TextureText" as const,
-        id: "tt", name: "WIDE_LABEL",
-        enable: true, alpha: 1, speedScale: 1,
-        text: "WIDE",
-        textBox: { x: 1, y: 0.5 },
-        alignmentX: "Left" as const,
-        alignmentY: "Center" as const,
-        constrainMethod: "Width",
-        textQuality: 1,
-        maskIds: [],
-        transform: {
-          position: { x: 0, y: 0, z: 0 },
-          rotationDeg: { x: 0, y: 0, z: 0 },
-          scale: { x: 1, y: 1, z: 1 },
-        },
-        children: [],
-      }, makeCtx());
-    } finally {
-      createElement.mockRestore();
-    }
-
-    expect(fontCalls[0]).toContain("85px");
-    expect(fontCalls.at(-1)).toContain("72px");
-    expect(fillTextCalls[0]?.x).toBeGreaterThan(6);
-  });
-
-  test("Phase TextureText: tall single-line Width box sizes the glyph from a compact caption height, not the box height", () => {
-    // COACH_FUNCTION-shaped: authored TextBox is very tall (0.73 × 2.73). The
-    // PlaneGeometry stays tall (asserted in the preserved-TextBox test); the
-    // glyph must be sized from a COMPACT caption height so "COACH" is a small
-    // line INSIDE the box — never a giant glyph derived from the 2.73 height.
-    const fontCalls: string[] = [];
+  // The measure model (geometry = glyph INK, not TextBoxSize) only runs when a
+  // real 2D canvas context is available. These mock the canvas so the ink path
+  // is exercised in jsdom. The pure measure math is covered in
+  // nodes/textureTextMeasure.test.ts; here we assert the builder WIRES it in.
+  function buildTextWithMockCanvas(node: W3DTextureTextData): Mesh {
+    // Linear mock metrics: ink width = 0.5*px, ascent = 0.4*px, descent = 0.1*px
+    // (so ink width == ink height == 0.5*em). Scales linearly with the font px.
     let currentFont = "";
     const context = {
       clearRect: vi.fn(),
       fillText: vi.fn(),
       measureText: vi.fn(() => {
-        const match = /(\d+)px/.exec(currentFont);
-        const px = match ? Number(match[1]) : 85;
-        const scale = px / 85;
+        const px = Number(/(\d+(?:\.\d+)?)px/.exec(currentFont)?.[1] ?? "85");
         return {
-          width: 180 * scale,
-          actualBoundingBoxLeft: 20 * scale,
-          actualBoundingBoxRight: 200 * scale,
-          actualBoundingBoxAscent: 50 * scale,
-          actualBoundingBoxDescent: 10 * scale,
+          width: px * 0.5,
+          actualBoundingBoxLeft: 0,
+          actualBoundingBoxRight: px * 0.5,
+          actualBoundingBoxAscent: px * 0.4,
+          actualBoundingBoxDescent: px * 0.1,
         };
       }),
-      get font() {
-        return currentFont;
-      },
-      set font(value: string) {
-        currentFont = value;
-        fontCalls.push(value);
-      },
+      get font() { return currentFont; },
+      set font(value: string) { currentFont = value; },
       fillStyle: "",
       textAlign: "left" as CanvasTextAlign,
       textBaseline: "alphabetic" as CanvasTextBaseline,
     };
-    const canvas = {
-      width: 0,
-      height: 0,
-      getContext: vi.fn(() => context),
-    } as unknown as HTMLCanvasElement;
-    const originalCreateElement = document.createElement.bind(document);
-    const createElement = vi.spyOn(document, "createElement").mockImplementation((tagName: string) => {
-      if (tagName === "canvas") return canvas;
-      return originalCreateElement(tagName);
-    });
+    const canvas = { width: 0, height: 0, getContext: vi.fn(() => context) } as unknown as HTMLCanvasElement;
+    const orig = document.createElement.bind(document);
+    const spy = vi.spyOn(document, "createElement").mockImplementation((tag: string) =>
+      tag === "canvas" ? canvas : orig(tag));
     try {
-      buildNode({
-        kind: "TextureText" as const,
-        id: "tt", name: "ROLE_LABEL",
-        enable: true, alpha: 1, speedScale: 1,
-        text: "COACH",
-        textBox: { x: 0.73, y: 2.73 },
-        alignmentX: "Left" as const,
-        alignmentY: "Center" as const,
-        constrainMethod: "Width",
-        textQuality: 2,
-        maskIds: [],
-        transform: {
-          position: { x: 0, y: 0, z: 0 },
-          rotationDeg: { x: 0, y: 0, z: 0 },
-          scale: { x: 1, y: 1, z: 1 },
-        },
-        children: [],
-      }, makeCtx());
+      return buildNode(node, makeCtx()) as Mesh;
     } finally {
-      createElement.mockRestore();
+      spy.mockRestore();
     }
+  }
 
-    const pxPerUnit = 200 * 2; // quality 2
-    const compactUnits = Math.min(2.73, (0.73 / "COACH".length) * 1.2);
-    const expectedFontPx = Math.floor(Math.round(compactUnits * pxPerUnit) * 0.85);
-    const fullHeightFontPx = Math.floor(Math.round(2.73 * pxPerUnit) * 0.85);
-    const finalPx = Number(/(\d+)px/.exec(fontCalls.at(-1) ?? "")?.[1]);
-    // Glyph sized from the compact caption height (the mock text fits width, so
-    // no Width shrink), NOT from the tall 2.73 authored box.
-    expect(finalPx).toBe(expectedFontPx);
-    expect(finalPx).toBeLessThan(fullHeightFontPx);
+  function textGeomParams(mesh: Mesh) {
+    return (mesh.geometry as InstanceType<typeof import("three").PlaneGeometry>).parameters;
+  }
+
+  test("Phase TextureText: geometry comes from glyph INK (not TextBoxSize) when canvas metrics are available", () => {
+    const obj = buildTextWithMockCanvas({
+      kind: "TextureText", id: "tt", name: "WIDE_LABEL",
+      enable: true, alpha: 1, speedScale: 1, text: "WIDE",
+      textBox: { x: 1, y: 0.5 }, alignmentX: "Left", alignmentY: "Center",
+      constrainMethod: "Width", textQuality: 1, maskIds: [],
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+      children: [],
+    });
+    const params = textGeomParams(obj);
+    expect(params.width).not.toBeCloseTo(1, 2);    // NOT TextBoxSize.x
+    expect(params.height).not.toBeCloseTo(0.5, 2); // NOT TextBoxSize.y
+    expect(params.width).toBeCloseTo(params.height, 4); // mock ink: w == h
+    expect(params.width).toBeLessThan(1);
+    expect(obj.userData.w3d.measure).toBeDefined();
+  });
+
+  test("Phase TextureText: ConstrainMethod=Width shrinks ink to TextBoxSize.x when it overflows", () => {
+    const obj = buildTextWithMockCanvas({
+      kind: "TextureText", id: "tt", name: "WIDE_LABEL",
+      enable: true, alpha: 1, speedScale: 1, text: "WIDE",
+      textBox: { x: 0.05, y: 0.5 }, alignmentX: "Left", alignmentY: "Center",
+      constrainMethod: "Width", textQuality: 1, maskIds: [],
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+      children: [],
+    });
+    const params = textGeomParams(obj);
+    expect(params.width).toBeCloseTo(0.05, 3); // shrunk to fit the narrow box
+    expect(obj.userData.w3d.measure.widthConstrained).toBe(true);
+  });
+
+  test("Phase TextureText: ink height is base-size driven, NOT the TextBoxSize height (tall vs short box match)", () => {
+    const mk = (boxY: number): W3DTextureTextData => ({
+      kind: "TextureText", id: "tt", name: "ROLE_LABEL",
+      enable: true, alpha: 1, speedScale: 1, text: "COACH",
+      textBox: { x: 0.73, y: boxY }, alignmentX: "Left", alignmentY: "Center",
+      constrainMethod: "Width", textQuality: 2, maskIds: [],
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+      children: [],
+    });
+    const tall = textGeomParams(buildTextWithMockCanvas(mk(2.73)));
+    const short = textGeomParams(buildTextWithMockCanvas(mk(0.3)));
+    // Same text/font/width-box, different box HEIGHT -> identical ink height:
+    // size comes from the base em, never the box height (R3 prints: ink height
+    // ~constant across box heights).
+    expect(tall.height).toBeCloseTo(short.height, 5);
+    expect(tall.height).not.toBeCloseTo(2.73, 2);
   });
 
   test("Phase TextureText: mesh.userData.w3d carries kind, text, textBox", () => {

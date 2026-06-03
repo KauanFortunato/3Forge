@@ -136,6 +136,13 @@ export type W3DTextureTextData = {
   fontStyleId?: string;
   /** 2D box for text layout in world units (TextBoxSize). */
   textBox: { x: number; y: number };
+  /**
+   * R3 GeometryOptions.HasTextBox. When false (or no non-zero TextBoxSize) the
+   * text has no constraint box — it renders at the base size with no width-fit.
+   * Default derived from the presence of a non-zero TextBoxSize (consumers that
+   * build nodes by hand may omit it; the parser always sets it).
+   */
+  hasTextBox?: boolean;
   alignmentX?: "Left" | "Right" | "Center";
   alignmentY?: "Top" | "Bottom" | "Center";
   /** R3 rasterization quality multiplier (typical 0.8..5). */
@@ -351,6 +358,10 @@ function parseTextureText(el: Element, warnings: string[]): W3DTextureTextData {
   if (tbsEl && (textBox.x === 0 || textBox.y === 0)) {
     warnings.push(`TextureText "${label}" has zero TextBoxSize (${textBox.x} x ${textBox.y}); building anyway.`);
   }
+  const hasTextBox = parseBoolAttr(
+    go?.getAttribute("HasTextBox") ?? undefined,
+    textBox.x > 0 && textBox.y > 0,
+  );
 
   const node: W3DTextureTextData = {
     kind: "TextureText",
@@ -363,6 +374,7 @@ function parseTextureText(el: Element, warnings: string[]): W3DTextureTextData {
     text,
     fontStyleId,
     textBox,
+    hasTextBox,
     alignmentX,
     alignmentY,
     textQuality,
