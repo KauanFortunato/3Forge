@@ -83,6 +83,15 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ["K"], label: "Add keyframe at playhead" },
     ],
   },
+    {
+    title: "Property Edit Precision",
+    entries: [
+      { keys: ["Ctrl + Shift"], label: "Step 1" },
+      { keys: ["Shift"], label: "Step 0.1" },
+      { keys: ["Ctrl"], label: "Step 0.01" },
+      { keys: ["Alt"], label: "Step 0.001" },
+    ],
+  },
 ];
 
 export function ShortcutDialog({ isOpen, onClose }: ShortcutDialogProps) {

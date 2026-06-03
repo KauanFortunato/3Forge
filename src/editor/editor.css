@@ -3443,10 +3443,21 @@ button.save-status {
   max-width: 260px;
 }
 
-.save-status--synced .save-status__dot { background: var(--c-y); }
-.save-status--edited .save-status__dot { background: var(--c-warn); }
-.save-status--edited .save-status__primary { color: var(--c-warn); }
-.save-status--browser .save-status__dot { background: var(--c-accent); }
+.save-status--synced .save-status__dot {
+  background: var(--c-y);
+}
+
+.save-status--edited .save-status__dot {
+  background: var(--c-warn);
+}
+
+.save-status--edited .save-status__primary {
+  color: var(--c-warn);
+}
+
+.save-status--browser .save-status__dot {
+  background: var(--c-accent);
+}
 
 .save-status--saving .save-status__dot {
   background: var(--c-accent);
@@ -3454,8 +3465,15 @@ button.save-status {
 }
 
 @keyframes saveStatusPulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 button.save-status:hover .save-status__primary,
@@ -3470,15 +3488,15 @@ button.save-status:hover .save-status__detail {
   border-radius: var(--r-sm);
 }
 
-.menubar__right > .save-status--menubar {
+.menubar__right>.save-status--menubar {
   background: var(--c-bg-3);
 }
 
-.menubar__right > .save-status--browser {
+.menubar__right>.save-status--browser {
   background: color-mix(in srgb, var(--c-accent) 14%, var(--c-bg-3));
 }
 
-.menubar__right > .save-status--edited {
+.menubar__right>.save-status--edited {
   background: color-mix(in srgb, var(--c-warn) 16%, var(--c-bg-3));
 }
 
@@ -4061,7 +4079,7 @@ button.save-status--statusbar:hover {
 
 .modal--wide .modal__bd {
   overflow: hidden;
-  padding: 0;
+  padding: var(--sp-5);
 }
 
 .modal__hd {
