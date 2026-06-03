@@ -74,7 +74,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { USDLoader } from "three/examples/jsm/loaders/USDLoader.js";
-import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
+import { HDRLoader } from "three/examples/jsm/loaders/HDRLoader.js";
 import { createAlignmentShape, findAlignmentSnaps } from "./alignment";
 import {
   animationValueToBoolean,
@@ -530,7 +530,7 @@ export class SceneEditor {
   private readonly childContainerMap = new Map<string, Object3D>();
   private readonly gltfLoader = new GLTFLoader();
   private readonly usdLoader = new USDLoader();
-  private readonly rgbeLoader = new RGBELoader();
+  private readonly hdrLoader = new HDRLoader();
   // Parsed-model cache: maps asset.id → Promise<Group> so each model is parsed
   // once. Subsequent scene rebuilds clone the cached Group instead of re-parsing.
   private readonly modelGroupCache = new Map<string, ModelCacheEntry>();
@@ -2099,7 +2099,7 @@ export class SceneEditor {
       return cached;
     }
 
-    const source = await this.rgbeLoader.loadAsync(src);
+    const source = await this.hdrLoader.loadAsync(src);
     const target = this.pmremGenerator.fromEquirectangular(source);
     const environment = { target, source };
     this.hdrEnvironmentCache.set(src, environment);
