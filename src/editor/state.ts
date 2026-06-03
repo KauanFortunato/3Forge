@@ -1430,16 +1430,12 @@ function normalizeBlueprint(rawBlueprint: unknown): ComponentBlueprint {
           delete (node as { materialId?: string }).materialId;
         }
 
-        if (node.material.mapImageId && !availableImages.has(node.material.mapImageId)) {
-          delete node.material.mapImageId;
-        }
+        pruneMissingMaterialImageRefs(node.material, availableImages);
       }
     }
 
     for (const material of importedMaterials) {
-      if (material.spec.mapImageId && !availableImages.has(material.spec.mapImageId)) {
-        delete material.spec.mapImageId;
-      }
+      pruneMissingMaterialImageRefs(material.spec, availableImages);
     }
 
   const animation = normalizeAnimation(source.animation, new Set(importedNodes.map((node) => node.id)));
@@ -4000,13 +3996,11 @@ export class EditorStore extends EventTarget {
       delete node.imageId;
     }
     for (const material of this._blueprint.materials) {
-      if (material.spec.mapImageId === imageId) {
-        delete material.spec.mapImageId;
-      }
+      removeMaterialImageRef(material.spec, imageId);
     }
     for (const node of this._blueprint.nodes) {
-      if (node.type !== "group" && node.material.mapImageId === imageId) {
-        delete node.material.mapImageId;
+      if (node.type !== "group") {
+        removeMaterialImageRef(node.material, imageId);
       }
     }
     this.notify({ reason: "image", source });
@@ -4783,6 +4777,32 @@ function isVec3Equal(
   );
 }
 
+const MATERIAL_IMAGE_ID_KEYS = [
+  "mapImageId",
+  "roughnessMapImageId",
+  "metalnessMapImageId",
+  "normalMapImageId",
+  "aoMapImageId",
+  "emissiveMapImageId",
+] as const;
+
+function pruneMissingMaterialImageRefs(material: MaterialSpec, availableImages: Pick<ReadonlyMap<string | undefined, unknown>, "has">): void {
+  for (const key of MATERIAL_IMAGE_ID_KEYS) {
+    const imageId = material[key];
+    if (imageId && !availableImages.has(imageId)) {
+      delete material[key];
+    }
+  }
+}
+
+function removeMaterialImageRef(material: MaterialSpec, imageId: string): void {
+  for (const key of MATERIAL_IMAGE_ID_KEYS) {
+    if (material[key] === imageId) {
+      delete material[key];
+    }
+  }
+}
+
 /**
  * Material paths whose applicability depends on the resolved material type.
  * When a `material.type` entry is in the plan for a target, these paths must
@@ -4794,6 +4814,11 @@ const MATERIAL_TYPE_DEPENDENT_PATHS: ReadonlySet<string> = new Set<string>([
   "material.emissiveIntensity",
   "material.roughness",
   "material.metalness",
+  "material.roughnessMapImageId",
+  "material.metalnessMapImageId",
+  "material.normalMapImageId",
+  "material.aoMapImageId",
+  "material.emissiveMapImageId",
   "material.envMapIntensity",
   "material.ior",
   "material.transmission",

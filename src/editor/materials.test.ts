@@ -13,6 +13,11 @@ describe("material helpers", () => {
       type: "standard",
       color: "#5ad3ff",
       mapImageId: undefined,
+      roughnessMapImageId: undefined,
+      metalnessMapImageId: undefined,
+      normalMapImageId: undefined,
+      aoMapImageId: undefined,
+      emissiveMapImageId: undefined,
       side: "front",
       emissive: "#000000",
       emissiveIntensity: 1,
@@ -75,6 +80,11 @@ describe("material helpers", () => {
     const physicalDefs = getMaterialPropertyDefinitions("physical").map((definition) => definition.path);
     expect(physicalDefs).toContain("material.side");
     expect(physicalDefs).toContain("material.mapImageId");
+    expect(physicalDefs).toContain("material.roughnessMapImageId");
+    expect(physicalDefs).toContain("material.metalnessMapImageId");
+    expect(physicalDefs).toContain("material.normalMapImageId");
+    expect(physicalDefs).toContain("material.aoMapImageId");
+    expect(physicalDefs).toContain("material.emissiveMapImageId");
     expect(physicalDefs).toContain("material.roughness");
     expect(physicalDefs).toContain("material.transmission");
     expect(physicalDefs).toContain("material.clearcoatRoughness");
@@ -257,5 +267,6 @@ describe("material helpers", () => {
       "material.fog",
     ]);
     expect(getMaterialPropertyDefinitions("standard").map((definition) => definition.path)).toContain("material.roughness");
+    expect(getMaterialPropertyDefinitions("standard").map((definition) => definition.path)).toContain("material.roughnessMapImageId");
   });
 });

@@ -5,6 +5,7 @@ import {
   BoxGeometry,
   CapsuleGeometry,
   CircleGeometry,
+  type ColorSpace,
   Color,
   ConeGeometry,
   CylinderGeometry,
@@ -913,7 +914,12 @@ class BlueprintObjectBuilder {
   }
 
   private async createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" | "model" }>): Promise<MaterialBaseOptions> {
-    const materialTexture = await this.getMaterialTexture(node.material);
+    const materialTexture = await this.getMaterialColorTexture(node.material.mapImageId);
+    const emissiveMap = await this.getMaterialColorTexture(node.material.emissiveMapImageId);
+    const roughnessMap = await this.getMaterialDataTexture(node.material.roughnessMapImageId);
+    const metalnessMap = await this.getMaterialDataTexture(node.material.metalnessMapImageId);
+    const normalMap = await this.getMaterialDataTexture(node.material.normalMapImageId);
+    const aoMap = await this.getMaterialDataTexture(node.material.aoMapImageId);
     return {
       color: node.material.color,
       side: resolveMaterialSide(node.material.side),
@@ -932,12 +938,17 @@ class BlueprintObjectBuilder {
       wireframe: node.material.wireframe,
       wireframeLinewidth: node.material.wireframeLinewidth,
       ...(materialTexture ? { map: materialTexture } : {}),
+      ...(emissiveMap ? { emissiveMap } : {}),
+      ...(roughnessMap ? { roughnessMap } : {}),
+      ...(metalnessMap ? { metalnessMap } : {}),
+      ...(normalMap ? { normalMap } : {}),
+      ...(aoMap ? { aoMap } : {}),
     };
   }
 
   private async createImageMesh(node: ImageNode): Promise<Mesh> {
     const geometry = new PlaneGeometry(node.geometry.width, node.geometry.height);
-    const texture = await this.getMaterialTexture(node.material) ?? await this.getTexture(resolveImageAssetForNode(node, this.imagesById).src);
+    const texture = await this.getMaterialColorTexture(node.material.mapImageId) ?? await this.getTexture(resolveImageAssetForNode(node, this.imagesById).src, SRGBColorSpace);
     const material = buildMaterialFromSpec({
       ...await this.createBaseMaterialOptions(node),
       map: texture,
@@ -945,24 +956,35 @@ class BlueprintObjectBuilder {
     return new Mesh(geometry, material);
   }
 
-  private async getMaterialTexture(material: MaterialSpec): Promise<Texture | null> {
-    if (!material.mapImageId) {
+  private async getMaterialColorTexture(imageId: string | undefined): Promise<Texture | null> {
+    return this.getMaterialTexture(imageId, SRGBColorSpace);
+  }
+
+  private async getMaterialDataTexture(imageId: string | undefined): Promise<Texture | null> {
+    return this.getMaterialTexture(imageId);
+  }
+
+  private async getMaterialTexture(imageId: string | undefined, colorSpace?: ColorSpace): Promise<Texture | null> {
+    if (!imageId) {
       return null;
     }
 
-    const asset = this.imagesById.get(material.mapImageId);
-    return asset ? this.getTexture(asset.src) : null;
+    const asset = this.imagesById.get(imageId);
+    return asset ? this.getTexture(asset.src, colorSpace) : null;
   }
 
-  private async getTexture(src: string): Promise<Texture> {
-    let promise = this.textureCache.get(src);
+  private async getTexture(src: string, colorSpace?: ColorSpace): Promise<Texture> {
+    const cacheKey = colorSpace ? `${src}::${colorSpace}` : src;
+    let promise = this.textureCache.get(cacheKey);
     if (!promise) {
       promise = this.textureLoader.loadAsync(src).then((texture) => {
-        texture.colorSpace = SRGBColorSpace;
+        if (colorSpace) {
+          texture.colorSpace = colorSpace;
+        }
         texture.needsUpdate = true;
         return texture;
       });
-      this.textureCache.set(src, promise);
+      this.textureCache.set(cacheKey, promise);
     }
 
     return promise;

@@ -1,6 +1,6 @@
 import { frameToSeconds, getTrackSegments, isTrackMuted, mapAnimationEaseToGsap, sortTrackKeyframes } from "./animation";
 import { getAvailableFonts, getFontData } from "./fonts";
-import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageAsset, ImageNode, ModelAsset, SceneSettings, TransformSpec } from "./types";
+import type { ComponentBlueprint, EditableBinding, EditorNode, EditorNodeType, FontAsset, ImageAsset, ImageNode, MaterialSpec, ModelAsset, SceneSettings, TransformSpec } from "./types";
 import { ROOT_NODE_ID, createDefaultSceneSettings, getPropertyDefinitions, getPropertyValue, toCamelCase, toPascalCase } from "./state";
 
 interface CollectedBinding {
@@ -19,6 +19,7 @@ interface CollectedImage {
   image: ImageAsset;
   dataVariableName: string;
   textureVariableName: string;
+  colorTexture: boolean;
 }
 
 interface CollectedModel {
@@ -30,6 +31,60 @@ interface CollectedModel {
 
 type TimelineTargetKey = "position" | "rotation" | "scale" | "visible";
 type TimelineAxisKey = "x" | "y" | "z" | "value";
+
+const MATERIAL_TEXTURE_MAPS = [
+  { imageIdKey: "mapImageId", optionName: "map", colorTexture: true },
+  { imageIdKey: "roughnessMapImageId", optionName: "roughnessMap", colorTexture: false },
+  { imageIdKey: "metalnessMapImageId", optionName: "metalnessMap", colorTexture: false },
+  { imageIdKey: "normalMapImageId", optionName: "normalMap", colorTexture: false },
+  { imageIdKey: "aoMapImageId", optionName: "aoMap", colorTexture: false },
+  { imageIdKey: "emissiveMapImageId", optionName: "emissiveMap", colorTexture: true },
+] as const;
+
+function materialTextureKey(imageId: string, optionName: string): string {
+  return `material:${optionName}:${imageId}`;
+}
+
+function hasMaterialTexture(material: MaterialSpec): boolean {
+  return MATERIAL_TEXTURE_MAPS.some((textureMap) => Boolean(material[textureMap.imageIdKey]));
+}
+
+function hasColorMaterialTexture(material: MaterialSpec): boolean {
+  return MATERIAL_TEXTURE_MAPS.some((textureMap) => textureMap.colorTexture && Boolean(material[textureMap.imageIdKey]));
+}
+
+function getMaterialTextureVariables(
+  material: MaterialSpec,
+  imageVariables: Map<string | null, string>,
+): Partial<Record<(typeof MATERIAL_TEXTURE_MAPS)[number]["optionName"], string>> {
+  const variables: Partial<Record<(typeof MATERIAL_TEXTURE_MAPS)[number]["optionName"], string>> = {};
+
+  for (const textureMap of MATERIAL_TEXTURE_MAPS) {
+    const imageId = material[textureMap.imageIdKey];
+    if (!imageId) {
+      continue;
+    }
+
+    const variableName = imageVariables.get(materialTextureKey(imageId, textureMap.optionName));
+    if (variableName) {
+      variables[textureMap.optionName] = variableName;
+    }
+  }
+
+  return variables;
+}
+
+function materialTextureOptions(
+  textureVariables: Partial<Record<(typeof MATERIAL_TEXTURE_MAPS)[number]["optionName"], string>>,
+  optionNames: Array<(typeof MATERIAL_TEXTURE_MAPS)[number]["optionName"]>,
+): string[] {
+  return optionNames
+    .map((optionName) => {
+      const textureVariable = textureVariables[optionName];
+      return textureVariable ? `${optionName}: ${textureVariable}` : null;
+    })
+    .filter((option): option is string => Boolean(option));
+}
 
 interface CollectedAnimationSegment {
   atSeconds: number;
@@ -321,7 +376,9 @@ export function generateTypeScriptComponent(
     }
     lines.push("    ]);");
     for (const image of images) {
-      lines.push(`    ${image.textureVariableName}.colorSpace = SRGBColorSpace;`);
+      if (image.colorTexture) {
+        lines.push(`    ${image.textureVariableName}.colorSpace = SRGBColorSpace;`);
+      }
       lines.push(`    ${image.textureVariableName}.needsUpdate = true;`);
     }
   }
@@ -461,7 +518,7 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: ExportNo
   const images: CollectedImage[] = [];
   const models: CollectedModel[] = [];
 
-  const collectImage = (key: string, image: ImageAsset, baseName: string) => {
+  const collectImage = (key: string, image: ImageAsset, baseName: string, colorTexture = true) => {
     if (collectedImageKeys.has(key)) {
       return;
     }
@@ -479,7 +536,7 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: ExportNo
     imageUsedNames.add(dataVariableName);
     imageUsedNames.add(textureVariableName);
     collectedImageKeys.add(key);
-    images.push({ key, image, dataVariableName, textureVariableName });
+    images.push({ key, image, dataVariableName, textureVariableName, colorTexture });
   };
 
   const collectModel = (key: string, model: ModelAsset, baseName: string) => {
@@ -557,10 +614,16 @@ function collectExportCollections(blueprint: ComponentBlueprint, nodes: ExportNo
       collectModel(node.modelId ? `asset:${node.modelId}` : `node:${node.id}`, model, node.name || model.name);
     }
 
-    if (isMaterialNode(node) && node.material.mapImageId) {
-      const image = imagesById.get(node.material.mapImageId);
-      if (image) {
-        collectImage(`material:${node.material.mapImageId}`, image, image.name);
+    if (isMaterialNode(node)) {
+      for (const textureMap of MATERIAL_TEXTURE_MAPS) {
+        const imageId = node.material[textureMap.imageIdKey];
+        if (!imageId) {
+          continue;
+        }
+        const image = imagesById.get(imageId);
+        if (image) {
+          collectImage(materialTextureKey(imageId, textureMap.optionName), image, image.name, textureMap.colorTexture);
+        }
       }
     }
   }
@@ -642,9 +705,11 @@ function collectImports(nodes: ExportNode[], bindings: CollectedBinding[]): Set<
       imports.add(cls);
     }
   }
-  if (types.has("image") || materialNodes.some((node) => Boolean(node.material.mapImageId))) {
+  if (types.has("image") || materialNodes.some((node) => hasMaterialTexture(node.material))) {
     imports.add("TextureLoader");
-    imports.add("SRGBColorSpace");
+    if (types.has("image") || materialNodes.some((node) => hasColorMaterialTexture(node.material))) {
+      imports.add("SRGBColorSpace");
+    }
   }
   if (hasRenderableNodes) {
     imports.add("BackSide");
@@ -857,8 +922,8 @@ function emitCreationLines(
 
     const materialNode = node;
     const nodeTextureVariable = imageVariables.get(`node:${node.id}`);
-    const materialTextureVariable = node.material.mapImageId ? imageVariables.get(`material:${node.material.mapImageId}`) : undefined;
-    for (const line of emitMaterialCreationLines(materialNode, materialVariable, bindingAccessor, materialTextureVariable ?? nodeTextureVariable, Boolean(materialTextureVariable))) {
+    const materialTextureVariables = getMaterialTextureVariables(node.material, imageVariables);
+    for (const line of emitMaterialCreationLines(materialNode, materialVariable, bindingAccessor, materialTextureVariables, nodeTextureVariable)) {
       lines.push(line);
     }
     lines.push(`const ${meshVariable} = new Mesh(${geometryVariable}, ${materialVariable});`);
@@ -898,8 +963,8 @@ function emitMaterialCreationLines(
   node: MaterialEditorNode,
   materialVariable: string,
   bindingAccessor: string,
-  textureVariable?: string,
-  hasMaterialTexture = false,
+  textureVariables: Partial<Record<(typeof MATERIAL_TEXTURE_MAPS)[number]["optionName"], string>>,
+  nodeTextureVariable?: string,
 ): string[] {
   const lines: string[] = [];
   const hasDynamicMaterialType = Boolean(node.editable["material.type"]);
@@ -923,10 +988,11 @@ function emitMaterialCreationLines(
     `wireframeLinewidth: ${propertyExpression(node, "material.wireframeLinewidth", bindingAccessor)}`,
   ];
 
-  if (textureVariable && (node.type === "image" || hasMaterialTexture)) {
-    sharedOptions.push(`map: ${textureVariable}`);
+  const baseMapVariable = textureVariables.map ?? nodeTextureVariable;
+  if (baseMapVariable && (node.type === "image" || textureVariables.map)) {
+    sharedOptions.push(`map: ${baseMapVariable}`);
   } else if (node.type === "image") {
-    if (!textureVariable) {
+    if (!baseMapVariable) {
       throw new Error(`Image texture not found for image node "${node.name}".`);
     }
   }
@@ -940,6 +1006,7 @@ function emitMaterialCreationLines(
     emissiveIntensityOption,
     `roughness: ${propertyExpression(node, "material.roughness", bindingAccessor)}`,
     `metalness: ${propertyExpression(node, "material.metalness", bindingAccessor)}`,
+    ...materialTextureOptions(textureVariables, ["roughnessMap", "metalnessMap", "normalMap", "aoMap", "emissiveMap"]),
     `envMapIntensity: ${propertyExpression(node, "material.envMapIntensity", bindingAccessor)}`,
     flatShadingOption,
     fogOption,

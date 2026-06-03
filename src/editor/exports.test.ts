@@ -583,6 +583,32 @@ describe("exports", () => {
     expect(output).toContain("map: gridTextureTexture");
   });
 
+  it("emits PBR data texture maps without sRGB color space", () => {
+    const blueprint = createBlueprintFixture();
+    blueprint.images.push({
+      id: "image-roughness",
+      name: "Roughness Texture",
+      mimeType: "image/png",
+      src: "data:image/png;base64,roughness",
+      width: 16,
+      height: 16,
+    });
+    const box = blueprint.nodes.find((node) => node.type === "box");
+    expect(box).toBeTruthy();
+    if (!box) {
+      throw new Error("Expected mesh node.");
+    }
+    box.material.roughnessMapImageId = "image-roughness";
+
+    const output = generateTypeScriptComponent(blueprint);
+
+    expect(output).toMatch(/^import \{[^}]*TextureLoader[^}]*\} from "three";/m);
+    expect(output).not.toContain("roughnessTextureTexture.colorSpace = SRGBColorSpace");
+    expect(output).toContain('const roughnessTextureImageData = "data:image/png;base64,roughness" as const;');
+    expect(output).toContain("textureLoader.loadAsync(roughnessTextureImageData)");
+    expect(output).toContain("roughnessMap: roughnessTextureTexture");
+  });
+
   it("emits MeshToonMaterial with the emissive option when a node uses type=toon", () => {
     const blueprint = createBlueprintFixture();
     const box = blueprint.nodes.find((node) => node.type === "box");

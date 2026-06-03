@@ -63,6 +63,7 @@ import {
   WebGLRenderTarget,
   CircleGeometry,
   Clock,
+  type ColorSpace,
 } from "three";
 import { clone as cloneSkeletalGroup } from "three/examples/jsm/utils/SkeletonUtils.js";
 import * as THREE from "three";
@@ -2026,7 +2027,12 @@ export class SceneEditor {
   }
 
   private createBaseMaterialOptions(node: Exclude<EditorNode, { type: "group" | "model" }>): MaterialBaseOptions {
-    const materialTexture = this.getMaterialTexture(node.material);
+    const materialTexture = this.getMaterialColorTexture(node.material.mapImageId);
+    const emissiveMap = this.getMaterialColorTexture(node.material.emissiveMapImageId);
+    const roughnessMap = this.getMaterialDataTexture(node.material.roughnessMapImageId);
+    const metalnessMap = this.getMaterialDataTexture(node.material.metalnessMapImageId);
+    const normalMap = this.getMaterialDataTexture(node.material.normalMapImageId);
+    const aoMap = this.getMaterialDataTexture(node.material.aoMapImageId);
     return {
       color: node.material.color,
       side: resolveMaterialSide(node.material.side),
@@ -2045,12 +2051,17 @@ export class SceneEditor {
       wireframe: node.material.wireframe,
       wireframeLinewidth: node.material.wireframeLinewidth,
       ...(materialTexture ? { map: materialTexture } : {}),
+      ...(emissiveMap ? { emissiveMap } : {}),
+      ...(roughnessMap ? { roughnessMap } : {}),
+      ...(metalnessMap ? { metalnessMap } : {}),
+      ...(normalMap ? { normalMap } : {}),
+      ...(aoMap ? { aoMap } : {}),
     };
   }
 
   private createImageMesh(node: ImageNode): Mesh {
     const geometry = new PlaneGeometry(node.geometry.width, node.geometry.height);
-    const texture = this.getMaterialTexture(node.material) ?? this.getTexture(node.image.src);
+    const texture = this.getMaterialColorTexture(node.material.mapImageId) ?? this.getTexture(node.image.src, SRGBColorSpace);
     const baseOptions = {
       ...this.createBaseMaterialOptions(node),
       map: texture,
@@ -2059,12 +2070,20 @@ export class SceneEditor {
     return new Mesh(geometry, material);
   }
 
-  private getMaterialTexture(material: MaterialSpec): Texture | null {
-    if (!material.mapImageId) {
+  private getMaterialColorTexture(imageId: string | undefined): Texture | null {
+    return this.getMaterialTexture(imageId, SRGBColorSpace);
+  }
+
+  private getMaterialDataTexture(imageId: string | undefined): Texture | null {
+    return this.getMaterialTexture(imageId);
+  }
+
+  private getMaterialTexture(imageId: string | undefined, colorSpace?: ColorSpace): Texture | null {
+    if (!imageId) {
       return null;
     }
-    const asset = this.store.getImageAsset(material.mapImageId);
-    return asset ? this.getTexture(asset.src) : null;
+    const asset = this.store.getImageAsset(imageId);
+    return asset ? this.getTexture(asset.src, colorSpace) : null;
   }
 
   private resolveFont(fontId: string): ReturnType<typeof parseFontAsset> {
@@ -2080,16 +2099,19 @@ export class SceneEditor {
     return parseFontAsset(fontAsset);
   }
 
-  private getTexture(src: string): Texture {
-    const cached = this.textureCache.get(src);
+  private getTexture(src: string, colorSpace?: ColorSpace): Texture {
+    const cacheKey = colorSpace ? `${src}::${colorSpace}` : src;
+    const cached = this.textureCache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
     const texture = this.textureLoader.load(src);
-    texture.colorSpace = SRGBColorSpace;
+    if (colorSpace) {
+      texture.colorSpace = colorSpace;
+    }
     texture.needsUpdate = true;
-    this.textureCache.set(src, texture);
+    this.textureCache.set(cacheKey, texture);
     return texture;
   }
 

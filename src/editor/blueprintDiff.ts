@@ -134,6 +134,11 @@ function appendMaterialChanges(changes: BlueprintDiffFieldChange[], before: Edit
   appendChange(changes, "material.type", before.material.type, after.material.type);
   appendChange(changes, "material.side", before.material.side, after.material.side);
   appendChange(changes, "material.mapImageId", before.material.mapImageId, after.material.mapImageId);
+  appendChange(changes, "material.roughnessMapImageId", before.material.roughnessMapImageId, after.material.roughnessMapImageId);
+  appendChange(changes, "material.metalnessMapImageId", before.material.metalnessMapImageId, after.material.metalnessMapImageId);
+  appendChange(changes, "material.normalMapImageId", before.material.normalMapImageId, after.material.normalMapImageId);
+  appendChange(changes, "material.aoMapImageId", before.material.aoMapImageId, after.material.aoMapImageId);
+  appendChange(changes, "material.emissiveMapImageId", before.material.emissiveMapImageId, after.material.emissiveMapImageId);
   appendChange(changes, "material.emissive", before.material.emissive, after.material.emissive);
   appendChange(changes, "material.emissiveIntensity", before.material.emissiveIntensity, after.material.emissiveIntensity);
   appendChange(changes, "material.roughness", before.material.roughness, after.material.roughness);

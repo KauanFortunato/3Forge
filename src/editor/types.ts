@@ -78,6 +78,11 @@ export interface MaterialSpec {
   type: MaterialType;
   color: string;
   mapImageId?: string;
+  roughnessMapImageId?: string;
+  metalnessMapImageId?: string;
+  normalMapImageId?: string;
+  aoMapImageId?: string;
+  emissiveMapImageId?: string;
   side: MaterialSide;
   emissive: string;
   emissiveIntensity: number;

@@ -103,6 +103,11 @@ const MATERIAL_STANDARD_PATHS: ReadonlyArray<string> = [
   "material.emissiveIntensity",
   "material.roughness",
   "material.metalness",
+  "material.roughnessMapImageId",
+  "material.metalnessMapImageId",
+  "material.normalMapImageId",
+  "material.aoMapImageId",
+  "material.emissiveMapImageId",
   "material.envMapIntensity",
 ];
 
