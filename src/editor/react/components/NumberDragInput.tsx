@@ -192,9 +192,11 @@ export function NumberDragInput({
     onKeyDown?.(event);
   };
 
-  const resolveStep = (event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): number => {
+  const resolveStep = (event: { shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean }): number => {
+    if (event.ctrlKey && event.shiftKey) return step * 1;
     if (event.shiftKey) return step * 0.1;
-    if (event.ctrlKey || event.metaKey) return step * 10;
+    if (event.ctrlKey || event.metaKey) return step * 0.01;
+    if (event.altKey) return step * 0.001;
     return step;
   };
 
