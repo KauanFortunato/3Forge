@@ -337,12 +337,16 @@ body {
   width: 380px;
   max-height: calc(100% - 24px);
   overflow: auto;
-  background: rgba(20, 22, 28, 0.92);
+  /* Solid (was 0.92 translucent — the bright lineup showed through and made it
+     unreadable) + high z-index so it always sits above the WebGL canvas. */
+  background: #14161c;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 11px;
-  z-index: 5;
+  z-index: 1000;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
 }
 .playground__inspector header {
   display: flex;

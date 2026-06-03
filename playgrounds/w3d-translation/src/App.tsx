@@ -48,6 +48,10 @@ export function App() {
   const [stencilDebugShowMask, setStencilDebugShowMask] = useState(false);
   const [inspectorEnabled, setInspectorEnabled] = useState(false);
   const [inspectorReport, setInspectorReport] = useState<InspectorReport | null>(null);
+  // DEV-Inspector — viewport marker toggles. These live in the 3D scene, so they
+  // stay visible even when the properties panel is closed.
+  const [showBox, setShowBox] = useState(true);
+  const [showPivot, setShowPivot] = useState(true);
   const [referenceImageUrl, setReferenceImageUrl] = useState<string | null>(null);
   const [referenceOpacity, setReferenceOpacity] = useState(0.45);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -100,6 +104,11 @@ export function App() {
       vp.setInspectorCallback(null);
     };
   }, [inspectorEnabled, loaded]);
+
+  // DEV-Inspector — push marker visibility toggles to the viewport.
+  useEffect(() => {
+    viewportRef.current?.setMarkerVisibility({ box: showBox, pivot: showPivot });
+  }, [showBox, showPivot, inspectorReport]);
 
   // DEV-Inspector — Esc clears the panel and the in-viewport selection box.
   useEffect(() => {
@@ -250,6 +259,18 @@ export function App() {
             />
             inspector
           </label>
+          {inspectorEnabled ? (
+            <>
+              <label style={{ marginLeft: 8, fontSize: 12, opacity: 0.8 }} title="Show the pivot/anchor axes marker at the selected node">
+                <input type="checkbox" checked={showPivot} onChange={(e) => setShowPivot(e.target.checked)} />
+                pivot
+              </label>
+              <label style={{ marginLeft: 8, fontSize: 12, opacity: 0.8 }} title="Show the bounding-box outline of the selected node">
+                <input type="checkbox" checked={showBox} onChange={(e) => setShowBox(e.target.checked)} />
+                box
+              </label>
+            </>
+          ) : null}
         </div>
       </header>
 
@@ -340,8 +361,9 @@ export function App() {
             <InspectorPanel
               report={inspectorReport}
               onClose={() => {
+                // Close the panel but KEEP the viewport markers (pivot/box) so they
+                // don't obstruct — they clear on Esc, deselect, or inspector off.
                 setInspectorReport(null);
-                viewportRef.current?.clearInspectorSelection();
               }}
             />
           ) : null}
@@ -656,6 +678,7 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
           {report.transform.pivot ? <><dt>pivot</dt><dd>{fmtVec3(report.transform.pivot)}</dd></> : null}
           {report.transform.alignmentX ? <><dt>alignX</dt><dd>{report.transform.alignmentX}</dd></> : null}
           {report.transform.alignmentY ? <><dt>alignY</dt><dd>{report.transform.alignmentY}</dd></> : null}
+          {report.transform.verticalMode ? <><dt>anchor Y</dt><dd>{report.transform.verticalMode}</dd></> : null}
         </dl>
       </details>
 

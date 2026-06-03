@@ -7,6 +7,8 @@
 
 import {
   AmbientLight,
+  AxesHelper,
+  Box3,
   BoxGeometry,
   BoxHelper,
   CircleGeometry,
@@ -21,10 +23,12 @@ import {
   OrthographicCamera,
   PerspectiveCamera,
   PlaneGeometry,
+  Quaternion,
   Raycaster,
   Scene,
   SphereGeometry,
   Vector2,
+  Vector3,
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -98,6 +102,8 @@ export interface PlaygroundViewport {
   selectW3DNode(nodeId: string): Object3D | null;
   /** DEV-Inspector — clear the current selection outline. */
   clearInspectorSelection(): void;
+  /** DEV-Inspector — toggle the bounding-box / pivot markers on/off. */
+  setMarkerVisibility(opts: { box?: boolean; pivot?: boolean }): void;
   dispose(): void;
 }
 
@@ -176,6 +182,14 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   let inspectorEnabled = false;
   let inspectorCallback: ((event: InspectorEvent) => void) | null = null;
   let selectionHelper: BoxHelper | null = null;
+  // Pivot/anchor marker: AxesHelper at the node's world origin (the point the
+  // mesh position lands — i.e. its anchor). Drawn on top (depthTest off) so it
+  // shows over the geometry. Lives in the scene, not the panel, so it persists
+  // when the inspector panel is closed.
+  let pivotHelper: AxesHelper | null = null;
+  const markerVis = { box: true, pivot: true };
+  const tmpV = new Vector3();
+  const tmpQ = new Quaternion();
   const raycaster = new Raycaster();
   const ndc = new Vector2();
   // Track pointerdown coords to distinguish click vs OrbitControls drag.
@@ -191,13 +205,42 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       (selectionHelper.material as { dispose?: () => void }).dispose?.();
       selectionHelper = null;
     }
+    if (pivotHelper) {
+      scene.remove(pivotHelper);
+      pivotHelper.geometry.dispose();
+      (pivotHelper.material as { dispose?: () => void }).dispose?.();
+      pivotHelper = null;
+    }
   }
 
   function setSelection(target: Object3D | null): void {
     clearSelectionHelper();
     if (!target) return;
     selectionHelper = new BoxHelper(target, 0x7c44de);
+    // Draw the outline ON TOP of the 3D geometry (otherwise the photos/panels in
+    // front of the text occlude it and it looks like "nothing shows").
+    const boxMat = selectionHelper.material as { depthTest?: boolean; depthWrite?: boolean; transparent?: boolean };
+    boxMat.depthTest = false;
+    boxMat.depthWrite = false;
+    boxMat.transparent = true;
+    selectionHelper.renderOrder = 100000;
+    selectionHelper.visible = markerVis.box;
     scene.add(selectionHelper);
+
+    // Size the axes to the node so the marker is visible but not overwhelming.
+    const box = new Box3().setFromObject(target);
+    const dim = box.isEmpty() ? 0.4 : Math.max(box.max.x - box.min.x, box.max.y - box.min.y);
+    const size = Math.min(Math.max(dim * 0.6, 0.15), 1.5);
+    pivotHelper = new AxesHelper(size);
+    pivotHelper.position.copy(target.getWorldPosition(tmpV));
+    pivotHelper.quaternion.copy(target.getWorldQuaternion(tmpQ));
+    const axMat = pivotHelper.material as { depthTest?: boolean; depthWrite?: boolean; transparent?: boolean };
+    axMat.depthTest = false;
+    axMat.depthWrite = false;
+    axMat.transparent = true;
+    pivotHelper.renderOrder = 100001;
+    pivotHelper.visible = markerVis.pivot;
+    scene.add(pivotHelper);
   }
 
   function pickAt(clientX: number, clientY: number): Object3D | null {
@@ -351,6 +394,12 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
     },
     clearInspectorSelection() {
       clearSelectionHelper();
+    },
+    setMarkerVisibility(opts: { box?: boolean; pivot?: boolean }) {
+      if (opts.box !== undefined) markerVis.box = opts.box;
+      if (opts.pivot !== undefined) markerVis.pivot = opts.pivot;
+      if (selectionHelper) selectionHelper.visible = markerVis.box;
+      if (pivotHelper) pivotHelper.visible = markerVis.pivot;
     },
     dispose() {
       if (mountedNodes) {

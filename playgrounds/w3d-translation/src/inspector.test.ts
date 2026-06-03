@@ -334,4 +334,20 @@ describe("inspector — buildInspectorReport", () => {
     const r = buildInspectorReport(mesh);
     expect(r!.identity.fontLoaded).toBeUndefined();
   });
+
+  test("TextureText surfaces top-level alignmentX/Y and measure.verticalMode", () => {
+    // Quad stores alignment under geometry; TextureText stores it at the top
+    // level, plus the measured verticalMode (the anchor actually used).
+    const mesh = quadMesh("DARIUS", {
+      kind: "TextureText", id: "tt", name: "PLAYER_FIRST_NAME_01",
+      text: "DARIUS",
+      alignmentX: "Left",
+      alignmentY: "Center",
+      measure: { verticalMode: "baseline", widthConstrained: false },
+    });
+    const r = buildInspectorReport(mesh);
+    expect(r!.transform.alignmentX).toBe("Left");
+    expect(r!.transform.alignmentY).toBe("Center");
+    expect(r!.transform.verticalMode).toBe("baseline");
+  });
 });

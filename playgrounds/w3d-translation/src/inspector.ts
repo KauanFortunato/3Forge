@@ -42,6 +42,8 @@ export interface InspectorReport {
     pivot?: InspectorVec3;
     alignmentX?: string;
     alignmentY?: string;
+    /** Phase TextureText — the vertical anchor actually used (baseline/top/center/bottom). */
+    verticalMode?: string;
   };
   geometry: {
     /** Size from `node.geometry.size` — note this is post-timeline-snapshot. */
@@ -164,6 +166,11 @@ interface W3DUserDataNode {
   };
   // Phase TextureText — populated by buildTextureText.
   text?: string;
+  /** TextureText stores alignment at the top level (Quad uses geometry.alignmentX). */
+  alignmentX?: string;
+  alignmentY?: string;
+  /** Measured ink result; verticalMode is the anchor actually used. */
+  measure?: { verticalMode?: string; widthConstrained?: boolean };
   fontFamily?: string;
   fontWeight?: string;
   fontStyleName?: string;
@@ -373,8 +380,10 @@ export function buildInspectorReport(
         : vec3(0, 0, 0),
       scale: t?.scale ? vec3(t.scale.x, t.scale.y, t.scale.z) : vec3(1, 1, 1),
       ...(t?.pivot ? { pivot: vec3(t.pivot.x, t.pivot.y, t.pivot.z) } : {}),
-      ...(w.geometry?.alignmentX ? { alignmentX: w.geometry.alignmentX } : {}),
-      ...(w.geometry?.alignmentY ? { alignmentY: w.geometry.alignmentY } : {}),
+      // Quad carries alignment under geometry; TextureText at the top level.
+      ...((w.geometry?.alignmentX ?? w.alignmentX) ? { alignmentX: w.geometry?.alignmentX ?? w.alignmentX } : {}),
+      ...((w.geometry?.alignmentY ?? w.alignmentY) ? { alignmentY: w.geometry?.alignmentY ?? w.alignmentY } : {}),
+      ...(w.measure?.verticalMode ? { verticalMode: w.measure.verticalMode } : {}),
     },
     geometry: {
       ...(w.geometry?.size
