@@ -2556,10 +2556,11 @@ export class EditorStore extends EventTarget {
   setSelectedNodes(
     nodeIds: string[],
     source: EditorStoreChange["source"] = "ui",
-    primaryNodeId?: string,
+    primaryNodeId?: string | null,
   ): void {
-    const nextNodeIds = this.sanitizeSelectionIds(nodeIds, primaryNodeId ?? this._selectedNodeId);
-    const nextPrimaryId = this.resolvePrimarySelectionId(nextNodeIds, primaryNodeId ?? null);
+    const fallbackPrimaryId = primaryNodeId === undefined ? this._selectedNodeId : primaryNodeId;
+    const nextNodeIds = this.sanitizeSelectionIds(nodeIds, fallbackPrimaryId);
+    const nextPrimaryId = this.resolvePrimarySelectionId(nextNodeIds, fallbackPrimaryId);
 
     if (
       nextPrimaryId === this._selectedNodeId &&
@@ -2614,8 +2615,7 @@ export class EditorStore extends EventTarget {
   }
 
   clearSelection(source: EditorStoreChange["source"] = "ui"): void {
-    const fallbackId = this._blueprint.nodes[0]?.id;
-    this.setSelectedNodes(fallbackId ? [fallbackId] : [], source, fallbackId);
+    this.setSelectedNodes([], source, null);
   }
 
   moveSelectedNodes(
@@ -4617,8 +4617,8 @@ export class EditorStore extends EventTarget {
       return nextNodeIds;
     }
 
-    const fallbackId = (fallbackNodeId ? this.getNode(fallbackNodeId)?.id : undefined) ?? this._blueprint.nodes[0]?.id;
-    return this.getNode(fallbackId) ? [fallbackId] : [];
+    const fallbackId = fallbackNodeId ? this.getNode(fallbackNodeId)?.id : undefined;
+    return fallbackId ? [fallbackId] : [];
   }
 
   private resolvePrimarySelectionId(nodeIds: string[], preferredNodeId: string | null): string {
@@ -4626,7 +4626,7 @@ export class EditorStore extends EventTarget {
       return preferredNodeId;
     }
 
-    return nodeIds.at(-1) ?? this._blueprint.nodes[0]?.id ?? ROOT_NODE_ID;
+    return nodeIds.at(-1) ?? "";
   }
 
   private hasSelectedAncestor(nodeId: string | null, selection: Set<string>): boolean {

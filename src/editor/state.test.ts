@@ -1667,17 +1667,17 @@ describe("EditorStore", () => {
     expect(store.selectedNodeId).toBe(sphereId);
   });
 
-  it("clearSelection resets selection to the first node", () => {
+  it("clearSelection leaves no selected nodes", () => {
     const store = new EditorStore(createDefaultBlueprint());
-    const initialNodeId = store.blueprint.nodes[0]?.id;
     const boxId = store.insertNode("box", null);
     const sphereId = store.insertNode("sphere", null);
 
     store.setSelectedNodes([boxId, sphereId]);
     store.clearSelection();
 
-    expect(store.selectedNodeIds).toEqual([initialNodeId]);
-    expect(store.selectedNodeId).toBe(initialNodeId);
+    expect(store.selectedNodeIds).toEqual([]);
+    expect(store.selectedNodeId).toBe("");
+    expect(store.selectedNode).toBeUndefined();
   });
 
   it("moveSelectedNodes moves all selected root ids into the target parent, preserving order, in a single undo step", () => {

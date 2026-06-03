@@ -1454,6 +1454,10 @@ export class SceneEditor {
         return;
       }
     }
+
+    if (!additive) {
+      this.store.clearSelection("scene");
+    }
   }
 
   private getHitsAtClientPoint(clientX: number, clientY: number) {
