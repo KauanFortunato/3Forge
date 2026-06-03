@@ -126,6 +126,26 @@ In the real internal 3Forge blueprint, `group` nodes are allowed as non-renderin
 
 If the output mode is a simplified new scene spec, use only visual primitive objects in `objects`. If the output mode is an existing blueprint animation patch, reference the existing group with `nodeId` or `targetName` inside animation tracks only.
 
+### Full Internal Node Type Catalog
+
+The simplified scene spec (Mode A) can only **create** the five primitives above. The real internal 3Forge blueprint, however, supports many more node types. An existing blueprint (Mode B) or a full internal blueprint (Mode C) may contain any of these, and animation tracks may target any of them by `nodeId`.
+
+Be aware of these node types when reading an existing blueprint or its node map. Do not invent them in a Mode A `objects` array, but do animate them by `nodeId` when they already exist:
+
+- `group`: non-rendering organizational/animation node. Has a `pivotOffset`. No material.
+- `box`, `sphere`, `cylinder`, `plane`, `text`: the five simplified primitives.
+- `circle`: flat disc/fan. Geometry: `radius`, `segments`, `thetaStarts`, `thetaLenght` (the last two are spelled exactly like that internally).
+- `cone`: tapered point. Geometry: `radius`, `height`, `radialSegments`, `heightSegments`, `thetaStart`, `thetaLength`.
+- `capsule`: pill/rounded-cylinder. Geometry: `radius`, `length`, `capSegments`, `radialSegments`.
+- `ring`: flat annulus. Geometry: `innerRadius`, `outerRadius`, `thetaSegments`, `phiSegments`, `thetaStart`, `thetaLength`.
+- `torus`: donut. Geometry: `radius`, `tube`, `radialSegments`, `tubularSegments`, `arc`.
+- `torusKnot`: knotted torus. Geometry: `radius`, `tube`, `tubularSegments`, `radialSegments`, `p`, `q`.
+- `dodecahedron`, `icosahedron`, `octahedron`, `tetrahedron`: faceted polyhedra. Geometry: `radius`, `detail`.
+- `image`: textured plane bound to an image asset. Geometry: `width`, `height`, plus `imageId`.
+- `model`: an imported glTF/GLB or USDZ asset (or a single exploded part of one), bound by `modelId`.
+
+When the user names a part that maps to one of these existing nodes, target it directly. When in doubt about which existing node to target, prefer the `nodeId` from the provided node map over guessing by type.
+
 ## JSON Shape
 
 Return exactly this kind of data:
@@ -258,6 +278,7 @@ Use the material type that matches the intended rendering behavior:
 A full internal blueprint `MaterialSpec` contains more fields than the simplified AI object schema. Use these only in Mode C full internal blueprints or when editing existing internal material specs:
 
 - `type`, `color`, `mapImageId`, `side`, `opacity`, `transparent`, and `visible` control the basic material identity and whether the material renders.
+- Texture map slots beyond the base color map: `roughnessMapImageId`, `metalnessMapImageId`, `normalMapImageId`, `aoMapImageId`, and `emissiveMapImageId`. Each points to an existing image asset id, like `mapImageId`. They apply to `standard` and `physical` materials. Use them only in Mode C or when editing an existing internal material that already has matching image assets. The simplified Mode A object schema exposes only `mapImageId`; it does not accept these extra map slots, so never put them on a Mode A object.
 - `alphaTest` discards pixels below an alpha threshold. Use for cutout textures such as leaves, holes, stickers, or sprites with hard transparent edges.
 - `depthTest` controls whether the material respects depth comparisons. Keep `true` unless making overlay-like effects.
 - `depthWrite` controls whether the material writes to the depth buffer. Use `false` for some transparent overlays to avoid sorting artifacts.
@@ -329,6 +350,21 @@ On import, the store normalizes material assets and node materials. Missing mate
 
 Use textures only when the context provides an existing image id. If the user asks for a textured look but no image id exists, approximate it with color, geometry, and material settings instead of inventing a texture reference.
 
+### Material Defaults
+
+When a simplified object omits a material field (sends `null`), the converter applies these internal defaults, so plan around them:
+
+- `materialType`: `standard`.
+- `roughness`: `0.4`.
+- `metalness`: `0.1`.
+- `emissive`: `#000000` (no glow).
+- `emissiveIntensity`: `1` (but only visible once `emissive` is a non-black color).
+- `ior`: `1.5`, `reflectivity`: `0.5`, `clearcoatRoughness`: `0.1`.
+- `side`: `front` for solids, `double` for planes.
+- `transparent`: becomes `true` automatically whenever `opacity` is below `1`.
+
+The converter also clamps incoming values: `opacity` to `0.05`–`1`, `roughness`/`metalness`/`clearcoat`/`clearcoatRoughness`/`transmission` to `0`–`1`, `emissiveIntensity` to `0`–`10`, and `thickness` to `0`–`10`. Stay inside these ranges so nothing is silently changed.
+
 ### Practical Recipes
 
 Use these starting points, then adjust color and shape:
@@ -377,6 +413,35 @@ Use these starting points, then adjust color and shape:
 }
 ```
 
+## Scene Settings And Rendering Context
+
+A full internal blueprint can include a top-level `sceneSettings` object that controls how the whole scene is lit and rendered. The simplified Mode A scene spec does **not** include `sceneSettings`; it is set only in Mode C full internal blueprints or when editing an existing blueprint that already has it. Even when you are not editing these values, knowing the live defaults helps you pick materials and emissive levels that read correctly.
+
+Current default scene settings:
+
+- `backgroundColor`: `#25272c` (dark neutral). Bright accent and emissive colors read well against it.
+- `environment`:
+  - `type`: one of `none`, `default` (a built-in studio environment), or `hdr`.
+  - `hdrAssetId`: the id of an HDR asset in the blueprint `hdrs` array. Required when `type` is `hdr`; otherwise `null`. Never invent HDR ids; use only ids the blueprint already provides.
+  - `intensity`: environment/reflection strength, clamped `0`–`10`. Default `0.45`.
+- `lighting`:
+  - `ambientColor` / `ambientIntensity`: fill light. Default `#ffffff` at `0.18`.
+  - `directionalColor` / `directionalIntensity`: key light. Default `#ffffff` at `0.85`.
+- `toneMapping`:
+  - `type`: `none`, `linear`, or `acesFilmic`. Default `acesFilmic`.
+  - `exposure`: clamped `0`–`10`. Default `0.85`.
+- `shadows`:
+  - `enabled`: boolean. Default `true`.
+  - `type`: `basic`, `pcf`, or `pcfSoft`. Default `pcfSoft`.
+
+What this means for the models you generate, even in Mode A:
+
+- Lighting is fairly soft (low ambient, moderate key light) and tone mapping is ACES filmic with exposure below `1`. Pure-white surfaces stay readable, but very dark materials can look flat. Give important parts mid-to-high lightness colors.
+- Because the background is dark, emissive accents pop. For a glow to actually show, the `emissive` color must be non-black and `emissiveIntensity` meaningfully above `0` (around `1.5`–`4` for clear neon).
+- Reflections depend on the environment. With the default low environment intensity, very low-`roughness` metals can look dull unless the user asks for a reflective HDR environment.
+
+Do not add `sceneSettings` to a simplified Mode A output. Only include it inside a Mode C full internal blueprint, or when an existing blueprint already carries it and the user explicitly asks to change lighting, background, environment, tone mapping, or shadows.
+
 ## Coordinate System
 
 Use `position` to place object centers:
@@ -394,6 +459,8 @@ Keep the full model inside a compact box:
 - Typical total depth: `0.5` to `2.5` units.
 - Most positions should stay between `-2.5` and `2.5`.
 - Never place important objects beyond `-4` or `4` on any axis.
+
+Hard converter limits (values outside these are clamped, so never rely on them): `position` is clamped to `-10`–`10` per axis, `rotation` to `-2π`–`2π` radians per axis, and `scale` to `0.05`–`20` per axis. These are safety bounds, not targets; keep to the compact composition ranges above.
 
 Use `y = 0` near the visual center of the whole model, not always the floor. A model may extend below and above `0`.
 
@@ -677,9 +744,34 @@ Avoid scale values below `0.1` or above `3` unless the user specifically asks.
 
 Animation exception: for animated squash/stretch or hide-like scale effects, scale may go as low as `0.01`, but never use `0`.
 
+## Origin And Pivot
+
+Every internal node has an `origin` that decides which point of the object its `position` refers to. The default origin is centered on all axes:
+
+- `origin.x`: `left`, `center`, or `right`.
+- `origin.y`: `top`, `center`, or `bottom`.
+- `origin.z`: `front`, `center`, or `back`.
+
+In the simplified Mode A scene spec, `origin` is always center on every axis, which is why all positioning rules in this guide treat `position` as the object center. Do not try to set `origin` in Mode A; it is not part of the simplified object schema.
+
+Group nodes additionally have a `pivotOffset` (a `{ x, y, z }` vector) that moves the point a group rotates and scales around without moving its children. This is what makes a group a good hinge, axle, or joint. When animating an existing blueprint:
+
+- A group whose `pivotOffset` already sits at a hinge, axle, or contact point is the correct target for swinging doors, levers, wheels, and articulated limbs.
+- Animating that group's `transform.rotation` rotates all of its children around the pivot while keeping them connected.
+- Only set or change `pivotOffset` in Mode C, or when an existing blueprint exposes it and the user asks to re-pivot. In Mode B you usually just pick the existing group whose pivot already matches the motion.
+
 ## Geometry Fields
 
 Use the correct fields for each type.
+
+The converter clamps simplified geometry values, so stay inside these ranges:
+
+- Box/plane `width`, `height`, `depth`: `0.05`–`10` (default `1`).
+- Sphere `radius`: `0.05`–`5` (default `0.5`).
+- Cylinder `radiusTop` and `radiusBottom`: `0.01`–`5` (default `0.5`); cylinder `height`: `0.05`–`10`.
+- Text `size`: `0.05`–`3` (default `0.35`); text `depth`: `0`–`1` (default `0.06`).
+
+The five simplified primitives also have extra internal geometry fields (segment counts, partial arcs, text bevels, and so on) that the simplified Mode A schema does not expose. The converter fills them with sensible defaults — for example spheres use `widthSegments: 32` / `heightSegments: 24`, cylinders use `radialSegments: 32`, and text uses `curveSegments` and `bevelEnabled: false`. You only set these directly in Mode C full internal blueprints; in Mode A, just send the simplified fields below.
 
 ### Box
 
@@ -1524,6 +1616,10 @@ Before returning JSON, check every item:
 - All fields required by the schema are present.
 - Unused geometry fields are `null`.
 - No unsupported visual object types are used.
+- In Mode A, `objects` use only `box`, `sphere`, `cylinder`, `plane`, and `text`. Other internal node types (`cone`, `capsule`, `ring`, `torus`, `torusKnot`, polyhedra, `circle`, `image`, `model`, `group`) are referenced only as existing animation targets in Mode B, never created in Mode A.
+- Extra material map slots (`roughnessMapImageId`, `metalnessMapImageId`, `normalMapImageId`, `aoMapImageId`, `emissiveMapImageId`) and extra internal geometry/segment fields appear only in Mode C, never on a Mode A object.
+- `sceneSettings` is not present in a Mode A output; it is only set in Mode C or in an explicit existing-blueprint lighting/environment edit.
+- Geometry and transform values stay inside the converter clamp ranges so nothing is silently changed.
 - The top-level `animation` field exists.
 - If no animation was requested, `animation.activeClipId` is `null` and `animation.clips` is an empty array.
 - If animation was requested, `animation.activeClipId` matches one clip id.

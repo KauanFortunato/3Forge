@@ -48,7 +48,7 @@ describe("exportPackage", () => {
 
     expect(packageData.zipFileName).toBe("hero-banner.zip");
     expect(packageData.typeScriptFileName).toBe("hero-banner.ts");
-    expect(packageData.blueprintFileName).toBe("hero-banner.blueprint.json");
+    expect(packageData.blueprintFileName).toBe("hero-banner.blueprint.3forge");
     expect(typeScriptFile).toBeTruthy();
     expect(blueprintFile).toBeTruthy();
     expect(fontFile).toBeTruthy();

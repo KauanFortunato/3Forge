@@ -10,7 +10,11 @@ import { exportBlueprintToJson, generateTypeScriptComponent } from "../exports";
 import { createExportPackageZip } from "../exportPackage";
 import { exportBlueprintToGlbBlob, exportBlueprintToGltfBlob, exportBlueprintToUsdzBlob } from "../gltfExport";
 import {
+  BLUEPRINT_FILE_ACCEPT,
+  BLUEPRINT_FILE_EXTENSION,
+  BLUEPRINT_FILE_MIME_TYPE,
   BrowserFileSystemFileHandle,
+  LEGACY_BLUEPRINT_FILE_EXTENSION,
   getBlueprintFileName,
   openBlueprintWithPicker,
   readBlueprintFromFile,
@@ -540,7 +544,10 @@ function countImageUsage(nodes: EditorNode[]): Record<string, number> {
 }
 
 function isJsonFile(file: File): boolean {
-  return file.type === "application/json" || file.name.toLowerCase().endsWith(".json");
+  const fileName = file.name.toLowerCase();
+  return file.type === BLUEPRINT_FILE_MIME_TYPE
+    || fileName.endsWith(BLUEPRINT_FILE_EXTENSION)
+    || fileName.endsWith(LEGACY_BLUEPRINT_FILE_EXTENSION);
 }
 
 function isImageFile(file: File): boolean {
@@ -570,7 +577,7 @@ function dataTransferHasJsonFile(dataTransfer: DataTransfer): boolean {
   }
 
   return Array.from(dataTransfer.items ?? []).some((item) => (
-    item.kind === "file" && (item.type === "application/json" || item.type === "")
+    item.kind === "file" && (item.type === BLUEPRINT_FILE_MIME_TYPE || item.type === "")
   ));
 }
 
@@ -2148,9 +2155,9 @@ export function App() {
     const content = mode === "json"
       ? exportBlueprintToJson(blueprintSnapshot)
       : generateTypeScriptComponent(blueprintSnapshot);
-    const extension = mode === "json" ? "json" : "ts";
-    const fileName = `${blueprintSnapshot.componentName || "3forge-component"}.${extension}`;
-    downloadTextFile(content, fileName, mode === "json" ? "application/json" : "text/plain");
+    const extension = mode === "json" ? BLUEPRINT_FILE_EXTENSION : ".ts";
+    const fileName = `${blueprintSnapshot.componentName || "3forge-component"}${extension}`;
+    downloadTextFile(content, fileName, mode === "json" ? BLUEPRINT_FILE_MIME_TYPE : "text/plain");
     setTransientStatus(`Downloaded ${fileName}.`);
   }, [blueprintSnapshot, setTransientStatus]);
 
@@ -2710,7 +2717,7 @@ export function App() {
     try {
       await importJsonFromFile(file);
     } catch {
-      setTransientStatus("Unable to import JSON.");
+      setTransientStatus("Unable to import project file.");
     }
   }, [importJsonFromFile, pendingJsonDropImport, setTransientStatus]);
 
@@ -3062,7 +3069,7 @@ export function App() {
 
     if (result.status === "unsupported") {
       const fileName = getBlueprintFileName(blueprintSnapshot.componentName);
-      downloadTextFile(exportBlueprintToJson(blueprintSnapshot), fileName, "application/json");
+      downloadTextFile(exportBlueprintToJson(blueprintSnapshot), fileName, BLUEPRINT_FILE_MIME_TYPE);
       setTransientStatus(`File System Access unavailable. Downloaded ${fileName} instead.`);
       return;
     }
@@ -3562,7 +3569,7 @@ export function App() {
           label: "Import",
           icon: <FileIcon width={14} height={14} />,
           children: [
-            { id: "file-import-json", label: "JSON", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
+            { id: "file-import-json", label: "3Forge Project", icon: <FileIcon width={14} height={14} />, onSelect: () => jsonInputRef.current?.click() },
             { id: "file-import-image", label: "Image", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => requestImageImport({ mode: "create", ...resolveSelectionInsertTarget() }) },
             { id: "file-import-model", label: "Model", icon: <MeshIcon width={14} height={14} />, onSelect: () => modelInputRef.current?.click() },
             { id: "file-import-hdr", label: "HDR Environment", icon: <ImagePropertyIcon width={14} height={14} />, onSelect: () => hdrInputRef.current?.click() },
@@ -3704,7 +3711,7 @@ export function App() {
   const jsonDropOverlay = isJsonDropOverlayVisible ? (
     <div className="project-drop-overlay" role="status" aria-live="polite">
       <div className="project-drop-overlay__card">
-        <span className="project-drop-overlay__label">Drop JSON project</span>
+        <span className="project-drop-overlay__label">Drop 3Forge project</span>
         <span className="project-drop-overlay__copy">Release to review before opening. Your current progress stays saved locally.</span>
       </div>
     </div>
@@ -3717,7 +3724,7 @@ export function App() {
       onClose={() => setPendingJsonDropImport(null)}
     >
       <p>
-        Open {pendingJsonDropImport?.fileName ? `"${pendingJsonDropImport.fileName}"` : "this JSON file"} as a project?
+        Open {pendingJsonDropImport?.fileName ? `"${pendingJsonDropImport.fileName}"` : "this project file"} as a project?
       </p>
       <p>
         Your current project progress is saved locally before the new project opens, so you can return to it from local/recent workspace data.
@@ -3822,7 +3829,7 @@ export function App() {
           ref={jsonInputRef}
           className="app__hidden-input"
           type="file"
-          accept=".json"
+          accept={BLUEPRINT_FILE_ACCEPT}
           onChange={async (event) => {
             const file = event.target.files?.[0];
             event.currentTarget.value = "";
@@ -3830,7 +3837,7 @@ export function App() {
             try {
               await importJsonFromFile(file);
             } catch {
-              setTransientStatus("Unable to import JSON.");
+              setTransientStatus("Unable to import project file.");
             }
           }}
         />
@@ -4414,7 +4421,7 @@ export function App() {
         ref={jsonInputRef}
         className="app__hidden-input"
         type="file"
-        accept=".json"
+        accept={BLUEPRINT_FILE_ACCEPT}
         onChange={async (event) => {
           const file = event.target.files?.[0];
           event.currentTarget.value = "";
@@ -4425,7 +4432,7 @@ export function App() {
           try {
             await importJsonFromFile(file);
           } catch {
-            setTransientStatus("Unable to import JSON.");
+            setTransientStatus("Unable to import project file.");
           }
         }}
       />

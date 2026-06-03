@@ -60,9 +60,9 @@ describe("fileAccess", () => {
   });
 
   it("falls back to unsupported when Save As is unavailable", async () => {
-    const result = await saveBlueprintAs(createDefaultBlueprint(), "fixture.json", {});
+    const result = await saveBlueprintAs(createDefaultBlueprint(), "fixture.3forge", {});
 
     expect(result).toEqual({ status: "unsupported" });
-    expect(getBlueprintFileName("Fixture")).toBe("Fixture.json");
+    expect(getBlueprintFileName("Fixture")).toBe("Fixture.3forge");
   });
 });

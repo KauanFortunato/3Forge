@@ -1,4 +1,5 @@
 import JSZip from "jszip";
+import { BLUEPRINT_FILE_EXTENSION } from "./fileAccess";
 import { getAvailableFonts, getFontData } from "./fonts";
 import { exportBlueprintToJson, generateTypeScriptComponent } from "./exports";
 import { HDR_FILE_TOO_LARGE_MESSAGE, MAX_HDR_FILE_SIZE_BYTES } from "./hdr";
@@ -37,7 +38,7 @@ export interface ExportPackageArchive {
 export function createExportPackageData(blueprint: ComponentBlueprint): ExportPackageData {
   const componentBaseName = sanitizeFileNameBase(blueprint.componentName, "3forge-component");
   const typeScriptFileName = `${componentBaseName}.ts`;
-  const blueprintFileName = `${componentBaseName}.blueprint.json`;
+  const blueprintFileName = `${componentBaseName}.blueprint${BLUEPRINT_FILE_EXTENSION}`;
   const files: ExportPackageFile[] = [];
   const usedPaths = new Set<string>([typeScriptFileName, blueprintFileName]);
   const fontAssetPathsById: Record<string, string> = {};

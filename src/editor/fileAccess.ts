@@ -1,6 +1,11 @@
 import { exportBlueprintToJson } from "./exports";
 import type { ComponentBlueprint } from "./types";
 
+export const BLUEPRINT_FILE_EXTENSION = ".3forge";
+export const LEGACY_BLUEPRINT_FILE_EXTENSION = ".json";
+export const BLUEPRINT_FILE_ACCEPT = `${BLUEPRINT_FILE_EXTENSION},${LEGACY_BLUEPRINT_FILE_EXTENSION}`;
+export const BLUEPRINT_FILE_MIME_TYPE = "application/json";
+
 export type FilePermissionStatus = PermissionState | "unsupported";
 export type SaveProjectResult =
   | { status: "saved"; handle: BrowserFileSystemFileHandle }
@@ -48,7 +53,7 @@ export async function openBlueprintWithPicker(windowObject: BrowserWindowLike = 
       types: [{
         description: "3Forge Blueprint",
         accept: {
-          "application/json": [".json"],
+          [BLUEPRINT_FILE_MIME_TYPE]: [BLUEPRINT_FILE_EXTENSION, LEGACY_BLUEPRINT_FILE_EXTENSION],
         },
       }],
     });
@@ -80,7 +85,7 @@ export async function readBlueprintFromFile(file: File): Promise<unknown> {
 
 export function getBlueprintFileName(componentName: string): string {
   const trimmedName = componentName.trim();
-  return `${trimmedName.length > 0 ? trimmedName : "3forge-component"}.json`;
+  return `${trimmedName.length > 0 ? trimmedName : "3forge-component"}${BLUEPRINT_FILE_EXTENSION}`;
 }
 
 export async function queryFilePermission(
@@ -168,7 +173,7 @@ export async function saveBlueprintAs(
       types: [{
         description: "3Forge Blueprint",
         accept: {
-          "application/json": [".json"],
+          [BLUEPRINT_FILE_MIME_TYPE]: [BLUEPRINT_FILE_EXTENSION, LEGACY_BLUEPRINT_FILE_EXTENSION],
         },
       }],
     });

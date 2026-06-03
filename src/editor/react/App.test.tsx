@@ -32,7 +32,7 @@ const fileAccessMocks = vi.hoisted(() => ({
   readBlueprintFromFile: vi.fn<(file: File) => Promise<unknown>>(async (file: File) => JSON.parse(await file.text())),
   saveBlueprintAs: vi.fn<() => Promise<unknown>>(async () => ({ status: "unsupported" as const })),
   saveBlueprintToExistingHandle: vi.fn<() => Promise<unknown>>(async () => ({ status: "unsupported" as const })),
-  getBlueprintFileName: vi.fn<(componentName: string) => string>((componentName: string) => `${componentName || "3forge-component"}.json`),
+  getBlueprintFileName: vi.fn<(componentName: string) => string>((componentName: string) => `${componentName || "3forge-component"}.3forge`),
 }));
 const exportPackageMocks = vi.hoisted(() => ({
   createExportPackageZip: vi.fn(async () => ({
@@ -538,7 +538,7 @@ describe("App", () => {
 
   it("imports a file into recents and reopens it later from the welcome screen", async () => {
     const { container } = render(<App />);
-    const jsonInput = container.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    const jsonInput = container.querySelector('input[type="file"][accept=".3forge,.json"]') as HTMLInputElement;
     const blueprint = createDefaultBlueprint();
     blueprint.componentName = "Recent Fixture";
     const file = new File([JSON.stringify(blueprint)], "recent-fixture.json", { type: "application/json" });
@@ -571,7 +571,7 @@ describe("App", () => {
     const dataTransfer = createDropDataTransfer([file]);
 
     fireEvent.dragEnter(window, { dataTransfer });
-    expect(screen.getByText("Drop JSON project")).toBeTruthy();
+    expect(screen.getByText("Drop 3Forge project")).toBeTruthy();
 
     fireEvent.drop(window, { dataTransfer });
     expect(await screen.findByText("Open dropped project?")).toBeTruthy();
@@ -646,7 +646,7 @@ describe("App", () => {
 
   it("imports an AI scene spec JSON as a real blueprint", async () => {
     const { container } = render(<App />);
-    const jsonInput = container.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    const jsonInput = container.querySelector('input[type="file"][accept=".3forge,.json"]') as HTMLInputElement;
     const aiSceneSpec = createAiSceneSpecFixture("External AI Lamp");
     const file = new File([JSON.stringify(aiSceneSpec)], "ai-lamp.json", { type: "application/json" });
 
@@ -659,7 +659,7 @@ describe("App", () => {
 
   it("imports an animation-only AI JSON patch onto the current blueprint", async () => {
     const { container } = render(<App />);
-    const jsonInput = container.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+    const jsonInput = container.querySelector('input[type="file"][accept=".3forge,.json"]') as HTMLInputElement;
     const animationPatch = {
       animation: {
         activeClipId: "clip-main",
@@ -697,7 +697,7 @@ describe("App", () => {
     const { container } = render(<App />);
 
     for (const name of ["Alpha", "Beta", "Gamma"]) {
-      const jsonInput = container.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+      const jsonInput = container.querySelector('input[type="file"][accept=".3forge,.json"]') as HTMLInputElement;
       const blueprint = createDefaultBlueprint();
       blueprint.componentName = name;
       const file = new File([JSON.stringify(blueprint)], `${name.toLowerCase()}.json`, { type: "application/json" });
@@ -769,7 +769,7 @@ describe("App", () => {
     const { container } = render(<App />);
 
     for (const name of ["Alpha", "Beta"]) {
-      const jsonInput = container.querySelector('input[type="file"][accept=".json"]') as HTMLInputElement;
+      const jsonInput = container.querySelector('input[type="file"][accept=".3forge,.json"]') as HTMLInputElement;
       const blueprint = createDefaultBlueprint();
       blueprint.componentName = name;
       const file = new File([JSON.stringify(blueprint)], `${name.toLowerCase()}.json`, { type: "application/json" });
