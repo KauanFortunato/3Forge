@@ -110,7 +110,13 @@ export interface PlaygroundViewport {
 export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport {
   // stencil:true is required by Phase 1a photo mask clipping.
   const renderer = new WebGLRenderer({ antialias: true, stencil: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  // Supersample: render at ~2× the display resolution and let the browser
+  // downscale the canvas. MSAA only antialiases polygon edges, not the binary
+  // stencil/alphaTest contour used to cut the player silhouettes — that edge is
+  // written at fragment resolution and otherwise shows a 1px staircase on the
+  // margins. Rendering more fragments and averaging on downscale smooths it.
+  // Capped at 3 so the backing buffer stays bounded on hi-DPI displays.
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio * 2, 3));
   renderer.domElement.style.display = "block";
   // Phase DEV-Viewport — render into a 16:9 frame matching the 3Forge project
   // aspect (1920×1080). The canvas size is computed by resize() below to fit

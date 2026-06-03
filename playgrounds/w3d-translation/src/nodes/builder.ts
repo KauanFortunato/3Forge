@@ -1927,6 +1927,13 @@ function loadCachedTexture(url: string, cache: Map<string, Texture>): Texture {
   if (cached) return cached;
   const tex = new TextureLoader().load(url);
   tex.colorSpace = SRGBColorSpace;
+  // Match R3's `TextureFiltering*="Anisotropic"` (every photo/pattern layer in
+  // the corpus sets it). Without it Three.js samples at anisotropy=1, which on
+  // a non-uniformly scaled layer (e.g. FF_PHOTO Scale 1.7×0.82) and on the
+  // alpha contour used to cut the player silhouette produces a low-quality,
+  // shimmery margin. 16 is the de-facto GPU max; Three.js clamps to the actual
+  // hardware limit at upload, so this is safe to set unconditionally.
+  tex.anisotropy = 16;
   cache.set(url, tex);
   return tex;
 }
