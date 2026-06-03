@@ -62,6 +62,7 @@ import { ArPreviewPage } from "./components/ArPreviewPage";
 import { AIGenerateDialog } from "./components/AIGenerateDialog";
 import type { AIGenerationMode, AiChangeKind, AiChangeSummaryInput, AiChatGenerationResult } from "./components/AIGenerateDialog";
 import { BufferedInput } from "./components/BufferedInput";
+import { SaveStatusIndicator } from "./components/SaveStatusIndicator";
 import { ContextMenu } from "./components/ContextMenu";
 import { FieldsPanel } from "./components/FieldsPanel";
 import { ImageAssetsPanel } from "./components/ImageAssetsPanel";
@@ -103,6 +104,7 @@ import {
   ViewSolidIcon,
   ViewRenderedIcon,
   XIcon,
+  SaveIcon,
 } from "./components/icons";
 import { InspectorPanel } from "./components/InspectorPanel";
 import { MenuBar } from "./components/MenuBar";
@@ -495,6 +497,18 @@ function getProjectSourceLabel(source: WorkspaceProjectContext["source"], canOve
   return "Local workspace";
 }
 
+interface ProjectOriginBadge {
+  label: string;
+  tone: "disk" | "browser";
+}
+
+/** Plain-language "where does this project live" badge used across the launcher. */
+function getProjectOriginBadge(isOnDisk: boolean): ProjectOriginBadge {
+  return isOnDisk
+    ? { label: "On your computer", tone: "disk" }
+    : { label: "Browser only", tone: "browser" };
+}
+
 function countMaterialUsage(nodes: EditorNode[]): Record<string, number> {
   const usage: Record<string, number> = {};
   for (const node of nodes) {
@@ -654,9 +668,7 @@ function LandingPage({
     ?? "Last session";
   const isPhoneLayout = layoutMode === "phone";
   const isTabletLayout = layoutMode === "tablet";
-  const localProjectSourceLabel = persistedWorkspace
-    ? getProjectSourceLabel(persistedWorkspace.context.source, persistedWorkspace.context.canOverwriteFile)
-    : null;
+  const continueOriginBadge = getProjectOriginBadge(persistedWorkspace?.context.canOverwriteFile ?? false);
 
   const heroTitle = isPhoneLayout ? "3Forge" : "3Forge Editor";
   const heroSubtitle = isPhoneLayout
@@ -708,7 +720,11 @@ function LandingPage({
               <span className="landing-action__ico"><FrameIcon width={14} height={14} /></span>
               <span className="landing-action__body">
                 <span className="landing-action__title">Continue where you left off</span>
-                <span className="landing-action__sub">{`${localProjectSourceLabel} · ${localProjectLabel}`}</span>
+                <span className="landing-action__sub">
+                  <span className={`origin-badge origin-badge--${continueOriginBadge.tone}`}>{continueOriginBadge.label}</span>
+                  <span className="origin-badge__sep">·</span>
+                  <span className="landing-action__sub-name">{localProjectLabel}</span>
+                </span>
               </span>
             </button>
           ) : null}
@@ -736,34 +752,44 @@ function LandingPage({
           </div>
 
           {recentProjects.length > 0 ? (
-            <div>
-              {recentProjects.map((entry) => (
-                <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <button
-                    type="button"
-                    className="landing-recent"
-                    onClick={() => onOpenRecent(entry.id)}
-                  >
-                    <span>
-                      <span className="landing-recent__name">{entry.label}</span>
-                      <span className="landing-recent__meta">
-                        <span>{entry.source === "file-handle" ? "Linked file" : "Local snapshot"}</span>
-                        <span>·</span>
-                        <span>{entry.componentName}</span>
+            <div className="landing-recent-list">
+              {recentProjects.map((entry) => {
+                const isOnDisk = entry.source === "file-handle";
+                const originBadge = getProjectOriginBadge(isOnDisk);
+                return (
+                  <div key={entry.id} className="landing-recent-row">
+                    <button
+                      type="button"
+                      className="landing-recent"
+                      onClick={() => onOpenRecent(entry.id)}
+                    >
+                      <span
+                        className={`landing-recent__origin landing-recent__origin--${originBadge.tone}`}
+                        aria-hidden="true"
+                      >
+                        {isOnDisk ? <SaveIcon width={12} height={12} /> : <BoxIcon width={12} height={12} />}
                       </span>
-                    </span>
-                    <span className="landing-recent__time">{formatRecentProjectTime(entry.updatedAt)}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="landing-recent__remove"
-                    aria-label={`Remove ${entry.label} from recents`}
-                    onClick={() => onRemoveRecent(entry.id)}
-                  >
-                    <span aria-hidden="true">x</span>
-                  </button>
-                </div>
-              ))}
+                      <span className="landing-recent__body">
+                        <span className="landing-recent__name">{entry.label}</span>
+                        <span className="landing-recent__meta">
+                          <span className={`origin-badge origin-badge--${originBadge.tone}`}>{originBadge.label}</span>
+                          <span className="origin-badge__sep">·</span>
+                          <span className="landing-recent__component">{entry.componentName}</span>
+                        </span>
+                      </span>
+                      <span className="landing-recent__time">{formatRecentProjectTime(entry.updatedAt)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="landing-recent__remove"
+                      aria-label={`Remove ${entry.label} from recents`}
+                      onClick={() => onRemoveRecent(entry.id)}
+                    >
+                      <XIcon width={10} height={10} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="landing-empty">
@@ -888,6 +914,36 @@ export function App() {
   // entire base64 src (100MB+) into a string — running that eagerly on every
   // store revision (including undo/redo) was the dominant heap-churn source.
   // Compute them on-demand in the download handlers instead.
+
+  // Save-state tracking. `store.revision` is a monotonic counter bumped on every
+  // edit, so we can detect "dirty" by comparing revisions instead of stringifying
+  // the (potentially 100MB+) blueprint. We track two independent baselines:
+  //   - localSavedRevisionRef: last revision flushed to browser autosave.
+  //   - diskSavedRevisionRef: last revision written to a file on the machine
+  //     (null when the project only lives in the browser).
+  const currentRevision = store.revision;
+  const localSavedRevisionRef = useRef<number>(store.revision);
+  const diskSavedRevisionRef = useRef<number | null>(
+    initialWorkspace.context.canOverwriteFile ? store.revision : null,
+  );
+  const [lastLocalSaveAt, setLastLocalSaveAt] = useState<number | null>(
+    initialWorkspace.context.canOverwriteFile || bootState.persistedWorkspace ? initialWorkspace.context.updatedAt : null,
+  );
+  const [lastDiskSaveAt, setLastDiskSaveAt] = useState<number | null>(
+    initialWorkspace.context.canOverwriteFile ? initialWorkspace.context.updatedAt : null,
+  );
+  // Bumped on every project load so the project-name field remounts with a
+  // fresh draft — loading a different project always shows that project's name,
+  // even if the field happened to be focused. `autoFocusName` additionally
+  // grabs+selects the field for a brand-new project so the user lands ready to
+  // name it instead of discovering the rename field on their own later.
+  const [projectInstanceId, setProjectInstanceId] = useState(0);
+  const [autoFocusName, setAutoFocusName] = useState(false);
+  // Recent-project id for which the "save to your computer" nudge was dismissed.
+  // Tracking the id (rather than a boolean) means a fresh project re-arms the
+  // nudge while the current one stays quiet once dismissed.
+  const [dismissedSaveNudgeFor, setDismissedSaveNudgeFor] = useState<string | null>(null);
+
   const isPhoneLayout = layoutMode === "phone";
   const isCompactLayout = layoutMode !== "desktop";
   const effectiveToolMode = isPhoneLayout ? "select" : currentTool;
@@ -963,6 +1019,23 @@ export function App() {
     [activeClip],
   );
   const activeProjectLabel = projectContext.fileName ?? storeView.blueprintComponentName;
+  const hasDiskFile = projectContext.canOverwriteFile;
+  const isLocalDirty = currentRevision !== localSavedRevisionRef.current;
+  const isDiskDirty = hasDiskFile
+    && (diskSavedRevisionRef.current === null || currentRevision !== diskSavedRevisionRef.current);
+  const saveStatusData = {
+    isLocalDirty,
+    hasDiskFile,
+    isDiskDirty,
+    fileName: projectContext.fileName,
+    lastLocalSaveAt,
+    lastDiskSaveAt,
+  };
+  // Browser-only projects are one cache-clear away from being lost. Nudge the
+  // user to mirror the work to a real file — once per project, dismissable.
+  const showSaveToDiskNudge = !isPhoneLayout
+    && !hasDiskFile
+    && projectContext.recentProjectId !== dismissedSaveNudgeFor;
   const animatedNodeIds = useMemo(
     () => new Set(storeView.animation.clips.flatMap((clip) => clip.tracks.map((track) => track.nodeId))),
     [storeView.animation.clips],
@@ -1061,10 +1134,16 @@ export function App() {
     // Rapid undo/redo bursts used to trigger one serialisation per cycle —
     // the dominant heap churn that crashed the renderer. Now we coalesce
     // bursts into a single save 500ms after the user pauses.
+    const revisionAtSchedule = currentRevision;
     const timeoutId = window.setTimeout(() => {
       const didPersistWorkspace = persistWorkspace(blueprintSnapshot, projectContext);
       if (!didPersistWorkspace) {
         setTransientStatus("Project is too large for browser autosave. Save or export it manually.");
+      } else {
+        // Mark the browser autosave caught up so the save indicator flips from
+        // "Saving…" back to "Saved in browser" once the debounced flush lands.
+        localSavedRevisionRef.current = revisionAtSchedule;
+        setLastLocalSaveAt(Date.now());
       }
       setPersistedWorkspace({
         blueprint: blueprintSnapshot,
@@ -2044,6 +2123,18 @@ export function App() {
       activeFileHandleRef.current = null;
     }
     store.loadBlueprint(rawBlueprint, "ui");
+    // A freshly loaded project starts clean against its origin: the browser
+    // autosave baseline is the just-loaded revision, and the disk baseline is
+    // only "in sync" when the project came from a writable file on the machine.
+    const loadedRevision = store.revision;
+    const loadedAt = Date.now();
+    localSavedRevisionRef.current = loadedRevision;
+    diskSavedRevisionRef.current = context.canOverwriteFile ? loadedRevision : null;
+    setLastLocalSaveAt(loadedAt);
+    setLastDiskSaveAt(context.canOverwriteFile ? (context.updatedAt || loadedAt) : null);
+    // Remount the project-name field so it always reflects the freshly loaded
+    // project rather than holding a stale draft from the previous one.
+    setProjectInstanceId((id) => id + 1);
     setProjectContext(context);
     setCurrentFrame(0);
     setIsAnimationPlaying(false);
@@ -2793,8 +2884,9 @@ export function App() {
         fileHandleId: null,
         canOverwriteFile: false,
       }),
-      "Created new project.",
+      "New project — name it, then save it to your computer.",
     );
+    setAutoFocusName(true);
   }, [applyWorkspaceBlueprint]);
 
   const handleContinueWorkspace = useCallback(() => {
@@ -2950,6 +3042,9 @@ export function App() {
           fileHandleId,
           canOverwriteFile: true,
         }));
+        diskSavedRevisionRef.current = store.revision;
+        setLastDiskSaveAt(Date.now());
+        setLastLocalSaveAt(Date.now());
         setTransientStatus(`Saved ${result.handle.name}.`);
       }, { blocking: true });
       return;
@@ -3004,6 +3099,9 @@ export function App() {
         fileHandleId,
         canOverwriteFile: true,
       }));
+      diskSavedRevisionRef.current = store.revision;
+      setLastDiskSaveAt(Date.now());
+      setLastLocalSaveAt(Date.now());
       setTransientStatus(`Saved ${linkedHandle.name}.`);
       return;
     }
@@ -3748,6 +3846,13 @@ export function App() {
           appVersion={APP_VERSION}
           hasNewReleaseNotes={hasNewReleaseNotes}
           isTimelineVisible={isTimelineVisible}
+          saveStatus={(
+            <SaveStatusIndicator
+              variant="menubar"
+              {...saveStatusData}
+              onSaveToDisk={handleSaveProject}
+            />
+          )}
           onOpenReleaseNotes={openReleaseNotesDialog}
           onOpenSettings={() => setIsSettingsDialogOpen(true)}
           onGenerateWithAI={() => setIsAiDialogOpen(true)}
@@ -3764,6 +3869,35 @@ export function App() {
           onViewModeChange={(mode) => store.setViewMode(mode)}
           onExit={handleExitProject}
         />
+      ) : null}
+
+      {showSaveToDiskNudge ? (
+        <div className="save-nudge" role="note" aria-label="Save this project to your computer">
+          <button
+            type="button"
+            className="save-nudge__dismiss"
+            aria-label="Dismiss"
+            title="Not now"
+            onClick={() => setDismissedSaveNudgeFor(projectContext.recentProjectId)}
+          >
+            <XIcon width={10} height={10} />
+          </button>
+          <div className="save-nudge__head">
+            <span className="save-nudge__icon" aria-hidden="true">
+              <SaveIcon width={12} height={12} />
+            </span>
+            <span className="save-nudge__title">Only saved in this browser</span>
+          </div>
+          <p className="save-nudge__sub">Save a copy to your computer so it can&apos;t be lost.</p>
+          <button
+            type="button"
+            className="save-nudge__save"
+            onClick={() => { void handleSaveProject(); }}
+          >
+            <SaveIcon width={12} height={12} />
+            Save to computer
+          </button>
+        </div>
       ) : null}
 
       <div className={shellBodyClassName}>
@@ -3809,10 +3943,20 @@ export function App() {
                 </span>
                 <span className="left-project-panel__meta">
                   <BufferedInput
+                    key={projectInstanceId}
                     className="left-project-panel__name"
                     type="text"
                     value={storeView.blueprintComponentName}
                     onCommit={(value) => store.updateComponentName(value)}
+                    autoFocus={autoFocusName}
+                    onFocus={(event) => {
+                      if (autoFocusName) {
+                        event.currentTarget.select();
+                        setAutoFocusName(false);
+                      }
+                    }}
+                    placeholder="Untitled project"
+                    title="Click to rename this project"
                     aria-label="Project name"
                   />
                   <span className="left-project-panel__sub">{`blueprint / ${storeView.blueprintNodes.length} nodes`}</span>
@@ -4254,9 +4398,11 @@ export function App() {
             <span className="statusbar__chip">{`${getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)} · ${storeView.blueprintNodes.length} nodes`}</span>
           ) : (
             <>
-              <span className="statusbar__chip">local workspace saved</span>
-              <span className="statusbar__sep">·</span>
-              <span className="statusbar__chip">{getProjectSourceLabel(projectContext.source, projectContext.canOverwriteFile)}</span>
+              <SaveStatusIndicator
+                variant="statusbar"
+                {...saveStatusData}
+                onSaveToDisk={handleSaveProject}
+              />
               <span className="statusbar__sep">·</span>
               <span className="statusbar__chip">{storeView.blueprintNodes.length} nodes</span>
             </>

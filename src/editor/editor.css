@@ -505,18 +505,32 @@ code {
 .left-project-panel__name {
   width: 100%;
   min-width: 0;
-  height: 16px;
-  padding: 0;
+  height: 18px;
+  padding: 0 4px;
+  margin: 0 -4px;
   border: 0;
+  border-radius: var(--r-sm);
   background: transparent;
   color: var(--c-text);
   font-size: var(--fs-md);
   font-weight: 700;
   text-overflow: ellipsis;
+  cursor: text;
+  transition: background 120ms, box-shadow 120ms, color 120ms;
+}
+
+.left-project-panel__name::placeholder {
+  color: var(--c-text-dim);
+  font-weight: 600;
+}
+
+.left-project-panel__name:hover {
+  background: var(--c-bg-3);
 }
 
 .left-project-panel__name:focus {
-  box-shadow: none;
+  background: var(--c-bg-3);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-accent) 55%, var(--c-border));
   color: var(--c-accent);
 }
 
@@ -3374,6 +3388,215 @@ code {
 }
 
 /* =============================================================
+   Save-state indicator (menubar + statusbar)
+   Two truths surfaced at once: whether the in-browser autosave has
+   caught up, and whether the project is mirrored to a file on the
+   user's machine. Tones: green = synced to file, amber = unsaved
+   edits to a linked file, accent = browser-only, pulsing = saving.
+   ============================================================= */
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--f-mono);
+  color: var(--c-text-med);
+}
+
+button.save-status {
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: 1px solid transparent;
+  margin: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.save-status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-text-dim);
+  flex: none;
+}
+
+.save-status__text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.save-status__primary {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.save-status__detail {
+  font-size: var(--fs-xs);
+  color: var(--c-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.save-status--synced .save-status__dot { background: var(--c-y); }
+.save-status--edited .save-status__dot { background: var(--c-warn); }
+.save-status--edited .save-status__primary { color: var(--c-warn); }
+.save-status--browser .save-status__dot { background: var(--c-accent); }
+
+.save-status--saving .save-status__dot {
+  background: var(--c-accent);
+  animation: saveStatusPulse 1s ease-in-out infinite;
+}
+
+@keyframes saveStatusPulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+button.save-status:hover .save-status__primary,
+button.save-status:hover .save-status__detail {
+  color: var(--c-text);
+}
+
+/* Menubar variant — sits as a compact pill among the menubar chips. */
+.save-status--menubar {
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+}
+
+.menubar__right > .save-status--menubar {
+  background: var(--c-bg-3);
+}
+
+.menubar__right > .save-status--browser {
+  background: color-mix(in srgb, var(--c-accent) 14%, var(--c-bg-3));
+}
+
+.menubar__right > .save-status--edited {
+  background: color-mix(in srgb, var(--c-warn) 16%, var(--c-bg-3));
+}
+
+button.save-status--menubar:hover {
+  border-color: var(--c-border-strong);
+}
+
+.save-status--menubar .save-status__detail {
+  max-width: 160px;
+}
+
+/* Statusbar variant — inline, no pill, matches the footer chips. */
+.save-status--statusbar {
+  color: var(--c-text-med);
+}
+
+button.save-status--statusbar:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* =============================================================
+   Save-to-computer nudge — small dismissable popup card anchored
+   above the status bar while a project lives only in the browser.
+   ============================================================= */
+.save-nudge {
+  position: fixed;
+  right: 14px;
+  bottom: calc(var(--h-statusbar, 28px) + 12px);
+  z-index: 60;
+  width: 244px;
+  max-width: calc(100vw - 28px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--r-md);
+  background: var(--c-bg-2);
+  border: 1px solid color-mix(in srgb, var(--c-accent) 38%, var(--c-border));
+  box-shadow: var(--sh-dropdown);
+  color: var(--c-text);
+  animation: fadeIn 160ms ease;
+}
+
+.save-nudge__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-right: 18px;
+}
+
+.save-nudge__icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--c-accent) 20%, transparent);
+  color: var(--c-accent);
+}
+
+.save-nudge__title {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+
+.save-nudge__sub {
+  margin: 0;
+  color: var(--c-text-med);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.save-nudge__save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  background: var(--c-accent);
+  border: 1px solid var(--c-accent);
+  color: var(--c-accent-fg);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 120ms;
+}
+
+.save-nudge__save:hover {
+  filter: brightness(1.08);
+}
+
+.save-nudge__dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--c-text-dim);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+
+.save-nudge__dismiss:hover {
+  background: var(--c-bg-3);
+  color: var(--c-text);
+}
+
+/* =============================================================
    Landing overlay
    ============================================================= */
 .landing-overlay {
@@ -3625,10 +3848,17 @@ code {
 }
 
 .landing-action__sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: var(--c-text-dim);
   font-family: var(--f-mono);
-  margin-top: 2px;
+  margin-top: 3px;
+  min-width: 0;
+}
+
+.landing-action__sub-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3638,15 +3868,66 @@ code {
   color: rgba(14, 15, 17, 0.65);
 }
 
+/* Origin badge — plain-language "where it lives" pill shared by the launcher
+   continue action and recent-project rows. Tones mirror the editor save state:
+   green = on disk, accent = browser-only. */
+.origin-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 15px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-family: var(--f-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex: none;
+}
+
+.origin-badge--disk {
+  background: color-mix(in srgb, var(--c-y) 20%, transparent);
+  color: var(--c-y);
+}
+
+.origin-badge--browser {
+  background: color-mix(in srgb, var(--c-accent) 22%, transparent);
+  color: var(--c-accent);
+}
+
+.landing-action.is-primary .origin-badge--disk,
+.landing-action.is-primary .origin-badge--browser {
+  background: rgba(14, 15, 17, 0.14);
+  color: rgba(14, 15, 17, 0.72);
+}
+
+.origin-badge__sep {
+  color: var(--c-text-faint);
+}
+
+.landing-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.landing-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .landing-recent {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 8px 10px;
   border-radius: var(--r-sm);
   cursor: pointer;
   min-width: 0;
+  flex: 1;
   background: transparent;
   border: 0;
   width: 100%;
@@ -3659,6 +3940,32 @@ code {
   background: var(--c-bg-2);
 }
 
+.landing-recent__origin {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--c-border);
+}
+
+.landing-recent__origin--disk {
+  color: var(--c-y);
+  background: color-mix(in srgb, var(--c-y) 14%, var(--c-bg-2));
+  border-color: color-mix(in srgb, var(--c-y) 30%, var(--c-border));
+}
+
+.landing-recent__origin--browser {
+  color: var(--c-accent);
+  background: color-mix(in srgb, var(--c-accent) 14%, var(--c-bg-2));
+  border-color: color-mix(in srgb, var(--c-accent) 30%, var(--c-border));
+}
+
+.landing-recent__body {
+  min-width: 0;
+}
+
 .landing-recent__name {
   font-size: 12px;
   font-weight: 500;
@@ -3668,13 +3975,21 @@ code {
   color: var(--c-text);
 }
 
+.landing-recent__component {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .landing-recent__meta {
   font-size: 10px;
   font-family: var(--f-mono);
   color: var(--c-text-dim);
   display: flex;
-  gap: 8px;
-  margin-top: 2px;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  min-width: 0;
 }
 
 .landing-recent__time {

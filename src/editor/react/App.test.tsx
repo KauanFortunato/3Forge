@@ -917,16 +917,19 @@ describe("App", () => {
     const shellBody = container.querySelector(".app__body");
     const footer = container.querySelector("footer.statusbar");
 
-    expect(appShell?.children[1]).toBe(shellBody ?? null);
-    expect(appShell?.children[2]).toBe(footer ?? null);
+    // The footer sits immediately after the body in the shell. A save-to-disk
+    // nudge may sit above the body for browser-only projects, so assert the
+    // body→footer adjacency rather than fixed child indices.
+    const childrenBefore = Array.from(appShell?.children ?? []);
+    expect(childrenBefore.indexOf(footer as Element)).toBe(childrenBefore.indexOf(shellBody as Element) + 1);
     expect(shellBody?.querySelector(".app__col--center.has-timeline")).toBeTruthy();
     expect(shellBody?.querySelector(".tl")).toBeTruthy();
-    expect(screen.getByText("local workspace saved")).toBeTruthy();
+    expect(within(footer as HTMLElement).getByText("Saved in browser")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Timeline On" }));
 
-    expect(appShell?.children[1]).toBe(shellBody ?? null);
-    expect(appShell?.children[2]).toBe(footer ?? null);
+    const childrenAfter = Array.from(appShell?.children ?? []);
+    expect(childrenAfter.indexOf(footer as Element)).toBe(childrenAfter.indexOf(shellBody as Element) + 1);
     expect(shellBody?.querySelector(".app__col--center.has-timeline")).toBeFalsy();
     expect(shellBody?.querySelector(".tl")).toBeFalsy();
     expect(screen.getByRole("button", { name: "Timeline Off" })).toBeTruthy();

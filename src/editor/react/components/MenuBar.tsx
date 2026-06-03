@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type { MenuAction } from "../ui-types";
 import { MenuList } from "./ContextMenu";
 import { AiSparkCubeIcon, SettingsIcon, TimelineIcon } from "./icons";
@@ -14,6 +15,7 @@ interface MenuBarProps {
   appVersion?: string;
   hasNewReleaseNotes?: boolean;
   isTimelineVisible?: boolean;
+  saveStatus?: ReactNode;
   onOpenReleaseNotes?: () => void;
   onOpenSettings?: () => void;
   onGenerateWithAI?: () => void;
@@ -25,6 +27,7 @@ export function MenuBar({
   appVersion,
   hasNewReleaseNotes = false,
   isTimelineVisible = false,
+  saveStatus,
   onOpenReleaseNotes,
   onOpenSettings,
   onGenerateWithAI,
@@ -123,10 +126,12 @@ export function MenuBar({
               <span>Timeline</span>
             </button>
           ) : null}
-          <span className="menubar__chip">
-            <span className="menubar__dot" aria-hidden="true" />
-            auto-save
-          </span>
+          {saveStatus ?? (
+            <span className="menubar__chip">
+              <span className="menubar__dot" aria-hidden="true" />
+              auto-save
+            </span>
+          )}
           {onOpenReleaseNotes ? (
             <button
               type="button"
