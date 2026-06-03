@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createDefaultFontAsset } from "../../fonts";
@@ -16,7 +16,7 @@ function createCommonProps() {
   wrapperGroup.name = "Wrapper";
 
   return {
-    emptyMessage: "Selecione um objeto para editar.",
+    emptyMessage: "Select an object to edit.",
     onNodeNameChange: vi.fn(),
     onParentChange: vi.fn(),
     onNodeOriginChange: vi.fn(),
@@ -177,7 +177,7 @@ describe("InspectorPanel", () => {
     expect(props.onToggleEditable).toHaveBeenCalledWith("group-1", expect.objectContaining({ path: "visible" }), true);
   });
 
-  it("renders castShadow/receiveShadow controls only inside the Shadows sub-section (no duplicate)", () => {
+  it("renders castShadow/receiveShadow controls only inside the Advanced section (no duplicate)", () => {
     const node = createNode("box", ROOT_NODE_ID, "box-1");
     const props = createCommonProps();
 
@@ -194,16 +194,13 @@ describe("InspectorPanel", () => {
     expect(screen.getAllByLabelText("Cast Shadow")).toHaveLength(1);
     expect(screen.getAllByLabelText("Receive Shadow")).toHaveLength(1);
 
-    // The Shadows sub-header should render exactly once within the material section
-    const materialSections = Array.from(container.querySelectorAll(".sec")).filter((el) => (
-      el.querySelector(".sec__hd-title")?.textContent?.trim() === "Material"
+    const advancedSections = Array.from(container.querySelectorAll(".sec")).filter((el) => (
+      el.querySelector(".sec__hd-title")?.textContent?.trim() === "Advanced"
     ));
-    expect(materialSections.length).toBeGreaterThan(0);
-    const materialCard = materialSections[0] as HTMLElement;
-    const shadowSubHeaders = Array.from(
-      materialCard.querySelectorAll(".sec__sub"),
-    ).filter((el) => el.textContent?.trim() === "Shadows");
-    expect(shadowSubHeaders).toHaveLength(1);
+    expect(advancedSections.length).toBeGreaterThan(0);
+    const advancedCard = advancedSections[0] as HTMLElement;
+    expect(within(advancedCard).getByLabelText("Cast Shadow")).toBeTruthy();
+    expect(within(advancedCard).getByLabelText("Receive Shadow")).toBeTruthy();
   });
 
   it("renders material side as a Base select in the inspector", async () => {
@@ -371,7 +368,7 @@ describe("InspectorPanel", () => {
     );
 
     expect(screen.getByText("2 objects")).toBeTruthy();
-    expect(screen.getByTitle("Material")).toBeTruthy();
+    expect(screen.getByTitle("Base")).toBeTruthy();
     expect(screen.getByTitle("Object")).toBeTruthy();
     expect(screen.getByTitle("Transform")).toBeTruthy();
 
@@ -601,7 +598,7 @@ describe("InspectorPanel", () => {
     );
 
     expect(screen.getByTitle("Transform")).toBeTruthy();
-    expect(screen.getByTitle("Material")).toBeTruthy();
+    expect(screen.getByTitle("Base")).toBeTruthy();
     expect(screen.queryByTitle("Geometry")).toBeNull();
 
     expect(screen.getByLabelText("Color")).toBeTruthy();
@@ -688,14 +685,14 @@ describe("InspectorPanel", () => {
 
     const sections = Array.from(container.querySelectorAll(".sec")) as HTMLElement[];
     const transform = sections.find((el) => el.querySelector(".sec__hd-title")?.textContent?.trim() === "Transform") as HTMLElement;
-    const material = sections.find((el) => el.querySelector(".sec__hd-title")?.textContent?.trim() === "Material") as HTMLElement;
+    const base = sections.find((el) => el.querySelector(".sec__hd-title")?.textContent?.trim() === "Base") as HTMLElement;
     expect(transform).toBeTruthy();
-    expect(material).toBeTruthy();
+    expect(base).toBeTruthy();
 
     await user.click(transform.querySelector(".sec__hd") as HTMLButtonElement);
 
     expect(transform.classList.contains("is-collapsed")).toBe(true);
-    expect(material.classList.contains("is-collapsed")).toBe(false);
+    expect(base.classList.contains("is-collapsed")).toBe(false);
   });
 
   it("keeps collapsed section bodies in the DOM so tests can still resolve their inputs", async () => {
@@ -711,11 +708,11 @@ describe("InspectorPanel", () => {
       />,
     );
 
-    // Color input is part of Material (initially open).
+    // Color input is part of Base (initially open).
     expect(screen.getByLabelText("Color")).toBeTruthy();
 
-    // Collapse the Material section and verify the Color input stays in the DOM.
-    await user.click(screen.getByTitle("Material"));
+    // Collapse the Base section and verify the Color input stays in the DOM.
+    await user.click(screen.getByTitle("Base"));
     expect(screen.getByLabelText("Color")).toBeTruthy();
   });
 

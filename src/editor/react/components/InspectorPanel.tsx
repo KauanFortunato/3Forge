@@ -70,10 +70,22 @@ interface InspectorPanelProps {
 const NUMERIC_INPUT_TYPES = new Set<NodePropertyDefinition["input"]>(["number", "degrees"]);
 const SCENE_ROOT_PARENT_VALUE = "__scene_root__";
 const POSITION_DRAG_STEP_MULTIPLIER = 0.25;
+const MATERIAL_TEXTURE_PATHS = new Set([
+  "material.mapImageId",
+  "material.roughnessMapImageId",
+  "material.metalnessMapImageId",
+  "material.normalMapImageId",
+  "material.aoMapImageId",
+  "material.emissiveMapImageId",
+]);
 type AnimationOverrideMap = Record<string, { frame: number; value: number }>;
 
 function isNumericDefinition(definition: NodePropertyDefinition): boolean {
   return NUMERIC_INPUT_TYPES.has(definition.input);
+}
+
+function isMaterialTexturePath(path: string): boolean {
+  return MATERIAL_TEXTURE_PATHS.has(path);
 }
 
 function getEvaluatedAnimationRawValue(
@@ -215,7 +227,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
   if (selectionNodes.length === 0) {
     return (
       <div className="panel__empty">
-        {emptyMessage ?? "Selecione um objeto para editar."}
+        {emptyMessage ?? "Select an object to edit."}
       </div>
     );
   }
@@ -589,7 +601,7 @@ export function InspectorPanel(props: InspectorPanelProps) {
           <p className="row__hint">
             {hasGroupSelection
               ? "Material editing is only available when all selected items expose a shared material field."
-              : emptyMessage ?? "Selecione um objeto para editar."}
+              : emptyMessage ?? "Select an object to edit."}
           </p>
         </Sec>
       ) : null}
@@ -736,163 +748,148 @@ function MaterialDefinitionSection(props: MaterialDefinitionSectionProps) {
     [images],
   );
   const resolvedDefinitions = useMemo(
-    () => definitions.map((definition) => definition.path === "material.mapImageId"
+    () => definitions.map((definition) => isMaterialTexturePath(definition.path)
       ? { ...definition, options: textureOptions }
       : definition),
     [definitions, textureOptions],
   );
 
-  const basePaths = ["material.type", "material.side", "material.mapImageId", "material.color", "material.opacity", "material.transparent"];
+  const basePaths = ["material.type", "material.side", "material.color", "material.opacity", "material.transparent"];
+  const texturePaths = ["material.mapImageId", "material.roughnessMapImageId", "material.metalnessMapImageId", "material.normalMapImageId", "material.aoMapImageId", "material.emissiveMapImageId"];
   const pbrPaths = ["material.emissive", "material.emissiveIntensity", "material.roughness", "material.metalness", "material.envMapIntensity"];
   const physicalPaths = ["material.transmission", "material.thickness", "material.clearcoat", "material.clearcoatRoughness", "material.ior"];
-  const advancedPaths = ["material.alphaTest", "material.depthTest", "material.depthWrite", "material.wireframe", "material.flatShading", "material.fog", "material.toneMapped"];
+  const advancedPaths = ["material.alphaTest", "material.depthTest", "material.depthWrite", "material.wireframe", "material.flatShading", "material.toneMapped"];
+  const fogPaths = ["material.fog"];
   const shadowPaths = ["material.castShadow", "material.receiveShadow"];
 
   const baseProps = resolvedDefinitions.filter((definition) => basePaths.includes(definition.path));
+  const textureProps = resolvedDefinitions.filter((definition) => texturePaths.includes(definition.path));
   const pbrProps = resolvedDefinitions.filter((definition) => pbrPaths.includes(definition.path));
   const physicalProps = resolvedDefinitions.filter((definition) => physicalPaths.includes(definition.path));
+  const fogProps = resolvedDefinitions.filter((definition) => fogPaths.includes(definition.path));
   const shadowProps = resolvedDefinitions.filter((definition) => shadowPaths.includes(definition.path));
-  const advancedProps = resolvedDefinitions.filter((definition) => advancedPaths.includes(definition.path));
+  const advancedProps = [
+    ...resolvedDefinitions.filter((definition) => advancedPaths.includes(definition.path)),
+    ...shadowProps,
+  ];
+
+  const renderMaterialRows = (definitionsToRender: NodePropertyDefinition[]) => definitionsToRender.map((definition) => (
+    <PropertyRow
+      key={definition.path}
+      nodes={nodes}
+      definition={definition}
+      mixedPaths={mixedPaths}
+      onNodePropertyChange={onNodePropertyChange}
+      onNodesPropertyChange={onNodesPropertyChange}
+      onToggleEditable={onToggleEditable}
+      allowEditableToggle={allowEditableToggle}
+    />
+  ));
 
   return (
-    <Sec
-      title="Material"
-      icon={<MaterialIcon width={12} height={12} />}
-      meta={isMultiSelection && excludedNote ? excludedNote : null}
-    >
-      {bindingState && (onAssignMaterial || onUnbindMaterial) ? (
-        <div className="row">
-          <span className="row__lbl">Material</span>
-          <CustomSelect
-            ariaLabel="Material binding"
-            value={bindingState.kind === "shared"
-              ? bindingState.materialId
-              : bindingState.kind === "mixed"
-                ? "__mixed__"
-                : "__inline__"}
-            onChange={(value) => {
-              if (value === "__mixed__") {
-                return;
-              }
-              if (value === "__inline__") {
-                onUnbindMaterial?.(meshNodeIds);
-                return;
-              }
-              onAssignMaterial?.(meshNodeIds, value);
-            }}
-            options={[
-              ...(bindingState.kind === "mixed" ? [{ value: "__mixed__", label: "Mixed" }] : []),
-              { value: "__inline__", label: "Inline (this object only)" },
-              ...(materials ?? []).map((asset) => ({ value: asset.id, label: asset.name })),
-            ]}
-          />
-          <span aria-hidden="true" />
-        </div>
-      ) : null}
+    <>
+      <div className="material-binding-panel">
+        {bindingState && (onAssignMaterial || onUnbindMaterial) ? (
+          <div className="row">
+            <span className="row__lbl">Material</span>
+            <CustomSelect
+              ariaLabel="Material binding"
+              value={bindingState.kind === "shared"
+                ? bindingState.materialId
+                : bindingState.kind === "mixed"
+                  ? "__mixed__"
+                  : "__inline__"}
+              onChange={(value) => {
+                if (value === "__mixed__") {
+                  return;
+                }
+                if (value === "__inline__") {
+                  onUnbindMaterial?.(meshNodeIds);
+                  return;
+                }
+                onAssignMaterial?.(meshNodeIds, value);
+              }}
+              options={[
+                ...(bindingState.kind === "mixed" ? [{ value: "__mixed__", label: "Mixed" }] : []),
+                { value: "__inline__", label: "Inline (this object only)" },
+                ...(materials ?? []).map((asset) => ({ value: asset.id, label: asset.name })),
+              ]}
+            />
+            <span aria-hidden="true" />
+          </div>
+        ) : null}
 
-      {sharedAsset ? (
-        <p className="row__hint" style={{ marginTop: 0, marginBottom: "var(--sp-3)" }}>
-          {`Shared "${sharedAsset.name}" — edits propagate to every bound object.`}
-        </p>
-      ) : null}
+        {sharedAsset ? (
+          <p className="row__hint">
+            {`Shared "${sharedAsset.name}" — edits propagate to every bound object.`}
+          </p>
+        ) : null}
 
-      {isMultiSelection ? (
-        <p className="row__hint" style={{ marginBottom: "var(--sp-3)" }}>
-          {`Applying changes to ${selectionCount} selected objects.`}
-          {hasGroupSelection ? " Group items are excluded because they do not expose material controls." : ""}
-          {hasMixedMaterialTypes ? " Material-specific controls stay hidden while the selection mixes different material types." : ""}
-        </p>
-      ) : null}
+        {isMultiSelection ? (
+          <p className="row__hint">
+            {`Applying changes to ${selectionCount} selected objects.`}
+            {excludedNote ? ` ${excludedNote}.` : ""}
+            {hasGroupSelection ? " Group items are excluded because they do not expose material controls." : ""}
+            {hasMixedMaterialTypes ? " Material-specific controls stay hidden while the selection mixes different material types." : ""}
+          </p>
+        ) : null}
 
-      {definitions.length === 0 ? (
-        <p className="row__hint">No shared material properties are available for this selection.</p>
-      ) : null}
+        {definitions.length === 0 ? (
+          <p className="row__hint">No shared material properties are available for this selection.</p>
+        ) : null}
+      </div>
 
-      <div className="sec__sub">Base</div>
-      {baseProps.map((definition) => (
-        <PropertyRow
-          key={definition.path}
-          nodes={nodes}
-          definition={definition}
-          mixedPaths={mixedPaths}
-          onNodePropertyChange={onNodePropertyChange}
-          onNodesPropertyChange={onNodesPropertyChange}
-          onToggleEditable={onToggleEditable}
-          allowEditableToggle={allowEditableToggle}
-        />
-      ))}
+      <MaterialPropertySec title="Base" definitions={baseProps}>
+        {renderMaterialRows(baseProps)}
+      </MaterialPropertySec>
+
+      {textureProps.length > 0 ? (
+        <MaterialPropertySec title="Texture Maps" definitions={textureProps}>
+          {renderMaterialRows(textureProps)}
+        </MaterialPropertySec>
+      ) : null}
 
       {pbrProps.length > 0 ? (
-        <>
-          <div className="sec__sub">Standard PBR</div>
-          {pbrProps.map((definition) => (
-            <PropertyRow
-              key={definition.path}
-              nodes={nodes}
-              definition={definition}
-              mixedPaths={mixedPaths}
-              onNodePropertyChange={onNodePropertyChange}
-              onNodesPropertyChange={onNodesPropertyChange}
-              onToggleEditable={onToggleEditable}
-              allowEditableToggle={allowEditableToggle}
-            />
-          ))}
-        </>
+        <MaterialPropertySec title="Standard PBR" definitions={pbrProps}>
+          {renderMaterialRows(pbrProps)}
+        </MaterialPropertySec>
       ) : null}
 
       {physicalProps.length > 0 ? (
-        <>
-          <div className="sec__sub">Physical</div>
-          {physicalProps.map((definition) => (
-            <PropertyRow
-              key={definition.path}
-              nodes={nodes}
-              definition={definition}
-              mixedPaths={mixedPaths}
-              onNodePropertyChange={onNodePropertyChange}
-              onNodesPropertyChange={onNodesPropertyChange}
-              onToggleEditable={onToggleEditable}
-              allowEditableToggle={allowEditableToggle}
-            />
-          ))}
-        </>
+        <MaterialPropertySec title="Physical" definitions={physicalProps}>
+          {renderMaterialRows(physicalProps)}
+        </MaterialPropertySec>
       ) : null}
 
       {advancedProps.length > 0 ? (
-        <>
-          <div className="sec__sub">Advanced</div>
-          {advancedProps.map((definition) => (
-            <PropertyRow
-              key={definition.path}
-              nodes={nodes}
-              definition={definition}
-              mixedPaths={mixedPaths}
-              onNodePropertyChange={onNodePropertyChange}
-              onNodesPropertyChange={onNodesPropertyChange}
-              onToggleEditable={onToggleEditable}
-              allowEditableToggle={allowEditableToggle}
-            />
-          ))}
-        </>
+        <MaterialPropertySec title="Advanced" definitions={advancedProps}>
+          {renderMaterialRows(advancedProps)}
+        </MaterialPropertySec>
       ) : null}
 
-      {shadowProps.length > 0 ? (
-        <>
-          <div className="sec__sub">Shadows</div>
-          {shadowProps.map((definition) => (
-            <PropertyRow
-              key={definition.path}
-              nodes={nodes}
-              definition={definition}
-              mixedPaths={mixedPaths}
-              onNodePropertyChange={onNodePropertyChange}
-              onNodesPropertyChange={onNodesPropertyChange}
-              onToggleEditable={onToggleEditable}
-              allowEditableToggle={allowEditableToggle}
-            />
-          ))}
-        </>
+      {fogProps.length > 0 ? (
+        <MaterialPropertySec title="FOG" definitions={fogProps}>
+          {renderMaterialRows(fogProps)}
+        </MaterialPropertySec>
       ) : null}
+    </>
+  );
+}
+
+interface MaterialPropertySecProps {
+  title: string;
+  definitions: NodePropertyDefinition[];
+  children: ReactNode;
+}
+
+function MaterialPropertySec({ title, definitions, children }: MaterialPropertySecProps) {
+  if (definitions.length === 0) {
+    return null;
+  }
+
+  return (
+    <Sec title={title} icon={<MaterialIcon width={12} height={12} />}>
+      {children}
     </Sec>
   );
 }

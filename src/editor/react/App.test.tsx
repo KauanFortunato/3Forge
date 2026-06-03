@@ -339,12 +339,12 @@ describe("App", () => {
     fireEvent.click(heroRow);
 
     expect(screen.getByRole("tab", { name: "Properties" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.queryByTitle("Material")).toBeNull();
+    expect(screen.queryByTitle("Base")).toBeNull();
     expect(screen.queryByLabelText("Side")).toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "Material" }));
 
-    expect(screen.getByTitle("Material")).toBeTruthy();
+    expect(screen.getByTitle("Base")).toBeTruthy();
     expect(screen.getByLabelText("Side")).toBeTruthy();
   });
 
@@ -1027,7 +1027,7 @@ describe("App", () => {
 
     expect(screen.getByText("2 objects")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "Material" }));
-    expect(screen.getByTitle("Material")).toBeTruthy();
+    expect(screen.getByTitle("Base")).toBeTruthy();
     expect(screen.getByLabelText("Color").getAttribute("placeholder")).toBe("Mixed");
 
     const colorInput = screen.getByLabelText("Color");

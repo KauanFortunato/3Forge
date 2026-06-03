@@ -5167,6 +5167,16 @@ button.save-status--statusbar:hover {
   background: var(--c-bg-1);
 }
 
+.material-binding-panel {
+  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg-1);
+}
+
+.material-binding-panel .row__hint {
+  margin: 2px 0 0;
+}
+
 .sec__sub {
   padding: var(--sp-2) 0 4px;
   font-size: var(--fs-xs);

@@ -21,10 +21,19 @@ interface MaterialAssetEditorProps {
 }
 
 const SHADOW_PATHS = new Set(["material.castShadow", "material.receiveShadow"]);
-const BASE_PATHS = ["material.type", "material.side", "material.mapImageId", "material.color", "material.opacity", "material.transparent"];
+const BASE_PATHS = ["material.type", "material.side", "material.color", "material.opacity", "material.transparent"];
+const TEXTURE_PATHS = ["material.mapImageId", "material.roughnessMapImageId", "material.metalnessMapImageId", "material.normalMapImageId", "material.aoMapImageId", "material.emissiveMapImageId"];
 const PBR_PATHS = ["material.emissive", "material.emissiveIntensity", "material.roughness", "material.metalness", "material.envMapIntensity"];
 const PHYSICAL_PATHS = ["material.transmission", "material.thickness", "material.clearcoat", "material.clearcoatRoughness", "material.ior"];
 const ADVANCED_PATHS = ["material.alphaTest", "material.depthTest", "material.depthWrite", "material.wireframe", "material.flatShading", "material.fog", "material.toneMapped"];
+const MATERIAL_TEXTURE_PATHS = new Set([
+  "material.mapImageId",
+  "material.roughnessMapImageId",
+  "material.metalnessMapImageId",
+  "material.normalMapImageId",
+  "material.aoMapImageId",
+  "material.emissiveMapImageId",
+]);
 
 export function MaterialAssetEditor({ material, images = [], usageCount, onRename, onUpdate, onClose }: MaterialAssetEditorProps) {
   const definitions = useMemo(() => {
@@ -39,7 +48,7 @@ export function MaterialAssetEditor({ material, images = [], usageCount, onRenam
     [images],
   );
   const resolvedDefinitions = useMemo(
-    () => definitions.map((definition) => definition.path === "material.mapImageId"
+    () => definitions.map((definition) => MATERIAL_TEXTURE_PATHS.has(definition.path)
       ? { ...definition, options: textureOptions }
       : definition),
     [definitions, textureOptions],
@@ -96,6 +105,15 @@ export function MaterialAssetEditor({ material, images = [], usageCount, onRenam
           onCommit={(definition, value) => onUpdate(material.id, definition, value)}
         />
 
+        {groupedDefinitions.textures.length > 0 ? (
+          <MaterialPropertyGroup
+            title="Texture Maps"
+            definitions={groupedDefinitions.textures}
+            spec={material.spec}
+            onCommit={(definition, value) => onUpdate(material.id, definition, value)}
+          />
+        ) : null}
+
         {groupedDefinitions.pbr.length > 0 ? (
           <MaterialPropertyGroup
             title="Standard PBR"
@@ -129,6 +147,7 @@ export function MaterialAssetEditor({ material, images = [], usageCount, onRenam
 
 interface GroupedMaterialDefinitions {
   base: NodePropertyDefinition[];
+  textures: NodePropertyDefinition[];
   pbr: NodePropertyDefinition[];
   physical: NodePropertyDefinition[];
   advanced: NodePropertyDefinition[];
@@ -137,6 +156,7 @@ interface GroupedMaterialDefinitions {
 function groupMaterialDefinitions(definitions: NodePropertyDefinition[]): GroupedMaterialDefinitions {
   return {
     base: definitions.filter((definition) => BASE_PATHS.includes(definition.path)),
+    textures: definitions.filter((definition) => TEXTURE_PATHS.includes(definition.path)),
     pbr: definitions.filter((definition) => PBR_PATHS.includes(definition.path)),
     physical: definitions.filter((definition) => PHYSICAL_PATHS.includes(definition.path)),
     advanced: definitions.filter((definition) => ADVANCED_PATHS.includes(definition.path)),
