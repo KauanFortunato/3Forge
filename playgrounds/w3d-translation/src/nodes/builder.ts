@@ -99,6 +99,30 @@ const STENCIL_GENERIC_INDEX_MAX = 3;
  */
 const TEXTURED_MASK_ALPHA_TEST = 0.5;
 
+/**
+ * Phase 2K — design CONCENTRATION applied on top of the authored ScaleKey fade
+ * height. The raw `1/ScaleKey` rate (this scene: 2 → fade over the bottom half)
+ * reaches too far UP the card; the broadcast look keeps the player opaque and
+ * fades only the lower portion. This gain multiplies the ScaleKey-derived rate
+ * so the fade sits LOWER and more concentrated, while still SCALING with the
+ * authored ScaleKey (a different scene's scale still drives its own height).
+ * 1.5 ≈ fade over the bottom third for ScaleKey 0.5; the only knob if more/less
+ * (higher = lower/tighter fade, lower = taller/stronger fade).
+ */
+const BASE_FADE_GAIN = 1.5;
+
+/**
+ * Phase 2K — the coloured FILL behind the photo reaches full transparency over
+ * its bottom FILL_FADE_FOOT (in the matte's local UV.v). The fill uses the SAME
+ * dummy ramp as the photo, just biased to vanish EARLIER: its gold/pattern must
+ * be gone BEFORE the photo (still opaque above the fade) reveals that area, or it
+ * shows as a gold "bar" in the fade region (NOT present in the R3 thumb, where
+ * players are clean photos fading into the team panel). The fade transition then
+ * sits behind the opaque photo, so no strip-fading is visible. Bias only; the
+ * fade rate still comes from the dummy ramp (authored ScaleKey × gain).
+ */
+const FILL_FADE_FOOT = 0.5;
+
 export type GenericMaskInfo = {
   /** Generic mask owner index (1..STENCIL_GENERIC_INDEX_MAX). */
   index: number;
@@ -137,6 +161,7 @@ export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
   const top = new Group();
   top.name = "w3d-nodes-root";
   for (const r of roots) top.add(buildNode(r, ctx));
+  if (ctx) applySmoothMaskBaseFade(top);
   return top;
 }
 
@@ -1363,6 +1388,7 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: nu
   let textureLayerName: string | undefined;
   let textureFilename: string | undefined;
   let textureBlending: string | undefined;
+  let resolvedAlphaMapIsAlphaKey = false;
 
   if (ctx) {
     const warnings: string[] = [];
@@ -1385,6 +1411,7 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: nu
       : undefined;
     resolvedMapTransform = resolved.mapTransform;
     resolvedAlphaMapTransform = resolvedAlphaMapUrl ? resolved.alphaMapTransform : undefined;
+    resolvedAlphaMapIsAlphaKey = !!resolvedAlphaMapUrl && !!resolved.alphaMapIsAlphaKey;
     hasMaterialResolved = resolved.hasMaterialResolved;
     hasTextureLayerResolved = resolved.hasTextureLayerResolved;
     materialName = resolved.materialName;
@@ -1449,7 +1476,15 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: nu
     }
   }
   if (resolvedAlphaMapUrl && ctx) {
-    material.alphaMap = acquireTexture(resolvedAlphaMapUrl, resolvedAlphaMapTransform, ctx.textureCache);
+    // R3 AlphaKey mattes (e.g. VERTICAL_RAMP.png) store the gradient in the
+    // texture's ALPHA channel with RGB left solid white. Three.js samples the
+    // alphaMap's GREEN channel, so we bake alpha→RGB first; otherwise the matte
+    // reads as a flat 1.0 and the per-player base fade never appears.
+    material.alphaMap = resolvedAlphaMapIsAlphaKey
+      ? acquireAlphaMatteTexture(resolvedAlphaMapUrl, resolvedAlphaMapTransform, ctx.textureCache)
+      : acquireTexture(resolvedAlphaMapUrl, resolvedAlphaMapTransform, ctx.textureCache);
+    // Flag for the stencil epsilon (smooth ramp) and the base-fade pass.
+    if (resolvedAlphaMapIsAlphaKey) material.userData.alphaMapFromAlpha = true;
     material.needsUpdate = true;
   }
 
@@ -1594,6 +1629,12 @@ function applyPhotoMaskStencil(
     // no alphaMap) fall through: there's nothing to alphaTest against, so the
     // stencil follows the full geometric quad.
     if (node.maskProperties?.disableBinaryAlpha === true && (mat.map || mat.alphaMap)) {
+      // The stencil silhouette is the player SHAPE only — cut the photo's own
+      // alpha cutout at 0.5 so the contour is tight (a lower epsilon pulls in the
+      // photo's faint feathered edge pixels, which then show the gold fill as a
+      // streaky fringe along the player's sides). The smooth BASE fade is NOT
+      // done here: it lives on the readers' alphaMap (applySmoothMaskBaseFade),
+      // so the silhouette can stay tight without losing the falloff.
       mat.alphaTest = TEXTURED_MASK_ALPHA_TEST;
     }
 
@@ -1657,6 +1698,7 @@ function applyPhotoMaskStencil(
   if (effectiveMaskIds.length > 0) {
     let maskOwner: number | undefined;
     let dummyOwner: number | undefined;
+    let dummyMaskId: string | undefined;
     let genericOwner: number | undefined;
     let isInverted = false;
     let mixedOwner = false;
@@ -1670,6 +1712,10 @@ function applyPhotoMaskStencil(
         } else {
           if (dummyOwner === undefined) dummyOwner = target.playerIndex;
           else if (dummyOwner !== target.playerIndex) mixedOwner = true;
+          // The DUMMY mask carries the player's VERTICAL_RAMP. Remember its id so
+          // the post-build pass fades this fill THROUGH the dummy (its smooth
+          // contour) — the texture config lives on the mask, the fill just follows.
+          dummyMaskId = id;
         }
         continue;
       }
@@ -1745,6 +1791,9 @@ function applyPhotoMaskStencil(
     if (isPhotoCardClient(node.name)) {
       mat.transparent = true;
     }
+    // Hand the resolving dummy id to the post-build base-fade pass so this fill
+    // can fade through the dummy mask's ramp.
+    if (dummyMaskId !== undefined) mesh.userData.smoothFadeDummyId = dummyMaskId;
   }
 }
 
@@ -1920,6 +1969,143 @@ function applyThinDividerOverlay(mesh: Mesh, node: W3DQuadData): void {
   // exposed at its full size, drawn over the colored panel. Disable the stencil
   // test so the line renders un-clipped, matching R3.
   mat.stencilWrite = false;
+}
+
+/**
+ * Phase 2K — bake a W3D AlphaKey matte's ALPHA channel into RGB so a stock
+ * `material.alphaMap` (which samples GREEN) reproduces the matte.
+ *
+ * R3 `KeyType="AlphaKey"` ramps (e.g. VERTICAL_RAMP.png) keep RGB solid white
+ * and store the gradient in the texture's ALPHA channel. Three.js's alphaMap
+ * samples GREEN and ignores alpha, so the matte would read as a flat 1.0 and the
+ * fade vanishes. Rather than patch the shader (renderer-version fragile), we
+ * "edit the texture" the way you would in Photoshop/Photopea: copy alpha → RGB
+ * once, on load, via a 2D canvas, producing a normal grayscale ramp whose GREEN
+ * is the gradient. Clones (per-material UV transforms, and the base-fade fills)
+ * share this baked source automatically, so they all sample the right channel.
+ *
+ * Cached under a distinct "#matte" key so the same file used as a colour `map`
+ * elsewhere is unaffected. In jsdom (no 2D canvas) it degrades to the raw image
+ * — harmless, since tests never rasterise.
+ */
+function loadCachedAlphaMatte(url: string, cache: Map<string, Texture>): Texture {
+  const key = `${url}#alphaMatte`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+  const tex = new Texture();
+  // alphaMap green is sampled raw (no colour-space decode) — keep the ramp
+  // linear so the fade curve matches the authored alpha.
+  tex.anisotropy = 16;
+  const img = new Image();
+  img.onload = () => {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      const g = canvas.getContext("2d");
+      if (!g) { tex.image = img; tex.needsUpdate = true; return; }
+      g.drawImage(img, 0, 0);
+      const data = g.getImageData(0, 0, canvas.width, canvas.height);
+      const px = data.data;
+      for (let i = 0; i < px.length; i += 4) {
+        const a = px[i + 3];
+        px[i] = a; px[i + 1] = a; px[i + 2] = a; px[i + 3] = 255;
+      }
+      g.putImageData(data, 0, 0);
+      tex.image = canvas;
+      tex.needsUpdate = true;
+    } catch {
+      tex.image = img; tex.needsUpdate = true;
+    }
+  };
+  img.src = url;
+  cache.set(key, tex);
+  return tex;
+}
+
+/**
+ * Acquire an AlphaKey matte texture (alpha-baked-to-RGB) with the layer's UV
+ * transform applied. Mirrors `acquireTexture`'s clone-per-transform isolation so
+ * two materials referencing the same ramp keep independent offset/repeat/wrap.
+ */
+function acquireAlphaMatteTexture(
+  url: string,
+  transform: UVTransform | undefined,
+  cache: Map<string, Texture>,
+): Texture {
+  const base = loadCachedAlphaMatte(url, cache);
+  if (!transform || isIdentityUVTransform(transform)) return base;
+  const tex = base.clone();
+  tex.offset.set(transform.offset.x, transform.offset.y);
+  tex.repeat.set(transform.repeat.x, transform.repeat.y);
+  tex.rotation = degToRad(transform.rotationDeg);
+  if (transform.repeat.x < 0 || transform.repeat.y < 0) tex.center.set(0.5, 0.5);
+  tex.wrapS = transform.wrapS;
+  tex.wrapT = transform.wrapT;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Phase 2K — player base fade. The texture config (VERTICAL_RAMP) lives on the
+ * player MASK: the PHOTO_DUMMY_0N silhouette and the visible PHOTO_0N it shares
+ * (both flagged `alphaMapFromAlpha`). `DisableBinaryAlpha=True` means R3 fades
+ * the fill THROUGH that smooth mask (`Player.alpha × VERTICAL_RAMP`).
+ *
+ * A stencil is binary, so we split it: (1) anchor + concentrate the ramp on the
+ * photo/dummy mattes (`offset.y = 0`, `repeat *= BASE_FADE_GAIN`, keeping the
+ * authored `1/ScaleKey` rate); (2) re-apply the SAME dummy ramp — identical
+ * repeat/offset — as a smooth alphaMap on each fill the dummy clips, so the fill
+ * fades EXACTLY like the silhouette mask (not a separate/different ramp on the
+ * "strips"). The binary stencil keeps the shape; the alphaMap supplies the
+ * smooth falloff that the binary mask cannot.
+ *
+ * Inert elsewhere: only AlphaKey mattes (`alphaMapFromAlpha`) are anchored, and
+ * only readers stamped `smoothFadeDummyId` (clipped by such a dummy) get a fill
+ * fade — and only if they have no alpha key of their own.
+ */
+function applySmoothMaskBaseFade(root: Group): void {
+  // 1. Concentrate + anchor the photo + dummy mattes (the ones with the ramp).
+  root.traverse((o) => {
+    if (!(o instanceof Mesh)) return;
+    const mat = o.material as MeshBasicMaterial;
+    if (!mat.userData?.alphaMapFromAlpha || !mat.alphaMap) return;
+    mat.alphaMap.wrapT = ClampToEdgeWrapping;
+    mat.alphaMap.repeat.y *= BASE_FADE_GAIN;
+    mat.alphaMap.offset.y = 0;
+    mat.alphaMap.needsUpdate = true;
+  });
+
+  // 2. Map each dummy id → its (now anchored) ramp.
+  const dummyRamp = new Map<string, MeshBasicMaterial["alphaMap"]>();
+  root.traverse((o) => {
+    if (!(o instanceof Mesh)) return;
+    const w = o.userData?.w3d as { id?: string; isMask?: boolean } | undefined;
+    if (!w?.id || !w.isMask) return;
+    const mat = o.material as MeshBasicMaterial;
+    if (mat.userData?.alphaMapFromAlpha && mat.alphaMap) dummyRamp.set(w.id, mat.alphaMap);
+  });
+  if (dummyRamp.size === 0) return;
+
+  // 3. Each fill the dummy clips fades through the dummy's ramp (same rate), but
+  //    biased to vanish EARLIER (over its bottom FILL_FADE_FOOT) so its gold is
+  //    gone behind the still-opaque photo — no gold "bar" in the fade region.
+  root.traverse((o) => {
+    if (!(o instanceof Mesh)) return;
+    const dummyId = o.userData?.smoothFadeDummyId as string | undefined;
+    if (!dummyId) return;
+    const ramp = dummyRamp.get(dummyId);
+    if (!ramp) return;
+    const mat = o.material as MeshBasicMaterial;
+    if (mat.alphaMap) return; // never clobber a reader's own alpha key
+    const tex = ramp.clone();
+    tex.offset.y = -FILL_FADE_FOOT * tex.repeat.y;
+    tex.needsUpdate = true;
+    mat.alphaMap = tex;
+    mat.transparent = true;
+    mat.userData.alphaMapFromAlpha = true;
+    mat.needsUpdate = true;
+  });
 }
 
 function loadCachedTexture(url: string, cache: Map<string, Texture>): Texture {

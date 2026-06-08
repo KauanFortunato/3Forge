@@ -2319,10 +2319,13 @@ describe("builder — BuildContext", () => {
     expect(mat.stencilWrite).toBe(false);
   });
 
-  test("Phase 2F: PHOTO_DUMMY-like writer with map+alphaMap and DisableBinaryAlpha=True → alphaTest=0.5", () => {
-    // PHOTO_DUMMY_0X carries the player layer (Player N.png + VERTICAL_RAMP)
-    // and DisableBinaryAlpha="True". Stencil contour should follow texture
-    // alpha, not the geometric rectangle.
+  test("Phase 2K: PHOTO_DUMMY-like writer with AlphaKey ramp + DisableBinaryAlpha=True → alphaTest 0.5 (tight shape)", () => {
+    // PHOTO_DUMMY_0X carries the player layer (Player N.png + VERTICAL_RAMP) and
+    // DisableBinaryAlpha="True". The contour follows the texture alpha at a TIGHT
+    // 0.5 cut so it captures the player SHAPE only — a lower epsilon would pull in
+    // the photo's feathered edge pixels and show the gold fill as a streaky
+    // fringe along the sides. The smooth BASE fade is NOT done by the stencil; it
+    // lives on the readers' alphaMap (applySmoothMaskBaseFade).
     const playerTex: W3DTextureData = {
       kind: "Texture", id: "player-tex", name: "Player 1.png", filename: "Player 1.png", folderPath: "",
     };
@@ -2361,6 +2364,7 @@ describe("builder — BuildContext", () => {
     expect(mat.stencilWrite).toBe(true);
     expect(mat.colorWrite).toBe(false);
     expect(mat.alphaTest).toBeCloseTo(0.5, 5);
+    expect(mat.userData.alphaMapFromAlpha).toBe(true);
     expect(mat.map).toBeDefined();
     expect(mat.alphaMap).toBeDefined();
   });
@@ -2734,10 +2738,11 @@ describe("builder — BuildContext", () => {
     expect(mat.map!.offset.x).toBeCloseTo(0.07, 5);   // negated -0.07
     expect(mat.map!.offset.y).toBeCloseTo(0, 5);
     expect(mat.map!.repeat.y).toBe(1);
-    // alphaMap carries OffsetKey (negated)/ScaleKey, untouched by Offset.
+    // alphaMap (Key) uses R3 placement inversion: repeat=1/ScaleKey, offset=−OffsetKey/ScaleKey
+    // (so ScaleKey 0.5 SHRINKS the ramp into the lower card → fade at the base, not the whole card).
     expect(mat.alphaMap!.offset.x).toBeCloseTo(0, 5);
-    expect(mat.alphaMap!.offset.y).toBeCloseTo(0.2, 5); // negated -0.2
-    expect(mat.alphaMap!.repeat.y).toBeCloseTo(0.5, 5); // ScaleKey NOT negated
+    expect(mat.alphaMap!.offset.y).toBeCloseTo(0.4, 5); // −(−0.2)/0.5
+    expect(mat.alphaMap!.repeat.y).toBeCloseTo(2, 5); // 1/0.5
     // map and alphaMap must be distinct Texture instances even if cached
     // file URLs differ (here they do — separate Map entries).
     expect(mat.map).not.toBe(mat.alphaMap);

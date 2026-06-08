@@ -52,6 +52,8 @@ export function App() {
   // stay visible even when the properties panel is closed.
   const [showBox, setShowBox] = useState(true);
   const [showPivot, setShowPivot] = useState(true);
+  // DEV-Inspector — FOCUS/ISOLATE: show only the clicked node, hide the rest.
+  const [focusMode, setFocusMode] = useState(false);
   const [referenceImageUrl, setReferenceImageUrl] = useState<string | null>(null);
   const [referenceOpacity, setReferenceOpacity] = useState(0.45);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -109,6 +111,13 @@ export function App() {
   useEffect(() => {
     viewportRef.current?.setMarkerVisibility({ box: showBox, pivot: showPivot });
   }, [showBox, showPivot, inspectorReport]);
+
+  // DEV-Inspector — push focus/isolate mode to the viewport. Turning focus on
+  // also auto-enables click-to-pick so a click is needed to choose what to show.
+  useEffect(() => {
+    viewportRef.current?.setFocusMode(focusMode);
+    if (focusMode) setInspectorEnabled(true);
+  }, [focusMode]);
 
   // DEV-Inspector — Esc clears the panel and the in-viewport selection box.
   useEffect(() => {
@@ -258,6 +267,14 @@ export function App() {
               }}
             />
             inspector
+          </label>
+          <label style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }} title="Focus/isolate: show ONLY the clicked node (the rest is hidden); invisible masks are painted so you can see their shape">
+            <input
+              type="checkbox"
+              checked={focusMode}
+              onChange={(e) => setFocusMode(e.target.checked)}
+            />
+            focus
           </label>
           {inspectorEnabled ? (
             <>

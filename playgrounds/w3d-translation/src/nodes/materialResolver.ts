@@ -37,6 +37,16 @@ export type ResolvedMaterial = {
    * alphaMapUrl is present.
    */
   alphaMapTransform?: UVTransform;
+  /**
+   * True when the alphaMap comes from a W3D `Key` with `KeyType="AlphaKey"`.
+   * R3 AlphaKey mattes store their gradient in the texture's ALPHA channel
+   * (e.g. VERTICAL_RAMP.png is RGB=white with the ramp in alpha). Three.js
+   * `material.alphaMap` samples the GREEN channel and ignores alpha, so the
+   * builder must redirect the sample to `.a` for these (see
+   * `readAlphaMapFromAlphaChannel`). Without it the matte reads as a flat 1.0
+   * and the fade disappears entirely.
+   */
+  alphaMapIsAlphaKey?: boolean;
   hasMaterialResolved: boolean;
   hasTextureLayerResolved: boolean;
   materialName?: string;
@@ -98,9 +108,20 @@ function buildMapTransform(tl: W3DTextureLayerData): UVTransform {
 }
 
 function buildAlphaMapTransform(tl: W3DTextureLayerData): UVTransform {
+  // R3 places a Key matte as `sampledUV = (fragUV − Offset) / Scale`, so the
+  // Three.js mapping (`sampledUV = fragUV·repeat + offset`) is repeat = 1/Scale
+  // and offset = −Offset/Scale — NOT repeat = Scale. This matters for the player
+  // base fade: VERTICAL_RAMP authors `ScaleKey Y=0.5` to SHRINK the ramp into the
+  // lower portion of the card (so only the base fades). The old direct mapping
+  // (repeat = 0.5) instead STRETCHED the ramp over the whole card, fading the
+  // entire player. Verified against the R3 reference: ScaleKey 0.5 / OffsetKey
+  // −0.2 → repeat 2 / offset 0.4 puts the fade in the bottom third. (X axes
+  // default to Scale 1 / Offset 0 → repeat 1 / offset 0, a no-op.)
+  const sx = tl.scaleKey?.x ?? 1;
+  const sy = tl.scaleKey?.y ?? 1;
   return {
-    offset: { x: -(tl.offsetKey?.x ?? 0), y: -(tl.offsetKey?.y ?? 0) },
-    repeat: { x: tl.scaleKey?.x ?? 1, y: tl.scaleKey?.y ?? 1 },
+    offset: { x: -(tl.offsetKey?.x ?? 0) / sx, y: -(tl.offsetKey?.y ?? 0) / sy },
+    repeat: { x: 1 / sx, y: 1 / sy },
     rotationDeg: tl.rotationKeyDeg ?? 0,
     // alphaMap shares the layer's TextureAddressMode (W3D has no per-Key mode).
     wrapS: addressModeToWrap(tl.mapping?.textureAddressModeU),
@@ -215,6 +236,7 @@ export function resolveMaterial(
   let textureLayerName: string | undefined;
   let textureFilename: string | undefined;
   let textureBlending: string | undefined;
+  let alphaMapIsAlphaKey = false;
 
   if (textureLayerId && textureLayerId !== "Standard") {
     const tl = ctx.registry.textureLayers.get(textureLayerId);
@@ -273,6 +295,9 @@ export function resolveMaterial(
           const keyUrl = ctx.textureUrlsByFilename.get(keyTex.filename);
           if (keyUrl) {
             alphaMapUrl = keyUrl;
+            // AlphaKey mattes carry their gradient in the texture's alpha
+            // channel; flag it so the builder samples `.a`, not the green chan.
+            alphaMapIsAlphaKey = tl.mapping?.keyType === "AlphaKey";
           } else {
             warnings.push(`Key texture "${keyTex.filename}" not loaded; no alphaMapUrl.`);
           }
@@ -313,6 +338,7 @@ export function resolveMaterial(
     alphaMapUrl,
     mapTransform,
     alphaMapTransform,
+    alphaMapIsAlphaKey,
     hasMaterialResolved,
     hasTextureLayerResolved,
     materialName,

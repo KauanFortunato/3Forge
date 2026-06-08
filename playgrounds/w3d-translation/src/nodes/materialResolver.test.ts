@@ -425,13 +425,14 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
       scaleKey: { y: 0.5 },                // must remain positive 0.5
     };
     const r = resolveMaterial(undefined, "L", undefined, 1, ctxFor(layer, true), []);
-    // Offsets negated
+    // Map Offset negated; the Key (alphaMap) uses R3's placement inversion
+    // sampledUV=(fragUV−Offset)/Scale → offset = −OffsetKey/ScaleKey, repeat = 1/ScaleKey.
     expect(r.mapTransform!.offset.x).toBeCloseTo(0.07, 5);
-    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.2, 5);
-    // Scale (repeat) NOT negated
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.4, 5); // −(−0.2)/0.5
+    // Map Scale (repeat) is a direct passthrough; only the Key inverts.
     expect(r.mapTransform!.repeat.x).toBeCloseTo(1.7, 5);
     expect(r.mapTransform!.repeat.y).toBeCloseTo(0.82, 5);
-    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5);
+    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(2, 5); // 1/0.5
     // Rotation NOT negated
     expect(r.mapTransform!.rotationDeg).toBe(45);
     // AddressMode unchanged
@@ -474,12 +475,12 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
     expect(r.mapTransform!.offset.x).toBeCloseTo(0.07, 5);  // negated -0.07
     expect(r.mapTransform!.offset.y).toBeCloseTo(0, 5);
     expect(r.mapTransform!.repeat.y).toBe(1);
-    // alphaMap transform — driven by OffsetKey (negated)/ScaleKey, untouched by Offset
+    // alphaMap (Key) uses R3 placement inversion: repeat=1/ScaleKey, offset=−OffsetKey/ScaleKey.
     expect(r.alphaMapTransform).toBeDefined();
     expect(r.alphaMapTransform!.offset.x).toBeCloseTo(0, 5);
-    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.2, 5);  // negated -0.2
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.4, 5);  // −(−0.2)/0.5
     expect(r.alphaMapTransform!.repeat.x).toBe(1);
-    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5); // ScaleKey NOT negated
+    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(2, 5); // 1/0.5
   });
 
   test('TextureAddressModeU="Repeat" → wrapS=RepeatWrapping', async () => {
@@ -580,9 +581,9 @@ describe("resolveMaterial — Phase 2C UV transform exposure", () => {
     expect(r.mapTransform!.repeat.x).toBe(1);
     expect(r.mapTransform!.repeat.y).toBe(1);
     expect(r.alphaMapTransform!.offset.x).toBeCloseTo(0, 5);
-    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.2, 5); // negated -0.2
+    expect(r.alphaMapTransform!.offset.y).toBeCloseTo(0.4, 5); // −(−0.2)/0.5 (R3 placement inversion)
     expect(r.alphaMapTransform!.repeat.x).toBe(1);
-    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(0.5, 5); // ScaleKey NOT negated
+    expect(r.alphaMapTransform!.repeat.y).toBeCloseTo(2, 5); // 1/0.5
   });
 });
 

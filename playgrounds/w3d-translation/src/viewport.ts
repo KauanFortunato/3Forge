@@ -104,6 +104,12 @@ export interface PlaygroundViewport {
   clearInspectorSelection(): void;
   /** DEV-Inspector — toggle the bounding-box / pivot markers on/off. */
   setMarkerVisibility(opts: { box?: boolean; pivot?: boolean }): void;
+  /**
+   * DEV-Inspector — FOCUS/ISOLATE. When on, only the selected node's subtree is
+   * shown (the rest is hidden) and invisible masks in the selection are
+   * force-painted so their shape is visible. Re-applies to the current selection.
+   */
+  setFocusMode(on: boolean): void;
   dispose(): void;
 }
 
@@ -203,6 +209,57 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   let downY = 0;
   const CLICK_THRESHOLD_PX = 3;
 
+  // DEV-Inspector — FOCUS / ISOLATE. When on, only the selected node's subtree
+  // (plus its ancestors, so it stays positioned) is shown; everything else is
+  // hidden. Meshes in the selection that paint nothing (mask writers with
+  // colorWrite=false, or alpha≈0 helpers) are temporarily force-painted in the
+  // selection colour so an otherwise-invisible mask reveals its actual shape.
+  // Originals are saved and restored when focus turns off or the selection moves.
+  let focusMode = false;
+  let currentTarget: Object3D | null = null;
+  const savedVis = new Map<Object3D, boolean>();
+  const FOCUS_PAINT = 0x7c44de;
+  const savedMat = new Map<MeshBasicMaterial, { colorWrite: boolean; opacity: number; transparent: boolean; color: number }>();
+
+  function restoreFocus(): void {
+    for (const [o, v] of savedVis) o.visible = v;
+    savedVis.clear();
+    for (const [m, s] of savedMat) {
+      m.colorWrite = s.colorWrite;
+      m.opacity = s.opacity;
+      m.transparent = s.transparent;
+      m.color.setHex(s.color);
+      m.needsUpdate = true;
+    }
+    savedMat.clear();
+  }
+
+  function applyFocus(): void {
+    restoreFocus();
+    if (!focusMode || !currentTarget || !mountedNodes) return;
+    const keep = new Set<Object3D>();
+    currentTarget.traverse((o) => keep.add(o));           // target + descendants
+    for (let a: Object3D | null = currentTarget; a; a = a.parent) keep.add(a); // ancestors
+    mountedNodes.traverse((o) => {
+      savedVis.set(o, o.visible);
+      o.visible = keep.has(o);
+    });
+    // Force-paint invisible meshes in the selection so masks show their shape.
+    currentTarget.traverse((o) => {
+      if (!(o as Mesh).isMesh) return;
+      const m = (o as Mesh).material as MeshBasicMaterial | undefined;
+      if (!m) return;
+      const invisible = m.colorWrite === false || (typeof m.opacity === "number" && m.opacity <= 0.01);
+      if (!invisible) return;
+      savedMat.set(m, { colorWrite: m.colorWrite, opacity: m.opacity, transparent: m.transparent, color: m.color.getHex() });
+      m.colorWrite = true;
+      m.opacity = 0.6;
+      m.transparent = true;
+      m.color.setHex(FOCUS_PAINT);
+      m.needsUpdate = true;
+    });
+  }
+
   function clearSelectionHelper(): void {
     if (selectionHelper) {
       scene.remove(selectionHelper);
@@ -221,6 +278,8 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
 
   function setSelection(target: Object3D | null): void {
     clearSelectionHelper();
+    currentTarget = target;
+    applyFocus();
     if (!target) return;
     selectionHelper = new BoxHelper(target, 0x7c44de);
     // Draw the outline ON TOP of the 3D geometry (otherwise the photos/panels in
@@ -371,6 +430,10 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       resize();
     },
     setNodes(roots, ctx) {
+      // A rebuild invalidates any focus/selection state (objects are disposed).
+      savedVis.clear();
+      savedMat.clear();
+      currentTarget = null;
       if (mountedNodes) {
         scene.remove(mountedNodes);
         disposeGroup(mountedNodes);
@@ -406,6 +469,11 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       if (opts.pivot !== undefined) markerVis.pivot = opts.pivot;
       if (selectionHelper) selectionHelper.visible = markerVis.box;
       if (pivotHelper) pivotHelper.visible = markerVis.pivot;
+    },
+    setFocusMode(on: boolean) {
+      if (on === focusMode) return;
+      focusMode = on;
+      applyFocus();
     },
     dispose() {
       if (mountedNodes) {
