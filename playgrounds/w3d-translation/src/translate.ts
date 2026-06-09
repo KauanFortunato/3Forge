@@ -139,7 +139,7 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
     // transform. Builder shears the PlaneGeometry by these angles.
     const sk = skewByControllableId.get(n.id);
     if (sk !== undefined) {
-      const cur = n.transform.skew ?? { x: 0, y: 0 };
+      const cur = n.transform.skew ?? { x: 0, y: 0, z: 0 };
       if (sk.x !== undefined) cur.x = sk.x;
       if (sk.y !== undefined) cur.y = sk.y;
       n.transform.skew = cur;

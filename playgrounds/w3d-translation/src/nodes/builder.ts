@@ -165,35 +165,41 @@ export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
   return top;
 }
 
-const PHOTO_MASK_NAME_RE = /^PHOTO_MASK_(\d+)$/;
-const PHOTO_DUMMY_NAME_RE = /^PHOTO_DUMMY_(\d+)$/;
-
 function collectPhotoMaskInfo(
   roots: W3DNodeData[],
   warnings?: string[],
 ): Map<string, PhotoMaskInfo> {
   const out = new Map<string, PhotoMaskInfo>();
-  const walk = (n: W3DNodeData): void => {
-    if (n.kind === "Quad" && n.isMask) {
-      const isInverted = !!n.maskProperties?.isInvertedMask;
-      let m = PHOTO_MASK_NAME_RE.exec(n.name);
-      let klass: PhotoMaskClass = "mask";
-      if (!m) {
-        m = PHOTO_DUMMY_NAME_RE.exec(n.name);
-        klass = "dummy";
+  // Player slot = discovery order of the "player container" — the parent node that
+  // holds the photo masks. A player's MASK and DUMMY are siblings under the same
+  // container, so they SHARE a slot. This preserves the cross-player identity the
+  // name's index used to carry (a reader that mixes player A's MASK with player
+  // B's DUMMY still resolves to disagreeing owners and is skipped), WITHOUT
+  // reading the name. On LINEUP each VERTICAL_REPOS_0X container → slot 1..5,
+  // identical to the former PHOTO_MASK_0X → X mapping.
+  const slotByParentId = new Map<string, number>();
+  let nextSlot = 0;
+  const walk = (n: W3DNodeData, parentId: string): void => {
+    // Photo masks are the NON-coloured stencil writers. IsColoredMask=True is the
+    // generic colored-mask path (BASE_*), handled by collectGenericMaskInfo.
+    if (n.kind === "Quad" && n.isMask && n.maskProperties?.isColoredMask !== true) {
+      let slot = slotByParentId.get(parentId);
+      if (slot === undefined) {
+        slot = ++nextSlot;
+        slotByParentId.set(parentId, slot);
       }
-      if (m) {
-        const playerIndex = parseInt(m[1], 10);
-        if (playerIndex < 1 || playerIndex > STENCIL_PLAYER_INDEX_MAX) {
-          warnings?.push(`Mask "${n.name}" has player index ${playerIndex} outside the 1..${STENCIL_PLAYER_INDEX_MAX} stencil scope; skipping.`);
-        } else {
-          out.set(n.id, { klass, playerIndex, isInverted, name: n.name });
-        }
+      if (slot > STENCIL_PLAYER_INDEX_MAX) {
+        warnings?.push(`Photo mask "${n.name}" is in player container #${slot}, exceeding the ${STENCIL_PLAYER_INDEX_MAX}-slot stencil scope; skipping.`);
+      } else {
+        // Class from DisableBinaryAlpha: textured silhouette (true) = "dummy",
+        // geometric stencil shape (false) = "mask". Derived from attributes, not name.
+        const klass: PhotoMaskClass = n.maskProperties?.disableBinaryAlpha ? "dummy" : "mask";
+        out.set(n.id, { klass, playerIndex: slot, isInverted: !!n.maskProperties?.isInvertedMask, name: n.name });
       }
     }
-    for (const c of n.children) walk(c);
+    for (const c of n.children) walk(c, n.id);
   };
-  for (const r of roots) walk(r);
+  for (const r of roots) walk(r, "__root__");
   return out;
 }
 
@@ -212,13 +218,10 @@ function collectGenericMaskInfo(
   const referencedIds = new Set<string>();
   const walk = (n: W3DNodeData): void => {
     for (const id of n.maskIds) referencedIds.add(id);
-    if (
-      n.kind === "Quad" &&
-      n.isMask &&
-      n.maskProperties?.isColoredMask === true &&
-      !PHOTO_MASK_NAME_RE.test(n.name) &&
-      !PHOTO_DUMMY_NAME_RE.test(n.name)
-    ) {
+    // Generic colored masks are the visible IsColoredMask=True writers (BASE_*).
+    // Photo masks (IsColoredMask=False) go to collectPhotoMaskInfo, so the
+    // `isColoredMask === true` check alone separates the two paths — no name needed.
+    if (n.kind === "Quad" && n.isMask && n.maskProperties?.isColoredMask === true) {
       candidates.push(n);
     }
     for (const c of n.children) walk(c);
@@ -549,7 +552,7 @@ function applyFlowLayout(group: Group, node: W3DGroupData): void {
   //
   // Group-local == world along the main axis: the flow parent in the 2D corpus
   // carries no rotation/scale, so subtracting the group's world position recovers
-  // local extents (same invariant the cross-axis pass and former Phase D2 used).
+  // local extents (the cursor and child.position are both group-local).
   const groupWorld = new Vector3();
   group.getWorldPosition(groupWorld);
   // Top margin for a Y text stack = the first row's font DESCENT (the empty
@@ -574,14 +577,37 @@ function applyFlowLayout(group: Group, node: W3DGroupData): void {
       //     instead of +1.29 out of slot — subsumes the former Phase H3 residual.
       //   • keep YMinus "Trailing" stacks (BENCH_LIST) with their rendered top
       //     edge at the group origin — subsumes the former Phase D2 anchor.
-      // (Group-local == world on the main axis: the flow parent carries no
-      // rotation/scale in the 2D corpus.)
       const leadingRel = (sign > 0 ? box.min[mainAxis] : box.max[mainAxis]) - groupWorld[mainAxis];
       child.position[mainAxis] += cursor - leadingRel;
     } else {
       child.position[mainAxis] += cursor;
     }
     cursor += sign * (flowMainExtent(child, mainAxis) + leadingSpace);
+  }
+
+  // Main-axis "Trailing" (FlowChildrenAlignment along the Flow Order axis). R3
+  // anchors the packed block by an edge tied to the ALIGNMENT, not the flow sign:
+  // "Leading" puts the block's MIN edge on the group origin, "Trailing" puts the
+  // block's MAX edge there. The packing loop above anchors the LEADING edge per
+  // flow sign, so a +growth flow (XPlus) lands the MIN edge at the origin =
+  // "Leading" by construction. For "Trailing" we move the block back by its own
+  // length so the MAX edge sits on the origin instead. This is how R3 mirrors a
+  // panel: LINEUP_RIGHT PLAYERS is XPlus+Trailing, so the row anchors by its
+  // RIGHT edge and sits on the opposite side of the origin instead of off-frame.
+  //
+  // Scoped to +growth flows (sign > 0). A −growth flow (YMinus, e.g. BENCH_LIST)
+  // ALREADY anchors its MAX (top) edge at the origin via the packing loop, so it
+  // is "Trailing" by construction — re-shifting it would swallow the
+  // firstRowFontDescent top margin and cram the first row against the heading.
+  // (A YMinus+Leading flow would need the symmetric shift; the corpus has none.)
+  if (node.flow.alignment === "Trailing" && sign > 0) {
+    let hi = -Infinity;
+    for (const child of group.children) {
+      child.updateWorldMatrix(true, true);
+      const b = new Box3().setFromObject(child);
+      if (isFinite(b.max[mainAxis])) hi = Math.max(hi, b.max[mainAxis] - groupWorld[mainAxis]);
+    }
+    if (isFinite(hi)) for (const child of group.children) child.position[mainAxis] += -hi;
   }
 
   // Phase P2 — cross-axis alignment. For Leading (default) we skip. For
@@ -2175,7 +2201,7 @@ function isIdentityUVTransform(t: UVTransform): boolean {
 
 function applyTransform(obj: Object3D, t: W3DTransform): void {
   obj.position.set(t.position.x, t.position.y, t.position.z);
-  obj.rotation.set(degToRad(t.rotationDeg.x), degToRad(t.rotationDeg.y), degToRad(t.rotationDeg.z));
+  obj.rotation.set(degToRad(t.rotationDeg.x), degToRad(t.rotationDeg.y), degToRad(t.rotationDeg.z), t.rotationOrder ?? "YXZ");
   obj.scale.set(t.scale.x, t.scale.y, t.scale.z);
   // Pivot is applied by applyPivotAnchor / wrapMeshWithPivot (Phase 2B), not
   // here — those routines insert an inner offset under the transformed outer.

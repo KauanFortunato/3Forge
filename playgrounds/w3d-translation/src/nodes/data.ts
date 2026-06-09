@@ -2,6 +2,7 @@
 
 export type W3DTransform = {
   position: { x: number; y: number; z: number };
+  rotationOrder?: "XYZ" | "XZY" | "YXZ" | "YZX" | "ZXY" | "ZYX";
   rotationDeg: { x: number; y: number; z: number };
   scale: { x: number; y: number; z: number; lock?: string };
   /**
@@ -10,7 +11,7 @@ export type W3DTransform = {
    * corpus. Absent = no skew. The builder shears the node's PlaneGeometry by
    * these angles (after alignment, before the world/pivot transform).
    */
-  skew?: { x: number; y: number };
+  skew?: { x: number; y: number; z: number };
   pivot?: { x: number; y: number; z: number };
   /**
    * Phase P7 — `<NodeTransform PivotType="Absolute">` attribute. The corpus
@@ -456,6 +457,7 @@ function readVec3(el: Element | null, defaults: { x: number; y: number; z: numbe
 function readTransform(el: Element): W3DTransform {
   const nt = findDirectChild(el, "NodeTransform");
   const position = readVec3(nt ? findDirectChild(nt, "Position") : null, { x: 0, y: 0, z: 0 });
+  const rotationOrder = (nt?.getAttribute("RotationOrder") ?? "YXZ") as W3DTransform["rotationOrder"];
   const rotationDeg = readVec3(nt ? findDirectChild(nt, "Rotation") : null, { x: 0, y: 0, z: 0 });
   const scaleEl = nt ? findDirectChild(nt, "Scale") : null;
   const scaleVec = readVec3(scaleEl, { x: 1, y: 1, z: 1 });
@@ -470,11 +472,11 @@ function readTransform(el: Element): W3DTransform {
   const pivotTypeAttr = nt ? nt.getAttribute("PivotType") : null;
   const pivotType: W3DTransform["pivotType"] | undefined =
     pivotTypeAttr === "Absolute" ? "Absolute"
-    : pivotTypeAttr === "Relative" ? "Relative"
-    : undefined;
+      : pivotTypeAttr === "Relative" ? "Relative"
+        : undefined;
 
   return {
-    position, rotationDeg, scale,
+    position, rotationOrder, rotationDeg, scale,
     ...(pivot ? { pivot } : {}),
     ...(pivotType ? { pivotType } : {}),
   };

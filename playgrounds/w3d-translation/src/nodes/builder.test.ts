@@ -1,6 +1,6 @@
 // playgrounds/w3d-translation/src/nodes/builder.test.ts
 import { describe, expect, test, vi } from "vitest";
-import { Box3, Group, Mesh, MeshBasicMaterial, PlaneGeometry, Vector3 } from "three";
+import { Box3, Group, Mesh, MeshBasicMaterial, NotEqualStencilFunc, PlaneGeometry, Vector3 } from "three";
 import { applySkew, buildNode, buildNodeTree } from "./builder";
 import type { BuildContext } from "./builder";
 import type { W3DGroupData, W3DQuadData, W3DTextureTextData } from "./data";
@@ -45,6 +45,18 @@ describe("builder — Group", () => {
     expect(root).toBeInstanceOf(Group);
     expect(root.children).toHaveLength(2);
   });
+
+  test("rotationOrder from the transform is applied to the built Euler order", () => {
+    const obj = buildNode(groupData({
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 }, rotationOrder: "ZXY" },
+    }));
+    expect(obj.rotation.order).toBe("ZXY");
+  });
+
+  test("rotationOrder defaults to YXZ (R3 default) when the transform omits it", () => {
+    const obj = buildNode(groupData()); // groupData's default transform has no rotationOrder
+    expect(obj.rotation.order).toBe("YXZ");
+  });
 });
 
 function quadData(overrides: Partial<W3DQuadData> = {}): W3DQuadData {
@@ -67,6 +79,32 @@ function quadData(overrides: Partial<W3DQuadData> = {}): W3DQuadData {
     ...overrides,
   };
 }
+
+describe("builder — mask identity by attributes (not name)", () => {
+  test("a mask with a non-PHOTO_ name still wires stencil on its reader", () => {
+    // A shape mask (IsMask, not coloured, DisableBinaryAlpha=false) named
+    // arbitrarily, referenced by a reader via GUID. The reader must be stencil-
+    // clipped — proving identification is by attributes+GUID, not by name regex.
+    const mask = quadData({
+      id: "m1",
+      name: "FOO_SHAPE", // deliberately NOT matching /^PHOTO_MASK_\d+$/
+      isMask: true,
+      maskProperties: { isColoredMask: false, disableBinaryAlpha: false, isInvertedMask: false, hasSampleCount: false },
+    });
+    const reader = quadData({ id: "r1", name: "ANYTHING", maskIds: ["m1"] });
+    const root = groupData({ id: "g", name: "G", children: [mask, reader] });
+
+    const built = buildNodeTree([root], makeCtx());
+    let readerMesh: Mesh | undefined;
+    built.traverse((o) => {
+      if ((o.userData?.w3d as { id?: string } | undefined)?.id === "r1") readerMesh = o as Mesh;
+    });
+    expect(readerMesh, "reader mesh built").toBeDefined();
+    const mat = readerMesh!.material as MeshBasicMaterial;
+    expect(mat.stencilWrite, "reader should be stencil-clipped by FOO_SHAPE").toBe(true);
+    expect(mat.stencilFunc).toBe(NotEqualStencilFunc); // not inverted → visible outside the shape
+  });
+});
 
 describe("builder — Quad without children", () => {
   test("produces a Mesh with PlaneGeometry sized to data", () => {
@@ -524,16 +562,19 @@ describe("builder — BuildContext", () => {
     expect(m.visible).toBe(true);
   });
 
-  test("Phase 2J: PHOTO_DUMMY_03 writer encodes DUMMY owner player index 3", () => {
+  test("Phase 2J: a DUMMY-class writer encodes its owner slot in the DUMMY field (shifted)", () => {
+    // Class from DisableBinaryAlpha=true (textured silhouette). Slot = player-
+    // container discovery order; a lone writer is the 1st container → slot 1.
+    // Name is irrelevant now (WHATEVER_DUMMY, not PHOTO_DUMMY_0X).
     const dummy = quadData({
-      id: "dummy-3", name: "PHOTO_DUMMY_03", isMask: true,
+      id: "dummy-3", name: "WHATEVER_DUMMY", isMask: true,
       maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
     const ctx = makeCtx();
     const root = buildNodeTree([dummy], ctx);
     const mat = (root.children[0] as Mesh).material as MeshBasicMaterial;
-    // ref = playerIndex << 3 = 3 << 3 = 24
-    expect(mat.stencilRef).toBe(24);
+    // ref = slot << 3 = 1 << 3 = 8
+    expect(mat.stencilRef).toBe(8);
     expect(mat.stencilWriteMask).toBe(56); // DUMMY owner field only
   });
 
@@ -558,24 +599,30 @@ describe("builder — BuildContext", () => {
     expect(maskMat.stencilWriteMask & dummyMat.stencilWriteMask).toBe(0);
   });
 
-  test("Phase 2J: mixed-player effective maskIds skip stencil setup safely (warning + no leakage)", () => {
-    // A client whose effective maskIds resolve to two different player indices
-    // (e.g. PHOTO_DUMMY_01 + PHOTO_MASK_02) is an authoring error — combining
-    // them would test a player-bit ref that's neither player's, garbling the
-    // result and leaking across players. Translator must skip stencil setup
-    // and emit a warning instead.
-    const dummy1 = quadData({
-      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+  test("Phase 2J: a client mixing two players' masks skips stencil setup (warning + no leakage)", () => {
+    // Player A's DUMMY lives under container A; player B's MASK under container B,
+    // so they resolve to DIFFERENT owner slots (1 vs 2). A reader referencing both
+    // is an authoring error — combining them would test a ref that's neither
+    // player's. The translator must skip stencil setup and warn. (This is the
+    // cross-player safety net that the by-container slot preserves without names.)
+    const dummyA = quadData({
+      id: "dummy-a", name: "WHATEVER_DUMMY", isMask: true,
       maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
-    const mask2 = quadData({
-      id: "mask-2", name: "PHOTO_MASK_02", isMask: true,
+    const maskB = quadData({
+      id: "mask-b", name: "WHATEVER_MASK", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
-    const mixedClient = quadData({ id: "mixed", name: "MIXED_CLIENT", maskIds: ["dummy-1", "mask-2"] });
+    const playerA = groupData({ id: "pa", name: "PLAYER_A", children: [dummyA] });
+    const playerB = groupData({ id: "pb", name: "PLAYER_B", children: [maskB] });
+    const mixedClient = quadData({ id: "mixed", name: "MIXED_CLIENT", maskIds: ["dummy-a", "mask-b"] });
     const ctx = makeCtx();
-    const root = buildNodeTree([dummy1, mask2, mixedClient], ctx);
-    const mat = (root.children[2] as Mesh).material as MeshBasicMaterial;
+    const root = buildNodeTree([playerA, playerB, mixedClient], ctx);
+    let mixedMesh: Mesh | undefined;
+    root.traverse((o) => {
+      if ((o.userData?.w3d as { id?: string } | undefined)?.id === "mixed") mixedMesh = o as Mesh;
+    });
+    const mat = mixedMesh!.material as MeshBasicMaterial;
     expect(mat.stencilWrite).toBe(false);
     expect(ctx.warnings.some(w => w.includes("MASK owner") && w.includes("disagrees with DUMMY owner"))).toBe(true);
   });
@@ -703,14 +750,17 @@ describe("builder — BuildContext", () => {
     expect(m.visible).toBe(true);
   });
 
-  test("Phase 2D.1: IsMask=true + IsColoredMask=false → mesh hidden (pure stencil mask)", () => {
+  test("Phase 2D.1: IsMask=true + IsColoredMask=false → stencil writer (renders, paints nothing)", () => {
+    // A non-coloured mask is a stencil WRITER: it must render (visible) to write
+    // the stencil, but paints no colour (colorWrite=false). Identified by
+    // attributes, so the arbitrary name is irrelevant.
     const pureMask = quadData({
       id: "p", name: "SOME_STENCIL_ONLY", enable: true, isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
     const root = buildNodeTree([pureMask], makeCtx());
-    const m = root.children[0] as Mesh;
-    expect(m.visible).toBe(false);
+    const mat = (root.children[0] as Mesh).material as MeshBasicMaterial;
+    expect(mat.colorWrite).toBe(false); // paints nothing — the "hidden" stencil writer
   });
 
   test("Phase 2D.1: IsMask=true + IsColoredMask=true + Enable=false → mesh hidden (enable always wins)", () => {
@@ -964,8 +1014,8 @@ describe("builder — BuildContext", () => {
     const fillMat = (root.children[2] as Mesh).material as MeshBasicMaterial;
     expect(fillMat.stencilWrite).toBe(true);
     expect(fillMat.stencilFunc).toBe(EqualStencilFunc);
-    // Phase 2J: ref = MASK owner (2) | (DUMMY owner (2) << 3) = 2 | 16 = 18
-    expect(fillMat.stencilRef).toBe(18);
+    // Mask & dummy share the only container → slot 1: ref = 1 | (1 << 3) = 9
+    expect(fillMat.stencilRef).toBe(9);
     // funcMask = MASK_OWNER_FIELD | DUMMY_OWNER_FIELD = 7 | 56 = 63
     expect(fillMat.stencilFuncMask).toBe(63);
   });
@@ -1642,11 +1692,15 @@ describe("builder — BuildContext", () => {
     expect(g.children[1].position.y).toBeCloseTo(-0.6, 5);  // -0.4 - 0.2
   });
 
-  test("Phase D2: XPlus + Trailing — main axis leading-edge anchored, cross axis (Y) unaffected by equal extents", () => {
-    // X flow: leading edge is the box left (min-X). Quad x=1 → box.min=-0.5 →
-    // each child's left edge at its cursor → center at cursor + 0.5. The
-    // FlowChildrenAlignment="Trailing" cross-axis shift is a no-op here because
-    // all siblings share the same cross-axis (Y) extent (equal Quad y=0.4).
+  test("XPlus + Trailing — block MAX (trailing) edge anchored at the group origin; cross axis (Y) unaffected by equal extents", () => {
+    // R3 FlowChildrenAlignment is a MAIN-AXIS anchor tied to the alignment, not
+    // the flow sign: Leading puts the block's MIN edge on the origin, Trailing
+    // puts the block's MAX edge there. Two Quads x=1, leadingSpace=0 pack to the
+    // block [0, 2] (centers 0.5, 1.5); Trailing then shifts the whole block back
+    // by its length (−2) so the right (MAX) edge sits on the origin → centers
+    // −1.5, −0.5, block [−2, 0]. (This is what mirrors LINEUP_RIGHT's PLAYERS.)
+    // The cross-axis (Y) Trailing shift is a no-op here — all siblings share the
+    // same Y extent (equal Quad y=0.4).
     const mk = (i: number) => quadData({
       id: `c${i}`, name: `C_0${i}`, geometry: { size: { x: 1, y: 0.4 } },
     });
@@ -1657,9 +1711,9 @@ describe("builder — BuildContext", () => {
     });
     const root = buildNodeTree([row]);
     const g = root.children[0] as Group;
-    // Main-axis X leading edge at cursor 0, 1 → center 0.5, 1.5.
-    expect(g.children[0].position.x).toBeCloseTo(0.5, 5);
-    expect(g.children[1].position.x).toBeCloseTo(1.5, 5);
+    // Trailing: block MAX edge at origin → centers −1.5, −0.5 (right edge at 0).
+    expect(g.children[0].position.x).toBeCloseTo(-1.5, 5);
+    expect(g.children[1].position.x).toBeCloseTo(-0.5, 5);
     // Y stays at authored 0 because all siblings share the same cross-axis
     // extent (equal Quad y=0.4 → Trailing delta 0).
     expect(g.children[0].position.y).toBeCloseTo(0, 5);
@@ -2200,7 +2254,7 @@ describe("builder — BuildContext", () => {
     const fillGroup = root.children[2] as Group;
     const mat = (fillGroup.children[0] as Mesh).material as MeshBasicMaterial;
     expect(mat.stencilFunc).toBe(EqualStencilFunc);
-    expect(mat.stencilRef).toBe(18);      // MASK owner=2 | (DUMMY owner=2 << 3) = 2 | 16 = 18
+    expect(mat.stencilRef).toBe(9);       // slot 1: MASK owner=1 | (DUMMY owner=1 << 3) = 9
     expect(mat.stencilFuncMask).toBe(63); // MASK_OWNER_FIELD | DUMMY_OWNER_FIELD
   });
 
@@ -2255,7 +2309,7 @@ describe("builder — BuildContext", () => {
     const fillGroup = root.children[2] as Group;
     const mat = (fillGroup.children[0] as Mesh).material as MeshBasicMaterial;
     expect(mat.stencilFunc).toBe(EqualStencilFunc);
-    expect(mat.stencilRef).toBe(16);      // DUMMY owner=2 << 3 = 16; no synthetic MASK_01 added
+    expect(mat.stencilRef).toBe(8);       // DUMMY owner slot=1 << 3 = 8; no synthetic MASK added (FILL/DUMMY index mismatch)
     expect(mat.stencilFuncMask).toBe(56); // DUMMY_OWNER_FIELD only
   });
 
@@ -2304,7 +2358,7 @@ describe("builder — BuildContext", () => {
     for (const mesh of [colorMesh, textureMesh]) {
       const mat = mesh.material as MeshBasicMaterial;
       expect(mat.stencilFunc).toBe(EqualStencilFunc);
-      expect(mat.stencilRef).toBe(18);      // MASK owner=2 | (DUMMY owner=2 << 3) = 18
+      expect(mat.stencilRef).toBe(9);       // slot 1: MASK owner=1 | (DUMMY owner=1 << 3) = 9
       expect(mat.stencilFuncMask).toBe(63); // MASK_OWNER_FIELD | DUMMY_OWNER_FIELD
     }
   });
