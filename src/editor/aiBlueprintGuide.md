@@ -113,8 +113,9 @@ Use only these primitive visual types:
 - `cylinder`: wheels, rods, columns, propellers, handles, barrels, antennas.
 - `plane`: flat plates, labels, decals, front panels, background cards.
 - `text`: short readable labels or titles.
+- `torus`: rings, donuts, hoops, wheels with a hole, handles, hands/grips. Geometry fields `radius` (ring radius), `tube` (thickness), and `arc` (use `6.2832` for a full ring, less for an open arc). Other torus params use sane defaults.
 
-Do not invent visual object types such as `torus`, `cone`, `capsule`, `mesh`, `line`, `curve`, `glb`, `image`, `custom`, `light`, or `camera`.
+Do not invent visual object types such as `cone`, `capsule`, `mesh`, `line`, `curve`, `glb`, `image`, `custom`, `light`, or `camera`.
 
 Do not use `group` as a visual primitive object.
 
@@ -128,17 +129,17 @@ If the output mode is a simplified new scene spec, use only visual primitive obj
 
 ### Full Internal Node Type Catalog
 
-The simplified scene spec (Mode A) can only **create** the five primitives above. The real internal 3Forge blueprint, however, supports many more node types. An existing blueprint (Mode B) or a full internal blueprint (Mode C) may contain any of these, and animation tracks may target any of them by `nodeId`.
+The simplified scene spec (Mode A) can only **create** the six primitives above (`box`, `sphere`, `cylinder`, `plane`, `text`, `torus`). The real internal 3Forge blueprint, however, supports many more node types. An existing blueprint (Mode B) or a full internal blueprint (Mode C) may contain any of these, and animation tracks may target any of them by `nodeId`.
 
 Be aware of these node types when reading an existing blueprint or its node map. Do not invent them in a Mode A `objects` array, but do animate them by `nodeId` when they already exist:
 
 - `group`: non-rendering organizational/animation node. Has a `pivotOffset`. No material.
-- `box`, `sphere`, `cylinder`, `plane`, `text`: the five simplified primitives.
+- `box`, `sphere`, `cylinder`, `plane`, `text`, `torus`: the six simplified primitives.
 - `circle`: flat disc/fan. Geometry: `radius`, `segments`, `thetaStarts`, `thetaLenght` (the last two are spelled exactly like that internally).
 - `cone`: tapered point. Geometry: `radius`, `height`, `radialSegments`, `heightSegments`, `thetaStart`, `thetaLength`.
 - `capsule`: pill/rounded-cylinder. Geometry: `radius`, `length`, `capSegments`, `radialSegments`.
 - `ring`: flat annulus. Geometry: `innerRadius`, `outerRadius`, `thetaSegments`, `phiSegments`, `thetaStart`, `thetaLength`.
-- `torus`: donut. Geometry: `radius`, `tube`, `radialSegments`, `tubularSegments`, `arc`.
+- `torus`: donut/ring. Geometry: `radius`, `tube`, `radialSegments`, `tubularSegments`, `arc`. Creatable in Mode A via `radius`, `tube`, `arc`.
 - `torusKnot`: knotted torus. Geometry: `radius`, `tube`, `tubularSegments`, `radialSegments`, `p`, `q`.
 - `dodecahedron`, `icosahedron`, `octahedron`, `tetrahedron`: faceted polyhedra. Geometry: `radius`, `detail`.
 - `image`: textured plane bound to an image asset. Geometry: `width`, `height`, plus `imageId`.
@@ -173,12 +174,15 @@ Return exactly this kind of data:
       "position": { "x": 0, "y": 0, "z": 0 },
       "rotation": { "x": 0, "y": 0, "z": 0 },
       "scale": { "x": 1, "y": 1, "z": 1 },
+      "origin": null,
       "width": 1.8,
       "height": 0.35,
       "depth": 0.8,
       "radius": null,
       "radiusTop": null,
       "radiusBottom": null,
+      "tube": null,
+      "arc": null,
       "text": null,
       "size": null
     }
@@ -746,13 +750,13 @@ Animation exception: for animated squash/stretch or hide-like scale effects, sca
 
 ## Origin And Pivot
 
-Every internal node has an `origin` that decides which point of the object its `position` refers to. The default origin is centered on all axes:
+Every node has an `origin` that decides which point of the object its `position` refers to. The default origin is centered on all axes:
 
 - `origin.x`: `left`, `center`, or `right`.
 - `origin.y`: `top`, `center`, or `bottom`.
 - `origin.z`: `front`, `center`, or `back`.
 
-In the simplified Mode A scene spec, `origin` is always center on every axis, which is why all positioning rules in this guide treat `position` as the object center. Do not try to set `origin` in Mode A; it is not part of the simplified object schema.
+In Mode A, `origin` is an optional field on each object. **Omit it (or send `null`) to keep the default center**, which is why almost every positioning rule in this guide treats `position` as the object center. Only set `origin` when anchoring a specific face is genuinely useful — most commonly `origin.y: "bottom"` so an object's *base* sits exactly on the floor and so a `transform.scale.y` squash compresses toward the ground instead of shrinking around the center. Keep `origin` center unless you have a concrete reason to change it.
 
 Group nodes additionally have a `pivotOffset` (a `{ x, y, z }` vector) that moves the point a group rotates and scales around without moving its children. This is what makes a group a good hinge, axle, or joint. When animating an existing blueprint:
 
@@ -770,8 +774,9 @@ The converter clamps simplified geometry values, so stay inside these ranges:
 - Sphere `radius`: `0.05`–`5` (default `0.5`).
 - Cylinder `radiusTop` and `radiusBottom`: `0.01`–`5` (default `0.5`); cylinder `height`: `0.05`–`10`.
 - Text `size`: `0.05`–`3` (default `0.35`); text `depth`: `0`–`1` (default `0.06`).
+- Torus `radius`: `0.05`–`5` (default `0.6`); `tube`: `0.01`–`3` (default `0.18`); `arc`: `0.1`–`6.2832` (default `6.2832`, a full ring).
 
-The five simplified primitives also have extra internal geometry fields (segment counts, partial arcs, text bevels, and so on) that the simplified Mode A schema does not expose. The converter fills them with sensible defaults — for example spheres use `widthSegments: 32` / `heightSegments: 24`, cylinders use `radialSegments: 32`, and text uses `curveSegments` and `bevelEnabled: false`. You only set these directly in Mode C full internal blueprints; in Mode A, just send the simplified fields below.
+The six simplified primitives also have extra internal geometry fields (segment counts, partial arcs, text bevels, and so on) that the simplified Mode A schema does not expose. The converter fills them with sensible defaults — for example spheres use `widthSegments: 32` / `heightSegments: 24`, cylinders use `radialSegments: 32`, toruses use `radialSegments: 16` / `tubularSegments: 48`, and text uses `curveSegments` and `bevelEnabled: false`. You only set these directly in Mode C full internal blueprints; in Mode A, just send the simplified fields below.
 
 ### Box
 
@@ -858,8 +863,30 @@ Use `text`, `size`, and optionally `depth`.
   "radius": null,
   "radiusTop": null,
   "radiusBottom": null,
+  "tube": null,
+  "arc": null,
   "text": "3Forge",
   "size": 0.32
+}
+```
+
+### Torus
+
+Use `radius` (the ring radius from center to the tube), `tube` (tube thickness), and `arc` (`6.2832` for a full ring, smaller for an open hoop). A torus lies in its local XY plane facing +Z, so rotate it to orient the hole. Good for rings, hoops, gaskets, grips, and ring-shaped hands.
+
+```json
+{
+  "type": "torus",
+  "width": null,
+  "height": null,
+  "depth": null,
+  "radius": 0.2,
+  "radiusTop": null,
+  "radiusBottom": null,
+  "tube": 0.04,
+  "arc": 6.2832,
+  "text": null,
+  "size": null
 }
 ```
 
@@ -1616,7 +1643,8 @@ Before returning JSON, check every item:
 - All fields required by the schema are present.
 - Unused geometry fields are `null`.
 - No unsupported visual object types are used.
-- In Mode A, `objects` use only `box`, `sphere`, `cylinder`, `plane`, and `text`. Other internal node types (`cone`, `capsule`, `ring`, `torus`, `torusKnot`, polyhedra, `circle`, `image`, `model`, `group`) are referenced only as existing animation targets in Mode B, never created in Mode A.
+- In Mode A, `objects` use only `box`, `sphere`, `cylinder`, `plane`, `text`, and `torus`. Other internal node types (`cone`, `capsule`, `ring`, `torusKnot`, polyhedra, `circle`, `image`, `model`, `group`) are referenced only as existing animation targets in Mode B, never created in Mode A.
+- `origin` is omitted or `null` on most Mode A objects (default center); set it only to anchor a face, e.g. `origin.y: "bottom"` for floor-planted squash.
 - Extra material map slots (`roughnessMapImageId`, `metalnessMapImageId`, `normalMapImageId`, `aoMapImageId`, `emissiveMapImageId`) and extra internal geometry/segment fields appear only in Mode C, never on a Mode A object.
 - `sceneSettings` is not present in a Mode A output; it is only set in Mode C or in an explicit existing-blueprint lighting/environment edit.
 - Geometry and transform values stay inside the converter clamp ranges so nothing is silently changed.

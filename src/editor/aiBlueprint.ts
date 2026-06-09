@@ -1,10 +1,11 @@
 import { normalizeAnimation } from "./animation";
+import { buildExamplesBlock } from "./aiBlueprintExamples";
 import aiBlueprintGuide from "./aiBlueprintGuide.md?raw";
 import { createMaterialSpec, isMaterialSide, isMaterialType } from "./materials";
 import { createNode, ROOT_NODE_ID } from "./state";
-import type { BoxNode, ComponentAnimation, ComponentBlueprint, CylinderNode, EditorNode, MaterialSide, MaterialType, PlaneNode, SphereNode, TextNode, TransformSpec } from "./types";
+import type { BoxNode, ComponentAnimation, ComponentBlueprint, CylinderNode, EditorNode, MaterialSide, MaterialType, NodeOriginDepth, NodeOriginHorizontal, NodeOriginSpec, NodeOriginVertical, PlaneNode, SphereNode, TextNode, TorusNode, TransformSpec } from "./types";
 
-type AiPrimitiveType = "box" | "sphere" | "cylinder" | "plane" | "text";
+type AiPrimitiveType = "box" | "sphere" | "cylinder" | "plane" | "text" | "torus";
 
 export interface AiPrimitiveSpec {
   type: AiPrimitiveType;
@@ -25,12 +26,15 @@ export interface AiPrimitiveSpec {
   position: Partial<TransformSpec["position"]>;
   rotation: Partial<TransformSpec["rotation"]>;
   scale: Partial<TransformSpec["scale"]>;
+  origin?: Partial<NodeOriginSpec> | null;
   width?: number | null;
   height?: number | null;
   depth?: number | null;
   radius?: number | null;
   radiusTop?: number | null;
   radiusBottom?: number | null;
+  tube?: number | null;
+  arc?: number | null;
   text?: string | null;
   size?: number | null;
 }
@@ -139,17 +143,20 @@ const AI_SCENE_SCHEMA = {
           "position",
           "rotation",
           "scale",
+          "origin",
           "width",
           "height",
           "depth",
           "radius",
           "radiusTop",
           "radiusBottom",
+          "tube",
+          "arc",
           "text",
           "size",
         ],
         properties: {
-          type: { type: "string", enum: ["box", "sphere", "cylinder", "plane", "text"] },
+          type: { type: "string", enum: ["box", "sphere", "cylinder", "plane", "text", "torus"] },
           name: { type: "string" },
           color: { type: "string" },
           opacity: { type: "number" },
@@ -167,12 +174,15 @@ const AI_SCENE_SCHEMA = {
           position: createVec3Schema(),
           rotation: createVec3Schema(),
           scale: createVec3Schema(),
+          origin: createOriginSchema(),
           width: { type: ["number", "null"] },
           height: { type: ["number", "null"] },
           depth: { type: ["number", "null"] },
           radius: { type: ["number", "null"] },
           radiusTop: { type: ["number", "null"] },
           radiusBottom: { type: ["number", "null"] },
+          tube: { type: ["number", "null"] },
+          arc: { type: ["number", "null"] },
           text: { type: ["string", "null"] },
           size: { type: ["number", "null"] },
         },
@@ -196,7 +206,8 @@ export async function generateBlueprint({ apiKey, prompt, provider = "openrouter
 
 export async function generateBlueprintResult({ apiKey, prompt, provider = "openrouter", model, localUrl, chatContext }: GenerateBlueprintOptions): Promise<AiBlueprintResult> {
   const selectedModel = model?.trim() || getDefaultModel(provider);
-  const result = await generateSceneSpec({ apiKey, prompt: createPromptWithChatContext(prompt, chatContext), provider, model: selectedModel, localUrl });
+  const userMessage = prependExamples(createPromptWithChatContext(prompt, chatContext), prompt);
+  const result = await generateSceneSpec({ apiKey, prompt: userMessage, provider, model: selectedModel, localUrl });
   return createAiBlueprintResult(result.sceneSpec, result.rawText, result.executedModel);
 }
 
@@ -228,7 +239,8 @@ export async function editBlueprintWithAIResult({ apiKey, prompt, provider = "op
     "User edit request:",
     contextualPrompt,
   ].join("\n");
-  const result = await generateSceneSpec({ apiKey, prompt: editPrompt, provider, model: selectedModel, localUrl });
+  const userMessage = prependExamples(editPrompt, contextualPrompt);
+  const result = await generateSceneSpec({ apiKey, prompt: userMessage, provider, model: selectedModel, localUrl });
   return createAiBlueprintResult(result.sceneSpec, result.rawText, result.executedModel, currentBlueprint);
 }
 
@@ -354,6 +366,15 @@ function getChatCompletionsUrl(provider: AiProvider, localUrl?: string): string 
   return OPENROUTER_CHAT_URL;
 }
 
+function prependExamples(
+  userMessage: string,
+  relevancePrompt: string,
+  options: { count?: number; preferExistingBlueprint?: boolean } = {},
+): string {
+  const block = buildExamplesBlock(relevancePrompt, options);
+  return block ? `${block}\n\n${userMessage}` : userMessage;
+}
+
 function createPromptWithChatContext(prompt: string, chatContext?: AiChatContext): string {
   if (!chatContext?.lastSceneSpecJson && (!chatContext?.diffSummaries || chatContext.diffSummaries.length === 0)) {
     return prompt;
@@ -434,6 +455,7 @@ export function createBlueprintFromAiScene(spec: AiSceneSpec, options: { baseBlu
       y: clampNumber(object.scale.y, 0.05, 20, 1),
       z: clampNumber(object.scale.z, 0.05, 20, 1),
     };
+    node.origin = resolveOrigin(object.origin);
 
     applyMaterial(node, object);
 
@@ -519,12 +541,15 @@ export function createAiSceneFromBlueprint(blueprint: ComponentBlueprint): AiSce
         position: node.transform.position,
         rotation: node.transform.rotation,
         scale: node.transform.scale,
+        origin: node.origin,
         width: null,
         height: null,
         depth: null,
         radius: null,
         radiusTop: null,
         radiusBottom: null,
+        tube: null,
+        arc: null,
         text: null,
         size: null,
       }) satisfies AiPrimitiveSpec;
@@ -544,6 +569,11 @@ export function createAiSceneFromBlueprint(blueprint: ComponentBlueprint): AiSce
           {
             const base = createBase("cylinder");
             return [{ ...base, radiusTop: node.geometry.radiusTop, radiusBottom: node.geometry.radiusBottom, height: node.geometry.height }];
+          }
+        case "torus":
+          {
+            const base = createBase("torus");
+            return [{ ...base, radius: node.geometry.radius, tube: node.geometry.tube, arc: node.geometry.arc }];
           }
         case "plane":
           {
@@ -824,7 +854,7 @@ function stringifyDebugPayload(payload: unknown): string {
 function createSystemPrompt(): string {
   return [
     "You generate compact 3D scene specifications for 3Forge.",
-    "Use only primitive objects: box, sphere, cylinder, plane, and text.",
+    "Use only primitive objects: box, sphere, cylinder, plane, text, and torus.",
     "Build recognizable models from multiple simple primitives.",
     "Keep objects centered near the origin and sized for a 6x6x6 viewport.",
     "Use radians for rotations.",
@@ -851,6 +881,19 @@ function createVec3Schema() {
       x: { type: "number" },
       y: { type: "number" },
       z: { type: "number" },
+    },
+  } as const;
+}
+
+function createOriginSchema() {
+  return {
+    type: ["object", "null"],
+    additionalProperties: false,
+    required: ["x", "y", "z"],
+    properties: {
+      x: { type: "string", enum: ["left", "center", "right"] },
+      y: { type: "string", enum: ["top", "center", "bottom"] },
+      z: { type: "string", enum: ["front", "center", "back"] },
     },
   } as const;
 }
@@ -946,6 +989,11 @@ function applyGeometry(node: EditorNode, spec: AiPrimitiveSpec): void {
       (node as CylinderNode).geometry.radiusBottom = clampNumber(spec.radiusBottom, 0.01, 5, 0.5);
       (node as CylinderNode).geometry.height = clampNumber(spec.height, 0.05, 10, 1);
       break;
+    case "torus":
+      (node as TorusNode).geometry.radius = clampNumber(spec.radius, 0.05, 5, 0.6);
+      (node as TorusNode).geometry.tube = clampNumber(spec.tube, 0.01, 3, 0.18);
+      (node as TorusNode).geometry.arc = clampNumber(spec.arc, 0.1, Math.PI * 2, Math.PI * 2);
+      break;
     case "plane":
       (node as PlaneNode).geometry.width = clampNumber(spec.width, 0.05, 10, 1);
       (node as PlaneNode).geometry.height = clampNumber(spec.height, 0.05, 10, 1);
@@ -985,6 +1033,18 @@ function applyMaterial(node: EditorNode, spec: AiPrimitiveSpec): void {
   }
 
   node.material = material;
+}
+
+const ORIGIN_X_VALUES: readonly NodeOriginHorizontal[] = ["left", "center", "right"];
+const ORIGIN_Y_VALUES: readonly NodeOriginVertical[] = ["top", "center", "bottom"];
+const ORIGIN_Z_VALUES: readonly NodeOriginDepth[] = ["front", "center", "back"];
+
+function resolveOrigin(origin: Partial<NodeOriginSpec> | null | undefined): NodeOriginSpec {
+  return {
+    x: ORIGIN_X_VALUES.includes(origin?.x as NodeOriginHorizontal) ? (origin!.x as NodeOriginHorizontal) : "center",
+    y: ORIGIN_Y_VALUES.includes(origin?.y as NodeOriginVertical) ? (origin!.y as NodeOriginVertical) : "center",
+    z: ORIGIN_Z_VALUES.includes(origin?.z as NodeOriginDepth) ? (origin!.z as NodeOriginDepth) : "center",
+  };
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
