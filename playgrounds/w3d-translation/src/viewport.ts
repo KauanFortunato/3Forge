@@ -110,6 +110,14 @@ export interface PlaygroundViewport {
    * force-painted so their shape is visible. Re-applies to the current selection.
    */
   setFocusMode(on: boolean): void;
+  /** Focus/isolate a node by id (show only its subtree + ancestors). null clears. */
+  setFocus(nodeId: string | null): void;
+  /** Per-node visibility — the tree eye toggles. Hides each id and its subtree. */
+  setHiddenNodes(ids: Set<string>): void;
+  /** Renderer cost snapshot for the Debug tab. */
+  getRenderStats(): { calls: number; triangles: number; geometries: number; textures: number };
+  /** Built leaf meshes with their renderOrder, sorted — for the Debug tab. */
+  getRenderOrderList(): { id: string; name: string; kind: string; renderOrder: number }[];
   dispose(): void;
 }
 
@@ -215,11 +223,22 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   // colorWrite=false, or alpha≈0 helpers) are temporarily force-painted in the
   // selection colour so an otherwise-invisible mask reveals its actual shape.
   // Originals are saved and restored when focus turns off or the selection moves.
-  let focusMode = false;
+  let focusTarget: Object3D | null = null;
   let currentTarget: Object3D | null = null;
+  let hiddenIds: Set<string> = new Set();
   const savedVis = new Map<Object3D, boolean>();
   const FOCUS_PAINT = 0x7c44de;
   const savedMat = new Map<MeshBasicMaterial, { colorWrite: boolean; opacity: number; transparent: boolean; color: number }>();
+
+  // True when `o` or any ancestor was hidden via the tree eye toggle.
+  function isHidden(o: Object3D): boolean {
+    if (hiddenIds.size === 0) return false;
+    for (let a: Object3D | null = o; a; a = a.parent) {
+      const id = (a.userData?.w3d as { id?: string } | undefined)?.id;
+      if (id && hiddenIds.has(id)) return true;
+    }
+    return false;
+  }
 
   function restoreFocus(): void {
     for (const [o, v] of savedVis) o.visible = v;
@@ -234,30 +253,42 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
     savedMat.clear();
   }
 
-  function applyFocus(): void {
+  // Unified visibility: a node is shown when (no focus, or it's in the focused
+  // subtree/ancestor chain) AND it isn't hidden via the eye toggle. Focus and
+  // the per-node eye are independent overlays; this recomputes both at once.
+  function recomputeVisibility(): void {
     restoreFocus();
-    if (!focusMode || !currentTarget || !mountedNodes) return;
-    const keep = new Set<Object3D>();
-    currentTarget.traverse((o) => keep.add(o));           // target + descendants
-    for (let a: Object3D | null = currentTarget; a; a = a.parent) keep.add(a); // ancestors
+    if (!mountedNodes) return;
+    let keep: Set<Object3D> | null = null;
+    if (focusTarget) {
+      keep = new Set<Object3D>();
+      focusTarget.traverse((o) => keep!.add(o));           // target + descendants
+      for (let a: Object3D | null = focusTarget; a; a = a.parent) keep!.add(a); // ancestors
+    }
+    if (!keep && hiddenIds.size === 0) return;             // nothing to override
     mountedNodes.traverse((o) => {
       savedVis.set(o, o.visible);
-      o.visible = keep.has(o);
+      let vis = o.visible;
+      if (keep && !keep.has(o)) vis = false;
+      if (vis && isHidden(o)) vis = false;
+      o.visible = vis;
     });
-    // Force-paint invisible meshes in the selection so masks show their shape.
-    currentTarget.traverse((o) => {
-      if (!(o as Mesh).isMesh) return;
-      const m = (o as Mesh).material as MeshBasicMaterial | undefined;
-      if (!m) return;
-      const invisible = m.colorWrite === false || (typeof m.opacity === "number" && m.opacity <= 0.01);
-      if (!invisible) return;
-      savedMat.set(m, { colorWrite: m.colorWrite, opacity: m.opacity, transparent: m.transparent, color: m.color.getHex() });
-      m.colorWrite = true;
-      m.opacity = 0.6;
-      m.transparent = true;
-      m.color.setHex(FOCUS_PAINT);
-      m.needsUpdate = true;
-    });
+    // Force-paint invisible meshes in the focused subtree so masks show shape.
+    if (focusTarget) {
+      focusTarget.traverse((o) => {
+        if (!(o as Mesh).isMesh) return;
+        const m = (o as Mesh).material as MeshBasicMaterial | undefined;
+        if (!m) return;
+        const invisible = m.colorWrite === false || (typeof m.opacity === "number" && m.opacity <= 0.01);
+        if (!invisible) return;
+        savedMat.set(m, { colorWrite: m.colorWrite, opacity: m.opacity, transparent: m.transparent, color: m.color.getHex() });
+        m.colorWrite = true;
+        m.opacity = 0.6;
+        m.transparent = true;
+        m.color.setHex(FOCUS_PAINT);
+        m.needsUpdate = true;
+      });
+    }
   }
 
   function clearSelectionHelper(): void {
@@ -279,7 +310,6 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
   function setSelection(target: Object3D | null): void {
     clearSelectionHelper();
     currentTarget = target;
-    applyFocus();
     if (!target) return;
     selectionHelper = new BoxHelper(target, 0x7c44de);
     // Draw the outline ON TOP of the 3D geometry (otherwise the photos/panels in
@@ -434,6 +464,7 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       savedVis.clear();
       savedMat.clear();
       currentTarget = null;
+      focusTarget = null;
       if (mountedNodes) {
         scene.remove(mountedNodes);
         disposeGroup(mountedNodes);
@@ -471,9 +502,39 @@ export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport 
       if (pivotHelper) pivotHelper.visible = markerVis.pivot;
     },
     setFocusMode(on: boolean) {
-      if (on === focusMode) return;
-      focusMode = on;
-      applyFocus();
+      focusTarget = on ? currentTarget : null;
+      recomputeVisibility();
+    },
+    setFocus(nodeId: string | null) {
+      focusTarget = nodeId ? findW3DObjectById(nodeId) : null;
+      recomputeVisibility();
+    },
+    setHiddenNodes(ids: Set<string>) {
+      hiddenIds = ids;
+      recomputeVisibility();
+    },
+    getRenderStats() {
+      const info = renderer.info;
+      return {
+        calls: info.render.calls,
+        triangles: info.render.triangles,
+        geometries: info.memory.geometries,
+        textures: info.memory.textures,
+      };
+    },
+    getRenderOrderList() {
+      const out: { id: string; name: string; kind: string; renderOrder: number }[] = [];
+      if (!mountedNodes) return out;
+      mountedNodes.traverse((o) => {
+        if (!(o as Mesh).isMesh) return;
+        const w = (o.userData as Record<string, unknown> | undefined)?.w3d as
+          | { id?: string; name?: string; kind?: string }
+          | undefined;
+        if (!w?.id) return;
+        out.push({ id: w.id, name: w.name ?? "", kind: w.kind ?? "", renderOrder: o.renderOrder });
+      });
+      out.sort((a, b) => a.renderOrder - b.renderOrder);
+      return out;
     },
     dispose() {
       if (mountedNodes) {

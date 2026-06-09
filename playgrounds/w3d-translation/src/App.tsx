@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentBlueprint } from "../../../src/editor/types";
 import { analyzeW3dXml, type DocumentStats } from "./analyze";
-import type { W3DNodeData } from "./nodes/data";
+import type { W3DNodeData, W3DQuadData } from "./nodes/data";
 import { translateBlueprint } from "./translate";
 import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
 import type { BuildContext } from "./nodes/builder";
@@ -29,9 +29,7 @@ interface LoadedScene {
   stats: DocumentStats;
   movFiles: number;
   rasterTextureFiles: number;
-  /** Phase H3 — outcome of registering the W3D corpus fonts via FontFace. */
   fontLoadResults: FontLoadResult[];
-  /** Phase H3 — fast lookup: "<family>|<weight>|<style>" → registered. */
   loadedFontIndex: Set<string>;
 }
 
@@ -40,22 +38,29 @@ interface SelectedProject {
   index: W3DProjectIndex;
 }
 
+type PanelTab = "tree" | "props" | "debug";
+type RenderStats = { calls: number; triangles: number; geometries: number; textures: number };
+type RenderOrderRow = { id: string; name: string; kind: string; renderOrder: number };
+
 export function App() {
   const [project, setProject] = useState<SelectedProject | null>(null);
   const [loaded, setLoaded] = useState<LoadedScene | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activePanel, setActivePanel] = useState<"stats" | "tree">("stats");
-  const [stencilDebugShowMask, setStencilDebugShowMask] = useState(false);
-  const [inspectorEnabled, setInspectorEnabled] = useState(false);
+  const [activeTab, setActiveTab] = useState<PanelTab>("tree");
   const [inspectorReport, setInspectorReport] = useState<InspectorReport | null>(null);
-  // DEV-Inspector — viewport marker toggles. These live in the 3D scene, so they
-  // stay visible even when the properties panel is closed.
+  // Tree / inspect state (engine-style outliner).
+  const [hiddenNodeIds, setHiddenNodeIds] = useState<Set<string>>(new Set());
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  // Debug controls (temporary dev tooling).
+  const [stencilDebugShowMask, setStencilDebugShowMask] = useState(false);
   const [showBox, setShowBox] = useState(true);
   const [showPivot, setShowPivot] = useState(true);
-  // DEV-Inspector — FOCUS/ISOLATE: show only the clicked node, hide the rest.
-  const [focusMode, setFocusMode] = useState(false);
   const [referenceImageUrl, setReferenceImageUrl] = useState<string | null>(null);
   const [referenceOpacity, setReferenceOpacity] = useState(0.45);
+  const [renderStats, setRenderStats] = useState<RenderStats | null>(null);
+  const [renderOrder, setRenderOrder] = useState<RenderOrderRow[]>([]);
+
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const referenceInputRef = useRef<HTMLInputElement | null>(null);
   const viewportHostRef = useRef<HTMLDivElement | null>(null);
@@ -67,6 +72,7 @@ export function App() {
     if (!host) return;
     const vp = createPlaygroundViewport(host);
     viewportRef.current = vp;
+    vp.setInspectorEnabled(true); // click-to-pick is always on in the outliner UI
     return () => {
       vp.dispose();
       viewportRef.current = null;
@@ -89,70 +95,79 @@ export function App() {
     }
   }, [loaded, stencilDebugShowMask]);
 
-  // DEV-Inspector — wire the toggle into the viewport raycaster + selection.
+  // Click-to-pick in the viewport → select + show Props.
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) return;
     vp.setInspectorCallback((event) => {
       if (event.phase === "click") {
         const report = buildInspectorReport(event.target, loaded?.resources);
-        if (report) setInspectorReport(report);
+        if (report) {
+          setInspectorReport(report);
+          setActiveTab("props");
+        }
       } else {
         setInspectorReport(null);
       }
     });
-    vp.setInspectorEnabled(inspectorEnabled);
-    return () => {
-      vp.setInspectorCallback(null);
-    };
-  }, [inspectorEnabled, loaded]);
+    return () => vp.setInspectorCallback(null);
+  }, [loaded]);
 
-  // DEV-Inspector — push marker visibility toggles to the viewport.
+  // Marker visibility (box / pivot axes).
   useEffect(() => {
     viewportRef.current?.setMarkerVisibility({ box: showBox, pivot: showPivot });
   }, [showBox, showPivot, inspectorReport]);
 
-  // DEV-Inspector — push focus/isolate mode to the viewport. Turning focus on
-  // also auto-enables click-to-pick so a click is needed to choose what to show.
+  // Per-node eye toggles → viewport visibility.
   useEffect(() => {
-    viewportRef.current?.setFocusMode(focusMode);
-    if (focusMode) setInspectorEnabled(true);
-  }, [focusMode]);
+    viewportRef.current?.setHiddenNodes(hiddenNodeIds);
+  }, [hiddenNodeIds, loaded]);
 
-  // DEV-Inspector — Esc clears the panel and the in-viewport selection box.
+  // Focus/isolate a node's subtree.
   useEffect(() => {
-    if (!inspectorReport) return;
+    viewportRef.current?.setFocus(focusNodeId);
+  }, [focusNodeId, loaded]);
+
+  // Debug tab: poll render stats + refresh the render-order list while open.
+  useEffect(() => {
+    if (activeTab !== "debug" || !loaded) return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+    setRenderOrder(vp.getRenderOrderList());
+    const tick = () => setRenderStats(vp.getRenderStats());
+    tick();
+    const t = window.setInterval(tick, 500);
+    return () => window.clearInterval(t);
+  }, [activeTab, loaded]);
+
+  // Esc clears selection + focus.
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setInspectorReport(null);
-        viewportRef.current?.clearInspectorSelection();
-      }
+      if (e.key !== "Escape") return;
+      setInspectorReport(null);
+      setFocusNodeId(null);
+      viewportRef.current?.clearInspectorSelection();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inspectorReport]);
-
-  useEffect(() => {
-    loadedRef.current = loaded;
-  }, [loaded]);
-
-  useEffect(() => {
-    return () => {
-      cleanupLoadedScene(loadedRef.current);
-    };
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (referenceImageUrl) URL.revokeObjectURL(referenceImageUrl);
-    };
-  }, [referenceImageUrl]);
+  useEffect(() => { loadedRef.current = loaded; }, [loaded]);
+  useEffect(() => () => { cleanupLoadedScene(loadedRef.current); }, []);
+  useEffect(() => () => { if (referenceImageUrl) URL.revokeObjectURL(referenceImageUrl); }, [referenceImageUrl]);
+
+  const resetSceneUiState = useCallback(() => {
+    setInspectorReport(null);
+    setHiddenNodeIds(new Set());
+    setFocusNodeId(null);
+    setCollapsedIds(new Set());
+    viewportRef.current?.clearInspectorSelection();
+  }, []);
 
   const handleProjectFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
     cleanupLoadedScene(loaded);
-    viewportRef.current?.clearInspectorSelection();
-    setInspectorReport(null);
+    resetSceneUiState();
     setLoaded(null);
     setError(null);
     const index = indexW3DProject(files);
@@ -165,16 +180,15 @@ export function App() {
     if (index.scenes.length === 1) {
       await loadScene(files, index.scenes[0], index, setLoaded, setError);
     }
-  }, [loaded]);
+  }, [loaded, resetSceneUiState]);
 
   const handleSceneSelect = useCallback(async (scene: W3DProjectScene) => {
     if (!project) return;
     cleanupLoadedScene(loaded);
-    viewportRef.current?.clearInspectorSelection();
-    setInspectorReport(null);
+    resetSceneUiState();
     setLoaded(null);
     await loadScene(project.files, scene, project.index, setLoaded, setError);
-  }, [loaded, project]);
+  }, [loaded, project, resetSceneUiState]);
 
   const reTranslate = useCallback(() => {
     if (!loaded) return;
@@ -187,7 +201,6 @@ export function App() {
         nodes: translated.nodes,
         resources: translated.resources,
         warnings: translated.warnings,
-        // Preserve existing texture/font URLs and texture cache.
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -214,7 +227,28 @@ export function App() {
     const target = viewportRef.current?.selectW3DNode(node.id);
     const report = target ? buildInspectorReport(target, loaded?.resources) : null;
     setInspectorReport(report);
+    setActiveTab("props");
   }, [loaded]);
+
+  const toggleHide = useCallback((id: string) => {
+    setHiddenNodeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleCollapse = useCallback((id: string) => {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleFocus = useCallback((id: string) => {
+    setFocusNodeId((prev) => (prev === id ? null : id));
+  }, []);
 
   return (
     <div className="playground">
@@ -224,69 +258,10 @@ export function App() {
           <button type="button" onClick={() => folderInputRef.current?.click()}>
             Open W3D project…
           </button>
-          <button type="button" onClick={() => referenceInputRef.current?.click()}>
-            Reference image…
-          </button>
           {loaded ? (
             <button type="button" onClick={reTranslate} title="Re-run translate.ts against current XML">
               Re-translate
             </button>
-          ) : null}
-          {referenceImageUrl ? (
-            <label className="playground__debug-control" title="Fade the reference screenshot over the viewport">
-              ref fade
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={referenceOpacity}
-                onChange={(e) => setReferenceOpacity(Number(e.target.value))}
-              />
-              <button type="button" onClick={clearReferenceImage}>clear</button>
-            </label>
-          ) : null}
-          <label style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }} title="Debug: paint PHOTO_MASK_0X red 50% so the mask shape is visible">
-            <input
-              type="checkbox"
-              checked={stencilDebugShowMask}
-              onChange={(e) => setStencilDebugShowMask(e.target.checked)}
-            />
-            show mask (red)
-          </label>
-          <label style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }} title="Click a node in the viewport to inspect its W3D properties">
-            <input
-              type="checkbox"
-              checked={inspectorEnabled}
-              onChange={(e) => {
-                setInspectorEnabled(e.target.checked);
-                if (!e.target.checked) {
-                  setInspectorReport(null);
-                  viewportRef.current?.clearInspectorSelection();
-                }
-              }}
-            />
-            inspector
-          </label>
-          <label style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }} title="Focus/isolate: show ONLY the clicked node (the rest is hidden); invisible masks are painted so you can see their shape">
-            <input
-              type="checkbox"
-              checked={focusMode}
-              onChange={(e) => setFocusMode(e.target.checked)}
-            />
-            focus
-          </label>
-          {inspectorEnabled ? (
-            <>
-              <label style={{ marginLeft: 8, fontSize: 12, opacity: 0.8 }} title="Show the pivot/anchor axes marker at the selected node">
-                <input type="checkbox" checked={showPivot} onChange={(e) => setShowPivot(e.target.checked)} />
-                pivot
-              </label>
-              <label style={{ marginLeft: 8, fontSize: 12, opacity: 0.8 }} title="Show the bounding-box outline of the selected node">
-                <input type="checkbox" checked={showBox} onChange={(e) => setShowBox(e.target.checked)} />
-                box
-              </label>
-            </>
           ) : null}
         </div>
       </header>
@@ -305,7 +280,6 @@ export function App() {
           await handleProjectFiles(files);
         }}
       />
-
       <input
         ref={referenceInputRef}
         type="file"
@@ -325,12 +299,9 @@ export function App() {
             onSceneSelect={handleSceneSelect}
           />
           <div className="playground__tabs">
-            <button className={activePanel === "stats" ? "is-active" : ""} onClick={() => setActivePanel("stats")}>
-              Structure
-            </button>
-            <button className={activePanel === "tree" ? "is-active" : ""} onClick={() => setActivePanel("tree")}>
-              Tree
-            </button>
+            <button className={activeTab === "tree" ? "is-active" : ""} onClick={() => setActiveTab("tree")}>Tree</button>
+            <button className={activeTab === "props" ? "is-active" : ""} onClick={() => setActiveTab("props")}>Props</button>
+            <button className={activeTab === "debug" ? "is-active" : ""} onClick={() => setActiveTab("debug")}>Debug</button>
           </div>
           <div className="playground__panel-body">
             {!loaded ? (
@@ -338,16 +309,38 @@ export function App() {
                 {error ? <p className="playground__error">{error}</p> : null}
                 <p>Pick an R3/W3D project folder, then choose a scene.</p>
               </div>
-            ) : activePanel === "stats" ? (
-              <StatsView loaded={loaded} />
-            ) : activePanel === "tree" ? (
+            ) : activeTab === "tree" ? (
               <NodeTreeView
                 nodes={loaded.nodes}
                 activeNodeId={inspectorReport?.identity.id ?? null}
+                hiddenIds={hiddenNodeIds}
+                focusId={focusNodeId}
+                collapsedIds={collapsedIds}
                 onSelect={selectTreeNode}
+                onToggleHide={toggleHide}
+                onToggleCollapse={toggleCollapse}
+                onToggleFocus={toggleFocus}
               />
+            ) : activeTab === "props" ? (
+              <PropsView report={inspectorReport} />
             ) : (
-              <StatsView loaded={loaded} />
+              <DebugView
+                showMask={stencilDebugShowMask}
+                setShowMask={setStencilDebugShowMask}
+                showPivot={showPivot}
+                setShowPivot={setShowPivot}
+                showBox={showBox}
+                setShowBox={setShowBox}
+                onPickReference={() => referenceInputRef.current?.click()}
+                referenceImageUrl={referenceImageUrl}
+                referenceOpacity={referenceOpacity}
+                setReferenceOpacity={setReferenceOpacity}
+                clearReference={clearReferenceImage}
+                warnings={loaded.warnings}
+                stats={renderStats}
+                renderOrder={renderOrder}
+                report={inspectorReport}
+              />
             )}
           </div>
         </aside>
@@ -364,25 +357,8 @@ export function App() {
               <span>{loaded.sceneFileName}</span>
               <span>{loaded.stats.totalElements} elements · max depth {loaded.stats.maxDepth}</span>
               <span>{loaded.movFiles} .mov · {loaded.rasterTextureFiles} textures · {loaded.fontLoadResults.filter((r) => r.registered).length}/{loaded.fontLoadResults.length} fonts</span>
-              {loaded.warnings.length > 0 ? (
-                <details>
-                  <summary>{loaded.warnings.length} warning(s)</summary>
-                  <ul>
-                    {loaded.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                  </ul>
-                </details>
-              ) : null}
+              {focusNodeId ? <span style={{ color: "var(--accent)" }}>focus on · Esc to clear</span> : null}
             </div>
-          ) : null}
-          {inspectorReport ? (
-            <InspectorPanel
-              report={inspectorReport}
-              onClose={() => {
-                // Close the panel but KEEP the viewport markers (pivot/box) so they
-                // don't obstruct — they clear on Esc, deselect, or inspector off.
-                setInspectorReport(null);
-              }}
-            />
           ) : null}
         </main>
       </div>
@@ -411,15 +387,9 @@ async function loadScene(
       textureUrlsByFilename.set(file.name, URL.createObjectURL(file));
     }
 
-    // Phase H3 — register R3 fonts via FontFace so canvas TextureText renders
-    // with the authored family instead of system sans-serif fallback. Failures
-    // are non-fatal; per-file status surfaces in the inspector / summary.
     const fontLoadResults = await loadW3DFontFiles(project.fontFiles);
     const loadedFontIndex = buildLoadedFontIndex(fontLoadResults);
 
-    // Diagnostics — surface font discovery and warn (with a clear "import the
-    // project root" prompt) when the scene's FontStyle families aren't covered
-    // by the discovered fonts, so TextureText doesn't silently fall back.
     const registeredFamilies = fontLoadResults
       .filter((r) => r.registered && r.parsed)
       .map((r) => r.parsed!.family);
@@ -470,10 +440,7 @@ function ProjectScenes({
   loadedSceneFileName: string | null;
   onSceneSelect: (scene: W3DProjectScene) => void;
 }) {
-  if (!project) {
-    return null;
-  }
-
+  if (!project) return null;
   return (
     <section className="playground__project">
       <div className="playground__project-head">
@@ -500,21 +467,47 @@ function ProjectScenes({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Tree (engine-style outliner): per-row eye (show/hide), type icon, collapse,
+// select, and focus/isolate.
+// ---------------------------------------------------------------------------
+
+function nodeIcon(node: W3DNodeData): { glyph: string; cls: string } {
+  if (node.kind === "Group") return { glyph: "📁", cls: "group" };
+  if (node.kind === "TextureText") return { glyph: "T", cls: "texturetext" };
+  if (node.kind === "Quad") {
+    return (node as W3DQuadData).isMask
+      ? { glyph: "◫", cls: "mask" }
+      : { glyph: "📷", cls: "quad" };
+  }
+  return { glyph: "•", cls: "quad" };
+}
+
 function NodeTreeView({
   nodes,
   activeNodeId,
+  hiddenIds,
+  focusId,
+  collapsedIds,
   onSelect,
+  onToggleHide,
+  onToggleCollapse,
+  onToggleFocus,
 }: {
   nodes: W3DNodeData[];
   activeNodeId: string | null;
+  hiddenIds: Set<string>;
+  focusId: string | null;
+  collapsedIds: Set<string>;
   onSelect: (node: W3DNodeData) => void;
+  onToggleHide: (id: string) => void;
+  onToggleCollapse: (id: string) => void;
+  onToggleFocus: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleNodes = useMemo(
-    () => filterNodeTree(nodes, normalizedQuery),
-    [nodes, normalizedQuery],
-  );
+  const visibleNodes = useMemo(() => filterNodeTree(nodes, normalizedQuery), [nodes, normalizedQuery]);
+  const filtering = normalizedQuery.length > 0;
 
   return (
     <div className="playground__tree">
@@ -524,14 +517,21 @@ function NodeTreeView({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
-      <div className="playground__tree-list">
+      <div className="ptree-list">
         {visibleNodes.map((node) => (
-          <TreeNodeRow
+          <TreeRow
             key={node.id || node.name}
             node={node}
             depth={0}
             activeNodeId={activeNodeId}
+            hiddenIds={hiddenIds}
+            focusId={focusId}
+            collapsedIds={collapsedIds}
+            forceExpand={filtering}
             onSelect={onSelect}
+            onToggleHide={onToggleHide}
+            onToggleCollapse={onToggleCollapse}
+            onToggleFocus={onToggleFocus}
           />
         ))}
       </div>
@@ -539,39 +539,92 @@ function NodeTreeView({
   );
 }
 
-function TreeNodeRow({
+function TreeRow({
   node,
   depth,
   activeNodeId,
+  hiddenIds,
+  focusId,
+  collapsedIds,
+  forceExpand,
   onSelect,
+  onToggleHide,
+  onToggleCollapse,
+  onToggleFocus,
 }: {
   node: W3DNodeData;
   depth: number;
   activeNodeId: string | null;
+  hiddenIds: Set<string>;
+  focusId: string | null;
+  collapsedIds: Set<string>;
+  forceExpand: boolean;
   onSelect: (node: W3DNodeData) => void;
+  onToggleHide: (id: string) => void;
+  onToggleCollapse: (id: string) => void;
+  onToggleFocus: (id: string) => void;
 }) {
+  const hasChildren = node.children.length > 0;
+  const collapsed = !forceExpand && collapsedIds.has(node.id);
+  const hidden = hiddenIds.has(node.id);
+  const icon = nodeIcon(node);
+  const isActive = node.id === activeNodeId;
+  const isFocus = node.id === focusId;
+
   return (
-    <div className="playground__tree-item">
-      <button
-        type="button"
-        className={node.id === activeNodeId ? "is-active" : ""}
-        style={{ paddingLeft: depth * 12 + 8 }}
-        onClick={() => onSelect(node)}
-        title={nodePathTitle(node)}
+    <div className="ptree-item">
+      <div
+        className={`ptree-row${isActive ? " is-active" : ""}${isFocus ? " is-focus" : ""}${hidden ? " is-hidden" : ""}`}
+        style={{ paddingLeft: depth * 12 + 4 }}
       >
-        <span className={`kind kind--${node.kind.toLowerCase()}`}>{node.kind}</span>
-        <span className="name">{node.name || "(unnamed)"}</span>
-        {node.kind === "TextureText" ? <span className="text">{node.text}</span> : null}
-      </button>
-      {node.children.map((child) => (
-        <TreeNodeRow
-          key={child.id || child.name}
-          node={child}
-          depth={depth + 1}
-          activeNodeId={activeNodeId}
-          onSelect={onSelect}
-        />
-      ))}
+        <button
+          type="button"
+          className="ptree-eye"
+          title={hidden ? "Show" : "Hide"}
+          onClick={() => onToggleHide(node.id)}
+        >
+          {hidden ? "🚫" : "👁"}
+        </button>
+        <button
+          type="button"
+          className="ptree-chev"
+          style={{ visibility: hasChildren ? "visible" : "hidden" }}
+          onClick={() => hasChildren && onToggleCollapse(node.id)}
+        >
+          {collapsed ? "▸" : "▾"}
+        </button>
+        <span className={`ptree-icon kind--${icon.cls}`} title={node.kind}>{icon.glyph}</span>
+        <button type="button" className="ptree-name" onClick={() => onSelect(node)} title={nodePathTitle(node)}>
+          <span className="name">{node.name || "(unnamed)"}</span>
+          {node.kind === "TextureText" ? <span className="text">{node.text}</span> : null}
+        </button>
+        <button
+          type="button"
+          className={`ptree-focus${isFocus ? " on" : ""}`}
+          title={isFocus ? "Clear focus" : "Focus / isolate"}
+          onClick={() => onToggleFocus(node.id)}
+        >
+          ⌖
+        </button>
+      </div>
+      {hasChildren && !collapsed
+        ? node.children.map((child) => (
+            <TreeRow
+              key={child.id || child.name}
+              node={child}
+              depth={depth + 1}
+              activeNodeId={activeNodeId}
+              hiddenIds={hiddenIds}
+              focusId={focusId}
+              collapsedIds={collapsedIds}
+              forceExpand={forceExpand}
+              onSelect={onSelect}
+              onToggleHide={onToggleHide}
+              onToggleCollapse={onToggleCollapse}
+              onToggleFocus={onToggleFocus}
+            />
+          ))
+        : null}
     </div>
   );
 }
@@ -582,19 +635,14 @@ function filterNodeTree(nodes: W3DNodeData[], query: string): W3DNodeData[] {
   for (const node of nodes) {
     const children = filterNodeTree(node.children, query);
     if (nodeMatchesQuery(node, query) || children.length > 0) {
-      out.push({ ...node, children });
+      out.push({ ...node, children } as W3DNodeData);
     }
   }
   return out;
 }
 
 function nodeMatchesQuery(node: W3DNodeData, query: string): boolean {
-  const haystack = [
-    node.kind,
-    node.name,
-    node.id,
-    "text" in node ? node.text : "",
-  ].join(" ").toLowerCase();
+  const haystack = [node.kind, node.name, node.id, "text" in node ? node.text : ""].join(" ").toLowerCase();
   return haystack.includes(query);
 }
 
@@ -608,69 +656,22 @@ function nodePathTitle(node: W3DNodeData): string {
   return `${node.name} | ${node.kind} | pos ${fmtVec3(node.transform.position)}`;
 }
 
-function StatsView({ loaded }: { loaded: LoadedScene }) {
-  return (
-    <div className="playground__stats">
-      <table>
-        <thead>
-          <tr><th>Element</th><th>Count</th><th>Attributes</th></tr>
-        </thead>
-        <tbody>
-          {loaded.stats.byType.map((row) => (
-            <tr key={row.name}>
-              <td><code>{row.name}</code></td>
-              <td>{row.count}</td>
-              <td>
-                <details>
-                  <summary>{row.attributes.length} attr(s)</summary>
-                  <code>{row.attributes.join(", ")}</code>
-                  <p style={{ marginTop: 8, opacity: 0.7 }}>Sample paths:</p>
-                  <ul>{row.samplePaths.map((p, i) => <li key={i}><code>{p}</code></li>)}</ul>
-                </details>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// DEV-Inspector — floating panel with W3D/XML-style properties of a clicked
-// Object3D. Pure read-only view of the InspectorReport built by inspector.ts.
+// Props tab — docked inspector report (was the floating panel).
 // ---------------------------------------------------------------------------
 
-interface Vec3Like { x: number; y: number; z: number }
-interface Vec2Like { x: number; y: number }
-
-function fmt(n: number, digits = 3): string {
-  if (!isFinite(n)) return "—";
-  return Number(n.toFixed(digits)).toString();
-}
-function fmtVec3(v: Vec3Like, digits = 3): string {
-  return `(${fmt(v.x, digits)}, ${fmt(v.y, digits)}, ${fmt(v.z, digits)})`;
-}
-function fmtVec2(v: Vec2Like, digits = 3): string {
-  return `(${fmt(v.x, digits)}, ${fmt(v.y, digits)})`;
-}
-function fmtBin(n: number, bits = 8): string {
-  if (!isFinite(n)) return "—";
-  return "0b" + (n & ((1 << bits) - 1)).toString(2).padStart(bits, "0");
-}
-
-function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose: () => void }) {
+function PropsView({ report }: { report: InspectorReport | null }) {
+  if (!report) {
+    return <div className="playground__placeholder">Select a node in the Tree or the viewport.</div>;
+  }
   return (
-    <aside className="playground__inspector">
-      <header>
-        <h3>
-          {report.identity.name}
-          <span style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}>
-            ({report.identity.kind}{report.identity.hasChildren ? " w/ children" : ""})
-          </span>
-        </h3>
-        <button type="button" className="close" onClick={onClose} title="Close (Esc)">×</button>
-      </header>
+    <div className="playground__props">
+      <h3>
+        {report.identity.name}
+        <span style={{ color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}>
+          ({report.identity.kind}{report.identity.hasChildren ? " w/ children" : ""})
+        </span>
+      </h3>
 
       <details open>
         <summary>identity</summary>
@@ -680,7 +681,7 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
           <dt>id (guid)</dt><dd>{report.identity.id || "—"}</dd>
           <dt>path</dt><dd>{report.identity.hierarchyPath}</dd>
           {report.identity.fontFamily
-            ? <><dt>font family</dt><dd>{report.identity.fontFamily}{report.identity.fontLoaded === false ? <span style={{ color: "#d97706", marginLeft: 6 }}>(not loaded — using fallback)</span> : report.identity.fontLoaded === true ? <span style={{ color: "var(--muted)", marginLeft: 6 }}>(loaded)</span> : null}</dd></>
+            ? <><dt>font family</dt><dd>{report.identity.fontFamily}{report.identity.fontLoaded === false ? <span style={{ color: "#d97706", marginLeft: 6 }}>(not loaded — fallback)</span> : report.identity.fontLoaded === true ? <span style={{ color: "var(--muted)", marginLeft: 6 }}>(loaded)</span> : null}</dd></>
             : null}
         </dl>
       </details>
@@ -702,13 +703,10 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
       <details open>
         <summary>geometry</summary>
         <dl>
-          {report.geometry.currentSize ? (
-            <><dt>size</dt><dd>{fmtVec2(report.geometry.currentSize)}</dd></>
-          ) : null}
+          {report.geometry.currentSize ? <><dt>size</dt><dd>{fmtVec2(report.geometry.currentSize)}</dd></> : null}
           <dt>bbox min</dt><dd>{fmtVec3(report.geometry.worldBounds.min)}</dd>
           <dt>bbox max</dt><dd>{fmtVec3(report.geometry.worldBounds.max)}</dd>
-          <dt>bbox WxH</dt>
-          <dd>{fmt(report.geometry.worldBounds.width)} × {fmt(report.geometry.worldBounds.height)}</dd>
+          <dt>bbox WxH</dt><dd>{fmt(report.geometry.worldBounds.width)} × {fmt(report.geometry.worldBounds.height)}</dd>
           <dt>renderOrder</dt><dd>{report.geometry.renderOrder}</dd>
         </dl>
       </details>
@@ -716,19 +714,11 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
       <details open>
         <summary>visibility</summary>
         <dl>
-          {report.visibility.enable !== undefined
-            ? <><dt>enable</dt><dd>{String(report.visibility.enable)}</dd></>
-            : null}
+          {report.visibility.enable !== undefined ? <><dt>enable</dt><dd>{String(report.visibility.enable)}</dd></> : null}
           <dt>visible</dt><dd>{String(report.visibility.visible)}</dd>
-          {report.visibility.alpha !== undefined
-            ? <><dt>alpha (W3D)</dt><dd>{fmt(report.visibility.alpha, 3)}</dd></>
-            : null}
-          {report.visibility.opacity !== undefined
-            ? <><dt>opacity</dt><dd>{fmt(report.visibility.opacity, 3)}</dd></>
-            : null}
-          {report.visibility.transparent !== undefined
-            ? <><dt>transparent</dt><dd>{String(report.visibility.transparent)}</dd></>
-            : null}
+          {report.visibility.alpha !== undefined ? <><dt>alpha (W3D)</dt><dd>{fmt(report.visibility.alpha, 3)}</dd></> : null}
+          {report.visibility.opacity !== undefined ? <><dt>opacity</dt><dd>{fmt(report.visibility.opacity, 3)}</dd></> : null}
+          {report.visibility.transparent !== undefined ? <><dt>transparent</dt><dd>{String(report.visibility.transparent)}</dd></> : null}
           <dt>hiddenReason</dt><dd>{report.visibility.hiddenReason ?? "—"}</dd>
         </dl>
       </details>
@@ -736,22 +726,12 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
       <details open>
         <summary>mask</summary>
         <dl>
-          {report.mask.isMask !== undefined
-            ? <><dt>isMask</dt><dd>{String(report.mask.isMask)}</dd></>
-            : null}
-          {report.mask.isColoredMask !== undefined
-            ? <><dt>isColoredMask</dt><dd>{String(report.mask.isColoredMask)}</dd></>
-            : null}
-          {report.mask.isInvertedMask !== undefined
-            ? <><dt>isInvertedMask</dt><dd>{String(report.mask.isInvertedMask)}</dd></>
-            : null}
-          {report.mask.disableBinaryAlpha !== undefined
-            ? <><dt>disableBinaryAlpha</dt><dd>{String(report.mask.disableBinaryAlpha)}</dd></>
-            : null}
-          <dt>own maskIds</dt>
-          <dd>{report.mask.ownMaskIds.length === 0 ? "—" : report.mask.ownMaskIds.join("; ")}</dd>
-          <dt>effective</dt>
-          <dd>{report.mask.effectiveMaskIds.length === 0 ? "—" : report.mask.effectiveMaskIds.join("; ")}</dd>
+          {report.mask.isMask !== undefined ? <><dt>isMask</dt><dd>{String(report.mask.isMask)}</dd></> : null}
+          {report.mask.isColoredMask !== undefined ? <><dt>isColoredMask</dt><dd>{String(report.mask.isColoredMask)}</dd></> : null}
+          {report.mask.isInvertedMask !== undefined ? <><dt>isInvertedMask</dt><dd>{String(report.mask.isInvertedMask)}</dd></> : null}
+          {report.mask.disableBinaryAlpha !== undefined ? <><dt>disableBinaryAlpha</dt><dd>{String(report.mask.disableBinaryAlpha)}</dd></> : null}
+          <dt>own maskIds</dt><dd>{report.mask.ownMaskIds.length === 0 ? "—" : report.mask.ownMaskIds.join("; ")}</dd>
+          <dt>effective</dt><dd>{report.mask.effectiveMaskIds.length === 0 ? "—" : report.mask.effectiveMaskIds.join("; ")}</dd>
         </dl>
       </details>
 
@@ -774,77 +754,142 @@ function InspectorPanel({ report, onClose }: { report: InspectorReport; onClose:
       <details open>
         <summary>material / texture</summary>
         <dl>
-          {report.material.materialId
-            ? <><dt>materialId</dt><dd>{report.material.materialId}</dd></>
-            : null}
-          {report.material.materialName
-            ? <><dt>material name</dt><dd>{report.material.materialName}</dd></>
-            : null}
-          {report.material.textureLayerId
-            ? <><dt>layerId</dt><dd>{report.material.textureLayerId}</dd></>
-            : null}
-          {report.material.textureLayerName
-            ? <><dt>layer name</dt><dd>{report.material.textureLayerName}</dd></>
-            : null}
-          {report.material.mapFilename
-            ? <><dt>map file</dt><dd>{report.material.mapFilename}</dd></>
-            : null}
-          {report.material.alphaMapFilename
-            ? <><dt>alphaMap file</dt><dd>{report.material.alphaMapFilename}</dd></>
-            : null}
-          {report.material.textureBlending
-            ? <><dt>TextureBlending</dt><dd>{report.material.textureBlending} <span style={{ color: "var(--muted)" }}>(authored)</span></dd></>
-            : null}
+          {report.material.materialId ? <><dt>materialId</dt><dd>{report.material.materialId}</dd></> : null}
+          {report.material.materialName ? <><dt>material name</dt><dd>{report.material.materialName}</dd></> : null}
+          {report.material.textureLayerId ? <><dt>layerId</dt><dd>{report.material.textureLayerId}</dd></> : null}
+          {report.material.textureLayerName ? <><dt>layer name</dt><dd>{report.material.textureLayerName}</dd></> : null}
+          {report.material.mapFilename ? <><dt>map file</dt><dd>{report.material.mapFilename}</dd></> : null}
+          {report.material.alphaMapFilename ? <><dt>alphaMap file</dt><dd>{report.material.alphaMapFilename}</dd></> : null}
+          {report.material.textureBlending ? <><dt>TextureBlending</dt><dd>{report.material.textureBlending} <span style={{ color: "var(--muted)" }}>(authored)</span></dd></> : null}
         </dl>
       </details>
-
-      {(report.uv.mapOffset || report.uv.alphaMapOffset) ? (
-        <details open>
-          <summary>uv</summary>
-          <dl>
-            {report.uv.mapOffset
-              ? <><dt>map offset</dt><dd>{fmtVec2(report.uv.mapOffset)}</dd></>
-              : null}
-            {report.uv.mapRepeat
-              ? <><dt>map repeat</dt><dd>{fmtVec2(report.uv.mapRepeat)}</dd></>
-              : null}
-            {report.uv.mapRotationRad !== undefined
-              ? <><dt>map rot°</dt><dd>{fmt((report.uv.mapRotationRad * 180) / Math.PI, 3)}</dd></>
-              : null}
-            {report.uv.mapWrapS !== undefined
-              ? <><dt>wrapS/wrapT</dt><dd>{report.uv.mapWrapS} / {report.uv.mapWrapT}</dd></>
-              : null}
-            {report.uv.alphaMapOffset
-              ? <><dt>α offset</dt><dd>{fmtVec2(report.uv.alphaMapOffset)}</dd></>
-              : null}
-            {report.uv.alphaMapRepeat
-              ? <><dt>α repeat</dt><dd>{fmtVec2(report.uv.alphaMapRepeat)}</dd></>
-              : null}
-            {report.uv.alphaMapRotationRad !== undefined
-              ? <><dt>α rot°</dt><dd>{fmt((report.uv.alphaMapRotationRad * 180) / Math.PI, 3)}</dd></>
-              : null}
-          </dl>
-        </details>
-      ) : null}
 
       <details open>
         <summary>flow</summary>
         <dl>
           <dt>flow parent</dt><dd>{report.flow.underFlowParent ?? "—"}</dd>
-          {report.flow.slotIndex !== undefined
-            ? <><dt>slot index</dt><dd>{report.flow.slotIndex}</dd></>
-            : null}
-          {report.flow.parentLeadingSpace !== undefined
-            ? <><dt>LeadingSpace</dt><dd>{report.flow.parentLeadingSpace} <span style={{ color: "var(--muted)" }}>(authored)</span></dd></>
-            : null}
-          {report.flow.parentFlowDirection
-            ? <><dt>Direction</dt><dd>{report.flow.parentFlowDirection}</dd></>
-            : null}
-          {report.flow.parentFlowAlignment
-            ? <><dt>Alignment</dt><dd>{report.flow.parentFlowAlignment}</dd></>
-            : null}
+          {report.flow.slotIndex !== undefined ? <><dt>slot index</dt><dd>{report.flow.slotIndex}</dd></> : null}
+          {report.flow.parentLeadingSpace !== undefined ? <><dt>LeadingSpace</dt><dd>{report.flow.parentLeadingSpace} <span style={{ color: "var(--muted)" }}>(authored)</span></dd></> : null}
+          {report.flow.parentFlowDirection ? <><dt>Direction</dt><dd>{report.flow.parentFlowDirection}</dd></> : null}
+          {report.flow.parentFlowAlignment ? <><dt>Alignment</dt><dd>{report.flow.parentFlowAlignment}</dd></> : null}
         </dl>
       </details>
-    </aside>
+    </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Debug tab — temporary dev tooling (consolidated controls, perf, render order,
+// stencil of the selected node).
+// ---------------------------------------------------------------------------
+
+function DebugView({
+  showMask, setShowMask,
+  showPivot, setShowPivot,
+  showBox, setShowBox,
+  onPickReference, referenceImageUrl, referenceOpacity, setReferenceOpacity, clearReference,
+  warnings, stats, renderOrder, report,
+}: {
+  showMask: boolean; setShowMask: (v: boolean) => void;
+  showPivot: boolean; setShowPivot: (v: boolean) => void;
+  showBox: boolean; setShowBox: (v: boolean) => void;
+  onPickReference: () => void;
+  referenceImageUrl: string | null;
+  referenceOpacity: number;
+  setReferenceOpacity: (v: number) => void;
+  clearReference: () => void;
+  warnings: string[];
+  stats: RenderStats | null;
+  renderOrder: RenderOrderRow[];
+  report: InspectorReport | null;
+}) {
+  return (
+    <div className="playground__debug">
+      <section>
+        <h4>Controls</h4>
+        <label><input type="checkbox" checked={showMask} onChange={(e) => setShowMask(e.target.checked)} /> show mask (red)</label>
+        <label><input type="checkbox" checked={showPivot} onChange={(e) => setShowPivot(e.target.checked)} /> pivot axes</label>
+        <label><input type="checkbox" checked={showBox} onChange={(e) => setShowBox(e.target.checked)} /> bounding box</label>
+        <div className="debug-ref">
+          <button type="button" onClick={onPickReference}>Reference image…</button>
+          {referenceImageUrl ? (
+            <>
+              <label className="debug-range">opacity
+                <input type="range" min="0" max="1" step="0.05" value={referenceOpacity} onChange={(e) => setReferenceOpacity(Number(e.target.value))} />
+              </label>
+              <button type="button" onClick={clearReference}>clear</button>
+            </>
+          ) : null}
+        </div>
+      </section>
+
+      <section>
+        <h4>Performance</h4>
+        {stats ? (
+          <dl className="debug-stats">
+            <dt>draw calls</dt><dd>{stats.calls}</dd>
+            <dt>triangles</dt><dd>{stats.triangles.toLocaleString()}</dd>
+            <dt>geometries</dt><dd>{stats.geometries}</dd>
+            <dt>textures</dt><dd>{stats.textures}</dd>
+          </dl>
+        ) : <p className="playground__placeholder">—</p>}
+      </section>
+
+      <section>
+        <h4>Render order ({renderOrder.length})</h4>
+        <div className="debug-order">
+          {renderOrder.map((r) => (
+            <div key={r.id} className="debug-order-row">
+              <span className={`ord ${r.id === report?.identity.id ? "hit" : ""}`}>{r.renderOrder}</span>
+              <span className="nm">{r.name}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h4>Stencil (selected)</h4>
+        {report?.stencil ? (
+          <dl className="debug-stats">
+            <dt>ref</dt><dd>{report.stencil.stencilRef} ({fmtBin(report.stencil.stencilRef)})</dd>
+            <dt>writeMask</dt><dd>{fmtBin(report.stencil.stencilWriteMask)}</dd>
+            <dt>func</dt><dd>{report.stencil.stencilFunc}</dd>
+            <dt>funcMask</dt><dd>{fmtBin(report.stencil.stencilFuncMask)}</dd>
+            <dt>colorWrite</dt><dd>{String(report.stencil.colorWrite)}</dd>
+          </dl>
+        ) : <p className="playground__placeholder">Select a node with stencil.</p>}
+      </section>
+
+      {warnings.length > 0 ? (
+        <section>
+          <h4>Warnings ({warnings.length})</h4>
+          <ul className="debug-warnings">
+            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers.
+// ---------------------------------------------------------------------------
+
+interface Vec3Like { x: number; y: number; z: number }
+interface Vec2Like { x: number; y: number }
+
+function fmt(n: number, digits = 3): string {
+  if (!isFinite(n)) return "—";
+  return Number(n.toFixed(digits)).toString();
+}
+function fmtVec3(v: Vec3Like, digits = 3): string {
+  return `(${fmt(v.x, digits)}, ${fmt(v.y, digits)}, ${fmt(v.z, digits)})`;
+}
+function fmtVec2(v: Vec2Like, digits = 3): string {
+  return `(${fmt(v.x, digits)}, ${fmt(v.y, digits)})`;
+}
+function fmtBin(n: number, bits = 8): string {
+  if (!isFinite(n)) return "—";
+  return "0b" + (n & ((1 << bits) - 1)).toString(2).padStart(bits, "0");
 }
