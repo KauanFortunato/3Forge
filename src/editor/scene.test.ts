@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { shouldAttachTransformGizmo } from "./scene";
+import { createMaterialSpec } from "./materials";
+import { shouldApplyModelNodeMaterial, shouldAttachTransformGizmo } from "./scene";
 
 describe("shouldAttachTransformGizmo", () => {
   it("does not attach when the current tool is select", () => {
@@ -24,5 +25,23 @@ describe("shouldAttachTransformGizmo", () => {
 
   it("does not attach when the primary object is missing from the scene graph", () => {
     expect(shouldAttachTransformGizmo("translate", 2, false)).toBe(false);
+  });
+});
+
+describe("shouldApplyModelNodeMaterial", () => {
+  it("preserves imported model materials while the model node has its default material", () => {
+    expect(shouldApplyModelNodeMaterial(createMaterialSpec("#ffffff"))).toBe(false);
+  });
+
+  it("applies the model node material after the user changes material state", () => {
+    const material = createMaterialSpec("#ffffff", "physical");
+    material.transmission = 0.85;
+    material.thickness = 0.2;
+
+    expect(shouldApplyModelNodeMaterial(material)).toBe(true);
+  });
+
+  it("applies a linked material asset even when its current values match the default", () => {
+    expect(shouldApplyModelNodeMaterial(createMaterialSpec("#ffffff"), "mat-glass")).toBe(true);
   });
 });

@@ -282,7 +282,7 @@ export function createDefaultSceneSettings(): SceneSettings {
   return {
     backgroundColor: "#25272c",
     environment: {
-      type: "none",
+      type: "default",
       hdrAssetId: null,
       intensity: 0.45,
     },

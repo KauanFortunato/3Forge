@@ -85,6 +85,7 @@ import {
 } from "./animation";
 import { DEFAULT_FONT_ID, parseFontAsset } from "./fonts";
 import { buildInlineExplodePlan } from "./gltfImport";
+import { createMaterialSpec } from "./materials";
 import { tryDecodeDataUrl } from "./modelBuffer";
 import { buildStructureFromGroup, findObjectByIndexPath, findObjectByUsdPath } from "./modelStructure";
 import { runTask } from "./react/hooks/useAsyncTask";
@@ -108,6 +109,8 @@ type GizmoMode = "translate" | "rotate" | "scale";
 
 type MaterialBaseOptions = Record<string, unknown>;
 
+const DEFAULT_MODEL_MATERIAL_SPEC = createMaterialSpec("#ffffff");
+
 interface SceneEditorOptions {
   onTransformObjectChange?: (nodeId: string, object: Object3D) => boolean;
 }
@@ -128,6 +131,7 @@ interface ModelCacheEntry {
 const MATERIAL_TEXTURE_PROPERTIES = [
   "map",
   "alphaMap",
+  "anisotropyMap",
   "aoMap",
   "bumpMap",
   "clearcoatMap",
@@ -146,8 +150,11 @@ const MATERIAL_TEXTURE_PROPERTIES = [
   "sheenRoughnessMap",
   "specularColorMap",
   "specularIntensityMap",
+  "thicknessMap",
   "transmissionMap",
 ] as const;
+
+type MaterialTextureProperty = typeof MATERIAL_TEXTURE_PROPERTIES[number];
 
 function disposeMaterialTextures(material: Material, disposedTextures: Set<Texture>): void {
   const record = material as unknown as Record<string, unknown>;
@@ -201,166 +208,82 @@ function disposeObjectResources(
   });
 }
 
-/**
- * Apply the *scalar/color* fields of a MaterialSpec onto an already-built
- * Material instance (typically a clone of a USD-parsed `MeshPhysicalMaterial`).
- * Used by primPath ModelNodes so the user can edit color/roughness/metalness/
- * etc. via Inspector while keeping the textures the OpenUSD parser baked onto
- * the source material. Properties not exposed in the spec are left untouched.
- */
-function applyMaterialSpecOverrides(material: Material, spec: MaterialSpec): void {
-  const mat = material as unknown as Record<string, unknown> & {
-    color?: Color;
-    emissive?: Color;
-  };
-  if (mat.color && typeof mat.color.set === "function") {
-    mat.color.set(spec.color);
-  }
-  if (mat.emissive && typeof mat.emissive.set === "function") {
-    mat.emissive.set(spec.emissive);
-  }
-  if ("emissiveIntensity" in mat) mat.emissiveIntensity = spec.emissiveIntensity;
-  if ("roughness" in mat) mat.roughness = spec.roughness;
-  if ("metalness" in mat) mat.metalness = spec.metalness;
-  mat.opacity = spec.opacity;
-  mat.transparent = spec.transparent;
-  mat.alphaTest = spec.alphaTest;
-  mat.visible = spec.visible;
-  mat.depthTest = spec.depthTest;
-  mat.depthWrite = spec.depthWrite;
-  mat.colorWrite = spec.colorWrite;
-  mat.dithering = spec.dithering;
-  mat.toneMapped = spec.toneMapped;
-  if ("wireframe" in mat) mat.wireframe = spec.wireframe;
-  material.side = resolveMaterialSide(spec.side);
-  material.needsUpdate = true;
-}
+const MATERIAL_TEXTURE_PROPERTIES_BY_TYPE: Record<MaterialSpec["type"], readonly MaterialTextureProperty[]> = {
+  basic: ["map", "alphaMap", "aoMap", "envMap", "lightMap"],
+  lambert: ["map", "alphaMap", "aoMap", "bumpMap", "displacementMap", "emissiveMap", "envMap", "lightMap"],
+  phong: ["map", "alphaMap", "aoMap", "bumpMap", "displacementMap", "emissiveMap", "envMap", "lightMap", "normalMap"],
+  standard: [
+    "map",
+    "alphaMap",
+    "aoMap",
+    "bumpMap",
+    "displacementMap",
+    "emissiveMap",
+    "envMap",
+    "lightMap",
+    "metalnessMap",
+    "normalMap",
+    "roughnessMap",
+  ],
+  physical: MATERIAL_TEXTURE_PROPERTIES,
+  toon: ["map", "alphaMap", "aoMap", "bumpMap", "displacementMap", "emissiveMap", "lightMap", "normalMap"],
+  normal: ["alphaMap", "bumpMap", "displacementMap", "normalMap"],
+  depth: ["alphaMap", "displacementMap"],
+};
 
-
-/**
- * Texture slots stripped while the editor is in "solid" view. Covers
- * MeshStandardMaterial + every extension on MeshPhysicalMaterial. Listed
- * explicitly rather than enumerated via `for…in` so we never accidentally
- * walk past Material.userData / Material.uuid and so the round-trip is
- * deterministic.
- */
-const SOLID_STRIPPED_TEXTURE_KEYS = [
-  "map",
-  "normalMap",
-  "roughnessMap",
-  "metalnessMap",
-  "aoMap",
-  "emissiveMap",
-  "alphaMap",
-  "bumpMap",
-  "displacementMap",
-  "lightMap",
-  "envMap",
-  "specularColorMap",
-  "specularIntensityMap",
-  "clearcoatMap",
-  "clearcoatNormalMap",
-  "clearcoatRoughnessMap",
-  "sheenColorMap",
-  "sheenRoughnessMap",
-  "transmissionMap",
-  "thicknessMap",
-  "iridescenceMap",
-  "iridescenceThicknessMap",
-  "anisotropyMap",
-] as const;
-
-const SOLID_STASH_KEY = "__solidStash";
-
-interface SolidStash {
-  textures: Partial<Record<typeof SOLID_STRIPPED_TEXTURE_KEYS[number], Texture | null>>;
-}
-
-function isLiveTexture(value: unknown): value is Texture {
-  return !!value && typeof value === "object" && (value as { isTexture?: boolean }).isTexture === true;
-}
-
-/**
- * Blender-like solid mode: while in solid view, every Material instance has
- * its texture map slots nulled (so the GPU never uploads them) and the live
- * Texture refs stashed on userData. Switching back to rendered/wireframe
- * restores them.
- *
- * Important: do NOT rely on the presence of `userData[SOLID_STASH_KEY]` as
- * a "this material is already in solid" flag. When Three.js's `Material.copy`
- * clones a material (via `.clone()`), it deep-clones userData with
- * `JSON.parse(JSON.stringify(source.userData))` — which calls each Texture's
- * `.toJSON()` and replaces the live Texture refs in our stash with serialised
- * metadata. The cloned material then carries a `__solidStash` key whose
- * contents are useless plain objects, yet the live map slots are also copied
- * over (Material.copy copies them by reference). So a "stash present" clone
- * may still have live textures we need to strip. Always inspect the actual
- * map slots and only treat values with `.isTexture === true` as restorable.
- */
-function applySolidShading(materialOrList: Material | Material[] | null | undefined, solid: boolean): void {
-  if (!materialOrList) return;
-  if (Array.isArray(materialOrList)) {
-    for (const m of materialOrList) applySolidShading(m, solid);
-    return;
-  }
-  const material = materialOrList;
-  const indexed = material as unknown as Record<string, Texture | null | undefined>;
-  const userData = material.userData as Record<string, unknown>;
-  const existing = userData[SOLID_STASH_KEY] as SolidStash | undefined;
-
-  if (solid) {
-    const captured: SolidStash["textures"] = {};
-    let stripped = false;
-    for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
-      const value = indexed[key];
-      if (isLiveTexture(value)) {
-        captured[key] = value;
-        indexed[key] = null;
-        stripped = true;
-      } else if (value !== null && value !== undefined) {
-        // Non-Texture leftover in a map slot (e.g. JSON-cloned metadata
-        // from a previous round trip). Null it so it doesn't render.
-        indexed[key] = null;
-        stripped = true;
-      }
+function collectSourceTextureOptions(sourceMaterial: Material, spec: MaterialSpec): MaterialBaseOptions {
+  const sourceRecord = sourceMaterial as unknown as Record<string, unknown>;
+  const options: MaterialBaseOptions = {};
+  for (const property of MATERIAL_TEXTURE_PROPERTIES_BY_TYPE[spec.type]) {
+    const texture = sourceRecord[property];
+    if (texture instanceof Texture) {
+      options[property] = texture;
     }
-    if (stripped) {
-      // Merge in any still-valid Texture entries from a prior stash that we
-      // didn't re-capture this round, so successive solid passes accumulate
-      // instead of overwriting (e.g. when only some slots had been wired up
-      // at the previous pass and more textures arrived since).
-      if (existing) {
-        for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
-          if (key in captured) continue;
-          const prior = existing.textures[key];
-          if (isLiveTexture(prior)) {
-            captured[key] = prior;
-          }
-        }
-      }
-      userData[SOLID_STASH_KEY] = { textures: captured } satisfies SolidStash;
-      material.needsUpdate = true;
-    }
-    // If we stripped nothing this round, do NOT touch any existing stash:
-    // that's almost always the legitimate "already-stripped" state from a
-    // previous pass (maps null + stash carrying the real Texture refs) which
-    // we need to keep intact so a later switch to rendered/wireframe can
-    // restore the textures. Deleting it here was the regression that left
-    // certain meshes stuck in solid mode until the model rebuilt.
-    return;
   }
-
-  if (!existing) return;
-  for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
-    if (!(key in existing.textures)) continue;
-    const stashed = existing.textures[key];
-    // Only restore real Texture instances. Anything else is JSON-serialised
-    // metadata from a Material.copy round-trip and can't be used as a map.
-    indexed[key] = isLiveTexture(stashed) ? stashed : null;
+  if ("vertexColors" in sourceRecord && typeof sourceRecord.vertexColors === "boolean") {
+    options.vertexColors = sourceRecord.vertexColors;
   }
-  delete userData[SOLID_STASH_KEY];
-  material.needsUpdate = true;
+  return options;
 }
+
+function createModelNodeMaterial(sourceMaterial: Material, spec: MaterialSpec): Material {
+  const material = buildMaterialFromSpec(
+    { ...buildCommonMaterialOptions(spec), ...collectSourceTextureOptions(sourceMaterial, spec) },
+    spec,
+  );
+  material.name = sourceMaterial.name;
+  material.userData = { ...sourceMaterial.userData, isClonedForNode: true };
+  material.needsUpdate = true;
+  return material;
+}
+
+export function shouldApplyModelNodeMaterial(spec: MaterialSpec, materialId?: string): boolean {
+  if (materialId) return true;
+  const keys = Object.keys(DEFAULT_MODEL_MATERIAL_SPEC) as Array<keyof MaterialSpec>;
+  return keys.some((key) => spec[key] !== DEFAULT_MODEL_MATERIAL_SPEC[key]);
+}
+
+function applyModelNodeMaterial(root: Object3D, spec: MaterialSpec): void {
+  root.traverse((child) => {
+    if (!(child instanceof Mesh)) return;
+    const sourceMaterial = child.material;
+    if (Array.isArray(sourceMaterial)) {
+      child.material = sourceMaterial.map((material) => createModelNodeMaterial(material, spec));
+    } else if (sourceMaterial) {
+      child.material = createModelNodeMaterial(sourceMaterial, spec);
+    }
+  });
+}
+
+// userData key under which a mesh's real material(s) are parked while the
+// editor is in solid view (see SceneEditor.applySolidView).
+const SOLID_ORIGINAL_MATERIAL_KEY = "__renderedMaterial";
+
+/**
+ * Blender-like solid view colour: a uniform light grey "clay" so every mesh
+ * reads as a simple shaded form regardless of its real material.
+ */
+const SOLID_VIEW_COLOR = 0xcdcdcd;
 
 function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialSpec): Material {
   switch (spec.type) {
@@ -421,7 +344,13 @@ function buildMaterialFromSpec(baseOptions: MaterialBaseOptions, spec: MaterialS
         sheenColor: spec.sheenColor,
         specularIntensity: spec.specularIntensity,
         specularColor: spec.specularColor,
-        attenuationDistance: spec.attenuationDistance,
+        // Three's MeshPhysicalMaterial defaults attenuationDistance to Infinity
+        // ("no volumetric absorption"). Our spec uses 0 as that same sentinel,
+        // but feeding a literal 0 into the shader makes `-log(color)/distance`
+        // blow up to Infinity/NaN, so the transmission pass absorbs *all* light
+        // and the glass renders pitch black. Map 0 (or anything ≤ 0) back to
+        // Infinity so transmissive materials read as glass instead of a void.
+        attenuationDistance: spec.attenuationDistance > 0 ? spec.attenuationDistance : Infinity,
         attenuationColor: spec.attenuationColor,
         dispersion: spec.dispersion,
         anisotropy: spec.anisotropy,
@@ -464,6 +393,37 @@ function resolveMaterialSide(side: MaterialSpec["side"]) {
 function resolveDepthPacking(depthPacking: MaterialSpec["depthPacking"]) {
   return depthPacking === "rgba" ? RGBADepthPacking : BasicDepthPacking;
 }
+
+/**
+ * Common scalar/color/render-state fields lifted from a MaterialSpec into the
+ * constructor options every Material accepts. `buildMaterialFromSpec` only sets
+ * the *type-specific* properties (roughness, metalness, transmission, …) and
+ * relies on these base options to carry color/opacity/side/etc. — so any caller
+ * building a material from a spec MUST pass these, or the result renders as a
+ * white, opaque, single-side material regardless of the spec. Mirrors the
+ * export pipeline's `createBaseMaterialOptions` so preview == export.
+ */
+function buildCommonMaterialOptions(spec: MaterialSpec): MaterialBaseOptions {
+  return {
+    color: spec.color,
+    side: resolveMaterialSide(spec.side),
+    opacity: spec.opacity,
+    transparent: spec.transparent,
+    alphaTest: spec.alphaTest,
+    depthTest: spec.depthTest,
+    depthWrite: spec.depthWrite,
+    colorWrite: spec.colorWrite,
+    dithering: spec.dithering,
+    toneMapped: spec.toneMapped,
+    premultipliedAlpha: spec.premultipliedAlpha,
+    polygonOffset: spec.polygonOffset,
+    polygonOffsetFactor: spec.polygonOffsetFactor,
+    polygonOffsetUnits: spec.polygonOffsetUnits,
+    wireframe: spec.wireframe,
+    wireframeLinewidth: spec.wireframeLinewidth,
+  };
+}
+
 export type ToolMode = "select" | GizmoMode;
 
 const DRAG_SNAP_THRESHOLD = 0.18;
@@ -585,6 +545,10 @@ export class SceneEditor {
     depthTest: false,
     toneMapped: false,
   });
+  // Single shared "clay" material used by every mesh in solid view. Cheap,
+  // matte, textureless — lit by the scene lights so forms read like Blender's
+  // solid shading. Shared so solid view costs almost nothing on the GPU.
+  private readonly solidViewMaterial = new MeshLambertMaterial({ color: SOLID_VIEW_COLOR });
   private readonly edgesGeometryCache = new WeakMap<BufferGeometry, EdgesGeometry>();
   // Each entry pairs the rendered outline line with the source Mesh it traces
   // so we can sync matrices on every frame after the mesh's world transform
@@ -929,6 +893,7 @@ export class SceneEditor {
     this.clearHdrEnvironmentCache();
     this.clearSelectionOutlines();
     this.selectionOutlineMaterial.dispose();
+    this.solidViewMaterial.dispose();
     this.infiniteGrid.geometry.dispose();
     this.infiniteGrid.material.dispose();
     disposeObjectResources(this.orientationRoot);
@@ -1095,67 +1060,58 @@ export class SceneEditor {
         const nodeId = this.findNodeId(object);
         const node = nodeId ? this.store.getNode(nodeId) : undefined;
         const material = node && node.type !== "group" ? node.material : undefined;
+        // Solid view never casts/receives shadows (Blender-style), and the real
+        // material's own shadow flags only apply in rendered view.
         object.castShadow = isRendered && this.store.sceneSettings.shadows.enabled && (material?.castShadow ?? true);
         object.receiveShadow = isRendered && this.store.sceneSettings.shadows.enabled && (material?.receiveShadow ?? true);
-        const meshMaterial = object.material;
-        if (meshMaterial && !Array.isArray(meshMaterial) && "wireframe" in meshMaterial) {
-          (meshMaterial as { wireframe: boolean }).wireframe = isWireframe || Boolean(material?.wireframe);
+        this.applySolidView(object, isSolid);
+        // Wireframe only applies to the real material. In solid view the mesh
+        // points at the *shared* clay, so we must never write its `wireframe`
+        // flag here (one node's setting would turn every solid mesh wireframe).
+        if (!isSolid) {
+          const meshMaterial = object.material;
+          if (meshMaterial && !Array.isArray(meshMaterial) && "wireframe" in meshMaterial) {
+            (meshMaterial as { wireframe: boolean }).wireframe = isWireframe || Boolean(material?.wireframe);
+          }
         }
-        applySolidShading(meshMaterial as Material | Material[] | null | undefined, isSolid);
       }
     });
+  }
 
-    if (isSolid) {
-      this.warnAboutUnstrippedMaterials();
+  /**
+   * Blender-like solid view. Rather than mutate each material in place (model
+   * meshes share cached material instances by reference, so mutating them
+   * corrupts the real rendered look), we swap the mesh's material pointer to a
+   * single shared light-grey clay and park the real material(s) on userData.
+   * Switching back to rendered/wireframe restores them untouched.
+   */
+  private applySolidView(mesh: Mesh, solid: boolean): void {
+    const userData = mesh.userData as Record<string, unknown>;
+    if (solid) {
+      if (!(SOLID_ORIGINAL_MATERIAL_KEY in userData)) {
+        userData[SOLID_ORIGINAL_MATERIAL_KEY] = mesh.material;
+      }
+      mesh.material = this.solidViewMaterial;
+      return;
+    }
+    const original = userData[SOLID_ORIGINAL_MATERIAL_KEY];
+    if (original) {
+      mesh.material = original as Material | Material[];
+      delete userData[SOLID_ORIGINAL_MATERIAL_KEY];
     }
   }
 
   /**
-   * Diagnostic: after a solid-mode pass, walk viewportRoot once more looking
-   * for any Mesh whose material still carries a live Texture in a known map
-   * slot. Logs a single console group per offending mesh so we can tell which
-   * materials are escaping `applySolidShading`. Kept opt-in via a dev flag on
-   * window so the warn doesn't fire in production once we've identified and
-   * patched the offending code path.
+   * Put every mesh's real material back before the viewport is torn down, so
+   * disposal frees the real materials (not the shared clay) and no mesh is left
+   * pointing at a disposed solid material.
    */
-  private warnAboutUnstrippedMaterials(): void {
-    const globalAny = globalThis as { __forgeDebugSolid?: boolean };
-    if (!globalAny.__forgeDebugSolid) return;
-    const offenders: Array<{ nodeId: string | null; subsetName?: string; primPath?: string; liveSlots: string[]; material: Material }> = [];
-    this.viewportRoot.traverse((object) => {
-      if (!(object instanceof Mesh)) return;
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const mat of materials) {
-        if (!mat) continue;
-        const indexed = mat as unknown as Record<string, unknown>;
-        const live: string[] = [];
-        for (const key of SOLID_STRIPPED_TEXTURE_KEYS) {
-          if (isLiveTexture(indexed[key])) live.push(key);
-        }
-        if (live.length === 0) continue;
-        const nodeId = this.findNodeId(object);
-        const node = nodeId ? this.store.getNode(nodeId) : undefined;
-        offenders.push({
-          nodeId,
-          subsetName: (node && node.type === "model" ? (node as { subsetName?: string }).subsetName : undefined),
-          primPath: (node && node.type === "model" ? (node as { primPath?: string }).primPath : undefined),
-          liveSlots: live,
-          material: mat,
-        });
+  private restoreSolidView(root: Object3D): void {
+    root.traverse((object) => {
+      if (object instanceof Mesh) {
+        this.applySolidView(object, false);
       }
     });
-    if (offenders.length === 0) {
-      console.info("[forge-debug] solid pass clean — no live textures remaining.");
-      return;
-    }
-    console.group(`[forge-debug] ${offenders.length} mesh(es) still carrying live textures after solid pass:`);
-    for (const o of offenders) {
-      console.warn(
-        `node=${o.nodeId ?? "?"}, prim=${o.primPath ?? "-"}, subset=${o.subsetName ?? "-"}, slots=[${o.liveSlots.join(", ")}], material=`,
-        o.material,
-      );
-    }
-    console.groupEnd();
   }
 
   private addHelpers(): void {
@@ -1699,24 +1655,14 @@ export class SceneEditor {
               continue;
             }
             const clonedMesh = child.clone();
-            // Clone the material too so Inspector edits applied below don't
-            // bleed across other prims that share the same parsed material
-            // reference. The MaterialSpec on the node carries the editable
-            // overrides; textures parsed from the USDZ are preserved on the
-            // cloned material instance.
+            // Build a per-node material so Inspector edits don't bleed across
+            // prims sharing the parsed source. The MaterialSpec chooses the
+            // live material class, while baked source textures are preserved.
             const sourceMaterial = clonedMesh.material;
             if (Array.isArray(sourceMaterial)) {
-              clonedMesh.material = sourceMaterial.map((m) => {
-                const c = m.clone();
-                c.userData = { ...c.userData, isClonedForNode: true };
-                applyMaterialSpecOverrides(c, node.material);
-                return c;
-              });
+              clonedMesh.material = sourceMaterial.map((m) => createModelNodeMaterial(m, node.material));
             } else if (sourceMaterial) {
-              const c = sourceMaterial.clone();
-              c.userData = { ...c.userData, isClonedForNode: true };
-              applyMaterialSpecOverrides(c, node.material);
-              clonedMesh.material = c;
+              clonedMesh.material = createModelNodeMaterial(sourceMaterial, node.material);
             }
             clonedMesh.userData.nodeId = node.id;
             clonedMesh.userData.nodeType = node.type;
@@ -1753,22 +1699,14 @@ export class SceneEditor {
             clonedMesh.position.set(0, 0, 0);
             clonedMesh.quaternion.identity();
             clonedMesh.scale.set(1, 1, 1);
-            // Clone the material so Inspector edits don't bleed across other
-            // parts that share the same parsed material reference. Textures
-            // baked onto the source material are preserved on the clone.
+            // Build a per-node material so Inspector edits don't bleed across
+            // parts sharing the parsed source. The MaterialSpec chooses the
+            // live material class, while baked source textures are preserved.
             const sourceMaterial = clonedMesh.material;
             if (Array.isArray(sourceMaterial)) {
-              clonedMesh.material = sourceMaterial.map((m) => {
-                const c = m.clone();
-                c.userData = { ...c.userData, isClonedForNode: true };
-                applyMaterialSpecOverrides(c, node.material);
-                return c;
-              });
+              clonedMesh.material = sourceMaterial.map((m) => createModelNodeMaterial(m, node.material));
             } else if (sourceMaterial) {
-              const c = sourceMaterial.clone();
-              c.userData = { ...c.userData, isClonedForNode: true };
-              applyMaterialSpecOverrides(c, node.material);
-              clonedMesh.material = c;
+              clonedMesh.material = createModelNodeMaterial(sourceMaterial, node.material);
             }
             clonedMesh.userData.nodeId = node.id;
             clonedMesh.userData.nodeType = node.type;
@@ -1788,6 +1726,9 @@ export class SceneEditor {
           && Object.keys(cached.userData.skeletalAnimations).length > 0;
         const clone = (hasSkinned ? cloneSkeletalGroup(cached) : cached.clone(true)) as Group;
         tagForNode(clone);
+        if (shouldApplyModelNodeMaterial(node.material, node.materialId)) {
+          applyModelNodeMaterial(clone, node.material);
+        }
 
         // Apply per-part visibility overrides. partId is the same index-path
         // used to build asset.structure, so walking clone.children by the
@@ -2034,22 +1975,7 @@ export class SceneEditor {
     const normalMap = this.getMaterialDataTexture(node.material.normalMapImageId);
     const aoMap = this.getMaterialDataTexture(node.material.aoMapImageId);
     return {
-      color: node.material.color,
-      side: resolveMaterialSide(node.material.side),
-      opacity: node.material.opacity,
-      transparent: node.material.transparent,
-      alphaTest: node.material.alphaTest,
-      depthTest: node.material.depthTest,
-      depthWrite: node.material.depthWrite,
-      colorWrite: node.material.colorWrite,
-      dithering: node.material.dithering,
-      toneMapped: node.material.toneMapped,
-      premultipliedAlpha: node.material.premultipliedAlpha,
-      polygonOffset: node.material.polygonOffset,
-      polygonOffsetFactor: node.material.polygonOffsetFactor,
-      polygonOffsetUnits: node.material.polygonOffsetUnits,
-      wireframe: node.material.wireframe,
-      wireframeLinewidth: node.material.wireframeLinewidth,
+      ...buildCommonMaterialOptions(node.material),
       ...(materialTexture ? { map: materialTexture } : {}),
       ...(emissiveMap ? { emissiveMap } : {}),
       ...(roughnessMap ? { roughnessMap } : {}),
@@ -2399,6 +2325,10 @@ export class SceneEditor {
   }
 
   private clearViewportRoot(): void {
+    // If we're in solid view, meshes currently point at the shared clay
+    // material. Swap their real materials back first so disposal frees those
+    // (not the shared clay, which lives for the editor's lifetime).
+    this.restoreSolidView(this.viewportRoot);
     disposeObjectResources(this.viewportRoot, { skipModelResources: true });
     this.viewportRoot.clear();
   }
