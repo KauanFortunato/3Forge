@@ -270,6 +270,33 @@ function makePrimaryMat(): W3DBaseMaterialData {
   };
 }
 
+/** Ctx with one resolvable PATTERN.png layer ("pat-layer") — for card-fill
+ * quads that must carry a real material.map (the textured-fill lane). */
+function makeCardPatternCtx(): BuildContext {
+  const patternTex: W3DTextureData = {
+    kind: "Texture", id: "pat-id", name: "PATTERN.png", filename: "PATTERN.png", folderPath: "",
+  };
+  const patLayer: W3DTextureLayerData = {
+    kind: "TextureLayer", id: "pat-layer", name: "PAT", textureBlending: "Multiply",
+    mapping: {
+      textureGuid: "pat-id", textureAddressModeU: "Wrap", textureAddressModeV: "Wrap",
+      keyType: "AlphaKey", isEmissive: false, useMipMapping: false,
+    },
+  };
+  return makeCtx({
+    registry: {
+      baseMaterials: new Map(),
+      textures: new Map([["pat-id", patternTex]]),
+      textureLayers: new Map([["pat-layer", patLayer]]),
+      dynamicTextureFilenameByLayerId: new Map(),
+      fontStyles: new Map(),
+    },
+    textureUrlsByFilename: new Map([["PATTERN.png", "blob:pattern"]]),
+  });
+}
+
+const patternFace = { surfaceName: "All", materialId: "", textureLayerId: "pat-layer", baseMaterialInherited: false, textureInherited: false };
+
 describe("builder — R3 fullframe fill (colored-mask screen-space background)", () => {
   function makePatternCtx(): BuildContext {
     const patternTex: W3DTextureData = {
@@ -818,7 +845,7 @@ describe("builder — BuildContext", () => {
     expect(mat.colorWrite).toBe(true); // KEY difference from PHOTO_* writers
   });
 
-  test("Phase 2D.3: first generic writer uses ref=64 (1<<6); second uses ref=128 (2<<6)", () => {
+  test("Phase 2D.3: generic writers use full-byte refs 1, 2 when no shape masks coexist", () => {
     const m1 = quadData({
       id: "base-main", name: "BASE_MAIN", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
@@ -832,11 +859,11 @@ describe("builder — BuildContext", () => {
     const root = buildNodeTree([m1, m2, c1, c2], makeCtx());
     const mat1 = (root.children[0] as Mesh).material as MeshBasicMaterial;
     const mat2 = (root.children[1] as Mesh).material as MeshBasicMaterial;
-    expect(mat1.stencilRef).toBe(64);  // 1 << 6
-    expect(mat2.stencilRef).toBe(128); // 2 << 6
+    expect(mat1.stencilRef).toBe(1);  // full-byte index
+    expect(mat2.stencilRef).toBe(2);
   });
 
-  test("Phase 2D.3: generic writer writeMask = STENCIL_GENERIC_OWNER_FIELD (0b11000000 = 192)", () => {
+  test("Phase 2D.3: generic writer writeMask = full byte (0xff) when no shape masks coexist", () => {
     const m1 = quadData({
       id: "base-main", name: "BASE_MAIN", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
@@ -844,7 +871,7 @@ describe("builder — BuildContext", () => {
     const client = quadData({ id: "c", name: "FF", maskIds: ["base-main"] });
     const root = buildNodeTree([m1, client], makeCtx());
     const mat = (root.children[0] as Mesh).material as MeshBasicMaterial;
-    expect(mat.stencilWriteMask).toBe(0b11000000); // 192
+    expect(mat.stencilWriteMask).toBe(0xff);
   });
 
   test("Phase 2D.3: generic field is disjoint from PHOTO_MASK and PHOTO_DUMMY fields", () => {
@@ -873,7 +900,7 @@ describe("builder — BuildContext", () => {
     expect(pMaskMat.stencilWriteMask | pDummyMat.stencilWriteMask | genMat.stencilWriteMask).toBe(0b11111111);
   });
 
-  test("Phase 2D.3: generic reader (MaskId=BASE_MAIN, IsInvertedMask=True) → Equal func, ref=64, funcMask=0b11000000", async () => {
+  test("Phase 2D.3: generic reader (MaskId=BASE_MAIN, IsInvertedMask=True) → Equal func, full-byte ref=1", async () => {
     const { EqualStencilFunc, KeepStencilOp } = await import("three");
     const baseMain = quadData({
       id: "base-main", name: "BASE_MAIN", isMask: true,
@@ -884,25 +911,31 @@ describe("builder — BuildContext", () => {
     const mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
     expect(mat.stencilWrite).toBe(true);
     expect(mat.stencilFunc).toBe(EqualStencilFunc);
-    expect(mat.stencilRef).toBe(64);
-    expect(mat.stencilFuncMask).toBe(0b11000000); // 192
+    expect(mat.stencilRef).toBe(1);          // full-byte mode (no shape masks)
+    expect(mat.stencilFuncMask).toBe(0xff);
     expect(mat.stencilFail).toBe(KeepStencilOp);
     expect(mat.stencilZFail).toBe(KeepStencilOp);
     expect(mat.stencilZPass).toBe(KeepStencilOp);
     expect(mat.depthTest).toBe(false);
   });
 
-  test("Phase 2D.3: generic reader's ref/funcMask does NOT touch PHOTO bits", () => {
+  test("Phase 2D.3: generic reader's ref/funcMask does NOT touch shape-mask bits when both coexist", () => {
+    // A shape mask in the scene forces legacy mode: the colored mask must keep
+    // to bits 6-7 so the photo fields (bits 0-5) stay uncontaminated.
+    const shapeMask = quadData({
+      id: "sm", name: "ANY_SLIT", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
     const baseMain = quadData({
       id: "bmain", name: "BASE_MAIN", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
     });
     const client = quadData({ id: "c", name: "FF", maskIds: ["bmain"] });
-    const root = buildNodeTree([baseMain, client], makeCtx());
-    const mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    const root = buildNodeTree([shapeMask, baseMain, client], makeCtx());
+    const mat = (root.children[2] as Mesh).material as MeshBasicMaterial;
     // ref and funcMask only have bits inside the generic field (6-7).
-    expect(mat.stencilRef & 0b00111111).toBe(0);     // no PHOTO bits set
-    expect(mat.stencilFuncMask & 0b00111111).toBe(0); // PHOTO fields not queried
+    expect(mat.stencilRef & 0b00111111).toBe(0);     // no shape-mask bits set
+    expect(mat.stencilFuncMask & 0b00111111).toBe(0); // shape fields not queried
   });
 
   test("Phase 2D.3: mixed PHOTO_DUMMY + generic reader combines bits without contamination", () => {
@@ -924,16 +957,22 @@ describe("builder — BuildContext", () => {
     expect(mat.stencilFuncMask).toBe(0b11111000); // DUMMY | GENERIC
   });
 
-  test("Phase 2D.3: 4th generic mask gets warning and skipped (limit = 3)", () => {
+  test("Phase 2D.3: 4th generic mask gets warning and skipped in LEGACY mode (shape masks coexist, limit = 3)", () => {
     const mk = (id: string, name: string) => quadData({
       id, name, isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
     });
     const clientFor = (id: string, n: number) => quadData({ id: `c${n}`, name: `C${n}`, maskIds: [id] });
+    // A shape mask forces legacy bit-field mode (2 bits → 3 colored masks max).
+    const shapeMask = quadData({
+      id: "sm", name: "ANY_SLIT", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
     const ctx = makeCtx();
     const root = buildNodeTree(
       [mk("g1", "G1"), mk("g2", "G2"), mk("g3", "G3"), mk("g4", "G4"),
-       clientFor("g1", 1), clientFor("g2", 2), clientFor("g3", 3), clientFor("g4", 4)],
+       clientFor("g1", 1), clientFor("g2", 2), clientFor("g3", 3), clientFor("g4", 4),
+       shapeMask],
       ctx,
     );
     // First three get stencilWrite=true; fourth does NOT
@@ -961,7 +1000,7 @@ describe("builder — BuildContext", () => {
     const g1Mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
     expect(orphanMat.stencilWrite).toBe(false); // orphan stays as a non-writer
     expect(g1Mat.stencilWrite).toBe(true);
-    expect(g1Mat.stencilRef).toBe(64); // index 1, not 2
+    expect(g1Mat.stencilRef).toBe(1); // full-byte index 1, not 2 (orphan didn't steal slot 1)
   });
 
   test("Phase 2D.3 + A1: first generic writer renderOrder=11, generic-only reader renderOrder=12", () => {
@@ -1030,13 +1069,13 @@ describe("builder — BuildContext", () => {
       maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
     const color = quadData({ id: "color-1", name: "PHOTO_COLOR_01" });
-    const texture = quadData({ id: "tex-1", name: "TEXTURE_PHOTO_01" });
+    const texture = quadData({ id: "tex-1", name: "TEXTURE_PHOTO_01", faceMapping: patternFace });
     const fill = groupData({
       id: "fill-1", name: "PHOTO_FILL_01",
       maskIds: ["dummy-1"],
       children: [color, texture],
     });
-    const ctx = makeCtx();
+    const ctx = makeCardPatternCtx();
     const root = buildNodeTree([dummy, fill], ctx);
     const fillGroup = root.children[1] as Group;
     const colorMesh = fillGroup.children[0] as Mesh;
@@ -1092,13 +1131,13 @@ describe("builder — BuildContext", () => {
       maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
     const color = quadData({ id: "color-1", name: "PHOTO_COLOR_01" });
-    const texture = quadData({ id: "tex-1", name: "TEXTURE_PHOTO_01" });
+    const texture = quadData({ id: "tex-1", name: "TEXTURE_PHOTO_01", faceMapping: patternFace });
     const fill = groupData({
       id: "fill-1", name: "PHOTO_FILL_01",
       maskIds: ["dummy-1"],
       children: [color, texture],
     });
-    const ctx = makeCtx();
+    const ctx = makeCardPatternCtx();
     const root = buildNodeTree([dummy, fill], ctx);
     const fillGroup = root.children[1] as Group;
     const colorMesh = fillGroup.children[0] as Mesh;
@@ -1133,6 +1172,280 @@ describe("builder — BuildContext", () => {
     expect(photoMesh.renderOrder).toBe(22); // Phase A1 — PHOTO_NN default (was 20)
   });
 
+  test("photo-card lanes are attribute-driven: dummy-reader with map → 20, without map → 21, mask-only → 22 (arbitrary names)", () => {
+    // The card stack order is derivable from the stencil composition + the
+    // material content — no PHOTO_*/TEXTURE_* names: a reader clipped by the
+    // dummy silhouette is a fill layer (textured pattern at the back, solid
+    // color above it); a reader clipped only by the slit mask is the photo on
+    // top. All names here are deliberately arbitrary.
+    const ctx = makeCardPatternCtx();
+    const slit = quadData({
+      id: "m1", name: "CARD_SLIT", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const silhouette = quadData({
+      id: "d1", name: "CARD_SILHOUETTE", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const inkPattern = quadData({ id: "ink-pat", name: "INK_PATTERN", faceMapping: patternFace });
+    const inkColor = quadData({ id: "ink-col", name: "INK_COLOR" });
+    const fill = groupData({ id: "fill", name: "FILL", maskIds: ["d1", "m1"], children: [inkPattern, inkColor] });
+    const hero = quadData({ id: "hero", name: "HERO", maskIds: ["m1"] });
+    const card = groupData({ id: "card", name: "CARD", children: [slit, silhouette, fill, hero] });
+    const root = buildNodeTree([card], ctx);
+    const byId = (id: string): Mesh => {
+      let m: Mesh | undefined;
+      root.traverse((o) => {
+        if (!m && (o as Mesh).isMesh && (o.userData?.w3d as { id?: string } | undefined)?.id === id) m = o as Mesh;
+      });
+      if (!m) throw new Error(`mesh ${id} not found`);
+      return m;
+    };
+    expect(byId("ink-pat").renderOrder).toBe(20); // textured fill layer — back of the card stack
+    expect(byId("ink-col").renderOrder).toBe(21); // solid fill layer — above the pattern
+    expect(byId("hero").renderOrder).toBe(22);    // slit-only reader (the photo) — front
+  });
+
+  test("photo-field readers are forced into the transparent pass regardless of name", () => {
+    // depthTest=false readers sort purely by renderOrder, which only holds
+    // within the transparent pass. The forcing must come from the stencil
+    // composition (photo-field reader), not from a name whitelist.
+    const slit = quadData({
+      id: "m1", name: "CARD_SLIT", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const opaqueReader = quadData({ id: "r1", name: "OPAQUE_THING", maskIds: ["m1"], alpha: 1 });
+    const card = groupData({ id: "card", name: "CARD", children: [slit, opaqueReader] });
+    const root = buildNodeTree([card], makeCtx());
+    let mesh: Mesh | undefined;
+    root.traverse((o) => {
+      if (!mesh && (o as Mesh).isMesh && (o.userData?.w3d as { id?: string } | undefined)?.id === "r1") mesh = o as Mesh;
+    });
+    expect(mesh, "reader mesh built").toBeDefined();
+    expect((mesh!.material as MeshBasicMaterial).transparent).toBe(true);
+  });
+
+  test("triangle node builds a 3-vertex mesh centered on its bounding box", () => {
+    const tri = quadData({
+      id: "t1", name: "ARROW",
+      geometry: { size: { x: 1, y: 2 } },
+      triangle: { angleDeg: 90, edge1: 1, edge2: 2 },
+    });
+    const mesh = buildNode(tri, makeCtx()) as Mesh;
+    expect(mesh).toBeInstanceOf(Mesh);
+    const pos = mesh.geometry.getAttribute("position");
+    expect(pos.count).toBe(3); // a triangle, not a plane (4 verts)
+    // Bounding box centered at the origin, matching PlaneGeometry semantics.
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox!;
+    expect((bb.min.x + bb.max.x) / 2).toBeCloseTo(0, 5);
+    expect((bb.min.y + bb.max.y) / 2).toBeCloseTo(0, 5);
+    expect(bb.max.x - bb.min.x).toBeCloseTo(1, 5);
+    expect(bb.max.y - bb.min.y).toBeCloseTo(2, 5);
+  });
+
+  test("card fills follow the photo's reveal, normalised by the AUTHORED alpha (ghosts show zero gold)", () => {
+    // The photo authors alpha 0.5 (the designed ghost state) and an Alpha
+    // track raises it to 1 at the reveal. The R3 reference shows ZERO gold in
+    // the ghost: the fill must be invisible at the authored alpha and fully
+    // materialised at 1 — normalised, not just multiplied.
+    const mkCard = (photoAlpha: number, authoredAlpha?: number) => {
+      const slit = quadData({
+        id: "m1", name: "SLIT", isMask: true,
+        maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+      });
+      const dummy = quadData({
+        id: "d1", name: "SIL", isMask: true,
+        maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+      });
+      const photo = quadData({ id: "ph", name: "HERO_PHOTO", maskIds: ["m1"], alpha: photoAlpha, authoredAlpha, faceMapping: patternFace });
+      const colorFill = quadData({ id: "cf", name: "CARD_SOLID", alpha: 1 });
+      const fill = groupData({ id: "fg", name: "FILL_GROUP", maskIds: ["d1", "m1"], children: [colorFill] });
+      return groupData({ id: "card", name: "CARD", children: [photo, slit, dummy, fill] });
+    };
+    const find = (root: Group, id: string): MeshBasicMaterial => {
+      let m: MeshBasicMaterial | undefined;
+      root.traverse((o) => {
+        if (!m && (o as Mesh).isMesh && (o.userData?.w3d as { id?: string } | undefined)?.id === id) {
+          m = (o as Mesh).material as MeshBasicMaterial;
+        }
+      });
+      if (!m) throw new Error(`${id} not found`);
+      return m;
+    };
+    // Ghost: alpha == authored 0.5 → reveal factor 0 → no gold at all.
+    const ghost = buildNodeTree([mkCard(0.5, 0.5)], makeCardPatternCtx());
+    expect(find(ghost, "cf").opacity).toBeCloseTo(0, 5);
+    expect(find(ghost, "cf").visible).toBe(false);
+    // Mid-reveal: alpha 0.75 from authored 0.5 → factor 0.5.
+    const mid = buildNodeTree([mkCard(0.75, 0.5)], makeCardPatternCtx());
+    expect(find(mid, "cf").opacity).toBeCloseTo(0.5, 5);
+    // Hero: alpha 1 → factor 1 → untouched.
+    const hero = buildNodeTree([mkCard(1, 0.5)], makeCardPatternCtx());
+    expect(find(hero, "cf").opacity).toBeCloseTo(1, 5);
+    // No Alpha track (no authored stash) → no ghost state → untouched.
+    const staticCard = buildNodeTree([mkCard(0.5, undefined)], makeCardPatternCtx());
+    expect(find(staticCard, "cf").opacity).toBeCloseTo(1, 5);
+  });
+
+  // --- Implicit sibling masking ---------------------------------------------
+  // R3 scoping observed on LINEUP: a BINARY shape mask (IsMask, not colored,
+  // DisableBinaryAlpha=False) clips every FOLLOWING sibling subtree in its
+  // container, with no MaskId authored. That is what hides the card labels
+  // while the card is below frame during the intro (the slit is the clip),
+  // while the hero stays intact (labels sit inside the slit at the marker).
+
+  test("binary shape mask implicitly clips FOLLOWING siblings (and their subtrees)", async () => {
+    const { EqualStencilFunc } = await import("three");
+    const before = quadData({ id: "before", name: "BEFORE" });
+    const slit = quadData({
+      id: "m1", name: "ANY_SLIT", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const leaf = quadData({ id: "leaf", name: "LEAF" });
+    const after = groupData({ id: "after", name: "AFTER", children: [leaf] });
+    const card = groupData({ id: "card", name: "CARD", children: [before, slit, after] });
+    const root = buildNodeTree([card], makeCtx());
+    const find = (id: string): MeshBasicMaterial => {
+      let m: MeshBasicMaterial | undefined;
+      root.traverse((o) => {
+        if (!m && (o as Mesh).isMesh && (o.userData?.w3d as { id?: string } | undefined)?.id === id) {
+          m = (o as Mesh).material as MeshBasicMaterial;
+        }
+      });
+      if (!m) throw new Error(`${id} not found`);
+      return m;
+    };
+    // A sibling BEFORE the mask is untouched.
+    expect(find("before").stencilWrite, "sibling before the mask").toBe(false);
+    // A sibling subtree AFTER the mask reads it implicitly.
+    const leafMat = find("leaf");
+    expect(leafMat.stencilWrite, "leaf after the mask").toBe(true);
+    expect(leafMat.stencilFunc).toBe(EqualStencilFunc); // inverted → inside reveal
+    expect(leafMat.stencilRef).toBe(1);
+    expect(leafMat.stencilFuncMask).toBe(0b00000111);
+  });
+
+  test("smooth silhouette masks (DisableBinaryAlpha) do NOT implicitly clip siblings", () => {
+    const dummy = quadData({
+      id: "d1", name: "ANY_SILHOUETTE", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const after = quadData({ id: "after", name: "AFTER" });
+    const card = groupData({ id: "card", name: "CARD", children: [dummy, after] });
+    const root = buildNodeTree([card], makeCtx());
+    const mat = ((root.children[0] as Group).children[1] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(false);
+  });
+
+  test("colored masks do NOT implicitly clip siblings (panels never clip the row)", () => {
+    const panel = quadData({
+      id: "p1", name: "ANY_PANEL", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+    });
+    const after = quadData({ id: "after", name: "AFTER" });
+    const card = groupData({ id: "card", name: "CARD", children: [panel, after] });
+    const root = buildNodeTree([card], makeCtx());
+    const mat = ((root.children[0] as Group).children[1] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilWrite).toBe(false);
+  });
+
+  test("implicit sibling mask MERGES with a reader's own maskIds (dummy ∩ slit)", async () => {
+    const { EqualStencilFunc } = await import("three");
+    const dummy = quadData({
+      id: "d1", name: "SIL", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const slit = quadData({
+      id: "m1", name: "SLIT", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const reader = quadData({ id: "r1", name: "FILL_LAYER", maskIds: ["d1"] });
+    const card = groupData({ id: "card", name: "CARD", children: [dummy, slit, reader] });
+    const root = buildNodeTree([card], makeCtx());
+    const mat = ((root.children[0] as Group).children[2] as Mesh).material as MeshBasicMaterial;
+    expect(mat.stencilFunc).toBe(EqualStencilFunc);
+    expect(mat.stencilRef).toBe(9);       // own dummy (1<<3) ∪ implicit slit (1)
+    expect(mat.stencilFuncMask).toBe(63);
+  });
+
+  // --- Colored masks beyond the legacy 3-mask limit -------------------------
+  // Scenes WITHOUT shape masks (everything except LINEUP-class scenes) get the
+  // whole 8-bit stencil byte: each colored mask writes its 1-based index as a
+  // full-byte ref (document-order replacement in overlaps), so the corpus's
+  // 19-mask GLOBAL_STATS fits. When shape masks coexist, the legacy 2-bit
+  // field (3 owners max) is kept so LINEUP semantics stay byte-identical.
+
+  const coloredMaskQuad = (i: number) => quadData({
+    id: `cm${i}`, name: `ANY_PANEL_${i}`, isMask: true,
+    geometry: { size: { x: 1, y: 1 } },
+    maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
+  });
+  const coloredReaderQuad = (i: number) => quadData({ id: `rd${i}`, name: `ANY_FILL_${i}`, maskIds: [`cm${i}`] });
+
+  test("5 referenced colored masks all get stencil config (full-byte refs, no limit warning)", () => {
+    const nodes: W3DQuadData[] = [];
+    for (let i = 1; i <= 5; i++) nodes.push(coloredMaskQuad(i), coloredReaderQuad(i));
+    const ctx = makeCtx();
+    const root = buildNodeTree(nodes, ctx);
+    expect(ctx.warnings.filter((w) => w.includes("mask limit")).length, ctx.warnings.join(" | ")).toBe(0);
+    for (let i = 1; i <= 5; i++) {
+      const writerMesh = root.children[(i - 1) * 2] as Mesh;
+      const readerMesh = root.children[(i - 1) * 2 + 1] as Mesh;
+      const wm = writerMesh.material as MeshBasicMaterial;
+      const rm = readerMesh.material as MeshBasicMaterial;
+      expect(wm.stencilWrite, `writer ${i} stencilWrite`).toBe(true);
+      expect(wm.stencilRef, `writer ${i} ref`).toBe(i);
+      expect(wm.stencilWriteMask, `writer ${i} writeMask`).toBe(0xff);
+      expect(rm.stencilWrite, `reader ${i} stencilWrite`).toBe(true);
+      expect(rm.stencilRef, `reader ${i} ref`).toBe(i);
+      expect(rm.stencilFuncMask, `reader ${i} funcMask`).toBe(0xff);
+      // Each mask keeps its contiguous 3-lane block (writer / fill / text).
+      expect(writerMesh.renderOrder, `writer ${i} lane`).toBe(11 + 3 * (i - 1));
+      expect(readerMesh.renderOrder, `reader ${i} lane`).toBe(11 + 3 * (i - 1) + 1);
+    }
+  });
+
+  test("legacy 2-bit colored-mask field is kept when shape masks coexist", () => {
+    const shapeMask = quadData({
+      id: "sm1", name: "ANY_SLIT", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([shapeMask, coloredMaskQuad(1), coloredReaderQuad(1)], ctx);
+    const wm = (root.children[1] as Mesh).material as MeshBasicMaterial;
+    const rm = (root.children[2] as Mesh).material as MeshBasicMaterial;
+    expect(wm.stencilRef).toBe(1 << 6);        // bits 6-7 owner field
+    expect(wm.stencilWriteMask).toBe(0b11000000);
+    expect(rm.stencilRef).toBe(1 << 6);
+    expect(rm.stencilFuncMask).toBe(0b11000000);
+  });
+
+  test("text / divider / overlay lanes float above the generic blocks when masks exceed 3", () => {
+    const nodes: (W3DQuadData | W3DTextureTextData)[] = [];
+    for (let i = 1; i <= 5; i++) nodes.push(coloredMaskQuad(i), coloredReaderQuad(i));
+    // A no-mask TextureText label and a thin divider — both must clear the
+    // 5 generic blocks (last block tops out at 11+3·5−1 = 25).
+    const label: W3DTextureTextData = {
+      kind: "TextureText", id: "lbl", name: "ANY_LABEL",
+      enable: true, alpha: 1, speedScale: 1,
+      text: "LABEL", textBox: { x: 1, y: 0.2 },
+      alignmentX: "Left", alignmentY: "Center",
+      textQuality: 0.8, maskIds: [],
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } },
+      children: [],
+    };
+    nodes.push(label);
+    nodes.push(quadData({ id: "sliver", name: "ANY_RULE", geometry: { size: { x: 0.01, y: 2 } } }));
+    const ctx = makeCtx();
+    const root = buildNodeTree(nodes, ctx);
+    const labelMesh = root.children[10] as Mesh;
+    const sliverMesh = root.children[11] as Mesh;
+    const base = 11 + 3 * 5; // card base above the 5 blocks (last block ends at 25)
+    expect(sliverMesh.renderOrder, "divider lane").toBe(base + 3);
+    expect(labelMesh.renderOrder, "text lane").toBe(base + 4);
+  });
+
   // Thin-divider overlay — keyed on GEOMETRY (sliver aspect ratio), not name, so
   // it generalises to any R3 scene's divider/rule lines.
   test("Thin-divider: a sliver Quad lifts above the photo stack (renderOrder 23, transparent, no depth test)", () => {
@@ -1162,20 +1475,19 @@ describe("builder — BuildContext", () => {
     expect(m.renderOrder).not.toBe(23);
   });
 
-  test("Patch D2: non-photo-card stencil reader keeps authored transparency (scope guard)", () => {
-    // A hypothetical future client that reads PHOTO_MASK/PHOTO_DUMMY but is
-    // not a photo-card node (PHOTO/PHOTO_COLOR/TEXTURE_PHOTO) must retain its
-    // material's authored transparent flag. The transparent override is
-    // scoped to photo-card names only.
-    const mask = quadData({
-      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
-      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+  test("Patch D2: generic-mask stencil reader keeps authored transparency (scope guard)", () => {
+    // The transparent forcing exists for the photo-card stack's renderOrder
+    // sorting. A client of a GENERIC colored mask is outside that stack and
+    // must retain its material's authored transparent flag.
+    const coloredMask = quadData({
+      id: "base-1", name: "BASE_PANEL", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: true, isInvertedMask: true },
     });
     const otherClient = quadData({
-      id: "other", name: "OTHER_CLIENT", maskIds: ["mask-1"], alpha: 1, // alpha=1, no texture → opaque
+      id: "other", name: "OTHER_CLIENT", maskIds: ["base-1"], alpha: 1, // alpha=1, no texture → opaque
     });
     const ctx = makeCtx();
-    const root = buildNodeTree([mask, otherClient], ctx);
+    const root = buildNodeTree([coloredMask, otherClient], ctx);
     const mat = (root.children[1] as Mesh).material as MeshBasicMaterial;
     expect(mat.stencilWrite).toBe(true);  // still stenciled
     expect(mat.transparent).toBe(false);  // NOT forced — opaque preserved
@@ -1244,6 +1556,28 @@ describe("builder — BuildContext", () => {
     // Visual order strictly left→right.
     const xs = playersGroup.children.map((c) => c.position.x);
     for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThan(xs[i - 1]);
+  });
+
+  test("unknown FlowChildren Direction warns and falls back to XPlus", () => {
+    // The corpus authors XPlus/XMinus/YPlus/YMinus (or omits = XPlus). Any
+    // other vocabulary must be observable as a warning — silently flowing a
+    // ZPlus stack along X would scramble an imported scene with no trace.
+    const a = quadData({ id: "a", name: "A", geometry: { size: { x: 1, y: 1 } } });
+    const b = quadData({ id: "b", name: "B", geometry: { size: { x: 1, y: 1 } } });
+    const row = groupData({
+      id: "row", name: "ROW",
+      flow: { children: true, direction: "ZPlus" },
+      children: [a, b],
+    });
+    const ctx = makeCtx();
+    const root = buildNodeTree([row], ctx);
+    expect(
+      ctx.warnings.some((w) => w.includes("ZPlus")),
+      `expected a Direction warning, got: [${ctx.warnings.join(" | ")}]`,
+    ).toBe(true);
+    // Fallback layout = XPlus: children flow left → right.
+    const grp = root.children[0] as Group;
+    expect(grp.children[1].position.x).toBeGreaterThan(grp.children[0].position.x);
   });
 
   test("Phase 2F-flow: PLAYERS main axis is slot-centered (authored main offset absorbed); node data + leadingSpace not mutated", () => {
@@ -2258,59 +2592,100 @@ describe("builder — BuildContext", () => {
     expect(mat.stencilFuncMask).toBe(63); // MASK_OWNER_FIELD | DUMMY_OWNER_FIELD
   });
 
-  test("Phase 2H: non-PHOTO_FILL group with single mask does NOT get fallback", async () => {
-    // The fallback is scoped strictly to PHOTO_FILL_XX names. A different
-    // group (e.g. SOME_OTHER) with a single maskId stays single-mask.
+  test("Phase 2H: ambiguous container (two mask-class siblings) does NOT get fallback", async () => {
+    // The dummy's container holds TWO mask-class writers — the pairing would
+    // be a guess, so the reader stays clipped by the dummy alone.
     const { EqualStencilFunc } = await import("three");
-    const photoMask = quadData({
-      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
+    const maskA = quadData({
+      id: "mask-a", name: "SLIT_A", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const maskB = quadData({
+      id: "mask-b", name: "SLIT_B", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
     const dummy = quadData({
-      id: "dummy-1", name: "PHOTO_DUMMY_01", isMask: true,
+      id: "dummy-1", name: "SILHOUETTE", isMask: true,
       maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
     const child = quadData({ id: "child", name: "SOME_CHILD" });
     const other = groupData({
-      id: "other", name: "SOME_OTHER_GROUP",
+      id: "other", name: "SOME_GROUP",
       maskIds: ["dummy-1"],
       children: [child],
     });
     const ctx = makeCtx();
-    const root = buildNodeTree([photoMask, dummy, other], ctx);
-    const grp = root.children[2] as Group;
+    const root = buildNodeTree([maskA, maskB, dummy, other], ctx);
+    const grp = root.children[3] as Group;
     const mat = (grp.children[0] as Mesh).material as MeshBasicMaterial;
     expect(mat.stencilFunc).toBe(EqualStencilFunc);
     expect(mat.stencilRef).toBe(8);       // DUMMY owner=1 << 3 = 8 — no fallback
     expect(mat.stencilFuncMask).toBe(56); // DUMMY_OWNER_FIELD only
   });
 
-  test("Phase 2H: mismatched FILL index (FILL_01 with DUMMY_02) does NOT trigger fallback", async () => {
-    // If FILL_XX's single maskId resolves to a DUMMY whose index doesn't match
-    // (e.g. FILL_01 pointing to DUMMY_02), the fallback skips — we never
-    // synthesise a mask that doesn't align with the authored intent.
+  test("Phase 2H: dummy and mask in DIFFERENT containers do NOT pair", async () => {
+    // The mask-class writer lives in another card's container (different
+    // discovery slot), so the dummy-only reader must NOT intersect with it —
+    // we never synthesise a pairing across cards.
     const { EqualStencilFunc } = await import("three");
     const photoMask = quadData({
-      id: "mask-1", name: "PHOTO_MASK_01", isMask: true,
+      id: "mask-1", name: "SLIT", isMask: true,
       maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
     const dummy2 = quadData({
-      id: "dummy-2", name: "PHOTO_DUMMY_02", isMask: true,
+      id: "dummy-2", name: "SILHOUETTE", isMask: true,
       maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
     });
-    const color = quadData({ id: "color", name: "PHOTO_COLOR_01" });
+    const cardA = groupData({ id: "card-a", name: "CARD_A", children: [photoMask] });
+    const cardB = groupData({ id: "card-b", name: "CARD_B", children: [dummy2] });
+    const color = quadData({ id: "color", name: "FILL_COLOR" });
     const fill = groupData({
-      id: "fill-1", name: "PHOTO_FILL_01",
-      maskIds: ["dummy-2"], // index mismatch
+      id: "fill-1", name: "FILL",
+      maskIds: ["dummy-2"], // resolves to card B's dummy; card B has no slit
       children: [color],
     });
     const ctx = makeCtx();
-    const root = buildNodeTree([photoMask, dummy2, fill], ctx);
+    const root = buildNodeTree([cardA, cardB, fill], ctx);
     const fillGroup = root.children[2] as Group;
     const mat = (fillGroup.children[0] as Mesh).material as MeshBasicMaterial;
     expect(mat.stencilFunc).toBe(EqualStencilFunc);
-    expect(mat.stencilRef).toBe(8);       // DUMMY owner slot=1 << 3 = 8; no synthetic MASK added (FILL/DUMMY index mismatch)
+    expect(mat.stencilRef).toBe(16);      // DUMMY owner slot=2 << 3 = 16; no cross-card MASK added
     expect(mat.stencilFuncMask).toBe(56); // DUMMY_OWNER_FIELD only
+  });
+
+  test("FILL→MASK pairing is structural: arbitrary names pair via shared container", async () => {
+    // A card container holds a textured silhouette (dummy-class:
+    // DisableBinaryAlpha=True) and a geometric slit (mask-class) — none named
+    // PHOTO_*. A sibling group referencing ONLY the dummy must still clip to
+    // the intersection (dummy ∩ mask), proving the pairing comes from the
+    // shared container, not from a name regex.
+    const { EqualStencilFunc } = await import("three");
+    const slit = quadData({
+      id: "slit-1", name: "CARD_SLIT", isMask: true,
+      maskProperties: { disableBinaryAlpha: false, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const silhouette = quadData({
+      id: "sil-1", name: "CARD_SILHOUETTE", isMask: true,
+      maskProperties: { disableBinaryAlpha: true, hasSampleCount: false, isColoredMask: false, isInvertedMask: true },
+    });
+    const colorQuad = quadData({ id: "color-1", name: "CARD_COLOR" });
+    const fill = groupData({
+      id: "fill-1", name: "CARD_FILL",
+      maskIds: ["sil-1"], // single-mask authoring slip
+      children: [colorQuad],
+    });
+    const card = groupData({ id: "card-1", name: "CARD", children: [slit, silhouette, fill] });
+    const ctx = makeCtx();
+    const root = buildNodeTree([card], ctx);
+    let colorMesh: Mesh | undefined;
+    root.traverse((o) => {
+      if ((o.userData?.w3d as { id?: string } | undefined)?.id === "color-1") colorMesh = o as Mesh;
+    });
+    expect(colorMesh, "fill child mesh built").toBeDefined();
+    const mat = colorMesh!.material as MeshBasicMaterial;
+    expect(mat.stencilFunc).toBe(EqualStencilFunc);
+    expect(mat.stencilRef).toBe(9);       // mask owner=1 | (dummy owner=1 << 3)
+    expect(mat.stencilFuncMask).toBe(63); // both photo fields tested → intersection
   });
 
   test("Phase 2E: single-mask client [DUMMY] keeps bitMask=2 (regression — FILL_01 case)", async () => {
@@ -3312,8 +3687,8 @@ describe("builder — BuildContext", () => {
     const textMesh = root.children[1] as Mesh;
     const mat = textMesh.material as MeshBasicMaterial;
     expect(mat.stencilWrite).toBe(true);
-    expect(mat.stencilRef).toBe(64); // generic mask index 1 << 6
-    expect(mat.stencilFuncMask).toBe(0b11000000);
+    expect(mat.stencilRef).toBe(1);      // full-byte mode (no shape masks in scene)
+    expect(mat.stencilFuncMask).toBe(0xff);
   });
 
   // -----------------------------------------------------------------------
@@ -3471,9 +3846,9 @@ describe("builder — BuildContext", () => {
     // field (Equal, ref 64, funcMask 192), and the writer ref is unchanged.
     const textMat = textMesh.material as MeshBasicMaterial;
     expect(textMat.stencilFunc).toBe(EqualStencilFunc);
-    expect(textMat.stencilRef).toBe(64);
-    expect(textMat.stencilFuncMask).toBe(0b11000000);
-    expect((writerMesh.material as MeshBasicMaterial).stencilRef).toBe(64);
+    expect(textMat.stencilRef).toBe(1);      // full-byte mode (no shape masks)
+    expect(textMat.stencilFuncMask).toBe(0xff);
+    expect((writerMesh.material as MeshBasicMaterial).stencilRef).toBe(1);
   });
 
   test("Phase 2D.4 + A1: BASE_TEAM text client reads ref=128 and lands in BASE_TEAM block text lane (16)", async () => {
@@ -3513,8 +3888,8 @@ describe("builder — BuildContext", () => {
     const benchMat = benchMesh.material as MeshBasicMaterial;
     expect(benchMesh.renderOrder).toBe(16); // Phase A1 — BASE_TEAM block text lane (index 2)
     expect(benchMat.stencilFunc).toBe(EqualStencilFunc);
-    expect(benchMat.stencilRef).toBe(128); // BASE_TEAM owner index 2 << 6
-    expect(benchMat.stencilFuncMask).toBe(0b11000000);
+    expect(benchMat.stencilRef).toBe(2);     // BASE_TEAM owner index, full-byte mode
+    expect(benchMat.stencilFuncMask).toBe(0xff);
   });
 
   test("Phase A1: with two generic masks M1 then M2, M1's whole block renders before M2's whole block", () => {

@@ -26,6 +26,26 @@ describe("parseNodes (skeleton)", () => {
 
 export { wrapInScene };
 
+describe("parseTriangle", () => {
+  test("Triangle parses as a Quad-kind node with the triangle shape from GeometryOptions", () => {
+    const { roots, warnings } = parseNodes(wrapInScene(
+      `<Triangle Id="t1" Name="ARROW_LEFT" DisplayColor="11119017" MaskId="m1;">
+         <GeometryOptions Angle="90" Edge1="1" Edge2="2" />
+       </Triangle>`,
+    ));
+    expect(warnings).toEqual([]); // no "unknown node" warning
+    expect(roots).toHaveLength(1);
+    const t = roots[0] as W3DQuadData;
+    expect(t.kind).toBe("Quad");
+    expect(t.id).toBe("t1");
+    expect(t.maskIds).toEqual(["m1"]);
+    expect(t.triangle).toEqual({ angleDeg: 90, edge1: 1, edge2: 2 });
+    // Layout size = the triangle's bounding box (90° → edge1 × edge2).
+    expect(t.geometry.size.x).toBeCloseTo(1, 5);
+    expect(t.geometry.size.y).toBeCloseTo(2, 5);
+  });
+});
+
 describe("parseQuad direct attributes", () => {
   test("reads Id, Name and defaults Enable=true, Alpha=1, SpeedScale=1", () => {
     const { roots } = parseNodes(wrapInScene(`<Quad Id="q1" Name="BG"/>`));

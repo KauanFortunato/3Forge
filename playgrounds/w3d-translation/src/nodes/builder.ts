@@ -1,7 +1,7 @@
 // playgrounds/w3d-translation/src/nodes/builder.ts
 import {
-  AlwaysStencilFunc, Box3, CanvasTexture, ClampToEdgeWrapping, Color, DoubleSide,
-  EqualStencilFunc, Group, KeepStencilOp, Mesh, MeshBasicMaterial,
+  AlwaysStencilFunc, Box3, BufferAttribute, BufferGeometry, CanvasTexture, ClampToEdgeWrapping,
+  Color, DoubleSide, EqualStencilFunc, Group, KeepStencilOp, Mesh, MeshBasicMaterial,
   NotEqualStencilFunc, Object3D, PlaneGeometry, ReplaceStencilOp, SRGBColorSpace, Texture,
   TextureLoader, Vector3,
 } from "three";
@@ -45,8 +45,8 @@ import {
  * one per writer class. Each writer touches ONLY its own field, so neither
  * writer can contaminate the other's owner identity:
  *
- *   bits 0-2:   PHOTO_MASK owner player (0 = no MASK wrote, 1..7 = which player's MASK)
- *   bits 3-5:   PHOTO_DUMMY owner player (0 = no DUMMY wrote, 1..7 = which player's DUMMY)
+ *   bits 0-2:   shape-mask (slit) owner slot (0 = no MASK wrote, 1..7 = which card's MASK)
+ *   bits 3-5:   silhouette (dummy) owner slot (0 = no DUMMY wrote, 1..7 = which card's DUMMY)
  *   bits 6-7:   reserved
  *
  * Readers test the involved field(s) for owner == N. At pixel MASK_M ∩
@@ -58,16 +58,17 @@ type PhotoMaskClass = "mask" | "dummy";
 type PhotoMaskInfo = {
   /** Writer class — selects which owner field this writer occupies. */
   klass: PhotoMaskClass;
-  /** Player index extracted from the mask writer name (1..7). */
-  playerIndex: number;
+  /** Card slot (1..7) — discovery order of the writer's parent container;
+   * MASK and DUMMY siblings of one card share it. No name involved. */
+  slot: number;
   isInverted: boolean;
   name: string;
 };
 
-const STENCIL_MASK_OWNER_FIELD = 0b00000111;   // bits 0-2: PHOTO_MASK owner
-const STENCIL_DUMMY_OWNER_FIELD = 0b00111000;  // bits 3-5: PHOTO_DUMMY owner
+const STENCIL_MASK_OWNER_FIELD = 0b00000111;   // bits 0-2: shape-mask (slit) owner
+const STENCIL_DUMMY_OWNER_FIELD = 0b00111000;  // bits 3-5: silhouette (dummy) owner
 const STENCIL_DUMMY_SHIFT = 3;
-const STENCIL_PLAYER_INDEX_MAX = 7;
+const STENCIL_SLOT_MAX = 7;
 
 /**
  * Phase 2D.3 — generic colored-mask owner field.
@@ -87,6 +88,16 @@ const STENCIL_PLAYER_INDEX_MAX = 7;
 const STENCIL_GENERIC_OWNER_FIELD = 0b11000000; // bits 6-7
 const STENCIL_GENERIC_SHIFT = 6;
 const STENCIL_GENERIC_INDEX_MAX = 3;
+/**
+ * Full-byte colored-mask mode — used when the scene has NO shape masks (the
+ * photo MASK/DUMMY pipeline), which frees the whole stencil byte. Each colored
+ * mask then writes its 1-based index as a full-byte ref: up to 255 owners, and
+ * overlapping writers REPLACE each other in document order (exactly the R3
+ * "later mask pair fully replaces the earlier one" semantics the 3-lane blocks
+ * encode). Scenes that DO carry shape masks (LINEUP) keep the legacy 2-bit
+ * field so their validated stencil bytes stay identical.
+ */
+const STENCIL_GENERIC_FULLBYTE_MAX = 255;
 
 /**
  * Phase 2F — alphaTest threshold for textured mask writers (e.g. PHOTO_DUMMY_0X
@@ -124,11 +135,45 @@ const BASE_FADE_GAIN = 1.5;
 const FILL_FADE_FOOT = 0.5;
 
 export type GenericMaskInfo = {
-  /** Generic mask owner index (1..STENCIL_GENERIC_INDEX_MAX). */
+  /** Generic mask owner index — 1..3 in legacy bit-field mode (shape masks
+   * present), 1..255 in full-byte mode (no shape masks in the scene). */
   index: number;
   isInverted: boolean;
   name: string;
 };
+
+const GENERIC_BLOCK_BASE = 11;   // writer lane of the first generic mask block
+const GENERIC_BLOCK_SIZE = 3;    // writer + fill-reader + text-reader
+
+/** Render lanes that float above the per-mask generic blocks. The floor keeps
+ * the historical values (overlay 19, card 20-22, divider 23, text 24) for
+ * scenes with up to 2 colored masks, so validated scenes are untouched. */
+export type RenderLanes = {
+  overlay: number;
+  cardPattern: number;
+  cardSolid: number;
+  cardFront: number;
+  divider: number;
+  text: number;
+};
+
+function computeRenderLanes(genericMaskCount: number): RenderLanes {
+  // First lane above the last generic 3-lane block (writer/fill/text per
+  // mask), floored at the historical card base (20) so scenes with up to 3
+  // colored masks keep the validated layout: overlay 19, cards 20-22,
+  // divider 23, text 24. Beyond 3 masks everything shifts up together.
+  const base = Math.max(20, GENERIC_BLOCK_BASE + GENERIC_BLOCK_SIZE * genericMaskCount);
+  return {
+    overlay: base - 1,
+    cardPattern: base,
+    cardSolid: base + 1,
+    cardFront: base + 2,
+    divider: base + 3,
+    text: base + 4,
+  };
+}
+
+const DEFAULT_LANES: RenderLanes = computeRenderLanes(0);
 
 export type BuildContext = {
   registry: W3DResourceRegistry;
@@ -149,6 +194,19 @@ export type BuildContext = {
    * to pick the registered face when present and fall back otherwise.
    */
   loadedFontIndex?: Set<string>;
+  /** Populated automatically by buildNodeTree — lanes above the generic blocks. */
+  lanes?: RenderLanes;
+  /**
+   * Phase TL — cache of rasterised TextureText canvases, keyed by everything
+   * that affects the pixels (text, font, color, size, quality). Text content
+   * does not animate, so the timeline player's per-frame rebuilds reuse the
+   * same CanvasTexture instead of re-rasterising every label every frame
+   * (also prevents orphaned GPU textures across rebuilds).
+   */
+  textTextureCache?: Map<string, Texture>;
+  /** Populated automatically by buildNodeTree — true when colored masks own the
+   * whole stencil byte (no shape masks in the scene). */
+  genericFullByte?: boolean;
 };
 
 export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
@@ -156,12 +214,20 @@ export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
     ctx.photoMaskInfoByMaskId = collectPhotoMaskInfo(roots, ctx.warnings);
   }
   if (ctx && !ctx.genericMaskInfoByMaskId) {
-    ctx.genericMaskInfoByMaskId = collectGenericMaskInfo(roots, ctx.warnings);
+    const hasShapeMasks = (ctx.photoMaskInfoByMaskId?.size ?? 0) > 0;
+    ctx.genericMaskInfoByMaskId = collectGenericMaskInfo(roots, ctx.warnings, hasShapeMasks);
+    ctx.genericFullByte = !hasShapeMasks;
+  }
+  if (ctx && !ctx.lanes) {
+    ctx.lanes = computeRenderLanes(ctx.genericMaskInfoByMaskId?.size ?? 0);
   }
   const top = new Group();
   top.name = "w3d-nodes-root";
   for (const r of roots) top.add(buildNode(r, ctx));
-  if (ctx) applySmoothMaskBaseFade(top);
+  if (ctx) {
+    applySmoothMaskBaseFade(top);
+    applyCardFillMaterialisation(top);
+  }
   return top;
 }
 
@@ -188,13 +254,13 @@ function collectPhotoMaskInfo(
         slot = ++nextSlot;
         slotByParentId.set(parentId, slot);
       }
-      if (slot > STENCIL_PLAYER_INDEX_MAX) {
-        warnings?.push(`Photo mask "${n.name}" is in player container #${slot}, exceeding the ${STENCIL_PLAYER_INDEX_MAX}-slot stencil scope; skipping.`);
+      if (slot > STENCIL_SLOT_MAX) {
+        warnings?.push(`Shape mask "${n.name}" is in card container #${slot}, exceeding the ${STENCIL_SLOT_MAX}-slot stencil scope; skipping.`);
       } else {
         // Class from DisableBinaryAlpha: textured silhouette (true) = "dummy",
         // geometric stencil shape (false) = "mask". Derived from attributes, not name.
         const klass: PhotoMaskClass = n.maskProperties?.disableBinaryAlpha ? "dummy" : "mask";
-        out.set(n.id, { klass, playerIndex: slot, isInverted: !!n.maskProperties?.isInvertedMask, name: n.name });
+        out.set(n.id, { klass, slot, isInverted: !!n.maskProperties?.isInvertedMask, name: n.name });
       }
     }
     for (const c of n.children) walk(c, n.id);
@@ -204,15 +270,18 @@ function collectPhotoMaskInfo(
 }
 
 /**
- * Phase 2D.3 — collect non-PHOTO `IsMask=True IsColoredMask=True` quads as
- * generic stencil writers. A candidate is registered only when at least one
- * other node references its GUID via `maskIds[]` (otherwise the index would
- * be wasted on an orphan mask). Document order determines the index 1..MAX;
- * the 4th candidate emits a warning and is skipped.
+ * Phase 2D.3 — collect `IsMask=True IsColoredMask=True` quads as generic
+ * stencil writers. A candidate is registered only when at least one other
+ * node references its GUID via `maskIds[]` (otherwise the index would be
+ * wasted on an orphan mask). Document order determines the index; capacity is
+ * 255 in full-byte mode (no shape masks in the scene) or 3 in legacy bit-field
+ * mode (shape masks present — LINEUP-class scenes). Beyond capacity a warning
+ * is emitted and the mask is skipped.
  */
 function collectGenericMaskInfo(
   roots: W3DNodeData[],
   warnings?: string[],
+  hasShapeMasks?: boolean,
 ): Map<string, GenericMaskInfo> {
   const candidates: W3DQuadData[] = [];
   const referencedIds = new Set<string>();
@@ -229,11 +298,12 @@ function collectGenericMaskInfo(
   for (const r of roots) walk(r);
 
   const out = new Map<string, GenericMaskInfo>();
+  const capacity = hasShapeMasks ? STENCIL_GENERIC_INDEX_MAX : STENCIL_GENERIC_FULLBYTE_MAX;
   let next = 1;
   for (const cand of candidates) {
     if (!referencedIds.has(cand.id)) continue; // orphan — no client references it
-    if (next > STENCIL_GENERIC_INDEX_MAX) {
-      warnings?.push(`Generic colored mask "${cand.name}" exceeds the ${STENCIL_GENERIC_INDEX_MAX}-mask limit; skipping stencil setup.`);
+    if (next > capacity) {
+      warnings?.push(`Generic colored mask "${cand.name}" exceeds the ${capacity}-mask limit; skipping stencil setup.`);
       continue;
     }
     out.set(cand.id, {
@@ -246,48 +316,41 @@ function collectGenericMaskInfo(
   return out;
 }
 
-const PHOTO_FILL_NAME_RE = /^PHOTO_FILL_(\d+)$/;
-
 /**
- * Phase 2H — R3 photo-fill paired-mask fallback.
+ * Phase 2H — paired-mask fallback for dummy-only readers, structural.
  *
- * Convention observed in LINEUP_LEFT and similar R3 scenes: a PHOTO_FILL_XX
- * group is supposed to be clipped by BOTH the photo dummy AND the photo mask
- * slit for that player, so the FILL is visible only inside the intersection.
- * Most scenes author the maskIds explicitly as [PHOTO_DUMMY_XX, PHOTO_MASK_XX]
- * (PLAYER_02..05 in LINEUP_LEFT), but PHOTO_FILL_01 in LINEUP_LEFT was
- * authored with only [PHOTO_DUMMY_01], which leaves the yellow PHOTO_COLOR
- * leaking around the player silhouette in the playground.
+ * Convention observed in the R3 corpus: a photo-fill group is clipped by BOTH
+ * the textured silhouette (dummy-class writer) AND the geometric slit
+ * (mask-class writer) of its card, so the fill is visible only inside the
+ * intersection. Most cards author the maskIds explicitly as [DUMMY, MASK]
+ * (PLAYER_02..05 in LINEUP_LEFT), but one card (PHOTO_FILL_01) was authored
+ * with only the dummy, which leaves the colored fill leaking around the
+ * player silhouette.
  *
- * Fallback: when a group's name matches PHOTO_FILL_XX and its maskIds is a
- * single entry resolving to PHOTO_DUMMY_XX, append PHOTO_MASK_XX (when one
- * exists in the registry) to the effective list passed to children. The
- * parsed XML is NOT mutated.
+ * Fallback: when a group's maskIds is a single entry resolving to a
+ * dummy-class writer, append the mask-class writer from the SAME card —
+ * identified by the shared card slot, which collectPhotoMaskInfo
+ * assigns per discovery container (MASK and DUMMY of one card are siblings).
+ * No node names involved. The parsed XML is NOT mutated.
  *
  * Skip cases (return input unchanged):
  *  - group has 0 or 2+ maskIds (author already paired them)
- *  - single maskId is not a DUMMY for this index
- *  - matching PHOTO_MASK_XX does not exist in the registry
- *  - group name does not match PHOTO_FILL_XX
+ *  - single maskId does not resolve to a dummy-class writer
+ *  - the dummy's container has no mask-class writer, or more than one
+ *    (ambiguous — never guess)
  */
-function augmentPhotoFillMaskIds(
-  groupName: string,
+function augmentDummyOnlyMaskIds(
   ownMaskIds: string[],
   info: Map<string, PhotoMaskInfo>,
 ): string[] {
-  const m = PHOTO_FILL_NAME_RE.exec(groupName);
-  if (!m) return ownMaskIds;
   if (ownMaskIds.length !== 1) return ownMaskIds;
-  const index = m[1];
-  const expectedDummyName = `PHOTO_DUMMY_${index}`;
-  const expectedMaskName = `PHOTO_MASK_${index}`;
   const dummyEntry = info.get(ownMaskIds[0]);
-  if (!dummyEntry || dummyEntry.name !== expectedDummyName) return ownMaskIds;
+  if (!dummyEntry || dummyEntry.klass !== "dummy") return ownMaskIds;
   let maskGuid: string | undefined;
   for (const [guid, mi] of info) {
-    if (mi.name === expectedMaskName) {
+    if (mi.klass === "mask" && mi.slot === dummyEntry.slot) {
+      if (maskGuid !== undefined) return ownMaskIds; // two siblings — ambiguous
       maskGuid = guid;
-      break;
     }
   }
   if (!maskGuid) return ownMaskIds;
@@ -299,11 +362,38 @@ export function buildNode(
   ctx?: BuildContext,
   inheritedMaskIds?: string[],
   inheritedAlpha?: number,
+  implicitMaskIds?: string[],
 ): Object3D {
-  if (node.kind === "Group") return buildGroup(node, ctx, inheritedMaskIds, inheritedAlpha);
-  if (node.kind === "TextureText") return buildTextureText(node, ctx, inheritedMaskIds, inheritedAlpha);
-  return buildQuad(node, ctx, inheritedMaskIds, inheritedAlpha);
+  if (node.kind === "Group") return buildGroup(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds);
+  if (node.kind === "TextureText") return buildTextureText(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds);
+  return buildQuad(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds);
 }
+
+/**
+ * Implicit sibling masking — R3 scoping observed on LINEUP: a BINARY shape
+ * mask (IsMask, not colored, DisableBinaryAlpha=False) clips every FOLLOWING
+ * sibling subtree in its container without any authored MaskId. This is what
+ * keeps a card's labels inside the slit at the hero AND hides them while the
+ * card sits below frame during the intro. Smooth silhouettes (dummy class)
+ * and colored masks do NOT take part — only binary shape writers.
+ */
+function isImplicitSiblingMask(node: W3DNodeData, ctx?: BuildContext): boolean {
+  return (
+    node.kind === "Quad" &&
+    node.isMask &&
+    ctx?.photoMaskInfoByMaskId?.get(node.id)?.klass === "mask"
+  );
+}
+
+// NOTE (future work — verified semantics, first implementation reverted):
+// permanently-invisible leaf quads (authored Alpha=0 with NO Alpha track,
+// e.g. MASK_POSITION_0N / MASK_FIRST_NAME_0N, and the chained NEW_MASK
+// reveal-wipe windows) act as clip mattes in R3 — the window for the label
+// that slides into view, and the union wipe over the card fill. A clipping-
+// plane implementation from the matte's world Box3 clipped TOO MUCH at the
+// hero (first names / positions vanished), so the window↔content geometry
+// needs to be pinned down with the diag harness before retrying. Animated-
+// from-zero quads (LOGO) are NOT mattes — discriminate by authoredAlpha.
 
 /**
  * Phase P1 — cumulative parent-Group Alpha is multiplied into descendant
@@ -319,6 +409,7 @@ function buildGroup(
   ctx?: BuildContext,
   inheritedMaskIds?: string[],
   inheritedAlpha?: number,
+  implicitMaskIds?: string[],
 ): Group {
   const g = new Group();
   g.name = node.name;
@@ -346,12 +437,12 @@ function buildGroup(
   const host = applyPivotAnchor(g, node.transform);
   // Own maskIds override inherited (R3 semantics). Children with no maskIds of
   // their own pick up this group's maskIds as their effective stencil source.
-  // Phase 2H — PHOTO_FILL_XX with only PHOTO_DUMMY_XX gets PHOTO_MASK_XX
-  // inferred when available, so the FILL clips to the intersection like its
-  // multi-mask siblings.
+  // Phase 2H — a group clipped only by a card's dummy silhouette also gets the
+  // card's slit mask inferred, so the fill clips to the intersection like its
+  // explicitly-paired siblings.
   let effectiveOwnMaskIds = node.maskIds;
   if (effectiveOwnMaskIds.length > 0 && ctx?.photoMaskInfoByMaskId) {
-    effectiveOwnMaskIds = augmentPhotoFillMaskIds(node.name, effectiveOwnMaskIds, ctx.photoMaskInfoByMaskId);
+    effectiveOwnMaskIds = augmentDummyOnlyMaskIds(effectiveOwnMaskIds, ctx.photoMaskInfoByMaskId);
   }
   const passToChildren = effectiveOwnMaskIds.length > 0 ? effectiveOwnMaskIds : inheritedMaskIds;
   // Phase P1 — fold this Group's authored Alpha into the inherited alpha that
@@ -360,8 +451,14 @@ function buildGroup(
   // we treat undefined as 1, so the recursion is a no-op for those Groups.
   const incoming = inheritedAlpha ?? 1;
   const passAlpha = incoming * (node.alpha ?? 1);
-  for (const c of node.children) host.add(buildNode(c, ctx, passToChildren, passAlpha));
-  applyFlowLayout(host, node);
+  // Implicit sibling masking — every binary shape-mask child clips the
+  // siblings that FOLLOW it (accumulated in document order).
+  let implicitForSiblings = implicitMaskIds ?? [];
+  for (const c of node.children) {
+    host.add(buildNode(c, ctx, passToChildren, passAlpha, implicitForSiblings));
+    if (isImplicitSiblingMask(c, ctx)) implicitForSiblings = [...implicitForSiblings, c.id];
+  }
+  applyFlowLayout(host, node, ctx?.warnings);
   return g;
 }
 
@@ -493,14 +590,24 @@ function isColoredMask(node: W3DQuadData): boolean {
  */
 type FlowAxis = "x" | "y";
 
-function flowAxisFromDirection(direction: string | undefined): { axis: FlowAxis; sign: 1 | -1 } {
+function flowAxisFromDirection(
+  direction: string | undefined,
+  warnings?: string[],
+  groupName?: string,
+): { axis: FlowAxis; sign: 1 | -1 } {
   switch (direction) {
     case "YMinus": return { axis: "y", sign: -1 };
     case "YPlus": return { axis: "y", sign: 1 };
     case "XMinus": return { axis: "x", sign: -1 };
     case "XPlus":
     case undefined:
-    default: return { axis: "x", sign: 1 };
+      return { axis: "x", sign: 1 };
+    default:
+      // Unknown vocabulary (e.g. a Z-axis flow) — fall back to the XPlus
+      // default but leave a trace, so an imported scene that flows wrong is
+      // diagnosable instead of silently scrambled.
+      warnings?.push(`Group "${groupName ?? "?"}": unknown FlowChildren Direction "${direction}", falling back to XPlus.`);
+      return { axis: "x", sign: 1 };
   }
 }
 
@@ -528,10 +635,10 @@ function firstRowFontDescent(child: Object3D | undefined): number {
   return descent;
 }
 
-function applyFlowLayout(group: Group, node: W3DGroupData): void {
+function applyFlowLayout(group: Group, node: W3DGroupData, warnings?: string[]): void {
   if (!node.flow?.children) return;
   if (group.children.length === 0) return;
-  const { axis: mainAxis, sign } = flowAxisFromDirection(node.flow.direction);
+  const { axis: mainAxis, sign } = flowAxisFromDirection(node.flow.direction, warnings, node.name);
   const leadingSpace = node.flow.leadingSpace ?? 0;
 
   // R3 FlowChildren anchors each child's LEADING EDGE — the edge facing the
@@ -704,6 +811,7 @@ function buildQuad(
   ctx?: BuildContext,
   inheritedMaskIds?: string[],
   inheritedAlpha?: number,
+  implicitMaskIds?: string[],
 ): Object3D {
   if (node.children.length === 0) {
     const mesh = makeQuadMesh(node, ctx, inheritedAlpha);
@@ -713,11 +821,10 @@ function buildQuad(
     // carries IsColoredMask=True (e.g. BASE_MAIN / BASE_TEAM in R3), it is
     // BOTH a clip source AND visible colored content — keep it visible.
     // applyPhotoMaskStencil's writer branch overrides this again to
-    // `mesh.visible = node.enable` for PHOTO_* writers, but that path is
-    // gated by name (collectPhotoMaskInfo), so non-PHOTO colored masks pass
-    // through this rule.
+    // `mesh.visible = node.enable` for shape-mask writers; colored masks stay
+    // visible so their gradient band renders.
     mesh.visible = node.enable && (!node.isMask || isColoredMask(node));
-    applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
+    applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds, implicitMaskIds);
     // Phase P4.1 — Foreground overlay promotion. A textured Quad that is
     // neither a mask writer nor a stencil reader (no own MaskId, no inherited
     // MaskId) currently lands at Three.js default renderOrder=0 and would be
@@ -730,10 +837,10 @@ function buildQuad(
     //       applyPhotoMaskStencil and assigned per-mask lanes there)
     //   (3) mesh.renderOrder still at default 0 (don't override stencil paths)
     //   (4) material.map is present (skip pure-color quads)
-    promoteOverlayQuadRenderOrder(mesh, node, inheritedMaskIds);
+    promoteOverlayQuadRenderOrder(mesh, node, inheritedMaskIds, ctx?.lanes ?? DEFAULT_LANES);
     // Lift thin-sliver divider quads above the photo stack so one shows between
     // every card (overrides the overlay lane). Keyed on geometry, not name.
-    applyThinDividerOverlay(mesh, node);
+    applyThinDividerOverlay(mesh, node, ctx?.lanes ?? DEFAULT_LANES);
     // Phase 2B — leaf Quad with pivot: wrap mesh in an outer Group so the
     // pivot anchor applies under the Quad's own transform. Outer carries
     // T(position) × R × S; mesh becomes a child at -pivot with identity
@@ -777,12 +884,17 @@ function buildQuad(
   // Z=-17.44), occluding most of its visible region. Leaf-Quad masks already
   // call this on line 445 — this restores the same invariant for the
   // children-carrier branch.
-  applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
+  applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds, implicitMaskIds);
   const passToChildren = node.maskIds.length > 0 ? node.maskIds : inheritedMaskIds;
   // Phase P1 — Quad-with-children carries its inherited alpha to children
   // unchanged (the Quad's own alpha applies only to its own carrier mesh; a
   // Quad's Alpha attribute is a leaf concept, not a container concept).
-  for (const c of node.children) host.add(buildNode(c, ctx, passToChildren, inheritedAlpha));
+  // Implicit sibling masking applies inside this container as well.
+  let implicitForSiblings = implicitMaskIds ?? [];
+  for (const c of node.children) {
+    host.add(buildNode(c, ctx, passToChildren, inheritedAlpha, implicitForSiblings));
+    if (isImplicitSiblingMask(c, ctx)) implicitForSiblings = [...implicitForSiblings, c.id];
+  }
   return wrapper;
 }
 
@@ -972,6 +1084,7 @@ function buildTextureText(
   ctx?: BuildContext,
   inheritedMaskIds?: string[],
   inheritedAlpha?: number,
+  implicitMaskIds?: string[],
 ): Object3D {
   // Preserve the authored TextBox verbatim as the PlaneGeometry / layout
   // bounds. R3 keeps the (sometimes very tall or very long) authored TextBox
@@ -1061,11 +1174,18 @@ function buildTextureText(
     );
     geometry = new PlaneGeometry(Math.max(measured.inkWidth, 0.001), Math.max(measured.inkHeight, 0.001));
     placeInkAnchor(geometry, measured, (node.alignmentX as AlignmentX) ?? "Left");
-    texture =
-      renderInkTextToCanvas({
-        text: node.text, family, weight, style, color: textColor,
-        fontEm: measured.fontEm, quality: node.textQuality, letterSpacingEm,
-      }) ?? new CanvasTexture(document.createElement("canvas"));
+    const cacheKey = `ink|${node.text}|${family}|${weight}|${style}|${textColor}|${measured.fontEm}|${node.textQuality}|${letterSpacingEm}`;
+    const cachedInk = ctx?.textTextureCache?.get(cacheKey) as CanvasTexture | undefined;
+    if (cachedInk) {
+      texture = cachedInk;
+    } else {
+      texture =
+        renderInkTextToCanvas({
+          text: node.text, family, weight, style, color: textColor,
+          fontEm: measured.fontEm, quality: node.textQuality, letterSpacingEm,
+        }) ?? new CanvasTexture(document.createElement("canvas"));
+      ctx?.textTextureCache?.set(cacheKey, texture);
+    }
   } else {
     // Fallback (jsdom / empty text): authored TextBox geometry + box-fitted glyph.
     geometry = new PlaneGeometry(
@@ -1077,18 +1197,25 @@ function buildTextureText(
       alignmentY: node.alignmentY,
       size: renderTextBox,
     });
-    texture = renderTextToCanvas({
-      text: node.text,
-      family,
-      weight,
-      style,
-      color: textColor,
-      textBox: renderTextBox,
-      alignmentX: node.alignmentX ?? "Center",
-      alignmentY: node.alignmentY ?? "Center",
-      quality: node.textQuality,
-      constrainMethod: effectiveConstrain,
-    });
+    const cacheKey = `box|${node.text}|${family}|${weight}|${style}|${textColor}|${renderTextBox.x}x${renderTextBox.y}|${node.alignmentX}|${node.alignmentY}|${node.textQuality}|${effectiveConstrain}`;
+    const cachedBox = ctx?.textTextureCache?.get(cacheKey) as CanvasTexture | undefined;
+    if (cachedBox) {
+      texture = cachedBox;
+    } else {
+      texture = renderTextToCanvas({
+        text: node.text,
+        family,
+        weight,
+        style,
+        color: textColor,
+        textBox: renderTextBox,
+        alignmentX: node.alignmentX ?? "Center",
+        alignmentY: node.alignmentY ?? "Center",
+        quality: node.textQuality,
+        constrainMethod: effectiveConstrain,
+      });
+      ctx?.textTextureCache?.set(cacheKey, texture);
+    }
   }
 
   const material = new MeshBasicMaterial({
@@ -1137,11 +1264,11 @@ function buildTextureText(
   // stencil-reader value (16 for generic, 18-20 for photo-card). depth state
   // is set to false here so it matches the rest of the pipeline regardless
   // of which path runs.
-  mesh.renderOrder = RENDER_ORDER_TEXT;
+  mesh.renderOrder = (ctx?.lanes ?? DEFAULT_LANES).text;
   material.depthWrite = false;
   material.depthTest = false;
 
-  applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds);
+  applyPhotoMaskStencil(mesh, node, ctx, inheritedMaskIds, implicitMaskIds);
 
   if (hasNonZeroPivot(node.transform.pivot)) {
     return wrapMeshWithPivot(mesh, node);
@@ -1376,6 +1503,40 @@ function renderTextToCanvas(opts: RenderTextOptions): CanvasTexture {
 }
 
 // R3 broadcast frame in world units (engine constant, not scene-specific).
+/**
+ * 3-vertex geometry for a <Triangle> node: edge1 along +X from the apex,
+ * edge2 at `angleDeg` counter-clockwise from edge1. Centered on its bounding
+ * box (PlaneGeometry semantics) with UVs mapped over that box so textures
+ * resolve like on a quad.
+ */
+function makeTriangleGeometry(tri: { angleDeg: number; edge1: number; edge2: number }): BufferGeometry {
+  const rad = (tri.angleDeg * Math.PI) / 180;
+  const xs = [0, tri.edge1, tri.edge2 * Math.cos(rad)];
+  const ys = [0, 0, tri.edge2 * Math.sin(rad)];
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const w = maxX - minX || 1;
+  const h = maxY - minY || 1;
+  const positions = new Float32Array(9);
+  const uvs = new Float32Array(6);
+  for (let i = 0; i < 3; i++) {
+    positions[i * 3] = xs[i] - cx;
+    positions[i * 3 + 1] = ys[i] - cy;
+    positions[i * 3 + 2] = 0;
+    uvs[i * 2] = (xs[i] - minX) / w;
+    uvs[i * 2 + 1] = (ys[i] - minY) / h;
+  }
+  const g = new BufferGeometry();
+  g.setAttribute("position", new BufferAttribute(positions, 3));
+  g.setAttribute("uv", new BufferAttribute(uvs, 2));
+  g.computeVertexNormals();
+  return g;
+}
+
 const W3D_FRAME_WIDTH = 7.363797;
 const W3D_FRAME_HEIGHT = 4.142136;
 
@@ -1395,7 +1556,11 @@ function isFullFrameQuadGeometry(geometry: PlaneGeometry): boolean {
 }
 
 function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: number): Mesh {
-  const geometry = new PlaneGeometry(node.geometry.size.x, node.geometry.size.y);
+  // <Triangle> nodes carry the same contract as a Quad but build a 3-vertex
+  // geometry (bounding-box centered, like PlaneGeometry) instead of a plane.
+  const geometry = node.triangle
+    ? (makeTriangleGeometry(node.triangle) as unknown as PlaneGeometry)
+    : new PlaneGeometry(node.geometry.size.x, node.geometry.size.y);
   applyAlignment(geometry, node.geometry);
   // Phase H5 — shear the LOCAL geometry by the snapshot Skew (degrees). No-op
   // when absent/zero. After alignment, before the mesh transform + pivot wrapper.
@@ -1615,22 +1780,23 @@ function applyPhotoMaskStencil(
   node: StencilCandidate,
   ctx?: BuildContext,
   inheritedMaskIds?: string[],
+  implicitMaskIds?: string[],
 ): void {
   if (!ctx) return;
   const info = ctx.photoMaskInfoByMaskId;
   if (!info) return;
   const mat = mesh.material as MeshBasicMaterial;
 
-  // Writer: PHOTO_MASK_0X or PHOTO_DUMMY_0X
+  // Writer: shape mask (slit) or silhouette (dummy) — non-colored IsMask quad.
   if (node.isMask && info.has(node.id)) {
-    const { klass, playerIndex } = info.get(node.id)!;
-    // Phase 2J — write owner player index into this writer's own 3-bit field
+    const { klass, slot } = info.get(node.id)!;
+    // Phase 2J — write the owner card slot into this writer's own 3-bit field
     // only. MASK writers occupy bits 0-2, DUMMY writers occupy bits 3-5. The
     // two fields are disjoint, so a MASK writer can never overwrite a DUMMY
-    // owner and vice-versa — cross-player leakage from MASK_M ∩ DUMMY_N is
+    // owner and vice-versa — cross-card leakage from MASK_M ∩ DUMMY_N is
     // structurally impossible.
     const writeMask = klass === "mask" ? STENCIL_MASK_OWNER_FIELD : STENCIL_DUMMY_OWNER_FIELD;
-    const ref = klass === "mask" ? playerIndex : (playerIndex << STENCIL_DUMMY_SHIFT);
+    const ref = klass === "mask" ? slot : (slot << STENCIL_DUMMY_SHIFT);
     mat.depthWrite = false;
     mat.depthTest = false;
     mat.stencilWrite = true;
@@ -1691,9 +1857,12 @@ function applyPhotoMaskStencil(
     mat.depthWrite = false;
     mat.depthTest = false;
     mat.stencilWrite = true;
-    mat.stencilWriteMask = STENCIL_GENERIC_OWNER_FIELD;
+    // Full-byte mode (no shape masks in the scene): the writer owns the whole
+    // byte and writes its index directly — up to 255 masks, overlaps replaced
+    // in document order. Legacy mode (shape masks present): bits 6-7 only.
+    mat.stencilWriteMask = ctx.genericFullByte ? 0xff : STENCIL_GENERIC_OWNER_FIELD;
     mat.stencilFunc = AlwaysStencilFunc;
-    mat.stencilRef = index << STENCIL_GENERIC_SHIFT;
+    mat.stencilRef = ctx.genericFullByte ? index : (index << STENCIL_GENERIC_SHIFT);
     mat.stencilZPass = ReplaceStencilOp;
     mat.stencilFail = ReplaceStencilOp;
     mat.stencilZFail = ReplaceStencilOp;
@@ -1718,9 +1887,16 @@ function applyPhotoMaskStencil(
   // If maskIds resolve to multiple distinct owner indices on the same class,
   // or MASK and DUMMY owners disagree, that's an authoring error — skip
   // stencil setup and record a warning.
-  const effectiveMaskIds: string[] = node.maskIds.length > 0
+  // Own maskIds override inherited (R3 semantics); implicit sibling masks are
+  // UNIONED on top — a reader after a binary shape mask in its container is
+  // clipped by it in addition to anything it references explicitly.
+  const baseMaskIds: string[] = node.maskIds.length > 0
     ? node.maskIds
     : (inheritedMaskIds ?? []);
+  const effectiveMaskIds: string[] =
+    implicitMaskIds && implicitMaskIds.length > 0
+      ? Array.from(new Set([...baseMaskIds, ...implicitMaskIds]))
+      : baseMaskIds;
   if (effectiveMaskIds.length > 0) {
     let maskOwner: number | undefined;
     let dummyOwner: number | undefined;
@@ -1733,11 +1909,11 @@ function applyPhotoMaskStencil(
       if (target) {
         isInverted = target.isInverted;
         if (target.klass === "mask") {
-          if (maskOwner === undefined) maskOwner = target.playerIndex;
-          else if (maskOwner !== target.playerIndex) mixedOwner = true;
+          if (maskOwner === undefined) maskOwner = target.slot;
+          else if (maskOwner !== target.slot) mixedOwner = true;
         } else {
-          if (dummyOwner === undefined) dummyOwner = target.playerIndex;
-          else if (dummyOwner !== target.playerIndex) mixedOwner = true;
+          if (dummyOwner === undefined) dummyOwner = target.slot;
+          else if (dummyOwner !== target.slot) mixedOwner = true;
           // The DUMMY mask carries the player's VERTICAL_RAMP. Remember its id so
           // the post-build pass fades this fill THROUGH the dummy (its smooth
           // contour) — the texture config lives on the mask, the fill just follows.
@@ -1776,8 +1952,13 @@ function applyPhotoMaskStencil(
       funcMask |= STENCIL_DUMMY_OWNER_FIELD;
     }
     if (genericOwner !== undefined) {
-      ref |= (genericOwner << STENCIL_GENERIC_SHIFT);
-      funcMask |= STENCIL_GENERIC_OWNER_FIELD;
+      if (ctx.genericFullByte) {
+        ref |= genericOwner;
+        funcMask |= 0xff;
+      } else {
+        ref |= (genericOwner << STENCIL_GENERIC_SHIFT);
+        funcMask |= STENCIL_GENERIC_OWNER_FIELD;
+      }
     }
     mat.stencilWrite = true;
     mat.stencilFunc = isInverted ? EqualStencilFunc : NotEqualStencilFunc;
@@ -1801,21 +1982,30 @@ function applyPhotoMaskStencil(
     // Phase A1 — per-mask reader lanes. `genericOwner` is the 1-based discovery
     // index of the writer this reader is clipped against; its block sits at
     // genericWriterLane(index) so fill/text readers land just above it.
+    // Photo-field readers take their card-stack lane from the stencil
+    // composition + material content (see photoCardReaderLane) — no names.
     mesh.renderOrder = isGenericOnly
       ? (isTextClient ? genericTextLane(genericOwner!) : genericFillLane(genericOwner!))
-      : photoCardRenderOrder(node.name);
-    // Patch D2 — force photo-card readers (PHOTO_0X, PHOTO_COLOR_0X,
-    // TEXTURE_PHOTO_0X) into the transparent pass so Three.js sorts them
-    // strictly by renderOrder. Without this, an opaque reader (PHOTO_COLOR_0X
-    // with no texture and opacity=1) would land in the opaque pass and render
-    // BEFORE transparent peers (TEXTURE_PHOTO_0X with PATTERN.png, PHOTO_0X
-    // with Player N.png), inverting the intended back-to-front layering and
-    // letting the diagonal PATTERN.png stripes appear on top of the yellow
-    // PHOTO_COLOR block. Scoped to photo-card names only so future readers
-    // (e.g. someone reusing PHOTO_MASK_0X stencil from outside the card)
-    // keep their authored transparency.
-    if (isPhotoCardClient(node.name)) {
+      : photoCardReaderLane(dummyOwner !== undefined, isTextClient, !!mat.map, ctx.lanes ?? DEFAULT_LANES);
+    // Patch D2 — force photo-field readers into the transparent pass so
+    // Three.js sorts them strictly by renderOrder. Without this, an opaque
+    // reader (a solid color fill with no texture and opacity=1) would land in
+    // the opaque pass and render BEFORE its transparent peers (the pattern and
+    // photo layers), inverting the intended back-to-front card layering.
+    // Derived from the stencil composition — any reader of the photo MASK /
+    // DUMMY fields shares the depthTest=false + renderOrder sorting scheme, so
+    // they must all live in the same (transparent) pass.
+    if (!isGenericOnly) {
       mat.transparent = true;
+    }
+    // Card-materialisation pass inputs: the PHOTO (slit-only reader) carries
+    // the card's reveal alpha; the FILL layers (dummy readers) must follow it
+    // so the gold backing never shows through a half-revealed photo (the card
+    // ghost reads as the panel behind it, not as gold).
+    if (dummyOwner !== undefined && !isTextClient) {
+      mesh.userData.cardFillSlot = dummyOwner;
+    } else if (maskOwner !== undefined && dummyOwner === undefined && !isTextClient && mat.map) {
+      mesh.userData.cardPhotoSlot = maskOwner;
     }
     // Hand the resolving dummy id to the post-build base-fade pass so this fill
     // can fade through the dummy mask's ramp.
@@ -1828,10 +2018,11 @@ function applyPhotoMaskStencil(
  *
  * With depthTest=false on all clients (required for stencil to draw without
  * being culled by the masks' depth values) Three.js can't z-sort by depth.
- * The opaque vs transparent pass split would then place TEXTURE_PHOTO (PNG,
- * transparent pass) ON TOP of PHOTO_COLOR (no map, opaque pass), inverting
- * the R3 visual order. Forcing renderOrder per node-name role restores the
- * intended back-to-front: TEXTURE (pattern) → COLOR (yellow) → PHOTO (player).
+ * The opaque vs transparent pass split would then place a textured fill
+ * (PNG, transparent pass) ON TOP of a solid-color fill (no map, opaque pass),
+ * inverting the R3 visual order. Forcing renderOrder per reader role —
+ * derived from stencil composition + material content in photoCardReaderLane —
+ * restores the intended back-to-front: pattern → solid color → photo.
  */
 /**
  * Phase A1 — per-mask renderOrder block for generic colored masks.
@@ -1865,9 +2056,6 @@ function applyPhotoMaskStencil(
  * allocation, mask-shape silhouette and reader equality tests remain
  * exactly as Phase 2J left them. Only the paint order changes.
  */
-const GENERIC_BLOCK_BASE = 11;   // writer lane of the first generic mask block
-const GENERIC_BLOCK_SIZE = 3;    // writer + fill-reader + text-reader
-
 function genericWriterLane(maskIndex: number): number {
   return GENERIC_BLOCK_BASE + GENERIC_BLOCK_SIZE * (maskIndex - 1);
 }
@@ -1885,44 +2073,37 @@ function genericTextLane(maskIndex: number): number {
  * the yellow BASE_MAIN panel). With Three.js's default `renderOrder=0`
  * combined with the colored mask writer at lane 11+, such overlays would
  * be overpainted by the panel's gradient even though XML document order
- * places them in front. Lane 19 sits above the highest reserved generic
- * mask block (text-reader of the 3rd generic mask = 17+2 = 19 in the
- * theoretical max) but below the photo-card stack (20-22). Applies only
- * when a texture is actually resolved on the Quad — pure-color quads do
- * not get promoted.
+ * places them in front. The overlay lane sits above the highest generic
+ * mask block but below the photo-card stack — see computeRenderLanes.
+ * Applies only when a texture is actually resolved on the Quad —
+ * pure-color quads do not get promoted.
  */
-const RENDER_ORDER_OVERLAY = 19;
-const RENDER_ORDER_TEXTURE_PHOTO = 20;   // photo-card pattern fill (was 18)
-const RENDER_ORDER_PHOTO_COLOR = 21;     // photo-card colored block (was 19)
-const RENDER_ORDER_DEFAULT_CLIENT = 22;  // PHOTO_NN and default photo-stencil reader (was 20)
+
 /**
- * Phase TextureText render-order — labels without a MaskId default to
- * renderOrder=24 (above the photo-card stack at 20/21/22) so PLAYER_NUMBER /
- * PLAYER_POSITION / PLAYER_LAST_NAME draw on top of their card. TextureText
- * nodes WITH a MaskId still pass through applyPhotoMaskStencil's reader path
- * which overrides this value with the appropriate stencil-reader renderOrder.
+ * Card-stack lane for a photo-field stencil reader, derived from the stencil
+ * composition + material content — no node names:
+ *
+ *  - TextureText readers stay at the stack top (front), same as the photo.
+ *  - A reader clipped by the DUMMY silhouette is a fill layer behind the
+ *    photo: textured (the pattern) at the back, solid color above it.
+ *  - A reader clipped only by the slit MASK is the photo itself (front).
+ *
+ * Matches the R3 card layering validated on LINEUP: TEXTURE (pattern) →
+ * COLOR (solid) → PHOTO (player), with labels on top via the text lane.
  */
-const RENDER_ORDER_TEXT = 24;
-// Thin-divider lane — a sliver Quad (e.g. a divider / rule line) renders ABOVE
-// the photo-card stack (20-22) but below the text labels (24). Such quads are
-// no-mask textured Quads, so promoteOverlayQuadRenderOrder would otherwise leave
-// them at the overlay lane (19), BEHIND the transparent photos.
-const RENDER_ORDER_DIVIDER = 23;
-
-const PHOTO_CARD_CLIENT_RE = /^(TEXTURE_PHOTO_\d+|PHOTO_COLOR_\d+|PHOTO_\d+)$/;
-
-function photoCardRenderOrder(name: string): number {
-  if (/^TEXTURE_PHOTO_\d+$/.test(name)) return RENDER_ORDER_TEXTURE_PHOTO;
-  if (/^PHOTO_COLOR_\d+$/.test(name)) return RENDER_ORDER_PHOTO_COLOR;
-  return RENDER_ORDER_DEFAULT_CLIENT;
-}
-
-function isPhotoCardClient(name: string): boolean {
-  return PHOTO_CARD_CLIENT_RE.test(name);
+function photoCardReaderLane(
+  isDummyReader: boolean,
+  isTextClient: boolean,
+  hasMap: boolean,
+  lanes: RenderLanes,
+): number {
+  if (isTextClient) return lanes.cardFront;
+  if (isDummyReader) return hasMap ? lanes.cardPattern : lanes.cardSolid;
+  return lanes.cardFront;
 }
 
 /**
- * Phase P4.1 — see doc-comment on `RENDER_ORDER_OVERLAY`. Promotes a leaf
+ * Phase P4.1 — see the overlay-lane doc-comment above. Promotes a leaf
  * textured Quad that doesn't interact with any stencil mask to the foreground
  * overlay lane so authored sibling order (e.g. LINEUP_LEFT LOGO authored
  * AFTER BASE_MAIN) is preserved visually. No-op if any guard fails:
@@ -1934,7 +2115,8 @@ function isPhotoCardClient(name: string): boolean {
 function promoteOverlayQuadRenderOrder(
   mesh: Mesh,
   node: W3DQuadData,
-  inheritedMaskIds?: string[],
+  inheritedMaskIds: string[] | undefined,
+  lanes: RenderLanes,
 ): void {
   if (mesh.renderOrder !== 0) return;
   if (node.isMask) return;
@@ -1942,7 +2124,7 @@ function promoteOverlayQuadRenderOrder(
   if (inheritedMaskIds && inheritedMaskIds.length > 0) return;
   const mat = mesh.material as MeshBasicMaterial;
   if (!mat || !mat.map) return;
-  mesh.renderOrder = RENDER_ORDER_OVERLAY;
+  mesh.renderOrder = lanes.overlay;
 }
 
 /**
@@ -1975,18 +2157,18 @@ function isThinDivider(node: W3DQuadData): boolean {
 /**
  * Lift a thin-divider Quad ABOVE the photo-card stack. Such quads are no-mask
  * textured Quads, so promoteOverlayQuadRenderOrder lands them at the overlay
- * lane (19), which is BEHIND the transparent photo readers (20-22): an inner
- * divider gets overpainted by the overlapping photos (only the rightmost,
- * uncovered, survives). Promote it to a transparent overlay just above the
- * photos so a divider shows between every card. Keyed on the quad's GEOMETRY
- * (sliver aspect ratio) — not its name — so it generalises to any R3 scene's
+ * lane, which is BEHIND the transparent photo readers: an inner divider gets
+ * overpainted by the overlapping photos (only the rightmost, uncovered,
+ * survives). Promote it to a transparent overlay just above the photos so a
+ * divider shows between every card. Keyed on the quad's GEOMETRY (sliver
+ * aspect ratio) — not its name — so it generalises to any R3 scene's
  * dividers. Does NOT touch photos, masks/stencil, pivot, flow, or text.
  */
-function applyThinDividerOverlay(mesh: Mesh, node: W3DQuadData): void {
+function applyThinDividerOverlay(mesh: Mesh, node: W3DQuadData, lanes: RenderLanes): void {
   if (!isThinDivider(node)) return;
   const mat = mesh.material as MeshBasicMaterial | undefined;
   if (!mat) return;
-  mesh.renderOrder = RENDER_ORDER_DIVIDER;
+  mesh.renderOrder = lanes.divider;
   mat.transparent = true;
   mat.depthTest = false;
   mat.depthWrite = false;
@@ -2130,6 +2312,46 @@ function applySmoothMaskBaseFade(root: Group): void {
     mat.alphaMap = tex;
     mat.transparent = true;
     mat.userData.alphaMapFromAlpha = true;
+    mat.needsUpdate = true;
+  });
+}
+
+/**
+ * Card materialisation — the FILL layers (the gold solid + pattern behind the
+ * photo) follow the PHOTO's REVEAL, normalised against the photo's AUTHORED
+ * alpha: factor = (alpha − authored) / (1 − authored). The authored static is
+ * the designed ghost state (the player photo authors 0.5), where the R3
+ * reference shows ZERO gold — the card reads as the panel behind it. As the
+ * photo's Alpha track rises to 1 the gold backing materialises with it. At
+ * the hero (alpha 1) the factor is 1, leaving the validated output untouched;
+ * photos without an Alpha track keep factor 1 (no authored ghost state).
+ */
+function applyCardFillMaterialisation(root: Group): void {
+  const revealBySlot = new Map<number, number>();
+  root.traverse((o) => {
+    if (!(o instanceof Mesh)) return;
+    const slot = o.userData?.cardPhotoSlot as number | undefined;
+    if (slot === undefined) return;
+    const w = o.userData?.w3d as { alpha?: number; authoredAlpha?: number } | undefined;
+    const cur = w?.alpha ?? 1;
+    const authored = w?.authoredAlpha;
+    const factor = authored === undefined || authored >= 1
+      ? 1
+      : Math.min(Math.max((cur - authored) / (1 - authored), 0), 1);
+    const prev = revealBySlot.get(slot);
+    if (prev === undefined || factor > prev) revealBySlot.set(slot, factor);
+  });
+  if (revealBySlot.size === 0) return;
+  root.traverse((o) => {
+    if (!(o instanceof Mesh)) return;
+    const slot = o.userData?.cardFillSlot as number | undefined;
+    if (slot === undefined) return;
+    const reveal = revealBySlot.get(slot);
+    if (reveal === undefined || reveal >= 1) return;
+    const mat = o.material as MeshBasicMaterial;
+    mat.opacity *= reveal;
+    mat.transparent = true;
+    mat.visible = reveal > 0;
     mat.needsUpdate = true;
   });
 }

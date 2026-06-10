@@ -118,6 +118,12 @@ export function parseResources(xml: string): ParseResourcesResult {
         folderPath: attrs.FolderPath ?? "",
         raw: attrs,
       });
+    } else if (el.tagName === "ImageSequence") {
+      // Video / image-sequence resource (e.g. SCORE.mp4). Not translated yet:
+      // playback needs a VideoTexture + the runtime binding path. Surface a
+      // warning so an imported scene's missing motion is diagnosable.
+      const attrs = readAllAttrs(el);
+      warnings.push(`ImageSequence resource "${attrs.Name ?? attrs.Id ?? "?"}" (video/sequence) is not translated yet.`);
     } else if (el.tagName === "TextureTextFontStyle") {
       const attrs = readAllAttrs(el);
       const id = attrs.Id;

@@ -12,7 +12,12 @@ import { parseW3DSceneMetadata } from "../../../src/editor/import/w3d";
 import type { ComponentBlueprint } from "../../../src/editor/types";
 import { parseNodes, type W3DNodeData } from "./nodes/data";
 import { parseResources, type W3DResourceRegistry } from "./nodes/resources";
-import { parseTimelinePreviewSnapshot, type TimelinePreviewSnapshot } from "./nodes/timelines";
+import {
+  evaluateSnapshotAtFrame,
+  parseTimelineTracks,
+  type TimelinePreviewSnapshot,
+  type TimelineTracks,
+} from "./nodes/timelines";
 
 export interface TranslateOptions {
   onWarn?: (msg: string) => void;
@@ -20,7 +25,16 @@ export interface TranslateOptions {
 
 export interface TranslateResult {
   blueprint: ComponentBlueprint;
+  /** Parsed nodes with the PreviewMarker snapshot applied (the hero frame). */
   nodes: W3DNodeData[];
+  /**
+   * Phase TL — pristine parse, NO timeline snapshot applied. The timeline
+   * player clones this (cloneNodes) and applies evaluateSnapshotAtFrame(tracks,
+   * frame) per frame, so scrubbing never accumulates state.
+   */
+  pristineNodes: W3DNodeData[];
+  /** Phase TL — parsed keyframe tracks of the selected timeline. */
+  tracks: TimelineTracks;
   resources: W3DResourceRegistry;
   warnings: string[];
 }
@@ -38,15 +52,28 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
   const nodesResult = parseNodes(xml);
   for (const w of nodesResult.warnings) warn(w);
 
+  // Phase TL — parse the selected timeline's tracks once. The static path
+  // below evaluates them at the PreviewMarker (the editor's hero frame); the
+  // timeline player re-evaluates the SAME tracks at any frame.
+  const tracks = parseTimelineTracks(xml);
+  const unsupportedByProp = new Map<string, number>();
+  for (const u of tracks.unsupportedProps) {
+    unsupportedByProp.set(u.prop, (unsupportedByProp.get(u.prop) ?? 0) + 1);
+  }
+  for (const [prop, count] of unsupportedByProp) {
+    warn(`Animated property "${prop}" (${count} controller${count === 1 ? "" : "s"}) is not translated yet; those tracks are ignored.`);
+  }
+
+  // Keep a pristine copy BEFORE the marker snapshot mutates the parse — the
+  // per-frame animation path needs unmodified authored values as its base.
+  const pristineNodes = cloneNodes(nodesResult.roots);
+
   // Phase 2G + 2D.2 — evaluate animated properties at the selected timeline's
   // PreviewMarker and override the corresponding static <Quad>/<Group>
-  // attributes on the parsed tree:
-  //   - Alpha            → Quad.alpha
-  //   - Size.XProp/YProp → Quad.geometry.size.x/y
-  //   - Transform.Position.{X,Y,Z}Prop → Quad/Group.transform.position.{x,y,z}
-  // Other animated properties stay at their authored static value until needed.
-  const previewSnapshot = parseTimelinePreviewSnapshot(xml);
-  applyTimelineSnapshot(nodesResult.roots, previewSnapshot);
+  // attributes on the parsed tree.
+  if (tracks.previewMarker !== undefined) {
+    applyTimelineSnapshot(nodesResult.roots, evaluateSnapshotAtFrame(tracks, tracks.previewMarker));
+  }
 
   const resourcesResult = parseResources(xml);
   for (const w of resourcesResult.warnings) warn(w);
@@ -54,9 +81,17 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
   return {
     blueprint: base.blueprint,
     nodes: nodesResult.roots,
+    pristineNodes,
+    tracks,
     resources: resourcesResult.registry,
     warnings,
   };
+}
+
+/** Deep-clone a parsed node tree (plain data — no functions/class instances). */
+export function cloneNodes(roots: W3DNodeData[]): W3DNodeData[] {
+  if (typeof structuredClone === "function") return structuredClone(roots);
+  return JSON.parse(JSON.stringify(roots)) as W3DNodeData[];
 }
 
 /**
@@ -71,7 +106,7 @@ export function translateBlueprint(xml: string, options: TranslateOptions = {}):
  * geometry.size.y untouched. Nodes whose GUID is absent from every map
  * remain at their authored static values.
  */
-function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapshot): void {
+export function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapshot): void {
   const {
     alphaByControllableId,
     sizeByControllableId,
@@ -91,9 +126,21 @@ function applyTimelineSnapshot(roots: W3DNodeData[], snap: TimelinePreviewSnapsh
     return;
   }
   const walk = (n: W3DNodeData): void => {
-    if (n.kind === "Quad") {
+    if (n.kind === "Group") {
+      // Group Alpha tracks (e.g. TEAM_COMPOSITION) — the builder multiplies
+      // group.alpha into every descendant leaf opacity, so an animated group
+      // fade applies to the whole subtree.
       const a = alphaByControllableId.get(n.id);
       if (a !== undefined) n.alpha = a;
+    }
+    if (n.kind === "Quad") {
+      const a = alphaByControllableId.get(n.id);
+      if (a !== undefined) {
+        // Stash the authored static before overriding — the card-fill
+        // materialisation pass normalises the reveal against it.
+        if (n.authoredAlpha === undefined) n.authoredAlpha = n.alpha;
+        n.alpha = a;
+      }
       const sz = sizeByControllableId.get(n.id);
       if (sz !== undefined) {
         if (sz.x !== undefined) n.geometry.size.x = sz.x;

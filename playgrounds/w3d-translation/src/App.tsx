@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentBlueprint } from "../../../src/editor/types";
 import { analyzeW3dXml, type DocumentStats } from "./analyze";
 import type { W3DNodeData, W3DQuadData } from "./nodes/data";
-import { translateBlueprint } from "./translate";
+import { applyTimelineSnapshot, cloneNodes, translateBlueprint } from "./translate";
+import { evaluateSnapshotAtFrame, type TimelineTracks } from "./nodes/timelines";
 import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
 import type { BuildContext } from "./nodes/builder";
 import type { W3DResourceRegistry } from "./nodes/resources";
@@ -22,9 +23,15 @@ interface LoadedScene {
   xml: string;
   blueprint: ComponentBlueprint;
   nodes: W3DNodeData[];
+  /** Pristine parse — base for per-frame timeline evaluation. */
+  pristineNodes: W3DNodeData[];
+  /** Keyframe tracks of the selected timeline (player input). */
+  tracks: TimelineTracks;
   resources: W3DResourceRegistry;
   textureUrlsByFilename: Map<string, string>;
   textureCache: Map<string, Texture>;
+  /** Rasterised TextureText canvases, reused across per-frame rebuilds. */
+  textTextureCache: Map<string, Texture>;
   warnings: string[];
   stats: DocumentStats;
   movFiles: number;
@@ -60,6 +67,9 @@ export function App() {
   const [referenceOpacity, setReferenceOpacity] = useState(0.45);
   const [renderStats, setRenderStats] = useState<RenderStats | null>(null);
   const [renderOrder, setRenderOrder] = useState<RenderOrderRow[]>([]);
+  // Timeline transport — frame is fractional during playback (fps × dt).
+  const [frame, setFrame] = useState(0);
+  const [playing, setPlaying] = useState(false);
 
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const referenceInputRef = useRef<HTMLInputElement | null>(null);
@@ -79,6 +89,17 @@ export function App() {
     };
   }, []);
 
+  // Reset the transport when a different scene loads — start at the authored
+  // PreviewMarker (the hero frame) so the initial view matches the editor.
+  useEffect(() => {
+    setPlaying(false);
+    setFrame(loaded?.tracks.previewMarker ?? 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded?.sceneFileName]);
+
+  // Build the scene AT THE CURRENT FRAME: clone the pristine parse, apply the
+  // timeline snapshot evaluated at `frame`, rebuild. Texture caches (images +
+  // rasterised text) live on the LoadedScene, so per-frame rebuilds reuse them.
   useEffect(() => {
     if (loaded && viewportRef.current) {
       const builderWarnings: string[] = [];
@@ -86,14 +107,55 @@ export function App() {
         registry: loaded.resources,
         textureUrlsByFilename: loaded.textureUrlsByFilename,
         textureCache: loaded.textureCache,
+        textTextureCache: loaded.textTextureCache,
         warnings: builderWarnings,
         stencilDebugShowMask,
         loadedFontIndex: loaded.loadedFontIndex,
       };
       viewportRef.current.setBlueprint(loaded.blueprint);
-      viewportRef.current.setNodes(loaded.nodes, ctx);
+      const frameNodes = cloneNodes(loaded.pristineNodes);
+      applyTimelineSnapshot(frameNodes, evaluateSnapshotAtFrame(loaded.tracks, frame));
+      viewportRef.current.setNodes(frameNodes, ctx);
     }
-  }, [loaded, stencilDebugShowMask]);
+  }, [loaded, stencilDebugShowMask, frame]);
+
+  // Playback loop — advance `frame` by fps × elapsed while playing; stop (or
+  // loop, when the timeline authors IsLoop) at the end.
+  useEffect(() => {
+    if (!playing || !loaded) return;
+    const { fps, maxFrames, isLoop } = loaded.tracks;
+    const lastFrame = Math.max(maxFrames - 1, 0);
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      setFrame((f) => {
+        let nf = f + dt * fps;
+        if (nf >= lastFrame) {
+          if (isLoop) {
+            nf = lastFrame > 0 ? nf % lastFrame : 0;
+          } else {
+            setPlaying(false);
+            nf = lastFrame;
+          }
+        }
+        return nf;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, loaded]);
+
+  const togglePlay = useCallback(() => {
+    if (!loaded) return;
+    const lastFrame = Math.max(loaded.tracks.maxFrames - 1, 0);
+    setPlaying((p) => {
+      if (!p && frame >= lastFrame) setFrame(0); // replay from the top
+      return !p;
+    });
+  }, [loaded, frame]);
 
   // Click-to-pick in the viewport → select + show Props.
   useEffect(() => {
@@ -199,6 +261,8 @@ export function App() {
         ...loaded,
         blueprint: translated.blueprint,
         nodes: translated.nodes,
+        pristineNodes: translated.pristineNodes,
+        tracks: translated.tracks,
         resources: translated.resources,
         warnings: translated.warnings,
       });
@@ -360,6 +424,44 @@ export function App() {
               {focusNodeId ? <span style={{ color: "var(--accent)" }}>focus on · Esc to clear</span> : null}
             </div>
           ) : null}
+          {loaded && loaded.tracks.maxFrames > 0 ? (
+            <div className="playground__timeline">
+              <button
+                type="button"
+                className="tl-play"
+                onClick={togglePlay}
+                title={playing ? "Pause" : "Play"}
+              >
+                {playing ? "❚❚" : "▶"}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={loaded.tracks.maxFrames - 1}
+                step={1}
+                value={Math.round(frame)}
+                onChange={(e) => {
+                  setPlaying(false);
+                  setFrame(Number(e.target.value));
+                }}
+              />
+              <span className="tl-frame">{Math.round(frame)} / {loaded.tracks.maxFrames - 1}</span>
+              <span className="tl-info">{loaded.tracks.timelineName ?? "timeline"} · {loaded.tracks.fps} fps</span>
+              {loaded.tracks.previewMarker !== undefined ? (
+                <button
+                  type="button"
+                  className="tl-marker"
+                  title="Jump to the authored PreviewMarker (hero frame)"
+                  onClick={() => {
+                    setPlaying(false);
+                    setFrame(loaded.tracks.previewMarker!);
+                  }}
+                >
+                  marker {loaded.tracks.previewMarker}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </main>
       </div>
     </div>
@@ -407,9 +509,12 @@ async function loadScene(
       xml,
       blueprint: translated.blueprint,
       nodes: translated.nodes,
+      pristineNodes: translated.pristineNodes,
+      tracks: translated.tracks,
       resources: translated.resources,
       textureUrlsByFilename,
       textureCache,
+      textTextureCache: new Map(),
       warnings: [...translated.warnings, ...fontDiagnostics],
       stats,
       movFiles: collectSceneMovFiles(files, scene).length,
@@ -429,6 +534,7 @@ function cleanupLoadedScene(scene: LoadedScene | null): void {
   if (!scene) return;
   for (const url of scene.textureUrlsByFilename.values()) URL.revokeObjectURL(url);
   for (const tex of scene.textureCache.values()) tex.dispose();
+  for (const tex of scene.textTextureCache.values()) tex.dispose();
 }
 
 function ProjectScenes({

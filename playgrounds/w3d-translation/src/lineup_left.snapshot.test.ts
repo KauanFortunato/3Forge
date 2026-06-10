@@ -16,10 +16,11 @@
 // The fixture is a verbatim copy of LINEUP_LEFT/scene.w3d; the source scene is
 // never modified.
 
-import { Box3, type Object3D } from "three";
+import { Box3, type Mesh, type MeshBasicMaterial, type Object3D } from "three";
 import { describe, expect, test } from "vitest";
 import { translateBlueprint } from "./translate";
 import { buildNodeTree } from "./nodes/builder";
+import type { BuildContext } from "./nodes/builder";
 import type { W3DNodeData, W3DGroupData, W3DQuadData, W3DTextureTextData } from "./nodes/data";
 // Vite `?raw` import inlines the committed fixture as a string. The module type
 // comes from vite/client (configured in tsconfig types), so this needs neither
@@ -232,5 +233,53 @@ describe("LINEUP_LEFT PreviewMarker snapshot fidelity (real scene.w3d)", () => {
     const xs = [1, 2, 3, 4, 5].map((i) => boundsX(root, `NUMBER_0${i}`).center);
     const deltas = xs.slice(1).map((x, i) => x - xs[i]);
     for (const d of deltas) expect(d).toBeCloseTo(0.925, 1); // incl. PLAYER_02's pivot, absorbed
+  });
+
+  // ---------------------------------------------------------------------------
+  // GENERALIZATION GUARD — card stencil/lane composition on the REAL fixture.
+  //
+  // The card roles (pattern fill / solid fill / photo) and the FILL→MASK
+  // intersection pairing are derived from attributes + structure, with no node
+  // names. Build WITH resources (fake per-filename URLs so material.map
+  // resolves) and pin the resulting lanes + stencil refs for all 5 players.
+  // If this regresses, the attribute-driven classification has drifted from
+  // the validated LINEUP composition.
+  // ---------------------------------------------------------------------------
+  const buildResolvedRoot = (): { root: Object3D; warnings: string[] } => {
+    const { nodes: resolvedNodes, resources } = translateBlueprint(lineupLeftXml);
+    const textureUrlsByFilename = new Map<string, string>();
+    for (const t of resources.textures.values()) {
+      textureUrlsByFilename.set(t.filename, `blob:${t.filename}`);
+    }
+    const ctx: BuildContext = {
+      registry: resources,
+      textureUrlsByFilename,
+      textureCache: new Map(),
+      warnings: [],
+    };
+    const root = buildNodeTree(resolvedNodes, ctx);
+    return { root, warnings: ctx.warnings };
+  };
+
+  test("generalization guard: card lanes 20/21/22 + intersection refs hold for all 5 players (no name logic)", () => {
+    const { root } = buildResolvedRoot();
+    for (let i = 1; i <= 5; i++) {
+      const photo = findObj(root, `PHOTO_0${i}`) as Mesh;          // slit-only reader → front
+      const color = findObj(root, `PHOTO_COLOR_0${i}`) as Mesh;    // dummy reader, no map → middle
+      const pattern = findObj(root, `TEXTURE_PHOTO_0${i}`) as Mesh; // dummy reader, textured → back
+      expect(pattern.renderOrder, `TEXTURE_PHOTO_0${i}`).toBe(20);
+      expect(color.renderOrder, `PHOTO_COLOR_0${i}`).toBe(21);
+      expect(photo.renderOrder, `PHOTO_0${i}`).toBe(22);
+      // Fill layers clip to the DUMMY ∩ MASK intersection — including player 1,
+      // whose FILL authors only the dummy and relies on the structural pairing.
+      const colorMat = color.material as MeshBasicMaterial;
+      expect(colorMat.stencilRef, `PHOTO_COLOR_0${i} ref`).toBe(i | (i << 3));
+      expect(colorMat.stencilFuncMask, `PHOTO_COLOR_0${i} funcMask`).toBe(63);
+      expect(colorMat.transparent, `PHOTO_COLOR_0${i} forced transparent`).toBe(true);
+      // The photo reads only its own slit mask.
+      const photoMat = photo.material as MeshBasicMaterial;
+      expect(photoMat.stencilRef, `PHOTO_0${i} ref`).toBe(i);
+      expect(photoMat.stencilFuncMask, `PHOTO_0${i} funcMask`).toBe(7);
+    }
   });
 });

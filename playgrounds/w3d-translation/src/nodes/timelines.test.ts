@@ -422,3 +422,113 @@ describe("parseTimelinePreviewSnapshot — Phase 2D.4 Transform.Scale", () => {
 
 // Suppress unused warning if wrap helper isn't used in any test
 void wrap;
+
+// ---------------------------------------------------------------------------
+// Runtime animation — parse tracks ONCE, evaluate at ANY frame (the timeline
+// player path). parseTimelinePreviewSnapshot stays as the marker shortcut.
+// ---------------------------------------------------------------------------
+import { parseTimelineTracks, evaluateSnapshotAtFrame } from "./timelines";
+
+describe("parseTimelineTracks + evaluateSnapshotAtFrame", () => {
+  test("tracks expose name, previewMarker, maxFrames, isLoop and fps (from Timelines Format)", () => {
+    const tracks = parseTimelineTracks(wrapWithAttr(`SelectedTimelineId="t1" Format="HD1080p50"`, `
+      <Timeline Name="In" Id="t1" IsLoop="False" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="a">
+          <KeyFrame FrameNumber="0" Value="0"/><KeyFrame FrameNumber="100" Value="1"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    expect(tracks.timelineName).toBe("In");
+    expect(tracks.previewMarker).toBe(799);
+    expect(tracks.maxFrames).toBe(800);
+    expect(tracks.fps).toBe(50);
+    expect(tracks.isLoop).toBe(false);
+  });
+
+  test("evaluates at arbitrary frames: hold-before, linear mid, hold-after", () => {
+    const tracks = parseTimelineTracks(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="a">
+          <KeyFrame FrameNumber="100" Value="0"/>
+          <KeyFrame FrameNumber="200" Value="1"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    expect(evaluateSnapshotAtFrame(tracks, 0).alphaByControllableId.get("a")).toBeCloseTo(0, 5);
+    expect(evaluateSnapshotAtFrame(tracks, 150).alphaByControllableId.get("a")).toBeCloseTo(0.5, 5);
+    expect(evaluateSnapshotAtFrame(tracks, 750).alphaByControllableId.get("a")).toBeCloseTo(1, 5);
+  });
+
+  test("CubicBezier easing (right 1,0 → left 0,1) eases in: quarter-time value far below linear", () => {
+    const tracks = parseTimelineTracks(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="a">
+          <KeyFrame FrameNumber="0" Value="0" LeftType="Linear" RightType="CubicBezier" LeftControlPointX="0.5" LeftControlPointY="0.5" RightControlPointX="1" RightControlPointY="0"/>
+          <KeyFrame FrameNumber="100" Value="1" LeftType="CubicBezier" RightType="Linear" LeftControlPointX="0" LeftControlPointY="1" RightControlPointX="0.5" RightControlPointY="0.5"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    const quarter = evaluateSnapshotAtFrame(tracks, 25).alphaByControllableId.get("a")!;
+    expect(quarter).toBeGreaterThan(0);
+    expect(quarter).toBeLessThan(0.1);  // linear would be 0.25 — bezier eases in
+    const mid = evaluateSnapshotAtFrame(tracks, 50).alphaByControllableId.get("a")!;
+    expect(mid).toBeCloseTo(0.5, 2);    // symmetric S-curve crosses the middle
+  });
+
+  test("vec3 tracks evaluate mid-segment too", () => {
+    const tracks = parseTimelineTracks(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Position" ControllableId="n">
+          <KeyFrame FrameNumber="0" Value="0,0,0"/>
+          <KeyFrame FrameNumber="100" Value="2,4,6"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    const p = evaluateSnapshotAtFrame(tracks, 50).positionByControllableId.get("n")!;
+    expect(p.x).toBeCloseTo(1, 5);
+    expect(p.y).toBeCloseTo(2, 5);
+    expect(p.z).toBeCloseTo(3, 5);
+  });
+
+  test("Enabled step-evaluates at any frame", () => {
+    const tracks = parseTimelineTracks(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="799" MaxFrames="800">
+        <KeyFrameAnimationController AnimatedProperty="Enabled" ControllableId="q">
+          <KeyFrame FrameNumber="10" Value="False"/>
+          <KeyFrame FrameNumber="20" Value="True"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    expect(evaluateSnapshotAtFrame(tracks, 15).enabledByControllableId.get("q")).toBe(false);
+    expect(evaluateSnapshotAtFrame(tracks, 25).enabledByControllableId.get("q")).toBe(true);
+  });
+
+  test("unsupported AnimatedProperty values are surfaced for warnings", () => {
+    const tracks = parseTimelineTracks(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="0" MaxFrames="100">
+        <KeyFrameAnimationController AnimatedProperty="Animation" ControllableId="n1"/>
+        <KeyFrameAnimationController AnimatedProperty="SceneNodeIndex" ControllableId="n2"/>
+      </Timeline>`));
+    expect(tracks.unsupportedProps).toEqual([
+      { prop: "Animation", controllableId: "n1" },
+      { prop: "SceneNodeIndex", controllableId: "n2" },
+    ]);
+  });
+
+  test("ImageSequenceAnimationController is surfaced as unsupported (video/sequence playback)", () => {
+    const tracks = parseTimelineTracks(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="0" MaxFrames="100">
+        <ImageSequenceAnimationController IncrementValue="1" StartFrame="0" EndFrame="-2147483648" AnimatedProperty="Animation" ControllableId="seq-1" />
+      </Timeline>`));
+    expect(tracks.unsupportedProps).toEqual([
+      { prop: "Animation (image sequence / video playback)", controllableId: "seq-1" },
+    ]);
+  });
+
+  test("tracks are still parsed when PreviewMarker is -1 (timeline can play)", () => {
+    const tracks = parseTimelineTracks(wrapWithAttr(``, `
+      <Timeline Name="Out" Id="t1" PreviewMarker="-1" MaxFrames="200">
+        <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="x">
+          <KeyFrame FrameNumber="0" Value="1"/><KeyFrame FrameNumber="100" Value="0"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    expect(tracks.previewMarker).toBeUndefined();
+    expect(tracks.maxFrames).toBe(200);
+    expect(evaluateSnapshotAtFrame(tracks, 50).alphaByControllableId.get("x")).toBeCloseTo(0.5, 5);
+  });
+});

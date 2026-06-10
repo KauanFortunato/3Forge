@@ -124,6 +124,9 @@ export interface PlaygroundViewport {
 export function createPlaygroundViewport(host: HTMLElement): PlaygroundViewport {
   // stencil:true is required by Phase 1a photo mask clipping.
   const renderer = new WebGLRenderer({ antialias: true, stencil: true });
+  // Invisible matte windows (builder applySiblingMatteWindows) clip via
+  // per-material clipping planes — requires local clipping on the renderer.
+  renderer.localClippingEnabled = true;
   // Supersample: render at ~2× the display resolution and let the browser
   // downscale the canvas. MSAA only antialiases polygon edges, not the binary
   // stencil/alphaTest contour used to cut the player silhouettes — that edge is

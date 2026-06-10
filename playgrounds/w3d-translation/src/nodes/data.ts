@@ -86,8 +86,7 @@ export type W3DGroupData = {
   alpha?: number;
   /**
    * Parsed generically for any Group with <GeometryOptions FlowChildren/LeadingSpace/Direction>.
-   * The builder currently applies it only to the PLAYERS group (Phase 2A staging gate);
-   * Phase 2F removes that gate and generalises to all groups.
+   * The builder applies it to every Group via applyFlowLayout.
    */
   flow?: W3DGroupFlow;
   children: W3DNodeData[];
@@ -103,6 +102,13 @@ export type W3DQuadData = {
   name: string;
   enable: boolean;
   alpha: number;
+  /**
+   * The AUTHORED static Alpha, stashed by applyTimelineSnapshot before an
+   * Alpha track overrides `alpha`. The authored value is the node's designed
+   * "resting/hidden" state (e.g. the player photo authors 0.5 = its ghost);
+   * the card-materialisation pass normalises the reveal against it.
+   */
+  authoredAlpha?: number;
   speedScale: number;
   displayColor?: string;
   isMask: boolean;
@@ -115,6 +121,13 @@ export type W3DQuadData = {
   faceMapping?: W3DQuadFaceMapping;
   transform: W3DTransform;
   maskProperties?: W3DMaskProperties;
+  /**
+   * Set when the node was authored as a <Triangle>: a triangle defined by two
+   * edge lengths meeting at `angleDeg` (R3 GeometryOptions Angle/Edge1/Edge2).
+   * `geometry.size` then holds the triangle's bounding box for layout. The
+   * builder emits a 3-vertex geometry instead of a PlaneGeometry.
+   */
+  triangle?: { angleDeg: number; edge1: number; edge2: number };
   children: W3DNodeData[];
   raw?: {
     attributes: Record<string, string>;
@@ -199,6 +212,8 @@ function walkChildren(parent: Element, warnings: string[]): W3DNodeData[] {
     const tag = child.tagName;
     if (tag === "Quad") {
       out.push(parseQuad(child, warnings));
+    } else if (tag === "Triangle") {
+      out.push(parseTriangle(child, warnings));
     } else if (tag === "Group") {
       out.push(parseGroup(child, warnings));
     } else if (tag === "TextureText") {
@@ -322,6 +337,58 @@ function parseQuad(el: Element, warnings: string[]): W3DQuadData {
     maskIds: parseMaskIds(attrs.MaskId),
     geometry,
     transform,
+    children: [],
+  };
+  if (faceMapping) quad.faceMapping = faceMapping;
+  if (maskProperties) quad.maskProperties = maskProperties;
+  if (extraFaceMappings !== undefined) {
+    quad.raw = { ...(quad.raw ?? { attributes: {}, unknownChildren: [] }), extraFaceMappings };
+  }
+  const childrenEl = findDirectChild(el, "Children");
+  if (childrenEl) {
+    quad.children = walkChildren(childrenEl, warnings);
+  }
+  return quad;
+}
+
+/**
+ * <Triangle> — same node contract as a Quad (transform, face mapping, masks,
+ * children) but the shape comes from GeometryOptions Angle/Edge1/Edge2: two
+ * edges meeting at the authored angle. geometry.size is the bounding box so
+ * flow layout / divider / full-frame rules treat it like any other quad.
+ */
+function parseTriangle(el: Element, warnings: string[]): W3DQuadData {
+  const attrs = readAllAttrs(el);
+  const transform = readTransform(el);
+  const { faceMapping, extraFaceMappings } = readFaceMapping(el);
+  const maskProperties = readMaskProperties(el);
+
+  const go = findDirectChild(el, "GeometryOptions");
+  const angleDeg = parseNumberAttr(go?.getAttribute("Angle") ?? undefined, 90);
+  const edge1 = parseNumberAttr(go?.getAttribute("Edge1") ?? undefined, 1);
+  const edge2 = parseNumberAttr(go?.getAttribute("Edge2") ?? undefined, 1);
+  const rad = (angleDeg * Math.PI) / 180;
+  const x2 = edge2 * Math.cos(rad);
+  const y2 = edge2 * Math.sin(rad);
+
+  const quad: W3DQuadData = {
+    kind: "Quad",
+    id: attrs.Id ?? "",
+    name: attrs.Name ?? "",
+    enable: parseBoolAttr(attrs.Enable, true),
+    alpha: parseNumberAttr(attrs.Alpha, 1),
+    speedScale: parseNumberAttr(attrs.SpeedScale, 1),
+    displayColor: attrs.DisplayColor,
+    isMask: parseBoolAttr(attrs.IsMask, false),
+    maskIds: parseMaskIds(attrs.MaskId),
+    geometry: {
+      size: {
+        x: Math.max(edge1, x2, 0) - Math.min(0, x2),
+        y: Math.abs(y2),
+      },
+    },
+    transform,
+    triangle: { angleDeg, edge1, edge2 },
     children: [],
   };
   if (faceMapping) quad.faceMapping = faceMapping;
