@@ -49,6 +49,20 @@ export type W3DMaskProperties = {
   isInvertedMask: boolean;
 };
 
+/**
+ * One <Extensions><MultiVis> entry — R3's per-node visibility channels (the
+ * operator's "vis" states). PLAYER semantics: an ENABLED entry with
+ * KeepVisible="False" keeps the node HIDDEN at rest until its channel is
+ * triggered (PERMANENT_CLOCK SUBSTITUTION / SCORE_UPDATE_*); KeepVisible=
+ * "True" nodes stay visible.
+ */
+export type W3DMultiVis = {
+  sceneNodeIndex?: number;
+  keepVisible: boolean;
+  enabled: boolean;
+  name?: string;
+};
+
 export type W3DGroupConstrain = {
   /**
    * Verbatim GeometryOptions.ConstrainMethod — the R3 editor offers Width,
@@ -106,6 +120,8 @@ export type W3DGroupData = {
    * same convention as TextBoxSize vs HasTextBox.
    */
   constrain?: W3DGroupConstrain;
+  /** Present when <Extensions> carries <MultiVis> entries. */
+  multiVis?: W3DMultiVis[];
   children: W3DNodeData[];
   raw?: {
     attributes: Record<string, string>;
@@ -145,6 +161,8 @@ export type W3DQuadData = {
    * builder emits a 3-vertex geometry instead of a PlaneGeometry.
    */
   triangle?: { angleDeg: number; edge1: number; edge2: number };
+  /** Present when <Extensions> carries <MultiVis> entries. */
+  multiVis?: W3DMultiVis[];
   children: W3DNodeData[];
   raw?: {
     attributes: Record<string, string>;
@@ -188,6 +206,8 @@ export type W3DTextureTextData = {
   faceMapping?: W3DQuadFaceMapping;
   transform: W3DTransform;
   maskProperties?: W3DMaskProperties;
+  /** Present when <Extensions> carries <MultiVis> entries. */
+  multiVis?: W3DMultiVis[];
   children: W3DNodeData[];
   raw?: {
     attributes: Record<string, string>;
@@ -270,6 +290,8 @@ function parseGroup(el: Element, warnings: string[]): W3DGroupData {
   if (flow) group.flow = flow;
   const constrain = readGroupConstrain(el);
   if (constrain) group.constrain = constrain;
+  const multiVis = readMultiVis(el);
+  if (multiVis) group.multiVis = multiVis;
   return group;
 }
 
@@ -378,6 +400,8 @@ function parseQuad(el: Element, warnings: string[]): W3DQuadData {
   };
   if (faceMapping) quad.faceMapping = faceMapping;
   if (maskProperties) quad.maskProperties = maskProperties;
+  const multiVis = readMultiVis(el);
+  if (multiVis) quad.multiVis = multiVis;
   if (extraFaceMappings !== undefined) {
     quad.raw = { ...(quad.raw ?? { attributes: {}, unknownChildren: [] }), extraFaceMappings };
   }
@@ -430,6 +454,8 @@ function parseTriangle(el: Element, warnings: string[]): W3DQuadData {
   };
   if (faceMapping) quad.faceMapping = faceMapping;
   if (maskProperties) quad.maskProperties = maskProperties;
+  const multiVis = readMultiVis(el);
+  if (multiVis) quad.multiVis = multiVis;
   if (extraFaceMappings !== undefined) {
     quad.raw = { ...(quad.raw ?? { attributes: {}, unknownChildren: [] }), extraFaceMappings };
   }
@@ -490,6 +516,8 @@ function parseTextureText(el: Element, warnings: string[]): W3DTextureTextData {
   };
   if (faceMapping) node.faceMapping = faceMapping;
   if (maskProperties) node.maskProperties = maskProperties;
+  const multiVis = readMultiVis(el);
+  if (multiVis) node.multiVis = multiVis;
   if (extraFaceMappings !== undefined) {
     node.raw = { ...(node.raw ?? { attributes: {}, unknownChildren: [] }), extraFaceMappings };
   }
@@ -498,6 +526,30 @@ function parseTextureText(el: Element, warnings: string[]): W3DTextureTextData {
     node.children = walkChildren(childrenEl, warnings);
   }
   return node;
+}
+
+/**
+ * Reads <Extensions><MultiVis …> entries from a node element. Most nodes
+ * author an empty <Extensions/>; entries appear on the subtrees the operator
+ * toggles (PERMANENT_CLOCK SUBSTITUTION / SCORE_UPDATE_* / *_ENABLED).
+ */
+function readMultiVis(el: Element): W3DMultiVis[] | undefined {
+  const ext = findDirectChild(el, "Extensions");
+  if (!ext) return undefined;
+  const out: W3DMultiVis[] = [];
+  for (const child of Array.from(ext.children)) {
+    if (child.tagName !== "MultiVis") continue;
+    const entry: W3DMultiVis = {
+      keepVisible: parseBoolAttr(child.getAttribute("KeepVisible") ?? undefined, true),
+      enabled: parseBoolAttr(child.getAttribute("Enabled") ?? undefined, true),
+    };
+    const idx = Number(child.getAttribute("SceneNodeIndex"));
+    if (Number.isFinite(idx)) entry.sceneNodeIndex = idx;
+    const name = child.getAttribute("Name");
+    if (name !== null) entry.name = name;
+    out.push(entry);
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 function readQuadGeometry(

@@ -5061,3 +5061,42 @@ describe("builder — group ConstrainBox (per-axis shrink-to-fit)", () => {
     expect(ctx.warnings.some((w) => w.includes("Banana"))).toBe(true);
   });
 });
+
+describe("builder — MultiVis at-rest visibility", () => {
+  // R3 player semantics: a node whose <Extensions> carries an ENABLED MultiVis
+  // entry with KeepVisible="False" starts HIDDEN — its vis channel must be
+  // triggered to show it (PERMANENT_CLOCK SUBSTITUTION / SCORE_UPDATE_*).
+  test("KeepVisible=False + Enabled → built object starts hidden", () => {
+    const g = groupData({
+      id: "sub", name: "SUBSTITUTION",
+      multiVis: [{ sceneNodeIndex: 1, keepVisible: false, enabled: true, name: "MultiVis SUBSTITUTION" }],
+    });
+    const obj = buildNode(g);
+    expect(obj.visible).toBe(false);
+    expect((obj.userData.w3d as { hiddenByMultiVis?: boolean }).hiddenByMultiVis).toBe(true);
+  });
+
+  test("KeepVisible=True stays visible", () => {
+    const g = groupData({
+      id: "on", name: "LEFT_ENABLED",
+      multiVis: [{ sceneNodeIndex: 0, keepVisible: true, enabled: true, name: "MultiVis LEFT_ENABLED" }],
+    });
+    expect(buildNode(g).visible).toBe(true);
+  });
+
+  test("disabled MultiVis entry is inert (stays visible)", () => {
+    const g = groupData({
+      id: "x", name: "X",
+      multiVis: [{ sceneNodeIndex: 1, keepVisible: false, enabled: false, name: "off" }],
+    });
+    expect(buildNode(g).visible).toBe(true);
+  });
+
+  test("Quad with KeepVisible=False is hidden too", () => {
+    const q = quadData({
+      id: "q", name: "Q",
+      multiVis: [{ keepVisible: false, enabled: true }],
+    });
+    expect(buildNode(q).visible).toBe(false);
+  });
+});

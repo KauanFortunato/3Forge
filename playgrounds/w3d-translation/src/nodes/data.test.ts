@@ -465,3 +465,40 @@ describe("group ConstrainBox (HasConstrainBox + ConstrainMethod + ConstrainBoxSi
     expect((roots[0] as W3DGroupData).constrain).toEqual({ method: "Width", box: { x: 1.27 } });
   });
 });
+
+describe("MultiVis (Extensions) — at-rest visibility channels", () => {
+  test("KeepVisible=False entry is parsed onto the group", () => {
+    const { roots } = parseNodes(wrapInScene(
+      `<Group Id="g1" Name="SUBSTITUTION">
+         <Extensions>
+           <MultiVis SceneNodeIndex="1" KeepVisible="False" Id="mv1" Name="MultiVis SUBSTITUTION" Enabled="True" />
+         </Extensions>
+         <Children/>
+       </Group>`,
+    ));
+    const g = roots[0] as W3DGroupData;
+    expect(g.multiVis).toEqual([
+      { sceneNodeIndex: 1, keepVisible: false, enabled: true, name: "MultiVis SUBSTITUTION" },
+    ]);
+  });
+
+  test("empty Extensions → no multiVis field", () => {
+    const { roots } = parseNodes(wrapInScene(
+      `<Group Id="g1" Name="G"><Extensions /><Children/></Group>`,
+    ));
+    expect((roots[0] as W3DGroupData).multiVis).toBeUndefined();
+  });
+
+  test("MultiVis on a Quad is parsed too", () => {
+    const { roots } = parseNodes(wrapInScene(
+      `<Quad Id="q1" Name="Q">
+         <GeometryOptions><Size X="1" Y="1"/></GeometryOptions>
+         <Extensions>
+           <MultiVis SceneNodeIndex="0" KeepVisible="True" Id="mv2" Name="MultiVis Q" Enabled="True" />
+         </Extensions>
+       </Quad>`,
+    ));
+    const q = roots[0] as W3DQuadData;
+    expect(q.multiVis?.[0]?.keepVisible).toBe(true);
+  });
+});

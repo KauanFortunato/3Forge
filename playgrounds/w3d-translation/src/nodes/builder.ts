@@ -370,9 +370,19 @@ export function buildNode(
   inheritedAlpha?: number,
   implicitMaskIds?: string[],
 ): Object3D {
-  if (node.kind === "Group") return buildGroup(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds);
-  if (node.kind === "TextureText") return buildTextureText(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds);
-  return buildQuad(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds);
+  const obj =
+    node.kind === "Group" ? buildGroup(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds)
+      : node.kind === "TextureText" ? buildTextureText(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds)
+        : buildQuad(node, ctx, inheritedMaskIds, inheritedAlpha, implicitMaskIds);
+  // MultiVis (R3 player semantics): an ENABLED entry with KeepVisible="False"
+  // keeps the subtree HIDDEN at rest until its vis channel is triggered
+  // (PERMANENT_CLOCK SUBSTITUTION / SCORE_UPDATE_*). KeepVisible="True" and
+  // disabled entries are inert.
+  if (node.multiVis?.some((m) => m.enabled && !m.keepVisible)) {
+    obj.visible = false;
+    (obj.userData.w3d as Record<string, unknown>).hiddenByMultiVis = true;
+  }
+  return obj;
 }
 
 /**
