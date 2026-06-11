@@ -9,9 +9,17 @@
 //
 // Instead, we discover the user's `.ttf`/`.otf`/`.woff(2)` files at folder-
 // import time (see `w3dFolder.ts`) and register each face with the browser via
-// the FontFace API. The R3 family name (e.g. "Obviously Cond") is derived from
-// the filename stem: `ObviouslyCond-Black.ttf` → family `Obviously Cond`,
-// weight 900, style normal.
+// the FontFace API.
+//
+// Identity comes from the font FILE itself: the sfnt `name` table's
+// typographic family (nameID 16, falling back to legacy nameID 1) matches the
+// XML `FontStyle.FontName` EXACTLY, and the typographic subfamily (17 → 2)
+// matches `FontStyle.Type` (verified across the corpus: "Obviously Cond" /
+// "Black", "Obviously Wide" / "SemiBold", …). Weight/style are derived from
+// that subfamily string with the same keyword mapping the builder applies to
+// `Type`, so registration and canvas lookup always agree. The filename
+// heuristic remains only as a fallback for unparseable containers (woff/woff2
+// compress their tables) or corrupt files.
 //
 // Pure module — no DOM at import time. `loadW3DFontFiles` is async and
 // no-ops in test environments where `document.fonts` is undefined.
@@ -74,7 +82,7 @@ export function parseFontFilename(filename: string): ParsedFontFilename | undefi
     family = stem.replace(/[-_].*$/, "") || stem;
   }
 
-  // Strip leading "-" then split remaining descriptor on hyphen/space-case.
+  // Strip leading "-" then map the remaining descriptor.
   // Examples for `rest`:
   //   ""                   → Regular
   //   "-Regular"           → Regular
@@ -83,30 +91,129 @@ export function parseFontFilename(filename: string): ParsedFontFilename | undefi
   //   "-CondensedBlackItalic" → Condensed + Black + Italic
   //   "-SemiBoldItalic"    → SemiBold + Italic
   const descriptor = rest.replace(/^[-_\s]+/, "");
-  const lower = descriptor.toLowerCase();
-
-  const italic = /italic|oblique/.test(lower);
-  let weight = "400";
-  // Order matters: check longer/specific names first.
-  if (/thin/.test(lower)) weight = "100";
-  else if (/extralight|ultralight/.test(lower)) weight = "200";
-  else if (/light/.test(lower)) weight = "300";
-  else if (/medium/.test(lower)) weight = "500";
-  else if (/semibold|demibold/.test(lower)) weight = "600";
-  else if (/extrabold|ultrabold/.test(lower)) weight = "800";
-  else if (/black|heavy/.test(lower)) weight = "900";
-  else if (/super/.test(lower)) weight = "900"; // Obviously-Super maps to black
-  else if (/bold/.test(lower)) weight = "700";
+  const { weight, style } = descriptorToCss(descriptor);
 
   // Special case: Arial — descriptor often empty; the regular face is 400/normal.
   // "ariblk" → 900, "arial_1" → still 400. Leave as-is.
 
-  return {
-    filename,
-    family,
-    weight,
-    style: italic ? "italic" : "normal",
-  };
+  return { filename, family, weight, style };
+}
+
+/**
+ * Map a style descriptor ("Black Italic", "SemiBold", "ThinItalic", …) to CSS
+ * weight/style. The SINGLE authority for this keyword convention — used for
+ * the filename descriptor, the name-table subfamily, the builder's
+ * `FontStyle.Type` mapping and the diag harness — so a registered face is
+ * always found under exactly the key the canvas asks for.
+ */
+export function descriptorToCss(descriptor: string): { weight: string; style: string } {
+  const lower = descriptor.toLowerCase();
+  const italic = /italic|oblique/.test(lower);
+  let weight = "400";
+  // Order matters: check longer/specific names first ("semibold" before "bold",
+  // "ultralight" before "light").
+  if (/thin/.test(lower)) weight = "100";
+  else if (/extralight|ultralight/.test(lower)) weight = "200";
+  else if (/light/.test(lower)) weight = "300";
+  else if (/medium/.test(lower)) weight = "500";
+  else if (/semi|demibold/.test(lower)) weight = "600";
+  else if (/extrabold|ultrabold/.test(lower)) weight = "800";
+  else if (/black|heavy/.test(lower)) weight = "900";
+  else if (/super/.test(lower)) weight = "900"; // Obviously-Super maps to black
+  else if (/bold/.test(lower)) weight = "700";
+  return { weight, style: italic ? "italic" : "normal" };
+}
+
+/** Identity read from the sfnt binary itself (see module header). */
+export type FontBinaryMeta = {
+  /** Typographic family (nameID 16) or legacy family (nameID 1). */
+  family?: string;
+  /** Typographic subfamily (nameID 17) or legacy subfamily (nameID 2). */
+  subfamily?: string;
+  /** OS/2 usWeightClass (1–1000) when present. */
+  weightClass?: number;
+  /** OS/2 fsSelection bit 0 (ITALIC) when present. */
+  italic?: boolean;
+};
+
+/**
+ * Parse the `name` and `OS/2` tables out of a raw sfnt (TTF / CFF-OTF) file.
+ * Returns undefined for non-sfnt containers (woff/woff2 compress their
+ * tables) and for anything that fails bounds checks — callers fall back to
+ * the filename heuristic. Pure binary reader, no DOM.
+ */
+export function parseFontBinaryMeta(bytes: Uint8Array): FontBinaryMeta | undefined {
+  try {
+    const u16 = (o: number): number => (bytes[o] << 8) | bytes[o + 1];
+    const u32 = (o: number): number =>
+      (((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3]) >>> 0);
+    if (bytes.length < 12) return undefined;
+    const magic = u32(0);
+    // 0x00010000 = TrueType, "OTTO" = CFF OpenType, "true" = legacy Apple TTF.
+    if (magic !== 0x00010000 && magic !== 0x4f54544f && magic !== 0x74727565) return undefined;
+
+    const numTables = u16(4);
+    let nameOff = 0, nameLen = 0, os2Off = 0, os2Len = 0;
+    for (let i = 0; i < numTables; i++) {
+      const rec = 12 + i * 16;
+      if (rec + 16 > bytes.length) return undefined;
+      const tag = String.fromCharCode(bytes[rec], bytes[rec + 1], bytes[rec + 2], bytes[rec + 3]);
+      if (tag === "name") { nameOff = u32(rec + 8); nameLen = u32(rec + 12); }
+      if (tag === "OS/2") { os2Off = u32(rec + 8); os2Len = u32(rec + 12); }
+    }
+
+    const out: FontBinaryMeta = {};
+    if (os2Off && os2Off + 6 <= bytes.length) {
+      const wc = u16(os2Off + 4);
+      if (wc >= 1 && wc <= 1000) out.weightClass = wc;
+      if (os2Len >= 64 && os2Off + 64 <= bytes.length) {
+        out.italic = (u16(os2Off + 62) & 1) === 1;
+      }
+    }
+
+    if (nameOff && nameOff + 6 <= bytes.length) {
+      const count = u16(nameOff + 2);
+      const strBase = nameOff + u16(nameOff + 4);
+      // Prefer Windows en-US (3/0x0409) — fonts ship LOCALIZED records (e.g.
+      // arial.ttf's subfamily is "Normal" in Catalan, "Κανονικά" in Greek) and
+      // the en-US one is what matches the XML. Then any Windows language, then
+      // Unicode (0), then Mac (1). Platforms 3 and 0 store UTF-16BE, Mac
+      // stores single-byte.
+      const best = new Map<number, { rank: number; value: string }>();
+      for (let i = 0; i < count; i++) {
+        const r = nameOff + 6 + i * 12;
+        if (r + 12 > bytes.length) break;
+        const platform = u16(r);
+        const language = u16(r + 4);
+        const nameId = u16(r + 6);
+        if (nameId !== 1 && nameId !== 2 && nameId !== 16 && nameId !== 17) continue;
+        const rank =
+          platform === 3 ? (language === 0x0409 ? 0 : 1)
+            : platform === 0 ? 2
+              : platform === 1 ? 3
+                : 4;
+        if (rank === 4) continue;
+        const prev = best.get(nameId);
+        if (prev && prev.rank <= rank) continue;
+        const len = u16(r + 8);
+        const off = strBase + u16(r + 10);
+        if (off + len > bytes.length || (nameLen && off + len > nameOff + nameLen)) continue;
+        let s = "";
+        if (platform === 1) {
+          for (let j = 0; j < len; j++) s += String.fromCharCode(bytes[off + j]);
+        } else {
+          for (let j = 0; j + 1 < len; j += 2) s += String.fromCharCode(u16(off + j));
+        }
+        if (s) best.set(nameId, { rank, value: s });
+      }
+      out.family = best.get(16)?.value ?? best.get(1)?.value;
+      out.subfamily = best.get(17)?.value ?? best.get(2)?.value;
+    }
+
+    return out.family || out.subfamily || out.weightClass !== undefined ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -137,10 +244,29 @@ export async function loadW3DFontFiles(files: File[]): Promise<FontLoadResult[]>
   const fontSet = typeof document !== "undefined" ? document.fonts : undefined;
 
   for (const file of files) {
-    const parsed = parseFontFilename(file.name);
+    let parsed = parseFontFilename(file.name);
     if (!parsed) {
       out.push({ filename: file.name, registered: false, error: "unrecognised extension" });
       continue;
+    }
+    // The binary name table is the authoritative identity (matches the XML
+    // FontStyle exactly — see module header); the filename parse above is the
+    // fallback when the container can't be read (woff/woff2, corrupt file,
+    // or an environment without Blob.arrayBuffer).
+    let bin: FontBinaryMeta | undefined;
+    try {
+      bin = parseFontBinaryMeta(new Uint8Array(await file.arrayBuffer()));
+    } catch {
+      bin = undefined;
+    }
+    if (bin?.family) {
+      const css = descriptorToCss(bin.subfamily ?? "");
+      parsed = {
+        filename: file.name,
+        family: bin.family,
+        weight: css.weight,
+        style: bin.italic || css.style === "italic" ? "italic" : "normal",
+      };
     }
     if (!fontSet) {
       out.push({ filename: file.name, parsed, registered: false, error: "FontFace API unavailable" });

@@ -49,22 +49,18 @@ describe("resolveMaterial — colour", () => {
     expect(r.hasMaterialResolved).toBe(true);
   });
 
-  test("unknown materialId + displayColor '11119017' → converts to hex, hasMaterialResolved false, emits warning", () => {
+  test("unresolved materialId → engine-default placeholder: white, no warning (DisplayColor ignored)", () => {
+    // Corpus rule (26PT_WTV_BASKETBALL, all 10 scenes): the only MaterialIds
+    // referenced but never defined in <Resources> are the engine defaults.
+    // R3 renders them as a white pass-through — DisplayColor is the editor
+    // outliner colour, never a render colour.
     const warnings: string[] = [];
     const ctx = { registry: makeRegistry(), textureUrlsByFilename: new Map() };
     const r = resolveMaterial("unknown-id", undefined, "11119017", 1, ctx, warnings);
     expect(r.hasMaterialResolved).toBe(false);
-    expect(r.color).toMatch(/^#[0-9a-f]{6}$/);
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(warnings[0]).toContain("unknown-id");
-  });
-
-  test("unknown materialId + no displayColor → magenta fallback '#ff00ff'", () => {
-    const warnings: string[] = [];
-    const ctx = { registry: makeRegistry(), textureUrlsByFilename: new Map() };
-    const r = resolveMaterial("unknown-id", undefined, undefined, 1, ctx, warnings);
-    expect(r.color).toBe("#ff00ff");
-    expect(r.hasMaterialResolved).toBe(false);
+    expect(r.color).toBe("#ffffff");
+    expect(r.materialName).toBe("(engine-default)");
+    expect(warnings).toEqual([]);
   });
 
   test("opacity = quadAlpha * baseMaterial.alpha", () => {
@@ -200,7 +196,11 @@ describe("resolveMaterial — texture", () => {
 
 const DE1A3E3C = "DE1A3E3C-AE85-4B7B-BA86-056463611630";
 
-describe("resolveMaterial — DE1A3E3C project-default-transparent", () => {
+describe("resolveMaterial — unresolved MaterialId = engine-default placeholder", () => {
+  // Generalized from the old DE1A3E3C-specific rule: ANY MaterialId absent
+  // from the scene's <Resources> is an engine built-in default (DE1A3E3C-… in
+  // production scenes, "Standard" in test scenes) — invisible without a
+  // texture, pass-through with one. No GUID list in the code.
   test("DE1A3E3C + Standard → opacity=0, transparent=true, no warning", () => {
     const warnings: string[] = [];
     const ctx = { registry: makeFullRegistry(), textureUrlsByFilename: new Map() };
@@ -208,7 +208,18 @@ describe("resolveMaterial — DE1A3E3C project-default-transparent", () => {
     expect(r.opacity).toBe(0);
     expect(r.transparent).toBe(true);
     expect(r.hasMaterialResolved).toBe(false);
-    expect(r.materialName).toBe("(project-default-transparent)");
+    expect(r.materialName).toBe("(engine-default)");
+    expect(warnings).toEqual([]);
+  });
+
+  test('MaterialId="Standard" (engine default in TestAlphaChannel/TestPatternKey) → same engine-default behaviour', () => {
+    const warnings: string[] = [];
+    const ctx = { registry: makeFullRegistry(), textureUrlsByFilename: new Map() };
+    const r = resolveMaterial("Standard", "Standard", undefined, 1, ctx, warnings);
+    expect(r.opacity).toBe(0);
+    expect(r.transparent).toBe(true);
+    expect(r.color).toBe("#ffffff");
+    expect(r.materialName).toBe("(engine-default)");
     expect(warnings).toEqual([]);
   });
 
@@ -222,15 +233,15 @@ describe("resolveMaterial — DE1A3E3C project-default-transparent", () => {
     expect(warnings).toEqual([]);
   });
 
-  test("unknown materialId (different) → DisplayColor fallback + warning (unchanged)", () => {
+  test("any other unresolved materialId → identical engine-default behaviour (no special GUID)", () => {
     const warnings: string[] = [];
     const ctx = { registry: makeFullRegistry(), textureUrlsByFilename: new Map() };
     const r = resolveMaterial("totally-unknown-guid", undefined, "11119017", 1, ctx, warnings);
     expect(r.hasMaterialResolved).toBe(false);
-    expect(r.opacity).toBeGreaterThan(0);
-    expect(r.color).not.toBe("#ff00ff"); // should be displayColor, not magenta
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(warnings[0]).toContain("totally-unknown-guid");
+    expect(r.opacity).toBe(0);
+    expect(r.transparent).toBe(true);
+    expect(r.color).toBe("#ffffff");
+    expect(warnings).toEqual([]);
   });
 
   test("DE1A3E3C + resolved textureLayer with mapUrl → texture stays, opacity normal", () => {
@@ -256,7 +267,7 @@ describe("resolveMaterial — DE1A3E3C project-default-transparent", () => {
     const r = resolveMaterial(DE1A3E3C, "Standard", undefined, 1, ctx, warnings, { expectsCallerMap: true });
     expect(r.opacity).toBe(1); // quadAlpha=1, no map → resolved.opacity stays 1
     expect(r.transparent).toBe(false); // not forced; consumers set their own transparency
-    expect(r.materialName).toBe("(project-default-transparent)");
+    expect(r.materialName).toBe("(engine-default)");
     expect(warnings).toEqual([]);
   });
 

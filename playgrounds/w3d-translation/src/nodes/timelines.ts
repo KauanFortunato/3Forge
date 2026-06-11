@@ -196,6 +196,13 @@ export function parseTimelineTracks(xml: string): TimelineTracks {
     unsupportedProps: [],
   };
 
+  // R3 stores the start-of-track key as <OpenKeyFrame> — same attributes and
+  // easing handles as <KeyFrame>, possibly out of document order (seen in
+  // PERMANENT_CLOCK: OpenKeyFrame@0 listed after KeyFrame@10, their control
+  // points forming one coherent bezier segment). Both evaluate as keys; the
+  // per-track sort below restores frame order.
+  const isKeyTag = (tag: string): boolean => tag === "KeyFrame" || tag === "OpenKeyFrame";
+
   for (const ctrl of Array.from(selected.children)) {
     // Image-sequence / video playback controllers — not evaluated yet, but
     // surfaced so the importer can warn instead of silently dropping motion.
@@ -217,7 +224,7 @@ export function parseTimelineTracks(xml: string): TimelineTracks {
     if (prop === PROP_POS_VEC3 || prop === PROP_SCALE_VEC3) {
       const keys: Vec3Key[] = [];
       for (const kf of Array.from(ctrl.children)) {
-        if (kf.tagName !== "KeyFrame") continue;
+        if (!isKeyTag(kf.tagName)) continue;
         const frame = Number(kf.getAttribute("FrameNumber"));
         const value = parseVec3String(kf.getAttribute("Value"));
         if (Number.isFinite(frame) && value) keys.push({ frame, value, ...parseHandles(kf) });
@@ -231,7 +238,7 @@ export function parseTimelineTracks(xml: string): TimelineTracks {
     if (prop === PROP_ENABLED) {
       const keys: BoolKey[] = [];
       for (const kf of Array.from(ctrl.children)) {
-        if (kf.tagName !== "KeyFrame") continue;
+        if (!isKeyTag(kf.tagName)) continue;
         const frame = Number(kf.getAttribute("FrameNumber"));
         const raw = (kf.getAttribute("Value") ?? "").trim().toLowerCase();
         if (Number.isFinite(frame) && (raw === "true" || raw === "false")) {
@@ -247,7 +254,7 @@ export function parseTimelineTracks(xml: string): TimelineTracks {
     if (SCALAR_PROPS.has(prop)) {
       const keys: ScalarKey[] = [];
       for (const kf of Array.from(ctrl.children)) {
-        if (kf.tagName !== "KeyFrame") continue;
+        if (!isKeyTag(kf.tagName)) continue;
         const frame = Number(kf.getAttribute("FrameNumber"));
         const value = Number(kf.getAttribute("Value"));
         if (Number.isFinite(frame) && Number.isFinite(value)) {

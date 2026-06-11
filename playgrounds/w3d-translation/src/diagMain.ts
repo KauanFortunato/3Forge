@@ -14,7 +14,8 @@ import {
 } from "three";
 import { applyTimelineSnapshot, cloneNodes, translateBlueprint } from "./translate";
 import { evaluateSnapshotAtFrame } from "./nodes/timelines";
-import { buildNodeTree, type BuildContext } from "./nodes/builder";
+import { buildNodeTree, frameWorldSizeFor, type BuildContext } from "./nodes/builder";
+import { descriptorToCss } from "./fonts";
 import lineupLeftXmlRaw from "./__fixtures__/LINEUP_LEFT.scene.w3d?raw";
 
 const textureUrls = import.meta.glob("../diag-assets/textures/*", { eager: true, query: "?url", import: "default" }) as Record<string, string>;
@@ -30,17 +31,7 @@ function parseFontMeta(filename: string): { family: string; weight: string; styl
   const dash = stem.lastIndexOf("-");
   if (dash === -1) return { family: stem.replace(/_/g, " "), weight: "400", style: "normal" };
   const family = stem.slice(0, dash).replace(/_/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2");
-  const variant = stem.slice(dash + 1).toLowerCase();
-  const style = /italic|oblique/.test(variant) ? "italic" : "normal";
-  let weight = "400";
-  if (/thin/.test(variant)) weight = "100";
-  else if (/extralight|ultralight/.test(variant)) weight = "200";
-  else if (/light/.test(variant)) weight = "300";
-  else if (/medium/.test(variant)) weight = "500";
-  else if (/semibold|demibold/.test(variant)) weight = "600";
-  else if (/extrabold|ultrabold/.test(variant)) weight = "800";
-  else if (/black|heavy|super/.test(variant)) weight = "900";
-  else if (/bold/.test(variant)) weight = "700";
+  const { weight, style } = descriptorToCss(stem.slice(dash + 1));
   return { family, weight, style };
 }
 
@@ -60,7 +51,7 @@ async function main(): Promise<void> {
   await Promise.allSettled(fontLoads);
 
   const xml = lineupLeftXmlRaw.replace(/^﻿/, "");
-  const { pristineNodes, tracks, resources } = translateBlueprint(xml);
+  const { blueprint, pristineNodes, tracks, resources } = translateBlueprint(xml);
 
   const textureUrlsByFilename = new Map<string, string>();
   for (const [path, url] of Object.entries(textureUrls)) {
@@ -75,6 +66,7 @@ async function main(): Promise<void> {
     textureUrlsByFilename,
     textureCache: new Map<string, Texture>(),
     warnings: [],
+    frameSize: frameWorldSizeFor(blueprint.sceneSettings),
   };
   const root = buildNodeTree(nodes, ctx);
 

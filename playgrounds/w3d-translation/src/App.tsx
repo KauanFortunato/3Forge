@@ -5,7 +5,7 @@ import type { W3DNodeData, W3DQuadData } from "./nodes/data";
 import { applyTimelineSnapshot, cloneNodes, translateBlueprint } from "./translate";
 import { evaluateSnapshotAtFrame, type TimelineTracks } from "./nodes/timelines";
 import { createPlaygroundViewport, type PlaygroundViewport } from "./viewport";
-import type { BuildContext } from "./nodes/builder";
+import { frameWorldSizeFor, type BuildContext } from "./nodes/builder";
 import type { W3DResourceRegistry } from "./nodes/resources";
 import { buildInspectorReport, type InspectorReport } from "./inspector";
 import { buildFontDiagnostics, buildLoadedFontIndex, loadW3DFontFiles, type FontLoadResult } from "./fonts";
@@ -44,6 +44,12 @@ interface SelectedProject {
   files: File[];
   index: W3DProjectIndex;
 }
+
+// Timeline transport hidden while translation work continues — the timeline
+// runtime (track parsing, per-frame evaluation, diag harness) stays intact and
+// the view holds the static hero frame (PreviewMarker). Flip to true to bring
+// the player back.
+const SHOW_TIMELINE_UI = false;
 
 type PanelTab = "tree" | "props" | "debug";
 type RenderStats = { calls: number; triangles: number; geometries: number; textures: number };
@@ -111,6 +117,7 @@ export function App() {
         warnings: builderWarnings,
         stencilDebugShowMask,
         loadedFontIndex: loaded.loadedFontIndex,
+        frameSize: frameWorldSizeFor(loaded.blueprint.sceneSettings),
       };
       viewportRef.current.setBlueprint(loaded.blueprint);
       const frameNodes = cloneNodes(loaded.pristineNodes);
@@ -424,7 +431,7 @@ export function App() {
               {focusNodeId ? <span style={{ color: "var(--accent)" }}>focus on · Esc to clear</span> : null}
             </div>
           ) : null}
-          {loaded && loaded.tracks.maxFrames > 0 ? (
+          {SHOW_TIMELINE_UI && loaded && loaded.tracks.maxFrames > 0 ? (
             <div className="playground__timeline">
               <button
                 type="button"

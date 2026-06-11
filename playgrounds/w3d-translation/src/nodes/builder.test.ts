@@ -1,7 +1,7 @@
 // playgrounds/w3d-translation/src/nodes/builder.test.ts
 import { describe, expect, test, vi } from "vitest";
 import { Box3, Group, Mesh, MeshBasicMaterial, NotEqualStencilFunc, PlaneGeometry, Vector3 } from "three";
-import { applySkew, buildNode, buildNodeTree } from "./builder";
+import { applySkew, buildNode, buildNodeTree, frameWorldSizeFor } from "./builder";
 import type { BuildContext } from "./builder";
 import type { W3DGroupData, W3DQuadData, W3DTextureTextData } from "./data";
 import type { W3DResourceRegistry, W3DBaseMaterialData, W3DTextureLayerData, W3DTextureData } from "./resources";
@@ -364,6 +364,49 @@ describe("builder — R3 fullframe fill (colored-mask screen-space background)",
     const mat = findMesh(root, "SMALL_TEAM_NAME").material as MeshBasicMaterial;
     expect(mat.stencilFunc).toBe(EqualStencilFunc); // inverted colored mask → inside reveal preserved for content
     expect(mat.map!.repeat.x).toBeCloseTo(1.13, 4); // not full-frame → authored UV untouched
+  });
+
+  test("ctx.frameSize is the full-frame authority: a half-size frame makes a half-size fill full-frame", () => {
+    const ctx = makePatternCtx();
+    ctx.frameSize = { width: 7.363797 / 2, height: 4.142136 / 2 };
+    const fill = quadData({
+      id: "ff-main", name: "TEXTURE_FULLFRAME_MAIN", maskIds: ["base-main"],
+      geometry: { size: { x: 7.363797 / 2, y: 4.142136 / 2 } }, faceMapping: fillFace,
+    });
+    const root = buildNodeTree([groupData({ id: "main", name: "MAIN", children: [coloredMask(), fill] })], ctx);
+    const mat = findMesh(root, "TEXTURE_FULLFRAME_MAIN").material as MeshBasicMaterial;
+    expect(mat.map!.repeat.x).toBeCloseTo(1 / 1.13, 4); // full-frame for THIS scene's frame
+  });
+
+  test("ctx.frameSize larger than the default: a 1080p-sized fill is NOT full-frame", () => {
+    const ctx = makePatternCtx();
+    ctx.frameSize = { width: 7.363797 * 2, height: 4.142136 * 2 };
+    const fill = quadData({
+      id: "ff-main", name: "TEXTURE_FULLFRAME_MAIN", maskIds: ["base-main"],
+      geometry: { size: { x: 7.363797, y: 4.142136 } }, faceMapping: fillFace,
+    });
+    const root = buildNodeTree([groupData({ id: "main", name: "MAIN", children: [coloredMask(), fill] })], ctx);
+    const mat = findMesh(root, "TEXTURE_FULLFRAME_MAIN").material as MeshBasicMaterial;
+    expect(mat.map!.repeat.x).toBeCloseTo(1.13, 4); // covers half the frame → authored UV untouched
+  });
+});
+
+describe("frameWorldSizeFor — world frame derived from scene settings", () => {
+  test("no sceneSettings → default 1080p broadcast frame", () => {
+    const f = frameWorldSizeFor(undefined);
+    expect(f.width).toBeCloseTo(7.363797, 5);
+    expect(f.height).toBeCloseTo(4.142136, 5);
+  });
+
+  test("2d + 3840×2160 canvas → frame scales with px-per-unit (height 2160/260.7349)", () => {
+    const f = frameWorldSizeFor({ mode: "2d", canvas: { width: 3840, height: 2160 } });
+    expect(f.height).toBeCloseTo(2160 / (1080 / 4.142136), 4);
+    expect(f.width / f.height).toBeCloseTo(16 / 9, 5);
+  });
+
+  test("non-2d mode or degenerate canvas → default frame", () => {
+    expect(frameWorldSizeFor({ mode: "3d", canvas: { width: 3840, height: 2160 } }).height).toBeCloseTo(4.142136, 5);
+    expect(frameWorldSizeFor({ mode: "2d", canvas: { width: 1920, height: 0 } }).height).toBeCloseTo(4.142136, 5);
   });
 });
 

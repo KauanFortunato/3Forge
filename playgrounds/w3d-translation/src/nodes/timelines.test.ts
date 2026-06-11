@@ -532,3 +532,45 @@ describe("parseTimelineTracks + evaluateSnapshotAtFrame", () => {
     expect(evaluateSnapshotAtFrame(tracks, 50).alphaByControllableId.get("x")).toBeCloseTo(0.5, 5);
   });
 });
+
+describe("OpenKeyFrame — evaluated exactly like KeyFrame", () => {
+  // R3 authors the start-of-track key as <OpenKeyFrame> (same attributes:
+  // FrameNumber, Value, easing handles) and may list it AFTER higher-frame
+  // <KeyFrame>s in document order (seen in PERMANENT_CLOCK). Its easing
+  // handles pair with the neighbouring KeyFrame's to form one coherent bezier
+  // segment, so it participates in evaluation as a normal key.
+  test("scalar track: OpenKeyFrame@0 listed after KeyFrame@100 interpolates at the marker", () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="50" MaxFrames="100">
+        <KeyFrameAnimationController AnimatedProperty="Alpha" ControllableId="x">
+          <KeyFrame FrameNumber="100" Value="1" LeftType="Linear" RightType="Linear"/>
+          <OpenKeyFrame FrameNumber="0" Value="0" LeftType="Linear" RightType="Linear"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    // Without the open key the track would hold-first at 1; with it, 0→1 at 50 = 0.5.
+    expect(snap.alphaByControllableId.get("x")).toBeCloseTo(0.5, 5);
+  });
+
+  test("Enabled track: OpenKeyFrame@0 False holds until the next key", () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="50" MaxFrames="200">
+        <KeyFrameAnimationController AnimatedProperty="Enabled" ControllableId="n">
+          <KeyFrame FrameNumber="100" Value="True"/>
+          <OpenKeyFrame FrameNumber="0" Value="False"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    // Step/hold-last: at 50 the last key at-or-before is the open key (False).
+    expect(snap.enabledByControllableId.get("n")).toBe(false);
+  });
+
+  test("vec3 track: OpenKeyFrame@0 anchors the interpolation start", () => {
+    const snap = parseTimelinePreviewSnapshot(wrapWithAttr(`SelectedTimelineId="t1"`, `
+      <Timeline Name="In" Id="t1" PreviewMarker="50" MaxFrames="100">
+        <KeyFrameAnimationController AnimatedProperty="Transform.Position" ControllableId="p">
+          <KeyFrame FrameNumber="100" Value="0,2,0" LeftType="Linear" RightType="Linear"/>
+          <OpenKeyFrame FrameNumber="0" Value="0,0,0" LeftType="Linear" RightType="Linear"/>
+        </KeyFrameAnimationController>
+      </Timeline>`));
+    expect(snap.positionByControllableId.get("p")?.y).toBeCloseTo(1, 5);
+  });
+});

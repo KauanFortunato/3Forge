@@ -5,8 +5,125 @@ import {
   buildLoadedFontIndex,
   fontIndexKey,
   loadW3DFontFiles,
+  parseFontBinaryMeta,
   parseFontFilename,
 } from "./fonts";
+
+/**
+ * Minimal synthetic sfnt (TTF) with a `name` table and an `OS/2` table —
+ * just enough structure for parseFontBinaryMeta. Strings are written as
+ * platform 3 (Windows) UTF-16BE records, the common case in real fonts.
+ */
+function makeSfntFont(
+  names: Record<number, string>,
+  opts: { weightClass?: number; italic?: boolean } = {},
+): Uint8Array<ArrayBuffer> {
+  const ids = Object.keys(names).map(Number).sort((a, b) => a - b);
+  const strings = ids.map((id) => {
+    const bytes: number[] = [];
+    for (const ch of names[id]) {
+      const c = ch.charCodeAt(0);
+      bytes.push(c >> 8, c & 0xff);
+    }
+    return { id, bytes };
+  });
+  const nameHeaderLen = 6 + strings.length * 12;
+  const stringDataLen = strings.reduce((n, s) => n + s.bytes.length, 0);
+  const nameLen = nameHeaderLen + stringDataLen;
+  const os2Len = 64;
+
+  const headerLen = 12 + 2 * 16; // sfnt header + 2 table records
+  const os2Off = headerLen;
+  const nameOff = os2Off + os2Len;
+  const buf = new Uint8Array(nameOff + nameLen);
+  const w16 = (o: number, v: number) => { buf[o] = v >> 8; buf[o + 1] = v & 0xff; };
+  const w32 = (o: number, v: number) => { w16(o, v >>> 16); w16(o + 2, v & 0xffff); };
+  const tag = (o: number, t: string) => { for (let i = 0; i < 4; i++) buf[o + i] = t.charCodeAt(i); };
+
+  w32(0, 0x00010000); // TrueType magic
+  w16(4, 2);          // numTables
+  tag(12, "OS/2"); w32(12 + 8, os2Off); w32(12 + 12, os2Len);
+  tag(28, "name"); w32(28 + 8, nameOff); w32(28 + 12, nameLen);
+
+  w16(os2Off, 4); // OS/2 version
+  w16(os2Off + 4, opts.weightClass ?? 400);
+  w16(os2Off + 62, opts.italic ? 1 : 0); // fsSelection bit 0 = ITALIC
+
+  w16(nameOff, 0);                   // name format
+  w16(nameOff + 2, strings.length);  // count
+  w16(nameOff + 4, nameHeaderLen);   // stringOffset
+  let strCursor = 0;
+  strings.forEach((s, i) => {
+    const r = nameOff + 6 + i * 12;
+    w16(r, 3);              // platformID Windows
+    w16(r + 2, 1);          // encodingID Unicode BMP
+    w16(r + 4, 0x0409);     // languageID en-US
+    w16(r + 6, s.id);       // nameID
+    w16(r + 8, s.bytes.length);
+    w16(r + 10, strCursor);
+    buf.set(s.bytes, nameOff + nameHeaderLen + strCursor);
+    strCursor += s.bytes.length;
+  });
+  return buf;
+}
+
+describe("parseFontBinaryMeta — sfnt name table is the font identity", () => {
+  test("typographic family/subfamily (nameID 16/17) win over legacy (1/2)", () => {
+    const meta = parseFontBinaryMeta(makeSfntFont(
+      { 1: "Foo Cond Black", 2: "Regular", 16: "Foo Cond", 17: "Black" },
+      { weightClass: 900 },
+    ));
+    expect(meta?.family).toBe("Foo Cond");
+    expect(meta?.subfamily).toBe("Black");
+    expect(meta?.weightClass).toBe(900);
+    expect(meta?.italic).toBe(false);
+  });
+
+  test("falls back to legacy nameID 1/2 when 16/17 are absent (e.g. arial.ttf)", () => {
+    const meta = parseFontBinaryMeta(makeSfntFont({ 1: "Arial", 2: "Regular" }));
+    expect(meta?.family).toBe("Arial");
+    expect(meta?.subfamily).toBe("Regular");
+  });
+
+  test("fsSelection italic bit is surfaced", () => {
+    const meta = parseFontBinaryMeta(makeSfntFont(
+      { 16: "Foo", 17: "Thin Italic" },
+      { weightClass: 250, italic: true },
+    ));
+    expect(meta?.italic).toBe(true);
+    expect(meta?.weightClass).toBe(250);
+  });
+
+  test("non-sfnt bytes (wOFF magic / garbage) → undefined", () => {
+    const woff = new Uint8Array([0x77, 0x4f, 0x46, 0x46, 0, 0, 0, 0]); // "wOFF"
+    expect(parseFontBinaryMeta(woff)).toBeUndefined();
+    expect(parseFontBinaryMeta(new Uint8Array([1, 2, 3]))).toBeUndefined();
+  });
+});
+
+describe("loadW3DFontFiles — name table overrides the filename heuristic", () => {
+  test("misleading filename: family/weight/style come from the name table", async () => {
+    // XML FontStyle matches the font's typographic names exactly (verified on
+    // the corpus: FontName === nameID 16, Type === nameID 17), so the binary
+    // identity must win over whatever the file happens to be called.
+    const buf = makeSfntFont(
+      { 1: "Foo Cond Black", 2: "Regular", 16: "Foo Cond", 17: "Black Italic" },
+      { weightClass: 900, italic: true },
+    );
+    const file = new File([buf], "Whatever-Light.ttf");
+    const [r] = await loadW3DFontFiles([file]);
+    expect(r.parsed?.family).toBe("Foo Cond");
+    expect(r.parsed?.weight).toBe("900");  // descriptor "Black Italic" → 900 (same mapping the builder uses)
+    expect(r.parsed?.style).toBe("italic");
+  });
+
+  test("unparseable bytes keep the filename-derived meta", async () => {
+    const file = new File([new Uint8Array([1, 2, 3, 4])], "ObviouslyCond-Bold.ttf");
+    const [r] = await loadW3DFontFiles([file]);
+    expect(r.parsed?.family).toBe("Obviously Cond");
+    expect(r.parsed?.weight).toBe("700");
+  });
+});
 
 describe("parseFontFilename (Phase H3)", () => {
   test("Obviously-Regular.ttf → family 'Obviously', 400/normal", () => {

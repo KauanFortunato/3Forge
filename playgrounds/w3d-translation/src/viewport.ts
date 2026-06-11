@@ -33,7 +33,7 @@ import {
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { ComponentBlueprint, EditorNode } from "../../../src/editor/types";
-import { buildNodeTree, type BuildContext } from "./nodes/builder";
+import { buildNodeTree, W3D_FRAME_PX_PER_UNIT, type BuildContext } from "./nodes/builder";
 import type { W3DNodeData } from "./nodes/data";
 
 /**
@@ -48,8 +48,12 @@ import type { W3DNodeData } from "./nodes/data";
  * So to map `canvas.height` (in px) onto the ortho frustum half-height (in
  * world units), divide by this constant. For the default 1080 canvas the
  * result is 1080/2/260.7349 ≈ 2.071068 — exactly half the W3D 4.142 frame.
+ *
+ * The constant lives in the builder (which derives full-frame detection from
+ * the same conversion via frameWorldSizeFor); re-exported here for the
+ * viewport's existing consumers.
  */
-export const W3D_FRAME_PX_PER_UNIT = 1080 / 4.142136;
+export { W3D_FRAME_PX_PER_UNIT };
 
 /**
  * Default ortho half-height used for non-2D scenes (e.g. 3D / AR / no

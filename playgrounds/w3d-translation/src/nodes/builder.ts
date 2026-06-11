@@ -9,6 +9,7 @@ import type {
   W3DGroupData, W3DMaskProperties, W3DNodeData, W3DQuadData, W3DTextureTextData, W3DTransform,
 } from "./data";
 import { resolveMaterial, displayColorToHex, type UVTransform } from "./materialResolver";
+import { descriptorToCss } from "../fonts";
 import type { W3DResourceRegistry } from "./resources";
 import {
   inkAnchorOffset, measureTextureText,
@@ -207,6 +208,11 @@ export type BuildContext = {
   /** Populated automatically by buildNodeTree — true when colored masks own the
    * whole stencil byte (no shape masks in the scene). */
   genericFullByte?: boolean;
+  /**
+   * World-unit frame of THIS scene (from frameWorldSizeFor) — the authority
+   * for full-frame fill detection. Absent → default 1080p broadcast frame.
+   */
+  frameSize?: { width: number; height: number };
 };
 
 export function buildNodeTree(roots: W3DNodeData[], ctx?: BuildContext): Group {
@@ -1282,17 +1288,11 @@ function buildTextureText(
  * normal-400 sans-serif.
  */
 function fontStyleTypeToCss(type: string): { weight: string; style: string } {
-  const t = type.toLowerCase();
-  let weight = "400";
-  let style = "normal";
-  if (t.includes("thin")) weight = "100";
-  else if (t.includes("light")) weight = "300";
-  else if (t.includes("medium")) weight = "500";
-  else if (t.includes("semi") || t.includes("semibold")) weight = "600";
-  else if (t.includes("black")) weight = "900";
-  else if (t.includes("bold")) weight = "700";
-  if (t.includes("italic") || t.includes("oblique")) style = "italic";
-  return { weight, style };
+  // XML FontStyle.Type carries the font's typographic subfamily verbatim
+  // (corpus-verified: Type === name-table nameID 17), so the shared
+  // descriptor mapping in fonts.ts guarantees the canvas asks for exactly
+  // the weight/style the face was registered under.
+  return descriptorToCss(type);
 }
 
 /**
@@ -1537,8 +1537,39 @@ function makeTriangleGeometry(tri: { angleDeg: number; edge1: number; edge2: num
   return g;
 }
 
+/**
+ * Default R3 broadcast frame in world units — what a 1920×1080 canvas maps to.
+ * The px↔world conversion is fixed: every authored size in the corpus assumes
+ * 1080 px / 4.142136 units ≈ 260.7349 px per unit (equivalently 1920/7.363797).
+ * Scenes with an explicit 2d canvas derive their own frame via
+ * `frameWorldSizeFor`; these constants are only the no-settings fallback.
+ */
 const W3D_FRAME_WIDTH = 7.363797;
 const W3D_FRAME_HEIGHT = 4.142136;
+const DEFAULT_FRAME_SIZE: { width: number; height: number } =
+  { width: W3D_FRAME_WIDTH, height: W3D_FRAME_HEIGHT };
+export const W3D_FRAME_PX_PER_UNIT = 1080 / W3D_FRAME_HEIGHT;
+
+/**
+ * World-unit frame size for a scene, derived from its 2d canvas (pixels) via
+ * the fixed px-per-unit conversion — the same rule the viewport uses for the
+ * ortho frustum, so full-frame detection and framing always agree. Non-2d
+ * scenes and degenerate canvases fall back to the default broadcast frame.
+ */
+export function frameWorldSizeFor(
+  sceneSettings:
+    | { mode: "2d" | "3d"; canvas?: { width: number; height: number } }
+    | undefined,
+): { width: number; height: number } {
+  if (sceneSettings?.mode === "2d") {
+    const c = sceneSettings.canvas;
+    if (c && c.width > 0 && c.height > 0) {
+      const height = c.height / W3D_FRAME_PX_PER_UNIT;
+      return { width: height * (c.width / c.height), height };
+    }
+  }
+  return DEFAULT_FRAME_SIZE;
+}
 
 /**
  * A "full-frame fill" is a textured Quad whose geometry covers (about) the whole
@@ -1546,13 +1577,17 @@ const W3D_FRAME_HEIGHT = 4.142136;
  * it as a single screen-space BACKGROUND layer revealed AROUND the panel (the mask
  * is a hole), with the texture mapped once across the frame. Text / smaller content
  * clients of the SAME mask are not full-frame fills and keep their normal
- * inside-the-panel reveal. The threshold uses the authored geometry size, so it
- * generalises to any R3 scene's full-frame fills (no node-name dependency).
+ * inside-the-panel reveal. The threshold compares the authored geometry size to
+ * the SCENE's frame (ctx.frameSize, from frameWorldSizeFor) — no node-name
+ * dependency, and a non-1080 canvas keeps its own notion of "full frame".
  */
-function isFullFrameQuadGeometry(geometry: PlaneGeometry): boolean {
+function isFullFrameQuadGeometry(
+  geometry: PlaneGeometry,
+  frame: { width: number; height: number },
+): boolean {
   const p = geometry.parameters as { width?: number; height?: number } | undefined;
   if (!p || typeof p.width !== "number" || typeof p.height !== "number") return false;
-  return p.width >= W3D_FRAME_WIDTH * 0.98 && p.height >= W3D_FRAME_HEIGHT * 0.98;
+  return p.width >= frame.width * 0.98 && p.height >= frame.height * 0.98;
 }
 
 function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: number): Mesh {
@@ -1652,7 +1687,10 @@ function makeQuadMesh(node: W3DQuadData, ctx?: BuildContext, inheritedAlpha?: nu
   // would instead tile under Wrap and duplicate the pattern at the corners (the
   // bug). Scoped to full-frame textured colored-mask clients so per-quad textures
   // (photos, logos, text) are untouched.
-  if (material.map && ctx?.genericMaskInfoByMaskId && isFullFrameQuadGeometry(geometry)) {
+  if (
+    material.map && ctx?.genericMaskInfoByMaskId &&
+    isFullFrameQuadGeometry(geometry, ctx.frameSize ?? DEFAULT_FRAME_SIZE)
+  ) {
     const isColoredMaskClient = node.maskIds.some((id) => ctx.genericMaskInfoByMaskId!.has(id));
     if (isColoredMaskClient) {
       const t = material.map.clone();
@@ -1751,10 +1789,11 @@ export function applySkew(geometry: PlaneGeometry, skewXDeg: number, skewYDeg: n
 /**
  * Apply Phase 1a + Patch A stencil clipping to a quad mesh.
  *
- * Writers (PHOTO_MASK_0X / PHOTO_DUMMY_0X):
- *   - isMask=true and name matches /^PHOTO_(MASK|DUMMY)_\d+$/
- *   - writes only its own bit via stencilWriteMask (so PHOTO_MASK and
- *     PHOTO_DUMMY don't overwrite each other at the same pixel)
+ * Writers (shape "mask" class / silhouette "dummy" class):
+ *   - isMask=true, not colored; class from DisableBinaryAlpha, slot from
+ *     container discovery order (collectPhotoMaskInfo — attributes, no names)
+ *   - writes only its own bit via stencilWriteMask (so the mask and dummy
+ *     classes don't overwrite each other at the same pixel)
  *
  * Readers:
  *   - quads with maskIds (own or inherited from a parent Group)

@@ -1,12 +1,13 @@
 import { ClampToEdgeWrapping, MirroredRepeatWrapping, RepeatWrapping, type Wrapping } from "three";
 import type { W3DResourceRegistry, W3DTextureLayerData } from "./resources";
 
-/**
- * W3D project-level default transparent material.
- * Used as a pass-through "no color" base in many scenes.
- * Not present in scene-level <Resources> — intentionally transparent at runtime.
- */
-const W3D_DEFAULT_TRANSPARENT = "DE1A3E3C-AE85-4B7B-BA86-056463611630";
+// A MaterialId referenced by a face mapping but absent from the scene's
+// <Resources> is an R3 engine BUILT-IN default, never authored in scene XML
+// (verified across the 26PT_WTV_BASKETBALL corpus: the only such ids are the
+// engine's default-transparent GUID in production scenes and "Standard" in the
+// test scenes). The engine renders it as a white pass-through that is
+// invisible without a texture — so unresolved ids map to that behaviour by
+// rule, with no GUID list in the code.
 
 /**
  * Phase 2C — UV transform extracted from a <TextureMappingOption> block.
@@ -194,30 +195,25 @@ export function resolveMaterial(
   let materialName: string | undefined;
 
   if (materialId) {
-    if (materialId.toUpperCase() === W3D_DEFAULT_TRANSPARENT) {
-      // Known project-level transparent/pass-through material — not in scene Resources.
-      // In W3D runtime this is invisible; opacity overridden below after texture check.
-      hasMaterialResolved = false;
-      materialName = "(project-default-transparent)";
-      color = "#ffffff";
-      // No warning — this GUID is a known, expected omission from scene Resources.
-    } else {
-      const mat = ctx.registry.baseMaterials.get(materialId);
-      if (mat) {
-        hasMaterialResolved = true;
-        materialName = mat.name;
-        matAlpha = mat.alpha;
-        if (mat.hasEmissive) {
-          color = `#${mat.emissive}`;
-        } else if (mat.hasDiffuse) {
-          color = `#${mat.diffuse}`;
-        } else {
-          color = "#ffffff";
-        }
+    const mat = ctx.registry.baseMaterials.get(materialId);
+    if (mat) {
+      hasMaterialResolved = true;
+      materialName = mat.name;
+      matAlpha = mat.alpha;
+      if (mat.hasEmissive) {
+        color = `#${mat.emissive}`;
+      } else if (mat.hasDiffuse) {
+        color = `#${mat.diffuse}`;
       } else {
-        warnings.push(`MaterialId "${materialId}" not in registry; using DisplayColor fallback.`);
-        color = displayColorToHex(displayColor);
+        color = "#ffffff";
       }
+    } else {
+      // Engine-default placeholder (see header note) — white pass-through;
+      // opacity forced to 0 below when no texture resolves. No warning: these
+      // ids are an expected omission from scene Resources, not an error.
+      hasMaterialResolved = false;
+      materialName = "(engine-default)";
+      color = "#ffffff";
     }
   } else {
     color = displayColorToHex(displayColor);
@@ -314,15 +310,17 @@ export function resolveMaterial(
     }
   }
 
-  // DE1A3E3C without a resolved texture → fully transparent at runtime.
-  // If a texture was resolved (mapUrl exists), let the texture/opacity flow normally.
+  // Engine-default material without a resolved texture → fully transparent at
+  // runtime. If a texture was resolved (mapUrl exists), let the texture/opacity
+  // flow normally.
   // Phase P6.1 — TextureText callers set `options.expectsCallerMap=true` because
   // they synthesise a canvas-rendered glyph texture AFTER this returns; for
   // those callers the "no map => invisible" forcing is incorrect (the glyph
   // map will be present at render time). Quad callers omit the flag and keep
-  // the existing invisibility for unmapped DE1A3E3C placeholders.
+  // the existing invisibility for unmapped engine-default placeholders.
   if (
-    materialId?.toUpperCase() === W3D_DEFAULT_TRANSPARENT
+    materialId !== undefined
+    && !hasMaterialResolved
     && !mapUrl
     && !options?.expectsCallerMap
   ) {
