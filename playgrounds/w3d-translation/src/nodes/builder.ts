@@ -465,7 +465,48 @@ function buildGroup(
     if (isImplicitSiblingMask(c, ctx)) implicitForSiblings = [...implicitForSiblings, c.id];
   }
   applyFlowLayout(host, node, ctx?.warnings);
+  applyGroupConstrainBox(host, node, ctx?.warnings);
   return g;
+}
+
+/**
+ * Group ConstrainBox (HasConstrainBox="True") — R3's editor offers Width,
+ * Height and a combined method; each named axis is constrained INDEPENDENTLY
+ * (a too-wide child condenses on X only, its height untouched). Applied per
+ * CHILD: only a child whose measured extent exceeds the box shrinks, the
+ * name-plate behaviour (the long player name condenses, the line that fits
+ * stays natural). Runs after flow layout; in the corpus the constrained axis
+ * is the flow CROSS axis (PERMANENT_CLOCK Y-stacks constrained on Width), so
+ * slot positions are unaffected. Scaling is about the child's origin —
+ * center-aligned TextureText/Quad content condenses symmetrically.
+ */
+function applyGroupConstrainBox(group: Group, node: W3DGroupData, warnings?: string[]): void {
+  const c = node.constrain;
+  if (!c) return;
+  if (group.children.length === 0) return;
+  const m = c.method.toLowerCase();
+  const limitX = m.includes("width") ? c.box.x : undefined;
+  const limitY = m.includes("height") ? c.box.y : undefined;
+  if (limitX === undefined && limitY === undefined) {
+    warnings?.push(
+      `Group "${node.name}" ConstrainMethod="${c.method}" with box ` +
+      `(${c.box.x ?? "-"} x ${c.box.y ?? "-"}) names no usable axis ` +
+      `(known: Width, Height, combined); skipping constrain box.`,
+    );
+    return;
+  }
+  for (const child of group.children) {
+    child.updateWorldMatrix(true, true);
+    const box = new Box3().setFromObject(child);
+    if (limitX !== undefined && limitX > 0 && isFinite(box.min.x) && isFinite(box.max.x)) {
+      const w = box.max.x - box.min.x;
+      if (w > limitX) child.scale.x *= limitX / w;
+    }
+    if (limitY !== undefined && limitY > 0 && isFinite(box.min.y) && isFinite(box.max.y)) {
+      const h = box.max.y - box.min.y;
+      if (h > limitY) child.scale.y *= limitY / h;
+    }
+  }
 }
 
 /**

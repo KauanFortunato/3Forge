@@ -424,3 +424,44 @@ describe("parseGroup and recursion", () => {
     expect((roots[0] as W3DGroupData).flow).toBeUndefined();
   });
 });
+
+describe("group ConstrainBox (HasConstrainBox + ConstrainMethod + ConstrainBoxSize)", () => {
+  test("active constrain box is parsed (PERMANENT_CLOCK PLAYER_INFO shape)", () => {
+    const { roots, warnings } = parseNodes(wrapInScene(
+      `<Group Id="g1" Name="PLAYER_INFO_LEFT">
+         <GeometryOptions LeadingSpace="0.05" FlowChildren="True" FlowChildrenAlignment="Center" HasConstrainBox="True" ConstrainMethod="Width">
+           <ConstrainBoxSize X="2" Y="0.18" />
+         </GeometryOptions>
+         <Children/>
+       </Group>`,
+    ));
+    expect(warnings).toEqual([]);
+    const g = roots[0] as W3DGroupData;
+    expect(g.constrain).toEqual({ method: "Width", box: { x: 2, y: 0.18 } });
+    expect(g.flow?.children).toBe(true); // flow parsing unaffected
+  });
+
+  test("ConstrainBoxSize without HasConstrainBox=True is inactive (SCORE_QUARTERS shape)", () => {
+    const { roots } = parseNodes(wrapInScene(
+      `<Group Id="g1" Name="QUARTERS_SCORE_TOP">
+         <GeometryOptions LeadingSpace="0.1">
+           <ConstrainBoxSize X="1.27" />
+         </GeometryOptions>
+         <Children/>
+       </Group>`,
+    ));
+    expect((roots[0] as W3DGroupData).constrain).toBeUndefined();
+  });
+
+  test("X-only box parses with y undefined", () => {
+    const { roots } = parseNodes(wrapInScene(
+      `<Group Id="g1" Name="G">
+         <GeometryOptions HasConstrainBox="True" ConstrainMethod="Width">
+           <ConstrainBoxSize X="1.27" />
+         </GeometryOptions>
+         <Children/>
+       </Group>`,
+    ));
+    expect((roots[0] as W3DGroupData).constrain).toEqual({ method: "Width", box: { x: 1.27 } });
+  });
+});

@@ -4978,3 +4978,86 @@ describe("applySkew (Phase H5 — geometry shear)", () => {
     }
   });
 });
+
+describe("builder — group ConstrainBox (per-axis shrink-to-fit)", () => {
+  // R3 editor semantics (user-confirmed): ConstrainMethod names the axes —
+  // Width squeezes X only (height untouched), Height squeezes Y only, the
+  // combined option does both. Applied per CHILD: only a child whose measured
+  // extent exceeds the box shrinks (name-plate behaviour: the long name
+  // condenses, the line that fits stays natural).
+  function findByW3dId(root: Group, id: string) {
+    let found: import("three").Object3D | undefined;
+    root.traverse((o) => {
+      if (!found && (o.userData?.w3d as { id?: string } | undefined)?.id === id) found = o;
+    });
+    if (!found) throw new Error(`object ${id} not found`);
+    return found;
+  }
+
+  test("Width: only the too-wide child condenses on X; heights untouched", () => {
+    const wide = quadData({ id: "wide", name: "WIDE", geometry: { size: { x: 3, y: 0.5 } } });
+    const fits = quadData({ id: "fits", name: "FITS", geometry: { size: { x: 1, y: 0.5 } } });
+    const root = buildNodeTree([groupData({
+      id: "g", name: "PLATE",
+      constrain: { method: "Width", box: { x: 2, y: 0.18 } },
+      children: [wide, fits],
+    })]);
+    const wideObj = findByW3dId(root, "wide");
+    const fitsObj = findByW3dId(root, "fits");
+    expect(wideObj.scale.x).toBeCloseTo(2 / 3, 5);
+    expect(wideObj.scale.y).toBeCloseTo(1, 5);  // Width never touches height
+    expect(fitsObj.scale.x).toBeCloseTo(1, 5);  // fits → untouched
+  });
+
+  test("Width with authored child scale multiplies (not replaces)", () => {
+    const wide = quadData({
+      id: "wide", name: "WIDE", geometry: { size: { x: 2, y: 0.5 } },
+      transform: { position: { x: 0, y: 0, z: 0 }, rotationDeg: { x: 0, y: 0, z: 0 }, scale: { x: 1.5, y: 1.1, z: 1 } },
+    });
+    const root = buildNodeTree([groupData({
+      id: "g", name: "PLATE",
+      constrain: { method: "Width", box: { x: 2 } },
+      children: [wide],
+    })]);
+    const wideObj = findByW3dId(root, "wide");
+    // world width = 2 × 1.5 = 3 → factor 2/3 → final scale.x = 1.5 × 2/3 = 1.0
+    expect(wideObj.scale.x).toBeCloseTo(1.0, 5);
+    expect(wideObj.scale.y).toBeCloseTo(1.1, 5);
+  });
+
+  test("Height: squeezes Y only", () => {
+    const tall = quadData({ id: "tall", name: "TALL", geometry: { size: { x: 1, y: 0.36 } } });
+    const root = buildNodeTree([groupData({
+      id: "g", name: "PLATE",
+      constrain: { method: "Height", box: { x: 2, y: 0.18 } },
+      children: [tall],
+    })]);
+    const tallObj = findByW3dId(root, "tall");
+    expect(tallObj.scale.y).toBeCloseTo(0.5, 5);
+    expect(tallObj.scale.x).toBeCloseTo(1, 5);
+  });
+
+  test("combined method (e.g. WidthAndHeight) constrains both axes independently", () => {
+    const big = quadData({ id: "big", name: "BIG", geometry: { size: { x: 4, y: 0.36 } } });
+    const root = buildNodeTree([groupData({
+      id: "g", name: "PLATE",
+      constrain: { method: "WidthAndHeight", box: { x: 2, y: 0.18 } },
+      children: [big],
+    })]);
+    const bigObj = findByW3dId(root, "big");
+    expect(bigObj.scale.x).toBeCloseTo(0.5, 5);
+    expect(bigObj.scale.y).toBeCloseTo(0.5, 5);
+  });
+
+  test("unrecognised method → warning, no scaling", () => {
+    const ctx = makeCtx();
+    const wide = quadData({ id: "wide", name: "WIDE", geometry: { size: { x: 3, y: 0.5 } } });
+    const root = buildNodeTree([groupData({
+      id: "g", name: "PLATE",
+      constrain: { method: "Banana", box: { x: 2 } },
+      children: [wide],
+    })], ctx);
+    expect(findByW3dId(root, "wide").scale.x).toBeCloseTo(1, 5);
+    expect(ctx.warnings.some((w) => w.includes("Banana"))).toBe(true);
+  });
+});

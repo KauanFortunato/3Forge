@@ -49,6 +49,17 @@ export type W3DMaskProperties = {
   isInvertedMask: boolean;
 };
 
+export type W3DGroupConstrain = {
+  /**
+   * Verbatim GeometryOptions.ConstrainMethod — the R3 editor offers Width,
+   * Height and a combined option. Each named axis is constrained
+   * INDEPENDENTLY: a too-wide child condenses on X only, height untouched.
+   */
+  method: string;
+  /** ConstrainBoxSize in world units; an axis is absent when not authored. */
+  box: { x?: number; y?: number };
+};
+
 export type W3DGroupFlow = {
   /** R3 GeometryOptions.FlowChildren — when true, R3 distributes the children along the flow axis. */
   children: boolean;
@@ -89,6 +100,12 @@ export type W3DGroupData = {
    * The builder applies it to every Group via applyFlowLayout.
    */
   flow?: W3DGroupFlow;
+  /**
+   * Parsed only when GeometryOptions authors HasConstrainBox="True" — a
+   * <ConstrainBoxSize> WITHOUT the flag (SCORE_QUARTERS) is inactive, the
+   * same convention as TextBoxSize vs HasTextBox.
+   */
+  constrain?: W3DGroupConstrain;
   children: W3DNodeData[];
   raw?: {
     attributes: Record<string, string>;
@@ -251,7 +268,27 @@ function parseGroup(el: Element, warnings: string[]): W3DGroupData {
     group.alpha = parseNumberAttr(attrs.Alpha, 1);
   }
   if (flow) group.flow = flow;
+  const constrain = readGroupConstrain(el);
+  if (constrain) group.constrain = constrain;
   return group;
+}
+
+/**
+ * Reads the group constrain box: active only with HasConstrainBox="True"
+ * (PERMANENT_CLOCK PLAYER_INFO_* / REFEREE_NAMES). Method string is stored
+ * verbatim; the builder interprets the per-axis semantics.
+ */
+function readGroupConstrain(el: Element): W3DGroupConstrain | undefined {
+  const go = findDirectChild(el, "GeometryOptions");
+  if (!go) return undefined;
+  if (!parseBoolAttr(go.getAttribute("HasConstrainBox") ?? undefined, false)) return undefined;
+  const sizeEl = findDirectChild(go, "ConstrainBoxSize");
+  const box: { x?: number; y?: number } = {};
+  const x = sizeEl?.getAttribute("X");
+  const y = sizeEl?.getAttribute("Y");
+  if (x !== null && x !== undefined) box.x = parseNumberAttr(x, 0);
+  if (y !== null && y !== undefined) box.y = parseNumberAttr(y, 0);
+  return { method: go.getAttribute("ConstrainMethod") ?? "", box };
 }
 
 /**
