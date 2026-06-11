@@ -27,14 +27,23 @@ jobs:
 
       - name: Deploy files
         run: |
-          mkdir -p /home/umbrel/umbrel/app-data/3forge
-          rm -rf /home/umbrel/umbrel/app-data/3forge/dist
-          cp -r dist /home/umbrel/umbrel/app-data/3forge/dist
-          cp nginx.conf /home/umbrel/umbrel/app-data/3forge/nginx.conf
-          cp docker-compose.yml /home/umbrel/umbrel/app-data/3forge/docker-compose.yml
-
+          APP_DIR="/mnt/storage/apps/3forge"
+      
+          mkdir -p "$APP_DIR/config"
+          rm -rf "$APP_DIR/dist"
+      
+          cp -r dist "$APP_DIR/dist"
+          cp nginx.conf "$APP_DIR/config/default.conf"
+      
       - name: Restart container
         run: |
-          cd /home/umbrel/umbrel/app-data/3forge
-          docker compose up -d
-          docker compose restart
+          CONTAINER="$(docker ps --format '{{.Names}}' | grep -E 'threeforge' | head -n 1)"
+      
+          if [ -z "$CONTAINER" ]; then
+            echo "Container threeforge não encontrado"
+            docker ps
+            exit 1
+          fi
+      
+          echo "Reiniciando container: $CONTAINER"
+          docker restart "$CONTAINER"
